@@ -1,0 +1,2546 @@
+[
+  {
+    "table": "components",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_component",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('components_id_component_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_sheet",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "item",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "clase",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "marca",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "geometria",
+        "data_type": "jsonb",
+        "udt_name": "jsonb",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "estatus_corte",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_corte",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "costos_prorrateo",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('costos_prorrateo_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "work_order",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "plate_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "ancho_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "espesor",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "precio_placa",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "area_total_in2",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "cliente",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "producto",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "job",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "wo_origen",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "area_asignada_in2",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 13,
+        "pg_comment": ""
+      },
+      {
+        "name": "porcentaje_area",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 14,
+        "pg_comment": ""
+      },
+      {
+        "name": "costo_asignado",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 15,
+        "pg_comment": ""
+      },
+      {
+        "name": "scrap_in2",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 16,
+        "pg_comment": ""
+      },
+      {
+        "name": "costo_scrap",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 17,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_registro",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 18,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_lote",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": "1",
+        "ordinal": 19,
+        "pg_comment": ""
+      },
+      {
+        "name": "espesor_original",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 20,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "diccionario_swo",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('diccionario_swo_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "swo_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "prefijo_carpeta",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "cliente",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "job_numero",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "producto",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "erp_jobs",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('erp_jobs_id_job_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "job_number",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "cliente",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "producto",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_total",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_registro",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "wo_generadas",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": "0",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "sstl",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": "0.0",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "carbon_steel",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": "0.0",
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "costo_mp_wo",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": "0.0",
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "costo_mp_swo",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": "0.0",
+        "ordinal": 11,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "erp_piezas_tracking",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_pieza",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('erp_piezas_tracking_id_pieza_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_placa",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_componente",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_requerida",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_cortada",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": "0",
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_doblada",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": "0",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_wo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "erp_placas_tracking",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_placa",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('erp_placas_tracking_id_placa_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "codigo_placa",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_placas",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": "1",
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "herinox",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "granallado",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "corte",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_swo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "erp_super_work_orders",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_swo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('erp_super_work_orders_id_swo_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_swo",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_creacion",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 3,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "erp_work_orders",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_wo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('erp_work_orders_id_wo_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_wo",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_wo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "jobs",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('jobs_id_job_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "numero_job",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_creacion",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 3,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_cortes",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "barra_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "pieza_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "pieza_uid",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "status",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'PENDIENTE'::character varying",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_update",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_inicio_corte",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_fin_corte",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_eventos_pieza",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_eventos_pieza_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "turno_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "sesion_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "barra_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "pieza_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "pieza_uid",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "accion",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "operador",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "bahia",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_evento",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 13,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_eventos_sobrante",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_eventos_sobrante_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "turno_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "sesion_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "barra_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "accion",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "sobrante_real",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "operador",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "bahia",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_evento",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 12,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_job",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_job_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "job",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "source_csv_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "source_csv_path",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "clasificacion",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "row_hash",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "importado_el",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_base",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_total",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 13,
+        "pg_comment": ""
+      },
+      {
+        "name": "job_key",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 14,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_planes",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_planes_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "plan_hash",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "plan_json",
+        "data_type": "jsonb",
+        "udt_name": "jsonb",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "total_piezas",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "total_barras",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "estado",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'activo'::character varying",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 10,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_remanentes",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "rem_uid",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_remanentes_rem_uid_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "rem_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "seccion",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_real",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "material_grade",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'A36'::character varying",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "fuente_orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "fuente_tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "barra_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "status",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'DISPONIBLE'::character varying",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "reservado_para_orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 13,
+        "pg_comment": ""
+      },
+      {
+        "name": "reservado_para_tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 14,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 15,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 16,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_sesiones",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_sesiones_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "operador",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "bahia",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "estado",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'activa'::character varying",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_inicio",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_ultimo_movimiento",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_fin",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "piezas_totales",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "piezas_completadas",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 13,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_sobrantes",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "barra_index",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "sobrante_real",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_update",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 6,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_swo",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_swo_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "super_work_order",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "job",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "work_order",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "qty_lote",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "1",
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "factor_wo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "1",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "source_csv_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "source_csv_path",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "clasificacion",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_base",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 13,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "1",
+        "ordinal": 14,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_total_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 15,
+        "pg_comment": ""
+      },
+      {
+        "name": "cantidad_total_swo",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 16,
+        "pg_comment": ""
+      },
+      {
+        "name": "creado_el",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 17,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "lista_largos_turnos",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('lista_largos_turnos_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "sesion_id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "orden_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_orden",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "operador",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "bahia",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "estado",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'activo'::character varying",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_inicio_turno",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "hora_fin_turno",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "piezas_completadas_inicio",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "piezas_completadas_fin",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "0",
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "now()",
+        "ordinal": 13,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "material_actual",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_material",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('material_actual_id_material_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "ancho",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "grosor",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "estatus",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'validado'::character varying",
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "creado_el",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 6,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "pqart_swo",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('pqart_swo_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_swo",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_dxf",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "ruta",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_corte",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "ls",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": "'Pendiente'::text",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_uid",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_code",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_display_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "origen_proceso_pqart",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 12,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "pqart_wo",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('pqart_wo_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_wo",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "nombre_dxf",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "ruta",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "tipo_corte",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "procesado_con_swo",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'NO procesado'::character varying",
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "ls",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "NO",
+        "default": "'Pendiente'::text",
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_uid",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_code",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_display_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "updated_at",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "origen_proceso_pqart",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 13,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "reporte_cortes",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('reporte_cortes_id_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "job",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "work_order",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "calibre",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "placa_id",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "eficiencia",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "item",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 7,
+        "pg_comment": ""
+      },
+      {
+        "name": "mark",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 8,
+        "pg_comment": ""
+      },
+      {
+        "name": "clase",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 9,
+        "pg_comment": ""
+      },
+      {
+        "name": "ancho",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 10,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 11,
+        "pg_comment": ""
+      },
+      {
+        "name": "estatus",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 12,
+        "pg_comment": ""
+      },
+      {
+        "name": "geometria",
+        "data_type": "jsonb",
+        "udt_name": "jsonb",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 13,
+        "pg_comment": ""
+      },
+      {
+        "name": "fecha_corte",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "YES",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 14,
+        "pg_comment": ""
+      },
+      {
+        "name": "super_work_order",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 15,
+        "pg_comment": ""
+      },
+      {
+        "name": "origen_nesting",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 16,
+        "pg_comment": ""
+      },
+      {
+        "name": "estado_3d",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'PENDIENTE'::character varying",
+        "ordinal": 17,
+        "pg_comment": ""
+      },
+      {
+        "name": "ruta_exportacion",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 18,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_uid",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 19,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_code",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 20,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_seq",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 21,
+        "pg_comment": ""
+      },
+      {
+        "name": "sheet_display_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 22,
+        "pg_comment": ""
+      },
+      {
+        "name": "plate_group_key",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 23,
+        "pg_comment": ""
+      },
+      {
+        "name": "placa_ancho_canonico_mm",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 24,
+        "pg_comment": ""
+      },
+      {
+        "name": "placa_largo_canonico_mm",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 25,
+        "pg_comment": ""
+      },
+      {
+        "name": "nest_instance_id",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 26,
+        "pg_comment": ""
+      },
+      {
+        "name": "source_nest_name",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 27,
+        "pg_comment": ""
+      },
+      {
+        "name": "is_rtz",
+        "data_type": "boolean",
+        "udt_name": "bool",
+        "nullable": "YES",
+        "default": "false",
+        "ordinal": 28,
+        "pg_comment": ""
+      },
+      {
+        "name": "job_key",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 29,
+        "pg_comment": ""
+      },
+      {
+        "name": "ancho_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 30,
+        "pg_comment": ""
+      },
+      {
+        "name": "largo_in",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 31,
+        "pg_comment": ""
+      },
+      {
+        "name": "calibre_nominal",
+        "data_type": "text",
+        "udt_name": "text",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 32,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "reportes_dinamicos",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "super_work_order",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "datos_snapshot",
+        "data_type": "jsonb",
+        "udt_name": "jsonb",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "creado_el",
+        "data_type": "timestamp without time zone",
+        "udt_name": "timestamp",
+        "nullable": "NO",
+        "default": "CURRENT_TIMESTAMP",
+        "ordinal": 3,
+        "pg_comment": ""
+      }
+    ]
+  },
+  {
+    "table": "sheets",
+    "table_comment": "",
+    "columns": [
+      {
+        "name": "id_sheet",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "NO",
+        "default": "nextval('sheets_id_sheet_seq'::regclass)",
+        "ordinal": 1,
+        "pg_comment": ""
+      },
+      {
+        "name": "id_job",
+        "data_type": "integer",
+        "udt_name": "int4",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 2,
+        "pg_comment": ""
+      },
+      {
+        "name": "material",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 3,
+        "pg_comment": ""
+      },
+      {
+        "name": "espesor",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "NO",
+        "default": null,
+        "ordinal": 4,
+        "pg_comment": ""
+      },
+      {
+        "name": "dimension_x",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 5,
+        "pg_comment": ""
+      },
+      {
+        "name": "dimension_y",
+        "data_type": "numeric",
+        "udt_name": "numeric",
+        "nullable": "YES",
+        "default": null,
+        "ordinal": 6,
+        "pg_comment": ""
+      },
+      {
+        "name": "estatus",
+        "data_type": "character varying",
+        "udt_name": "varchar",
+        "nullable": "YES",
+        "default": "'Pendiente'::character varying",
+        "ordinal": 7,
+        "pg_comment": ""
+      }
+    ]
+  }
+]

@@ -1,0 +1,560 @@
+import os, sys, glob, traceback, importlib, re
+
+log_path = r"C:\NEST_EXPORTS\freecad_log.txt"
+log_file = open(log_path, "w", encoding="utf-8")
+sys.stdout, sys.stderr = log_file, log_file
+
+import FreeCAD as App
+import FreeCADGui
+import ImportGui
+import Part
+import importDXF
+
+try:
+    prefs = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Draft")
+    prefs.SetBool("TeighaCheck", False)
+    prefs.SetBool("UseTeigha", False)
+    prefs.SetBool("dxfShowDialog", False)
+
+    prefs_step = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Import/hSTEP")
+    prefs_step.SetBool("ExportFreeEdges", True)
+    prefs_step.SetBool("ExportFreeWires", True)
+    prefs_step.SetInt("WriteSchema", 2)
+except Exception:
+    pass
+
+def silenciar_ventanas_emergentes():
+    for mod in ['PySide6', 'PySide2', 'PyQt6', 'PyQt5']:
+        try:
+            QtWidgets = importlib.import_module(f"{mod}.QtWidgets")
+            QtWidgets.QMessageBox.information = lambda *a, **kw: None
+            QtWidgets.QMessageBox.warning = lambda *a, **kw: None
+            QtWidgets.QMessageBox.critical = lambda *a, **kw: None
+            QtWidgets.QMessageBox.question = lambda *a, **kw: 65536
+            QtWidgets.QDialog.exec = lambda self, *a, **kw: 0
+            if hasattr(QtWidgets.QDialog, 'exec_'):
+                QtWidgets.QDialog.exec_ = lambda self, *a, **kw: 0
+            return
+        except Exception:
+            pass
+
+silenciar_ventanas_emergentes()
+
+def _env_float(name: str, default: float) -> float:
+    try: return float(os.getenv(name, str(default)))
+    except: return default
+
+def _env_str(name: str, default: str) -> str:
+    try:
+        v = os.getenv(name, default)
+        return str(v) if v is not None else default
+    except: return default
+
+def _collect_closed_wires(obj):
+    wires = []
+    if not hasattr(obj, "Shape") or obj.Shape.isNull(): return wires
+    try:
+        for w in obj.Shape.Wires:
+            if w and w.isClosed(): wires.append(w)
+    except: pass
+    if not wires:
+        try:
+            for g in Part.sortEdges(obj.Shape.Edges):
+                w = Part.Wire(g)
+                if w.isClosed(): wires.append(w)
+        except: pass
+    return wires
+
+def _collect_edges(obj):
+    edges = []
+    if not hasattr(obj, "Shape") or obj.Shape.isNull(): return edges
+    try:
+        for e in obj.Shape.Edges: edges.append(e)
+    except: pass
+    return edges
+
+def _aplicar_offset_2d(wires, offset_val):
+    if abs(offset_val) < 0.001: return wires
+    new_wires = []
+    for w in wires:
+        try:
+            off_shape = w.makeOffset2D(offset_val, join=2)
+            for nw in off_shape.Wires:
+                if nw.isClosed(): new_wires.append(nw)
+        except Exception: new_wires.append(w)
+    return new_wires if new_wires else wires
+
+def _reconstruir_circulos_estricto(wire):
+    if not wire.isClosed(): return wire
+    bb = wire.BoundBox
+    dx = bb.XMax - bb.XMin
+    dy = bb.YMax - bb.YMin
+    if dx < 1e-3 or dy < 1e-3: return wire
+    if abs(dx - dy) / max(dx, dy) > 0.05: return wire
+    radius = (dx + dy) / 4.0
+    center = App.Vector(bb.XMin + dx/2.0, bb.YMin + dy/2.0, bb.ZMin)
+    for v in wire.Vertexes:
+        dist = (v.Point - center).Length
+        if abs(dist - radius) > (radius * 0.08): return wire
+    try:
+        circ_edge = Part.makeCircle(radius, center, App.Vector(0,0,1))
+        return Part.Wire(circ_edge)
+    except: return wire
+
+def _pick_biggest_wire(wires):
+    if not wires: return None
+    best = None
+    best_area = -1.0
+    for w in wires:
+        bb = w.BoundBox
+        area = (bb.XMax - bb.XMin) * (bb.YMax - bb.YMin)
+        if area > best_area:
+            best_area = area
+            best = w
+    return best
+
+LAYER_LIBRARY = [
+    {
+        # Biblioteca dedicada para DXF de Robot Laser + Mini Nest con capas numéricas.
+        # Capa 1 trae todo: contornos externos, internos e islas.
+        "name": "ROBOT_LASER_MINI_NUMERIC_V2",
+        "outer": set(),
+        "inner": set(),
+        "mixed_contour": {"1"},
+        "mark": {"4"},
+        "plate": {"6"},
+        "predicate": lambda layers: bool(layers) and set(layers).issubset({"1", "4", "6"}),
+    },
+    {
+        "name": "ARGA_NESTING_STD",
+        "outer": {"CUT_OUTER", "OUTER", "EXTER"},
+        "inner": {"CUT_INNER", "INNER", "INTER"},
+        "mark": {"MARK", "ETCH", "TEXT"},
+        "plate": {"PLATE"},
+        "mixed_contour": set(),
+        "predicate": lambda layers: True,  # perfil base
+    },
+]
+
+def _resolver_perfil_capas(layers_presentes):
+    for prof in LAYER_LIBRARY:
+        try:
+            if prof["predicate"](layers_presentes):
+                return prof
+        except Exception:
+            continue
+    return LAYER_LIBRARY[-1]
+
+def _label_matches_any(lbl, keys):
+    if not keys:
+        return False
+    lbl = (lbl or "").strip().upper()
+    if not lbl:
+        return False
+    tokens = [t for t in re.split(r"[^A-Z0-9_.-]+", lbl) if t]
+    for k in keys:
+        ku = str(k).strip().upper()
+        if not ku:
+            continue
+        if ku.isdigit():
+            if lbl == ku or ku in tokens:
+                return True
+        else:
+            if ku in lbl:
+                return True
+    return False
+
+def _collect_labels_from_doc(doc):
+    labels = []
+    for obj in getattr(doc, "Objects", []):
+        try:
+            labels.append(str(getattr(obj, "Label", "") or ""))
+        except Exception:
+            pass
+        try:
+            if hasattr(obj, "Group") and obj.Group:
+                for c in obj.Group:
+                    labels.append(str(getattr(c, "Label", "") or ""))
+        except Exception:
+            pass
+    return labels
+
+def _resolver_perfil_desde_labels(labels):
+    # 1) Forzar perfil numérico cuando aparezcan capas 1/4/6 en etiquetas de FreeCAD.
+    has1 = any(_label_matches_any(lbl, {"1"}) for lbl in labels)
+    has4 = any(_label_matches_any(lbl, {"4"}) for lbl in labels)
+    has6 = any(_label_matches_any(lbl, {"6"}) for lbl in labels)
+    if has1 and (has4 or has6):
+        for prof in LAYER_LIBRARY:
+            if prof["name"] == "ROBOT_LASER_MINI_NUMERIC_V2":
+                return prof
+
+    # 2) Fallback a detección previa.
+    norm = set()
+    for lbl in labels:
+        u = str(lbl or "").strip().upper()
+        if u:
+            norm.add(u)
+    return _resolver_perfil_capas(norm)
+
+def _clasificar_wires_paridad(wires):
+    """
+    Clasifica contornos mezclados por profundidad de anidamiento:
+    - profundidad par  -> material (outer / islas)
+    - profundidad impar -> corte (inner)
+    """
+    if not wires:
+        return [], []
+
+    wf = []
+    for w in wires:
+        try:
+            f = Part.Face(w)
+            if not f.isNull() and f.Area > 1e-7:
+                wf.append((w, f))
+        except Exception:
+            pass
+
+    if not wf:
+        return [], []
+
+    material = []
+    cortes = []
+    for i, (w_i, f_i) in enumerate(wf):
+        try:
+            p_i = f_i.CenterOfMass
+        except Exception:
+            material.append(w_i)
+            continue
+
+        depth = 0
+        area_i = abs(float(getattr(f_i, "Area", 0.0) or 0.0))
+        for j, (_w_j, f_j) in enumerate(wf):
+            if i == j:
+                continue
+            try:
+                area_j = abs(float(getattr(f_j, "Area", 0.0) or 0.0))
+                if area_j <= area_i:
+                    continue
+                if f_j.isInside(p_i, 1e-6, True):
+                    depth += 1
+            except Exception:
+                pass
+
+        if depth % 2 == 0:
+            material.append(w_i)
+        else:
+            cortes.append(w_i)
+
+    return material, cortes
+
+# ==========================================================
+# TU FUNCIÓN CLAVE PARA EVITAR SURFACE BODIES
+# ==========================================================
+def _solo_solidos(shape):
+    """
+    Devuelve SOLO sólidos (sin shells/surfaces).
+    Esto evita que el STEP exporte Surface Bodies en Inventor/PQart.
+    """
+    if not shape or getattr(shape, "isNull", lambda: True)():
+        return shape
+    try:
+        sols = list(shape.Solids)
+    except Exception:
+        sols = []
+
+    if not sols:
+        return shape  # no hay sólidos; devolvemos tal cual
+
+    if len(sols) == 1:
+        return sols[0]
+
+    try:
+        return Part.makeCompound(sols)
+    except Exception:
+        return sols[0]
+
+
+def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_y, off_z):
+    name = os.path.splitext(os.path.basename(dxf_path))[0]
+
+    # Queremos conservar el identificador útil para seguimiento:
+    # ejemplo:
+    # NESTING_0.105_W.O. 11 X8-H27  ->  W.O. 11 X8-H27
+    step_base = name
+    idx = name.upper().find("W.O.")
+    if idx != -1:
+        step_base = name[idx:].strip()
+
+    out_step = os.path.join(step_out_dir, f"{step_base}.step")
+    print(f"[{name}] Nombre STEP usado: {step_base}.step")
+
+    doc = App.newDocument(f"DXF_{name}")
+    importDXF.insert(dxf_path, doc.Name)
+    doc.recompute()
+
+    outer_w, inner_w, plate_w, mark_e = [], [], [], []
+    mixed_contours = []
+    labels_doc = _collect_labels_from_doc(doc)
+    perfil = _resolver_perfil_desde_labels(labels_doc)
+    print(f"[{name}] Perfil de capas activo: {perfil['name']}")
+    for obj in doc.Objects:
+        if hasattr(obj, "Group") and obj.Group:
+            lbl = obj.Label.upper()
+            if _label_matches_any(lbl, perfil.get("mark", set())):
+                for c in obj.Group:
+                    mark_e.extend(_collect_edges(c))
+            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
+                for c in obj.Group:
+                    mixed_contours.extend(_collect_closed_wires(c))
+            elif _label_matches_any(lbl, perfil.get("outer", set())):
+                for c in obj.Group:
+                    ws = _collect_closed_wires(c)
+                    outer_w.extend(ws)
+            elif _label_matches_any(lbl, perfil.get("inner", set())):
+                for c in obj.Group:
+                    ws = _collect_closed_wires(c)
+                    inner_w.extend(ws)
+            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
+                for c in obj.Group:
+                    ws = _collect_closed_wires(c)
+                    plate_w.extend(ws)
+
+    if not outer_w and not inner_w and not plate_w and not mark_e:
+        for obj in doc.Objects:
+            if hasattr(obj, "Group"): continue
+            lbl = obj.Label.upper()
+            if _label_matches_any(lbl, perfil.get("mark", set())):
+                mark_e.extend(_collect_edges(obj))
+            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
+                mixed_contours.extend(_collect_closed_wires(obj))
+            elif _label_matches_any(lbl, perfil.get("outer", set())):
+                ws = _collect_closed_wires(obj)
+                outer_w.extend(ws)
+            elif _label_matches_any(lbl, perfil.get("inner", set())):
+                ws = _collect_closed_wires(obj)
+                inner_w.extend(ws)
+            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
+                ws = _collect_closed_wires(obj)
+                plate_w.extend(ws)
+
+    if mixed_contours:
+        mats, cuts = _clasificar_wires_paridad(mixed_contours)
+        outer_w.extend(mats)
+        inner_w.extend(cuts)
+        print(f"[{name}] MIXED contour layer -> material:{len(mats)} cortes:{len(cuts)}")
+
+    print(f"\n[{name}] -> OUTER: {len(outer_w)}, INNER: {len(inner_w)}, LINEAS MARCAJE: {len(mark_e)}")
+
+    if not outer_w:
+        App.closeDocument(doc.Name)
+        return
+
+    plasma_offset = _env_float("FREECAD_PLASMA_OFFSET", 0.0)
+    if abs(plasma_offset) > 0.001:
+        outer_w = _aplicar_offset_2d(outer_w, plasma_offset)
+        inner_w = _aplicar_offset_2d(inner_w, -plasma_offset)
+        plate_w = _aplicar_offset_2d(plate_w, plasma_offset) if plate_w else plate_w
+
+
+    if abs(scale - 1.0) > 1e-9:
+        m = App.Matrix()
+        m.A11, m.A22, m.A33 = scale, scale, scale
+        outer_w = [w.transformGeometry(m) for w in outer_w]
+        inner_w = [w.transformGeometry(m) for w in inner_w]
+        plate_w = [w.transformGeometry(m) for w in plate_w]
+        mark_e = [e.transformGeometry(m) for e in mark_e]
+
+    # SELECCIÓN Y CREACIÓN DEL PLATE (Cortador de Galletas)
+    plate_wire = _pick_biggest_wire(plate_w)
+    if not plate_wire: plate_wire = _pick_biggest_wire(outer_w)
+    if not plate_wire:
+        App.closeDocument(doc.Name)
+        return
+
+    try:
+        # Construye la placa y la limpia a sólido puro
+        plate_solid = Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
+        plate_solid = _solo_solidos(plate_solid)
+    except Exception as e:
+        print(f"[{name}] ERROR construyendo PLATE: {e}")
+        App.closeDocument(doc.Name)
+        return
+
+    # POSICIONAMIENTO GLOBAL
+    caja_total = plate_solid.BoundBox
+    if origen_tipo == "TR": dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMax
+    else: dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMin
+
+    dx_final, dy_final, dz_final = dx_ancla + off_x, dy_ancla + off_y, off_z
+    mov = App.Vector(dx_final, dy_final, dz_final)
+
+    plate_solid.translate(mov)
+    outer_w_m = [w.copy().translate(mov) for w in outer_w]
+    inner_w_m = [w.copy().translate(mov) for w in inner_w]
+    
+    mark_e_m = []
+    for e in mark_e:
+        try:
+            ec = e.copy()
+            ec.translate(App.Vector(dx_final, dy_final, 0)) # La Z se ajusta en los ribbons
+            mark_e_m.append(ec)
+        except: pass
+
+    # ==========================================================
+    # PASO 1: PERFORAR INNER EN EL PLATE
+    # ==========================================================
+    try:
+        hole_tools = []
+        vec_hole = App.Vector(0, 0, thk_mm + 2.0)
+        for iw in inner_w_m:
+            try:
+                h = Part.Face(iw).extrude(vec_hole)
+                h.translate(App.Vector(0, 0, -1.0))
+                hole_tools.append(h)
+            except: pass
+
+        if hole_tools:
+            comp_holes = Part.makeCompound(hole_tools)
+            plate_solid = plate_solid.cut(comp_holes)
+            plate_solid = _solo_solidos(plate_solid) # Limpiamos de inmediato
+    except Exception as e:
+        print(f"[{name}] ERROR cortando INNER: {e}")
+
+    # ==========================================================
+    # PASO 2: TU LÓGICA DE MARCAJE (IMPRINT generalFuse)
+    # ==========================================================
+    try:
+        mark_mode = _env_str("FREECAD_MARK_MODE", "IMPRINT").strip().upper()
+        mark_z_offset = _env_float("FREECAD_MARK_Z_OFFSET", -0.5)
+        rib_h = _env_float("FREECAD_MARK_RIB_H", 1.0)
+        
+        vector_marcas_z = App.Vector(0, 0, dz_final + thk_mm + mark_z_offset)
+        vec_up = App.Vector(0, 0, rib_h)
+        ribbons = []
+
+        if mark_e_m:
+            for edge in mark_e_m:
+                try:
+                    e_rib = edge.copy()
+                    e_rib.translate(vector_marcas_z)
+                    if mark_mode == "IMPRINT":
+                        rib = e_rib.extrude(vec_up) # Tu lógica de sheet/surface
+                        if not rib.isNull():
+                            ribbons.append(rib)
+                except: pass
+            
+            print(f"[{name}] MARK MODE = {mark_mode} | Ribbons a fusionar: {len(ribbons)}")
+            
+            if ribbons:
+                # Chunking de ribbons para no colapsar generalFuse
+                chunk = 100
+                for i in range(0, len(ribbons), chunk):
+                    bloque = ribbons[i:i+chunk]
+                    try:
+                        comp_rib = Part.makeCompound(bloque)
+                        # Tu Imprint booleano exacto
+                        temp_shape = plate_solid.generalFuse([comp_rib])[0]
+                        temp_shape = _solo_solidos(temp_shape) 
+                        if temp_shape and not temp_shape.isNull():
+                            plate_solid = temp_shape
+                    except:
+                        # Fallback uno por uno como lo tenías
+                        for rib in bloque:
+                            try:
+                                temp_shape = plate_solid.generalFuse([rib])[0]
+                                temp_shape = _solo_solidos(temp_shape)
+                                if temp_shape and not temp_shape.isNull():
+                                    plate_solid = temp_shape
+                            except: pass
+                            
+                # Limpieza final del Plate marcado
+                plate_solid = _solo_solidos(plate_solid)
+    except Exception as e:
+        print(f"[{name}] ERROR en proceso IMPRINT: {e}")
+
+    # ==========================================================
+    # PASO 3: EXTRACCIÓN CON EL CORTADOR DE GALLETAS (OUTER)
+    # ==========================================================
+    try:
+        print(f"[{name}] Extrayendo piezas con INTERSECT...")
+        parts = []
+        vec_prism = App.Vector(0, 0, thk_mm + 2.0)
+
+        for ow in outer_w_m:
+            try:
+                prism = Part.Face(ow).extrude(vec_prism)
+                prism.translate(App.Vector(0,0,-1.0))
+                
+                # Interceptamos el gran Plate (que ya tiene los agujeros e imprints)
+                piece = plate_solid.common(prism)
+                
+                # Obligamos a que la pieza final no tenga basura superficial
+                piece = _solo_solidos(piece)
+
+                if hasattr(piece, "Volume") and piece.Volume > 1e-6:
+                    parts.append(piece)
+            except: pass
+
+        if not parts:
+            App.closeDocument(doc.Name)
+            return
+
+        # ==========================================================
+        # PASO 4: EMPAQUETAR Y EXPORTAR (IPT MULTIBODY)
+        # ==========================================================
+        color_verde = (0.0, 0.66, 0.42, 0.0)
+        master_compound = Part.makeCompound(parts)
+        f_master = doc.addObject("Part::Feature", name)
+        f_master.Shape = master_compound
+        if f_master.ViewObject: f_master.ViewObject.ShapeColor = color_verde
+
+        doc.recompute()
+        FreeCADGui.updateGui()
+
+        print(f"[{name}] STEP destino final: {out_step}")
+        print(f"[{name}] Carpeta STEP existe: {os.path.isdir(os.path.dirname(out_step))}")
+        print(f"[{name}] Carpeta STEP: {os.path.dirname(out_step)}")
+
+        try:
+            test_file = out_step + ".write_test"
+            with open(test_file, "wb") as tf:
+                tf.write(b"ok")
+            os.remove(test_file)
+            print(f"[{name}] WRITE TEST OK en carpeta STEP")
+        except Exception as e:
+            print(f"[{name}] WRITE TEST FAIL en carpeta STEP: {e}")
+
+        ImportGui.export([f_master], out_step)
+        print(f"[{name}] STEP IPT MULTIBODY EXPORTADO -> {out_step}")
+        print(f"==========================================================\n")
+
+    except Exception as e:
+        print(f"[{name}] ERROR exportando: {e}")
+        traceback.print_exc()
+
+    App.closeDocument(doc.Name)
+
+try:
+    dxf_in = os.getenv("FREECAD_DXF_IN", r"C:\NEST_EXPORTS")
+    step_out = os.getenv("FREECAD_STEP_OUT", dxf_in)
+    thk = _env_float("FREECAD_THK_MM", 6.35)
+    scl = _env_float("FREECAD_SCALE", 1.0)
+
+    ori = os.getenv("FREECAD_ORIGIN", "TR")
+    ox = _env_float("FREECAD_OFFSET_X", 0.0)
+    oy = _env_float("FREECAD_OFFSET_Y", 0.0)
+    oz = _env_float("FREECAD_OFFSET_Z", 0.0)
+
+    files = sorted(glob.glob(os.path.join(dxf_in, "*.dxf")))
+    print(f"Procesando {len(files)} archivos...")
+    for f in files:
+        procesar_dxf(f, step_out, thk, scl, ori, ox, oy, oz)
+
+except Exception as e:
+    print(f"ERROR GENERAL: {e}")
+    traceback.print_exc()
+
+finally:
+    log_file.close()
+    os._exit(0)

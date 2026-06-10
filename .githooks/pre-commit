@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+
+if [ -x ".venv/Scripts/python.exe" ]; then
+  PYTHON_CMD=".venv/Scripts/python.exe"
+elif [ -x ".venv/bin/python" ]; then
+  PYTHON_CMD=".venv/bin/python"
+else
+  PYTHON_CMD="python"
+fi
+
+echo "[context] Regenerating PROJECT_CONTEXT files..."
+"$PYTHON_CMD" scripts/generate_project_context.py
+
+git add PROJECT_CONTEXT.md project_context.json PROJECT_CODE_LISTING.txt
+echo "[context] PROJECT_CONTEXT files updated."

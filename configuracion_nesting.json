@@ -1,0 +1,15 @@
+{
+    "margins": {
+        "top": 10.0,
+        "bottom": 10.0,
+        "left": 10.0,
+        "right": 10.0
+    },
+    "spacing": 5.0,
+    "rotations": {
+        "allow_90": 1,
+        "allow_45": 0,
+        "allow_free": 0
+    },
+    "algorithm": "Bottom-Left (Est\u00e1ndar)"
+}

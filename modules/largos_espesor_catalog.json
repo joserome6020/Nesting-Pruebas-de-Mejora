@@ -1,0 +1,170 @@
+{
+  "PTR051": {
+    "clasificacion": "PTR 1 x 1 x 3/16",
+    "espesor": "0.169"
+  },
+  "PTR045": {
+    "clasificacion": "PTR 2 x 2 x 0.339",
+    "espesor": "0.339"
+  },
+  "PTR052": {
+    "clasificacion": "PTR 2",
+    "espesor": ""
+  },
+  "PTR053": {
+    "clasificacion": "PTR 2 x 2 x 0.441",
+    "espesor": "0.441"
+  },
+  "PTR044": {
+    "clasificacion": "PTR 3 x 3 x 0.671",
+    "espesor": "0.671"
+  },
+  "PTR018": {
+    "clasificacion": "PTR 3 x 3 x 0.354",
+    "espesor": "0.354"
+  },
+  "PTR013": {
+    "clasificacion": "PTR 3 x 3 x 3/16",
+    "espesor": "0.201"
+  },
+  "PTR016": {
+    "clasificacion": "PTR 4 x 4 x 1/4",
+    "espesor": "0.25"
+  },
+  "PTR021": {
+    "clasificacion": "PTR 4 x 4 x 5/16",
+    "espesor": "0.323"
+  },
+  "PTR027": {
+    "clasificacion": "PTR 4 x 4 x 1/2",
+    "espesor": "0.495"
+  },
+  "PTR034": {
+    "clasificacion": "PTR 4",
+    "espesor": ""
+  },
+  "SLC024": {
+    "clasificacion": "Solera 4 x 2",
+    "espesor": "2.0"
+  },
+  "SLC036": {
+    "clasificacion": "Solera 1 x 1/2",
+    "espesor": "0.5"
+  },
+  "SLC039": {
+    "clasificacion": "Solera 2 x 3/8",
+    "espesor": "0.375"
+  },
+  "SLC047": {
+    "clasificacion": "Solera 3 x 3/4",
+    "espesor": "0.75"
+  },
+  "SLC046": {
+    "clasificacion": "Solera 3 x 1/2",
+    "espesor": "0.5"
+  },
+  "SLC051": {
+    "clasificacion": "Solera 4 x 1/2",
+    "espesor": "0.5"
+  },
+  "SCO002": {
+    "clasificacion": "Solera 2 x 1/2",
+    "espesor": "0.5"
+  },
+  "SLC041": {
+    "clasificacion": "Solera 2 x 3/16",
+    "espesor": "0.188"
+  },
+  "SCO014": {
+    "clasificacion": "Solera 4 x 1/4",
+    "espesor": "0.25"
+  },
+  "SCO003": {
+    "clasificacion": "Solera 4 x 1/8",
+    "espesor": "0.125"
+  },
+  "SCO015": {
+    "clasificacion": "Solera 5 x 1/4",
+    "espesor": "0.25"
+  },
+  "SLS006": {
+    "clasificacion": "Solera 1 x 1/2",
+    "espesor": "0.5"
+  },
+  "SLS008": {
+    "clasificacion": "Solera 2 x 1/2",
+    "espesor": "0.5"
+  },
+  "SLS011": {
+    "clasificacion": "Solera 4 x 1/2",
+    "espesor": "0.5"
+  },
+  "HR174": {
+    "clasificacion": "TUBO HR174",
+    "espesor": ""
+  },
+  "HR169": {
+    "clasificacion": "TUBO HR169",
+    "espesor": ""
+  },
+  "HR211": {
+    "clasificacion": "TUBO HR211",
+    "espesor": ""
+  },
+  "HR220": {
+    "clasificacion": "TUBO HR220",
+    "espesor": ""
+  },
+  "HR164": {
+    "clasificacion": "TUBO HR164",
+    "espesor": ""
+  },
+  "HR166": {
+    "clasificacion": "TUBO HR166",
+    "espesor": ""
+  },
+  "HR167": {
+    "clasificacion": "TUBO HR167",
+    "espesor": ""
+  },
+  "HR212": {
+    "clasificacion": "TUBO HR212",
+    "espesor": ""
+  },
+  "RED025": {
+    "clasificacion": "Varilla RED025",
+    "espesor": ""
+  },
+  "RED027": {
+    "clasificacion": "Varilla RED027",
+    "espesor": ""
+  },
+  "RED028": {
+    "clasificacion": "Varilla RED028",
+    "espesor": ""
+  },
+  "RED024": {
+    "clasificacion": "Varilla RED024",
+    "espesor": ""
+  },
+  "RED040": {
+    "clasificacion": "Varilla RED040",
+    "espesor": ""
+  },
+  "RED035": {
+    "clasificacion": "Varilla RED035",
+    "espesor": ""
+  },
+  "VIG047": {
+    "clasificacion": "Viga IPR 1",
+    "espesor": ""
+  },
+  "VIG044": {
+    "clasificacion": "Viga IPR 1",
+    "espesor": ""
+  },
+  "VIG033": {
+    "clasificacion": "Viga IPR 1",
+    "espesor": ""
+  }
+}

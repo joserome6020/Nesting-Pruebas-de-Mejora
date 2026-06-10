@@ -1,0 +1,41 @@
+[2026-03-27 10:29:15] ======================================================
+[2026-03-27 10:29:15] 🌙 INICIANDO TURNO NOCTURNO: Escaneo de Modelos 3D
+[2026-03-27 10:29:15] ======================================================
+[2026-03-27 10:29:15] Trabajos pendientes detectados: 0
+[2026-03-27 10:29:15] 💤 No hay trabajos pendientes. El sistema volverá a dormir.
+[2026-03-27 10:29:15] 🏁 Turno Nocturno Finalizado.
+[2026-03-27 10:31:10] ======================================================
+[2026-03-27 10:31:10] 🌙 INICIANDO TURNO NOCTURNO: Escaneo de Modelos 3D
+[2026-03-27 10:31:10] ======================================================
+[2026-03-27 10:31:10] Trabajos pendientes detectados: 2
+[2026-03-27 10:31:10] ------------------------------------------------------
+[2026-03-27 10:31:10] 🚀 Procesando ruta_exportacion: \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE
+[2026-03-27 10:31:10] 📦 Calibre original en BD: 0.375_CARBONO
+[2026-03-27 10:31:10] Ruta NESTING esperada: \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING
+[2026-03-27 10:31:10] 📐 Espesor detectado: 0.375" (9.524999999999999 mm)
+[2026-03-27 10:31:10] 🔥 Offset plasma calculado: 0.3175 mm
+[2026-03-27 10:31:10] RUTA [laser_dxf] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Laser\DXF | existe=False
+[2026-03-27 10:31:10] RUTA [plasma_dxf] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Plasma\DXF | existe=False
+[2026-03-27 10:31:10] RUTA [laser_step_A] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Laser\STEP\Cama A | existe=True
+[2026-03-27 10:31:10] RUTA [laser_step_B] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Laser\STEP\Cama B | existe=True
+[2026-03-27 10:31:10] RUTA [plasma_step_A] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Plasma\STEP\Cama A | existe=True
+[2026-03-27 10:31:10] RUTA [plasma_step_B] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 7 X8\ARGA MODEL CORE\NESTING\Plasma\STEP\Cama B | existe=True
+[2026-03-27 10:31:10] DXF detectados | LASER=0 | PLASMA=0
+[2026-03-27 10:31:10] ❌ No hay DXF en Laser\DXF ni en Plasma\DXF.
+[2026-03-27 10:31:10] ⏸️ No se marca COMPLETADO. Se deja en PENDIENTE.
+[2026-03-27 10:31:10] ------------------------------------------------------
+[2026-03-27 10:31:10] 🚀 Procesando ruta_exportacion: \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE
+[2026-03-27 10:31:10] 📦 Calibre original en BD: 0.375_CARBONO
+[2026-03-27 10:31:10] Ruta NESTING esperada: \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING
+[2026-03-27 10:31:10] 📐 Espesor detectado: 0.375" (9.524999999999999 mm)
+[2026-03-27 10:31:10] 🔥 Offset plasma calculado: 0.3175 mm
+[2026-03-27 10:31:10] RUTA [laser_dxf] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Laser\DXF | existe=False
+[2026-03-27 10:31:10] RUTA [plasma_dxf] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Plasma\DXF | existe=False
+[2026-03-27 10:31:10] RUTA [laser_step_A] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Laser\STEP\Cama A | existe=True
+[2026-03-27 10:31:10] RUTA [laser_step_B] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Laser\STEP\Cama B | existe=True
+[2026-03-27 10:31:10] RUTA [plasma_step_A] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Plasma\STEP\Cama A | existe=True
+[2026-03-27 10:31:10] RUTA [plasma_step_B] => \\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals\ARGA METALS CORPORATE SYSTEM\PRODUCTO_TEST\CLIENTE_TEST\1500KVA\MODEL CORE FILES\W.O. 8 X9\ARGA MODEL CORE\NESTING\Plasma\STEP\Cama B | existe=True
+[2026-03-27 10:31:10] DXF detectados | LASER=0 | PLASMA=0
+[2026-03-27 10:31:10] ❌ No hay DXF en Laser\DXF ni en Plasma\DXF.
+[2026-03-27 10:31:10] ⏸️ No se marca COMPLETADO. Se deja en PENDIENTE.
+[2026-03-27 10:31:10] 🏁 Turno Nocturno Finalizado.

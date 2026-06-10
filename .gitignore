@@ -1,0 +1,18 @@
+# Sistema y carpetas protegidas
+System Volume Information/
+$RECYCLE.BIN/
+TEMP_PROCESSED/
+
+# Python y entorno virtual
+.venv/
+__pycache__/
+*.pyc
+
+# Archivos pesados o temporales
+*.rar
+*.zip
+# Contexto y carpetas auxiliares
+ARGA-NESTING-SOFTWARE/
+Contexto_ArgaNestingSuite.txt
+Contexto_Rapido/
+herinox_sync.local.json
