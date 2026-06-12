@@ -13,10 +13,16 @@ from .geometry_parser import generar_texto_vectorial
 
 
 def _overlay_ligado_a_rtz(nombre: str, rtz_id: str) -> bool:
+    """Overlays cuyo nombre incluye el id del RTZ (tatuaje, guillotina)."""
     n = str(nombre or "")
     rid = str(rtz_id or "")
     if not rid or rid not in n:
         return False
+    return n.startswith("TATUAJE__") or n.startswith("RETAZO_GUILLOTINA__")
+
+
+def _es_overlay_rtz_madre(nombre: str) -> bool:
+    n = str(nombre or "")
     return (
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
@@ -88,11 +94,14 @@ def _inferir_global_rtz(madre, rtz_hoja):
     return 0.0, 0.0
 
 
-def _quitar_overlays_rtz(madre, rtz_id):
+def _purge_rtz_overlays_madre(madre):
+    """Quita REF__/TATUAJE__/RETAZO_GUILLOTINA__ antes de regenerar desde cero."""
+    if not isinstance(madre, dict):
+        return
     madre["piezas"] = [
         p
         for p in (madre.get("piezas") or [])
-        if not _overlay_ligado_a_rtz(p.get("nombre", ""), rtz_id)
+        if not _es_overlay_rtz_madre(str(p.get("nombre", "") or ""))
     ]
 
 
@@ -129,8 +138,6 @@ def _reconstruir_overlays_rtz_en_madre(madre, rtz_hoja):
     rtz_id = str(rtz_hoja.get("placa_id", "") or "")
     if not rtz_id:
         return
-
-    _quitar_overlays_rtz(madre, rtz_id)
 
     gx, gy = _inferir_global_rtz(madre, rtz_hoja)
     rtz_hoja["global_x"] = gx
@@ -308,7 +315,12 @@ def sincronizar_overlays_grupo(hojas):
     for i, hoja in enumerate(hojas):
         if not isinstance(hoja, dict) or hoja.get("es_retazo"):
             continue
-        for rtz in _rtz_hojas_de_madre(hojas, i):
+        rtz_hijos = _rtz_hojas_de_madre(hojas, i)
+        if not rtz_hijos:
+            continue
+        # Una sola purga por placa madre evita acumular REF__ (p. ej. ×7 en re-sync).
+        _purge_rtz_overlays_madre(hoja)
+        for rtz in rtz_hijos:
             _reconstruir_overlays_rtz_en_madre(hoja, rtz)
 
 

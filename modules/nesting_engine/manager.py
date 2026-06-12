@@ -1,31 +1,42 @@
 import concurrent.futures
 import multiprocessing
+import random
 import threading
 import copy
 import re
 import time
 import os
+from collections import Counter
 from datetime import datetime
 from shapely.geometry import box, Polygon, LineString
 from shapely import affinity
 from shapely.ops import unary_union
+from shapely.prepared import prep
 
 from .geometry_parser import (
     recuperar_geometria_robusta,
     reconstruir_poly_seguro,
     reconstruir_marks,
     generar_texto_vectorial,
+    poligonos_desde_shapely,
 )
-from .algorithm import empaquetar_una_hoja_mc
+from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .efficiency_metrics import actualizar_eficiencias_hoja, calcular_eficiencias_grupo
 from .exporter import exportar_resultados_a_dxf
-from .rtz_overlays import sincronizar_overlays_grupo, sincronizar_overlays_resultados
+from .rtz_overlays import (
+    sincronizar_overlays_grupo,
+    sincronizar_overlays_resultados,
+    _rtz_hojas_de_madre,
+    _inferir_global_rtz,
+)
 
 DEBUG_DIR = r"C:\NEST_EXPORTS"
 DEBUG_LOG_NESTING = os.path.join(DEBUG_DIR, "nesting_debug_geometry.txt")
 DEFAULT_KERF_IN = 0.3
 DEFAULT_MARGIN_IN = 0.15
 THICKNESS_TOLERANCE_PCT = 0.15
+SLIDE_STEP_MM = 4.0
+TRANSFER_ROTATIONS = (0, 90, 180, 270)
 
 
 def _dbg_nesting(msg: str):
@@ -252,38 +263,57 @@ def _clamp_retazo_mini_nest_a_cama_laser(retazo: dict):
 
 
 def _crear_poly_nesting_seguro(poly_exact):
-    """
-    Genera una versión de trabajo SOLO si no altera topología real.
-    Si hay cualquier duda, regresa la geometría exacta.
-    """
-    if poly_exact is None or poly_exact.is_empty:
-        return poly_exact
+    """Fidelidad 1:1 al DXF: no simplificar nunca la geometría de trabajo."""
+    return poly_exact
 
+
+def _marks_geom_to_lista(marks_geom):
+    if marks_geom is None or getattr(marks_geom, "is_empty", True):
+        return []
+    geoms = list(marks_geom.geoms) if hasattr(marks_geom, "geoms") else [marks_geom]
+    out = []
+    for g in geoms:
+        try:
+            if len(g.coords) >= 2:
+                out.append(list(g.coords))
+        except Exception:
+            pass
+    return out
+
+
+def _origen_rotacion_pieza(poly):
+    """Mismo criterio que el motor C++: rotar alrededor del centroide del contorno."""
     try:
-        poly_try = poly_exact.simplify(0.10, preserve_topology=True)
-
-        if poly_try is None or poly_try.is_empty:
-            return poly_exact
-
-        if not poly_try.is_valid:
-            poly_try = poly_try.buffer(0)
-
-        if poly_try is None or poly_try.is_empty or not poly_try.is_valid:
-            return poly_exact
-
-        # No permitimos perder agujeros
-        if _safe_holes(poly_try) != _safe_holes(poly_exact):
-            return poly_exact
-
-        # No permitimos cambios de área apreciables
-        area_base = max(float(poly_exact.area), 1.0)
-        delta_area = abs(float(poly_try.area) - float(poly_exact.area)) / area_base
-        if delta_area > 0.001:
-            return poly_exact
-
-        return poly_try
+        c = poly.centroid
+        return (float(c.x), float(c.y))
     except Exception:
-        return poly_exact
+        return (0.0, 0.0)
+
+
+def _colocar_geometria_exacta_en_pieza(p_orig: dict, p_final: dict, transform: dict | None):
+    """
+    No reescribe poligonos: la posición la define el motor de nesting.
+    Solo completa marcas si el motor no devolvió ninguna.
+    """
+    marcas_motor = list(p_final.get("marcas") or [])
+    if marcas_motor:
+        return
+
+    pe = p_orig.get("poly_exact") or p_orig.get("poly")
+    if pe is None or pe.is_empty:
+        return
+
+    rot = float((transform or {}).get("rot_deg", 0.0) or 0.0)
+    sx = float((transform or {}).get("shift_x", 0.0) or 0.0)
+    sy = float((transform or {}).get("shift_y", 0.0) or 0.0)
+    origin = _origen_rotacion_pieza(pe)
+
+    me = p_orig.get("marks_exact") or p_orig.get("marks")
+    if me is not None and not getattr(me, "is_empty", True):
+        mk = affinity.translate(affinity.rotate(me, rot, origin=origin), sx, sy)
+        lista = _marks_geom_to_lista(mk)
+        if lista:
+            p_final["marcas"] = lista
 
 
 def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
@@ -314,11 +344,12 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
         else:
             final_marks_zero = None
 
+        rot_origin = _origen_rotacion_pieza(poly_local)
         best = None
         best_score = -10**9
 
         for ang in (0, 90, 180, 270):
-            test_poly = affinity.rotate(poly_local, ang, origin=(0, 0))
+            test_poly = affinity.rotate(poly_local, ang, origin=rot_origin)
             tminx, tminy, _, _ = test_poly.bounds
             test_poly_zero = affinity.translate(test_poly, -tminx, -tminy)
 
@@ -338,7 +369,7 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
                 and not getattr(final_marks_zero, "is_empty", True)
             ):
                 try:
-                    test_marks = affinity.rotate(marks_local, ang, origin=(0, 0))
+                    test_marks = affinity.rotate(marks_local, ang, origin=rot_origin)
                     test_marks_zero = affinity.translate(test_marks, -tminx, -tminy)
 
                     # buffer pequeño para comparar líneas
@@ -422,6 +453,30 @@ class MotorNesting:
     def __init__(self):
         self.margen_corte = 0.2 * 25.4
         self.escala_dxf = 25.4
+        self._cancel_checker = None
+        try:
+            print(f"[NESTING ENGINE] backend={nesting_engine_name()}")
+        except Exception:
+            pass
+
+    def set_cancel_checker(self, fn):
+        self._cancel_checker = fn
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # El checker apunta a métodos Qt (SistemaNestingPro) y no es serializable.
+        state["_cancel_checker"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._cancel_checker = state.get("_cancel_checker")
+
+    def _cancelado(self) -> bool:
+        try:
+            return bool(self._cancel_checker and self._cancel_checker())
+        except Exception:
+            return False
 
     def recuperar_geometria_robusta(self, ruta):
         return recuperar_geometria_robusta(ruta)
@@ -448,6 +503,75 @@ class MotorNesting:
             limite_poly=limite_poly,
             debug_tag="empaque_mc_ui",
         )
+
+    def empaquetar_con_reintentos(
+        self,
+        piezas,
+        w_placa,
+        h_placa,
+        kerf_override=DEFAULT_KERF_IN,
+        margin_override=DEFAULT_MARGIN_IN,
+        opt_override="OPTIMIZAR LARGO Y ANCHO",
+        corner_override="INFERIOR IZQUIERDA",
+        limite_poly=None,
+        intentos=8,
+        debug_tag="empaque_reintentos",
+    ):
+        """
+        Reempaqueta piezas con varios intentos (orden + shuffle) hasta colocar todas
+        o devolver el mejor resultado parcial. Usado al recalcular/renestear placas.
+        """
+        if not piezas:
+            return None
+
+        w = float(w_placa or 0)
+        h = float(h_placa or 0)
+        if w <= 0 or h <= 0:
+            return None
+
+        base = sorted(
+            [copy.deepcopy(p) for p in piezas],
+            key=lambda x: float(x.get("area", 0) or 0),
+            reverse=True,
+        )
+        n = max(1, int(intentos or 1))
+        mejor_parcial = None
+        mejor_eficiencia = -1.0
+
+        for intento in range(n):
+            if self._cancelado():
+                break
+
+            if intento == 0:
+                batch = base
+            else:
+                batch = base.copy()
+                random.shuffle(batch)
+                batch.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+
+            nh, sobras = _safe_empaquetar_una_hoja_mc(
+                batch,
+                w,
+                h,
+                kerf_override,
+                margin_override,
+                opt_override,
+                corner_override,
+                limite_poly=limite_poly,
+                debug_tag=f"{debug_tag}|try={intento + 1}",
+            )
+            if not nh:
+                continue
+
+            if not sobras:
+                return actualizar_eficiencias_hoja(nh)
+
+            eff = float(nh.get("eficiencia", 0) or 0)
+            if eff > mejor_eficiencia:
+                mejor_eficiencia = eff
+                mejor_parcial = nh
+
+        return actualizar_eficiencias_hoja(mejor_parcial) if mejor_parcial else None
 
     def recalcular_hoja_full(
         self,
@@ -632,11 +756,22 @@ class MotorNesting:
                 )
                 continue
 
+            n_mark_segs = 0
+            try:
+                if marks is not None and not marks.is_empty:
+                    if marks.geom_type == "LineString":
+                        n_mark_segs = 1
+                    elif marks.geom_type == "MultiLineString":
+                        n_mark_segs = len(list(marks.geoms))
+            except Exception:
+                pass
+
             _dbg_nesting(
                 f"[PARSER-OK] clave={clave} | pieza={pieza} | ruta={ruta} | "
                 f"geom_type={_safe_geom_type(poly)} | area={_safe_area(poly):.3f} | "
                 f"valid={_safe_is_valid(poly)} | holes={_safe_holes(poly)} | "
-                f"bounds={_fmt_bounds(poly)} | {_safe_marks_info(marks)}"
+                f"bounds={_fmt_bounds(poly)} | {_safe_marks_info(marks)} | "
+                f"mark_segs={n_mark_segs}"
             )
 
             minx, miny, _, _ = poly.bounds
@@ -690,8 +825,8 @@ class MotorNesting:
             for idx_qty in range(int(qty)):
                 grupos[clave].append({
                     "nombre": pieza,
-                    # Para el motor actual dejamos poly como geometría de trabajo
-                    "poly": poly_nesting,
+                    # Geometría exacta al motor: misma malla que exporta/visibiliza (con barrenos).
+                    "poly": poly_exact,
                     "marks": marks_exact,
                     "area": poly_exact.area,
                     "calibre": str(cal).strip(),
@@ -752,15 +887,17 @@ class MotorNesting:
         with concurrent.futures.ProcessPoolExecutor(max_workers=nucleos_a_usar) as executor:
             futuros = {
                 executor.submit(
-                    self._procesar_grupo_parallel,
-                    clave,
-                    piezas,
-                    datos_placas,
-                    config_kerf,
-                    config_margin,
-                    config_opt,
-                    config_corner,
-                    wo_name
+                    _procesar_grupo_parallel_worker,
+                    (
+                        clave,
+                        piezas,
+                        datos_placas,
+                        config_kerf,
+                        config_margin,
+                        config_opt,
+                        config_corner,
+                        wo_name,
+                    ),
                 ): clave
                 for clave, piezas in grupos_con_piezas.items()
             }
@@ -1396,6 +1533,15 @@ class MotorNesting:
                             f"[MATCH-FALLBACK] clave={clave} | nombre_final={nombre_final} | "
                             f"se aplicó fallback neutro"
                         )
+
+                    _colocar_geometria_exacta_en_pieza(p_orig, p_final, transform)
+                    n_holes = max(0, len(p_final.get("poligonos") or []) - 1)
+                    n_marks = len(p_final.get("marcas") or [])
+                    _dbg_nesting(
+                        f"[MATCH-OK-META] clave={clave} | nombre_final={nombre_final} | "
+                        f"anillos={len(p_final.get('poligonos') or [])} | holes={n_holes} | "
+                        f"marcas={n_marks}"
+                    )
         
         if hojas_finales:
             costo_empresa = sum(
@@ -1453,26 +1599,137 @@ class MotorNesting:
             piezas.append(p)
         return piezas
 
+    def _conteo_piezas_reales_en_hojas(self, hojas):
+        total = 0
+        for h in hojas or []:
+            if isinstance(h, dict):
+                total += len(self._piezas_reales_en_hoja(h))
+        return total
+
     def _misma_pieza_visual(self, a, b):
-        if a is b:
+        if a is b or id(a) == id(b):
             return True
         if str(a.get("nombre", "")) != str(b.get("nombre", "")):
             return False
         return a.get("poligonos") == b.get("poligonos")
 
-    def _localizar_hoja_origen(self, resultados_nesting, pieza_info, hoja_origen=None):
+    def _grupo_de_hoja(self, resultados_nesting, hoja):
+        if not isinstance(hoja, dict):
+            return None
+        for _, grupo in resultados_nesting.items():
+            if isinstance(grupo, dict) and hoja in (grupo.get("hojas") or []):
+                return grupo
+        return None
+
+    def _pieza_real_en_hoja_por_idx(self, hoja, idx):
+        piezas = (hoja or {}).get("piezas") or []
+        if not isinstance(idx, int) or idx < 0 or idx >= len(piezas):
+            return None
+        p = piezas[idx]
+        if _is_virtual_piece(str(p.get("nombre", ""))):
+            return None
+        return p
+
+    def _resolver_candidatos_transferencia(
+        self, hoja_origen, piezas_especificas, indices=None
+    ):
+        """Empareja piezas seleccionadas con las de la hoja (tolerante a re-nest)."""
+        todas_origen = self._piezas_reales_en_hoja(hoja_origen)
+        if not piezas_especificas:
+            return list(todas_origen)
+
+        indices = list(indices or [])
+        candidatos = []
+        usados = set()
+
+        for k, ps in enumerate(piezas_especificas):
+            idx_hint = indices[k] if k < len(indices) else None
+            encontrada = None
+
+            if idx_hint is not None:
+                p_idx = self._pieza_real_en_hoja_por_idx(hoja_origen, idx_hint)
+                if p_idx is not None and id(p_idx) not in usados:
+                    nombre_ps = str(ps.get("nombre", "") or "")
+                    if not nombre_ps or str(p_idx.get("nombre", "") or "") == nombre_ps:
+                        encontrada = p_idx
+
+            if encontrada is None:
+                for p in todas_origen:
+                    if id(p) in usados:
+                        continue
+                    if p is ps or id(p) == id(ps):
+                        encontrada = p
+                        break
+
+            if encontrada is None:
+                nombre = str(ps.get("nombre", "") or "")
+                matches = [
+                    p
+                    for p in todas_origen
+                    if id(p) not in usados and str(p.get("nombre", "") or "") == nombre
+                ]
+                if len(matches) == 1:
+                    encontrada = matches[0]
+                elif len(matches) > 1 and idx_hint is not None:
+                    piezas = (hoja_origen or {}).get("piezas") or []
+                    if 0 <= idx_hint < len(piezas):
+                        target = piezas[idx_hint]
+                        for p in matches:
+                            if p is target or id(p) == id(target):
+                                encontrada = p
+                                break
+                if encontrada is None and matches:
+                    encontrada = matches[0]
+
+            if encontrada is None:
+                for p in todas_origen:
+                    if id(p) in usados:
+                        continue
+                    if self._misma_pieza_visual(p, ps):
+                        encontrada = p
+                        break
+
+            if encontrada is not None:
+                candidatos.append(encontrada)
+                usados.add(id(encontrada))
+
+        return candidatos
+
+    def _localizar_hoja_origen(
+        self, resultados_nesting, pieza_info, hoja_origen=None, idx_hint=None
+    ):
         origen_grupo = None
         origen_hoja = None
         idx_origen = -1
 
         if isinstance(hoja_origen, dict):
-            for i, p in enumerate(hoja_origen.get("piezas") or []):
+            piezas = hoja_origen.get("piezas") or []
+            origen_grupo = self._grupo_de_hoja(resultados_nesting, hoja_origen)
+
+            if isinstance(idx_hint, int):
+                p_idx = self._pieza_real_en_hoja_por_idx(hoja_origen, idx_hint)
+                if p_idx is not None and origen_grupo is not None:
+                    return origen_grupo, hoja_origen, idx_hint
+
+            for i, p in enumerate(piezas):
+                if p is pieza_info or id(p) == id(pieza_info):
+                    if origen_grupo is not None:
+                        return origen_grupo, hoja_origen, i
+
+            for i, p in enumerate(piezas):
                 if self._misma_pieza_visual(p, pieza_info):
-                    for _, grupo in resultados_nesting.items():
-                        if not isinstance(grupo, dict):
-                            continue
-                        if hoja_origen in (grupo.get("hojas") or []):
-                            return grupo, hoja_origen, i
+                    if origen_grupo is not None:
+                        return origen_grupo, hoja_origen, i
+
+            nombre_pieza = str(pieza_info.get("nombre", "") or "")
+            matches = [
+                (i, p)
+                for i, p in enumerate(piezas)
+                if not _is_virtual_piece(str(p.get("nombre", "")))
+                and str(p.get("nombre", "")) == nombre_pieza
+            ]
+            if len(matches) == 1 and origen_grupo is not None:
+                return origen_grupo, hoja_origen, matches[0][0]
             return None, None, -1
 
         nombre_pieza = str(pieza_info.get("nombre", "") or "")
@@ -1565,12 +1822,608 @@ class MotorNesting:
         except Exception:
             return None
 
-    def _simular_renest_en_destino(self, hoja_destino, piezas_dest_base, piezas_mover_raw):
+    def _zonas_rtz_reservadas_madre(self, madre, hojas_grupo=None, excluir_rtz_ids=None):
+        """Áreas de placa madre reservadas a RTZ/mini-nest (no anidar piezas madre)."""
+        zonas = []
+        if not isinstance(madre, dict) or madre.get("es_retazo"):
+            return zonas
+
+        excluir = {str(x) for x in (excluir_rtz_ids or ()) if x}
+
+        def _agregar(poly):
+            if poly is None or getattr(poly, "is_empty", True):
+                return
+            for z in zonas:
+                try:
+                    inter = z.intersection(poly)
+                    if not inter.is_empty and inter.area >= min(z.area, poly.area) * 0.95:
+                        return
+                except Exception:
+                    pass
+            zonas.append(poly)
+
+        for p in (madre.get("piezas") or []):
+            nom = str(p.get("nombre", "") or "")
+            if nom.startswith("RETAZO_GUILLOTINA__"):
+                rid = nom.replace("RETAZO_GUILLOTINA__", "", 1)
+                if rid in excluir:
+                    continue
+                _agregar(reconstruir_poly_seguro(p.get("poligonos") or []))
+
+        if not isinstance(hojas_grupo, list):
+            return zonas
+        try:
+            idx = hojas_grupo.index(madre)
+        except ValueError:
+            return zonas
+
+        for rtz in _rtz_hojas_de_madre(hojas_grupo, idx):
+            rtz_id = str(rtz.get("placa_id", "") or "")
+            if rtz_id in excluir:
+                continue
+            gx, gy = _inferir_global_rtz(madre, rtz)
+            rw = float(rtz.get("placa_w", 0) or 0)
+            rh = float(rtz.get("placa_h", 0) or 0)
+            borde = rtz.get("poly_borde_retazo")
+            if borde and len(borde) >= 3:
+                try:
+                    local = Polygon(borde)
+                    if not local.is_valid:
+                        local = local.buffer(0)
+                    if not local.is_empty:
+                        _agregar(affinity.translate(local, xoff=gx, yoff=gy))
+                        continue
+                except Exception:
+                    pass
+            if rw > 0 and rh > 0:
+                _agregar(box(gx, gy, gx + rw, gy + rh))
+        return zonas
+
+    def _rtz_ids_a_liberar_en_destino(self, hoja_origen, hoja_destino, hojas_grupo):
+        """
+        Si la pieza sale de un RTZ hacia su placa madre padre, no reservar esa zona RTZ.
+        """
+        if not isinstance(hoja_origen, dict) or not hoja_origen.get("es_retazo"):
+            return ()
+        if not isinstance(hojas_grupo, list):
+            return ()
+        try:
+            idx = hojas_grupo.index(hoja_origen)
+        except ValueError:
+            return ()
+        if idx <= 0:
+            return ()
+        madre = hojas_grupo[idx - 1]
+        if madre is not hoja_destino or madre.get("es_retazo"):
+            return ()
+        rid = str(hoja_origen.get("placa_id", "") or "")
+        return (rid,) if rid else ()
+
+    def _pieza_invade_zona_rtz(self, poly, zona, clearance_mm=0.0):
+        """True solo si hay solape de área dentro del RTZ (tocar el borde no cuenta)."""
+        if poly is None or poly.is_empty or zona is None or getattr(zona, "is_empty", True):
+            return False
+        try:
+            gap = float(clearance_mm or 0.0)
+            test = poly.buffer(gap / 2.0) if gap > 1e-6 else poly
+            inter = test.intersection(zona)
+            if inter.is_empty:
+                return False
+            return float(inter.area) > 1.0
+        except Exception:
+            return False
+
+    def _piezas_invaden_zonas_rtz(self, hoja_resultado, zonas_rtz, clearance_mm=0.0):
+        if not zonas_rtz or not isinstance(hoja_resultado, dict):
+            return False
+        for p in (hoja_resultado.get("piezas") or []):
+            if _is_virtual_piece(str(p.get("nombre", ""))):
+                continue
+            poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+            if poly is None or poly.is_empty:
+                continue
+            for zona in zonas_rtz:
+                if self._pieza_invade_zona_rtz(poly, zona, clearance_mm):
+                    return True
+        return False
+
+    def _limite_util_destino_transfer(self, hoja, margin_mm):
+        limite = self._limite_poly_desde_hoja(hoja)
+        if limite is not None:
+            if margin_mm > 1e-6:
+                try:
+                    inner = limite.buffer(-margin_mm)
+                    if not inner.is_empty:
+                        return inner
+                except Exception:
+                    pass
+            return limite
+        params = self._params_hoja(hoja)
+        w = float(params["w"] or 0)
+        h = float(params["h"] or 0)
+        if w <= 0 or h <= 0:
+            return None
+        m = max(0.0, float(margin_mm or 0.0))
+        return box(m, m, w - m, h - m)
+
+    def _obstaculos_transfer_destino(self, hoja_destino, kerf_mm):
+        gap = max(0.0, float(kerf_mm or 0.0) / 2.0)
+        obstaculos = []
+        for p in self._piezas_reales_en_hoja(hoja_destino):
+            poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+            if poly is None or poly.is_empty:
+                continue
+            try:
+                obst = poly.buffer(gap) if gap > 1e-6 else poly
+                if not obst.is_empty:
+                    obstaculos.append(obst)
+            except Exception:
+                obstaculos.append(poly)
+        return obstaculos
+
+    def _poly_dentro_limite_transfer(self, poly, limite):
+        if limite is None or poly is None or poly.is_empty:
+            return True
+        try:
+            return limite.contains(poly) or limite.covers(poly)
+        except Exception:
+            try:
+                return limite.intersection(poly).area >= poly.area * 0.995
+            except Exception:
+                return False
+
+    def _poly_colisiona_obstaculos_transfer(self, poly, obstaculos):
+        if poly is None or poly.is_empty:
+            return True
+        gap_test = poly.buffer(0.05) if not poly.is_empty else poly
+        for obs in obstaculos:
+            try:
+                if gap_test.intersects(obs):
+                    inter = gap_test.intersection(obs)
+                    if not inter.is_empty and float(inter.area) > 0.5:
+                        return True
+            except Exception:
+                return True
+        return False
+
+    def _poly_invade_zonas_rtz_transfer(self, poly, zonas_rtz, clearance_mm):
+        if not zonas_rtz or poly is None or poly.is_empty:
+            return False
+        for zona in zonas_rtz:
+            if self._pieza_invade_zona_rtz(poly, zona, clearance_mm):
+                return True
+        return False
+
+    def _build_variaciones_transfer(self, poly_src, marks_src, w_placa, h_placa, margin_mm, kerf_radio):
+        variaciones = []
+        if poly_src is None or poly_src.is_empty:
+            return variaciones
+        marks_src = marks_src if marks_src is not None else LineString()
+        origin = poly_src.centroid
+        for angulo in TRANSFER_ROTATIONS:
+            poly_rot = poly_src if angulo == 0 else affinity.rotate(poly_src, angulo, origin=origin)
+            marks_rot = marks_src
+            if angulo != 0 and not marks_src.is_empty:
+                marks_rot = affinity.rotate(marks_src, angulo, origin=origin)
+
+            minx, miny, maxx, maxy = poly_rot.bounds
+            w_p, h_p = maxx - minx, maxy - miny
+            poly_rot = affinity.translate(poly_rot, -minx, -miny)
+            if not marks_rot.is_empty:
+                marks_rot = affinity.translate(marks_rot, -minx, -miny)
+
+            if w_p > (w_placa - (2.0 * margin_mm) + 5.0) or h_p > (h_placa - (2.0 * margin_mm) + 5.0):
+                continue
+
+            try:
+                coords = list(poly_rot.exterior.coords)
+                poly_shell = Polygon(coords).buffer(0.01).simplify(0.1, preserve_topology=False)
+                poly_buff = poly_shell.buffer(kerf_radio, resolution=2, join_style=1)
+                if poly_buff.geom_type == "MultiPolygon":
+                    poly_buff = max(poly_buff.geoms, key=lambda g: g.area)
+                if not poly_buff.is_valid:
+                    poly_buff = poly_buff.buffer(0)
+            except Exception:
+                poly_buff = poly_rot.convex_hull.buffer(kerf_radio)
+
+            b_minx, b_miny, b_maxx, b_maxy = poly_buff.bounds
+            variaciones.append(
+                {
+                    "rot": angulo,
+                    "poly": poly_rot,
+                    "poly_buff": poly_buff,
+                    "marks": marks_rot,
+                    "b_minx": b_minx,
+                    "b_miny": b_miny,
+                    "b_maxx": b_maxx,
+                    "b_maxy": b_maxy,
+                }
+            )
+        return variaciones
+
+    def _fijas_y_anclas_destino_transfer(self, hoja_destino, kerf_radio):
+        fijas_bounds = []
+        fijas_preps = []
+        anclajes = []
+        for p in self._piezas_reales_en_hoja(hoja_destino):
+            poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+            if poly is None or poly.is_empty:
+                continue
+            try:
+                coords = list(poly.exterior.coords)
+                poly_shell = Polygon(coords).buffer(0.01).simplify(0.1, preserve_topology=False)
+                poly_buff = poly_shell.buffer(kerf_radio, resolution=2, join_style=1)
+                if poly_buff.geom_type == "MultiPolygon":
+                    poly_buff = max(poly_buff.geoms, key=lambda g: g.area)
+                if not poly_buff.is_valid:
+                    poly_buff = poly_buff.buffer(0)
+            except Exception:
+                poly_buff = poly.convex_hull.buffer(kerf_radio)
+            b = poly_buff.bounds
+            fijas_bounds.append(b)
+            fijas_preps.append(prep(poly_buff))
+            anclajes.append((b[2] + 1.0, b[1]))
+            anclajes.append((b[0], b[3] + 1.0))
+        return fijas_bounds, fijas_preps, anclajes
+
+    def _comprobar_colision_transfer(self, px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps):
+        b_minx = var["b_minx"]
+        b_miny = var["b_miny"]
+        b_maxx = var["b_maxx"]
+        b_maxy = var["b_maxy"]
+        cmx = px + b_minx
+        cmy = py + b_miny
+        cMx = px + b_maxx
+        cMy = py + b_maxy
+
+        if limite_prep is not None:
+            l_minx, l_miny, l_maxx, l_maxy = l_bounds
+            if cmx < l_minx or cmy < l_miny or cMx > l_maxx or cMy > l_maxy:
+                return True
+            moved = affinity.translate(var["poly_buff"], px, py)
+            if not limite_prep.contains(moved):
+                return True
+
+        c_buff_local = None
+        for idx, f_b in enumerate(fijas_bounds):
+            if not (cMx <= f_b[0] + 0.05 or cmx >= f_b[2] - 0.05 or cMy <= f_b[1] + 0.05 or cmy >= f_b[3] - 0.05):
+                if c_buff_local is None:
+                    c_buff_local = affinity.translate(var["poly_buff"], px, py)
+                if fijas_preps[idx].intersects(c_buff_local):
+                    return True
+        return False
+
+    def _anclas_transfer_destino(self, limite, obstaculos, margin_mm, kerf_mm, w, h):
+        del limite, kerf_mm, w, h  # anclas derivadas de piezas fijas + esquina inferior izquierda
+        anclajes = {(margin_mm, margin_mm)}
+        for obs in obstaculos:
+            try:
+                minx, miny, maxx, maxy = obs.bounds
+            except Exception:
+                continue
+            anclajes_pieza = (
+                (maxx + 1.0, miny),
+                (minx, maxy + 1.0),
+                (minx, miny),
+                (maxx, miny),
+                (minx, maxy),
+                (maxx, maxy),
+            )
+            for ax, ay in anclajes_pieza:
+                anclajes.add((ax, ay))
+        return sorted(anclajes, key=lambda t: (t[0] * t[0]) + (t[1] * t[1]))
+
+    def _clonar_hoja_para_sim_transfer(self, hoja):
+        if not isinstance(hoja, dict):
+            return {"piezas": []}
+        return {
+            "placa_id": hoja.get("placa_id"),
+            "placa_w": hoja.get("placa_w"),
+            "placa_h": hoja.get("placa_h"),
+            "es_retazo": hoja.get("es_retazo", False),
+            "poly_borde_retazo": hoja.get("poly_borde_retazo"),
+            "kerf_usado": hoja.get("kerf_usado"),
+            "margin_usado": hoja.get("margin_usado"),
+            "opt_usado": hoja.get("opt_usado"),
+            "corner_usado": hoja.get("corner_usado"),
+            "piezas": [copy.deepcopy(p) for p in (hoja.get("piezas") or [])],
+        }
+
+    def _maximo_lote_incremental(self, hoja_destino, candidatos_raw, hojas_grupo=None, hoja_origen=None):
+        """
+        Empareja piezas una a una sin re-nestear el destino (rápido y estable).
+        Prueba varios órdenes para maximizar cuántas caben.
+        """
+        if not candidatos_raw:
+            return [], None
+
+        excluir_rtz = self._rtz_ids_a_liberar_en_destino(
+            hoja_origen, hoja_destino, hojas_grupo
+        )
+
+        ordenes = [
+            lambda x: float(x.get("area", 0.0) or 0.0),
+            lambda x: -float(x.get("area", 0.0) or 0.0),
+            lambda x: str(x.get("nombre", "") or ""),
+        ]
+        mejor_lote = []
+        mejor_dest = None
+
+        for key_fn in ordenes:
+            sim = self._clonar_hoja_para_sim_transfer(hoja_destino)
+            lote = []
+            nueva_dest = None
+            for p in sorted(candidatos_raw, key=key_fn):
+                nueva_dest = self._intentar_colocacion_incremental(
+                    sim,
+                    p,
+                    hojas_grupo,
+                    excluir_rtz_ids=excluir_rtz,
+                )
+                if nueva_dest is None:
+                    continue
+                lote.append(p)
+                sim["piezas"] = list(nueva_dest.get("piezas") or [])
+            if len(lote) > len(mejor_lote):
+                mejor_lote = lote
+                mejor_dest = nueva_dest
+
+        return mejor_lote, mejor_dest
+
+    def _pieza_colocada_incremental(self, pieza_orig, var, px, py):
+        poly_local = var.get("poly")
+        if poly_local is None or poly_local.is_empty:
+            return None
+        marks_local = var.get("marks")
+        poly_placed = affinity.translate(poly_local, px, py)
+
+        marcas = list(pieza_orig.get("marcas") or [])
+        if marks_local is not None and not getattr(marks_local, "is_empty", True):
+            marks_placed = affinity.translate(marks_local, px, py)
+            marcas = _marks_geom_to_lista(marks_placed) or marcas
+
+        return {
+            "nombre": str(pieza_orig.get("nombre", "") or ""),
+            "poligonos": poligonos_desde_shapely(poly_placed),
+            "marcas": marcas,
+            "area": float(pieza_orig.get("area", poly_placed.area) or poly_placed.area),
+            "calibre": pieza_orig.get("calibre", ""),
+            "material": pieza_orig.get("material", ""),
+        }
+
+    def _intentar_colocacion_incremental(
+        self, hoja_destino, pieza_mover, hojas_grupo=None, excluir_rtz_ids=None
+    ):
+        """
+        Coloca la pieza nueva sobre el destino sin mover las existentes.
+        Usa la misma lógica de anclas + slide del motor C++/Cython.
+        """
+        pack_piece = self._as_pack_piece_visual(pieza_mover)
+        if pack_piece is None:
+            _dbg_nesting(
+                f"[TRANSFER] geometría inválida en incremental "
+                f"{hoja_destino.get('placa_id')} / {pieza_mover.get('nombre')}"
+            )
+            return None
+
+        params = self._params_hoja(hoja_destino)
+        kerf_in = float(params["kerf"] or DEFAULT_KERF_IN)
+        margin_in = float(params["margin"] or DEFAULT_MARGIN_IN)
+        kerf_radio = (kerf_in * 25.4) / 2.0
+        margin_mm = margin_in * 25.4
+        w = float(params["w"] or 0)
+        h = float(params["h"] or 0)
+        if w <= 0 or h <= 0:
+            return None
+
+        limite = self._limite_util_destino_transfer(hoja_destino, margin_mm)
+        limite_prep = None
+        l_bounds = (margin_mm, margin_mm, w - margin_mm, h - margin_mm)
+        if limite is not None:
+            try:
+                limite_eval = limite.buffer(0.1)
+                limite_prep = prep(limite_eval)
+                l_bounds = limite_eval.bounds
+            except Exception:
+                limite_prep = prep(limite)
+                l_bounds = limite.bounds
+
+        fijas_bounds, fijas_preps, anclajes_fijas = self._fijas_y_anclas_destino_transfer(
+            hoja_destino, kerf_radio
+        )
+        obstaculos = self._obstaculos_transfer_destino(hoja_destino, kerf_in * 25.4)
+        anclajes = self._anclas_transfer_destino(
+            limite, obstaculos, margin_mm, kerf_in * 25.4, w, h
+        )
+        anclajes_set = set(anclajes)
+        anclajes_set.update(anclajes_fijas)
+        anclajes = sorted(anclajes_set, key=lambda t: (t[0] * t[0]) + (t[1] * t[1]))
+
+        variaciones = self._build_variaciones_transfer(
+            pack_piece["poly"],
+            pack_piece.get("marks"),
+            w,
+            h,
+            margin_mm,
+            kerf_radio,
+        )
+        if not variaciones:
+            _dbg_nesting(
+                f"[TRANSFER] pieza demasiado grande para destino "
+                f"{hoja_destino.get('placa_id')} / {pieza_mover.get('nombre')}"
+            )
+            return None
+
+        zonas_rtz = (
+            []
+            if hoja_destino.get("es_retazo")
+            else self._zonas_rtz_reservadas_madre(
+                hoja_destino, hojas_grupo, excluir_rtz_ids=excluir_rtz_ids
+            )
+        )
+        clearance_rtz = kerf_in * 25.4
+
+        mejor = None
+        rechazos = {"colision": 0, "rtz": 0, "limite": 0}
+        for var in variaciones:
+            for anchor_x, anchor_y in anclajes:
+                px = anchor_x - var["b_minx"]
+                py = anchor_y - var["b_miny"]
+                if (
+                    px + var["b_minx"] < margin_mm - 0.1
+                    or py + var["b_miny"] < margin_mm - 0.1
+                    or px + var["b_maxx"] > w - margin_mm + 0.1
+                    or py + var["b_maxy"] > h - margin_mm + 0.1
+                ):
+                    rechazos["limite"] += 1
+                    continue
+                if self._comprobar_colision_transfer(
+                    px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+                ):
+                    rechazos["colision"] += 1
+                    continue
+
+                hubo_movimiento = True
+                while hubo_movimiento:
+                    hubo_movimiento = False
+                    test_px = px - SLIDE_STEP_MM
+                    if test_px + var["b_minx"] >= margin_mm:
+                        if not self._comprobar_colision_transfer(
+                            test_px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+                        ):
+                            px = test_px
+                            hubo_movimiento = True
+                    test_py = py - SLIDE_STEP_MM
+                    if test_py + var["b_miny"] >= margin_mm:
+                        if not self._comprobar_colision_transfer(
+                            px, test_py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+                        ):
+                            py = test_py
+                            hubo_movimiento = True
+
+                poly_test = affinity.translate(var["poly"], px, py)
+                if self._poly_invade_zonas_rtz_transfer(poly_test, zonas_rtz, clearance_rtz):
+                    rechazos["rtz"] += 1
+                    continue
+
+                score = (px * px) + (py * py)
+                if mejor is None or score < mejor[0]:
+                    mejor = (score, var, px, py)
+
+        if mejor is None:
+            libera = (
+                f" libera_rtz={','.join(excluir_rtz_ids)}"
+                if excluir_rtz_ids
+                else ""
+            )
+            _dbg_nesting(
+                f"[TRANSFER] incremental sin hueco en "
+                f"{hoja_destino.get('placa_id')} para {pieza_mover.get('nombre')}"
+                f" (col={rechazos['colision']} rtz={rechazos['rtz']} "
+                f"lim={rechazos['limite']}{libera})"
+            )
+            return None
+
+        _, var, px, py = mejor
+        pieza_colocada = self._pieza_colocada_incremental(pieza_mover, var, px, py)
+        if pieza_colocada is None:
+            return None
+
+        piezas_out = list(hoja_destino.get("piezas") or [])
+        piezas_out.append(pieza_colocada)
+        area_usada = 0.0
+        for p in piezas_out:
+            if _is_virtual_piece(str(p.get("nombre", ""))):
+                continue
+            try:
+                area_usada += float(p.get("area", 0.0) or 0.0)
+            except Exception:
+                pass
+        denom = w * h
+        return {
+            "piezas": piezas_out,
+            "area_usada": area_usada,
+            "eficiencia": (area_usada / denom) * 100.0 if denom > 0 else 0.0,
+        }
+
+    def _empaquetar_respetando_rtz_madre(
+        self,
+        piezas_pack,
+        hoja,
+        hojas_grupo=None,
+        *,
+        debug_tag="transfer",
+        intentos=24,
+        excluir_rtz_ids=None,
+    ):
+        """Empaqueta en placa madre evitando solapar zonas RTZ asociadas."""
+        params = self._params_hoja(hoja)
+        w = float(params["w"] or 0)
+        h = float(params["h"] or 0)
+        if w <= 0 or h <= 0 or not piezas_pack:
+            return None, list(piezas_pack or [])
+
+        limite_poly = self._limite_poly_desde_hoja(hoja)
+        zonas = self._zonas_rtz_reservadas_madre(
+            hoja, hojas_grupo, excluir_rtz_ids=excluir_rtz_ids
+        )
+        clearance = float(params["kerf"] or DEFAULT_KERF_IN) * 25.4
+
+        base = sorted(
+            [copy.deepcopy(p) for p in piezas_pack],
+            key=lambda x: float(x.get("area", 0) or 0),
+            reverse=True,
+        )
+        n = max(1, int(intentos or 1))
+
+        for intento in range(n):
+            if intento == 0:
+                batch = base
+            else:
+                batch = base.copy()
+                random.shuffle(batch)
+                batch.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+
+            nh, sobras = _safe_empaquetar_una_hoja_mc(
+                batch,
+                w,
+                h,
+                params["kerf"],
+                params["margin"],
+                params["opt"],
+                params["corner"],
+                limite_poly=limite_poly,
+                debug_tag=f"{debug_tag}|try={intento + 1}",
+            )
+            if not nh or sobras:
+                continue
+            if zonas and self._piezas_invaden_zonas_rtz(nh, zonas, clearance):
+                continue
+            return nh, []
+
+        return None, list(piezas_pack)
+
+    def _simular_renest_en_destino(
+        self,
+        hoja_destino,
+        piezas_dest_base,
+        piezas_mover_raw,
+        hojas_grupo=None,
+        intentos_mc=48,
+        hoja_origen=None,
+    ):
+        excluir_rtz = self._rtz_ids_a_liberar_en_destino(
+            hoja_origen, hoja_destino, hojas_grupo
+        )
         piezas_pack = list(piezas_dest_base)
         for p in piezas_mover_raw:
             pp = self._as_pack_piece_visual(p)
-            if pp is not None:
-                piezas_pack.append(pp)
+            if pp is None:
+                _dbg_nesting(
+                    f"[TRANSFER] geometría inválida al simular destino: {p.get('nombre')}"
+                )
+                return False, None
+            piezas_pack.append(pp)
         if not piezas_pack:
             return False, None
 
@@ -1578,27 +2431,45 @@ class MotorNesting:
         if params["w"] <= 0 or params["h"] <= 0:
             return False, None
 
-        piezas_pack.sort(key=lambda x: x["area"], reverse=True)
-        limite_poly = self._limite_poly_desde_hoja(hoja_destino)
-        nueva_dest, sobras = _safe_empaquetar_una_hoja_mc(
+        nueva_dest, sobras = self._empaquetar_respetando_rtz_madre(
             piezas_pack,
-            params["w"],
-            params["h"],
-            params["kerf"],
-            params["margin"],
-            params["opt"],
-            params["corner"],
-            limite_poly=limite_poly,
+            hoja_destino,
+            hojas_grupo,
             debug_tag="transfer_dest_batch",
+            intentos=int(intentos_mc or 48),
+            excluir_rtz_ids=excluir_rtz,
         )
-        if sobras:
+        if nueva_dest is None or sobras:
+            return False, None
+        colocadas = [
+            p
+            for p in (nueva_dest.get("piezas") or [])
+            if not _is_virtual_piece(str(p.get("nombre", "")))
+        ]
+        esperadas = Counter(str(p.get("nombre", "") or "") for p in piezas_pack)
+        ubicadas = Counter(str(p.get("nombre", "") or "") for p in colocadas)
+        if ubicadas != esperadas:
+            _dbg_nesting(
+                f"[TRANSFER] conteo destino inválido: esperadas={dict(esperadas)} "
+                f"colocadas={dict(ubicadas)}"
+            )
             return False, None
         return True, nueva_dest
 
-    def _maximo_lote_transferible(self, hoja_destino, piezas_dest_base, candidatos_raw):
+    def _maximo_lote_transferible(
+        self, hoja_destino, piezas_dest_base, candidatos_raw, hojas_grupo=None, hoja_origen=None
+    ):
+        """Respaldo lento (MC). Preferir _maximo_lote_incremental."""
         if not candidatos_raw:
             return []
-        ok_todas, _ = self._simular_renest_en_destino(hoja_destino, piezas_dest_base, candidatos_raw)
+        ok_todas, _ = self._simular_renest_en_destino(
+            hoja_destino,
+            piezas_dest_base,
+            candidatos_raw,
+            hojas_grupo,
+            intentos_mc=12,
+            hoja_origen=hoja_origen,
+        )
         if ok_todas:
             return list(candidatos_raw)
 
@@ -1606,40 +2477,76 @@ class MotorNesting:
         for p in sorted(
             candidatos_raw,
             key=lambda x: float(x.get("area", 0.0) or 0.0),
-            reverse=True,
         ):
             trial = mejor + [p]
-            ok, _ = self._simular_renest_en_destino(hoja_destino, piezas_dest_base, trial)
+            ok, _ = self._simular_renest_en_destino(
+                hoja_destino,
+                piezas_dest_base,
+                trial,
+                hojas_grupo,
+                intentos_mc=8,
+                hoja_origen=hoja_origen,
+            )
             if ok:
                 mejor = trial
         return mejor
+
+    def _renest_origen_tras_transferencia(self, origen_hoja, mover_ids, hojas_grupo=None):
+        """Quita las piezas movidas del origen sin re-nestear las que quedan."""
+        del hojas_grupo
+        piezas_res = []
+        area_usada = 0.0
+        for p in (origen_hoja.get("piezas") or []):
+            if id(p) in mover_ids:
+                continue
+            piezas_res.append(p)
+            if _is_virtual_piece(str(p.get("nombre", ""))):
+                continue
+            try:
+                area_usada += float(p.get("area", 0.0) or 0.0)
+            except Exception:
+                pass
+
+        params_o = self._params_hoja(origen_hoja)
+        w = float(params_o.get("w") or 0)
+        h = float(params_o.get("h") or 0)
+        denom = w * h
+        nueva_orig = {
+            "piezas": piezas_res,
+            "area_usada": area_usada,
+            "eficiencia": (area_usada / denom) * 100.0 if denom > 0 else 0.0,
+        }
+        return nueva_orig, params_o
+
+    def _eliminar_hoja_origen_si_vacia(self, origen_grupo, origen_hoja):
+        if not isinstance(origen_grupo, dict) or not isinstance(origen_grupo.get("hojas"), list):
+            return
+        if len(self._piezas_reales_en_hoja(origen_hoja)) > 0:
+            return
+        hojas = origen_grupo["hojas"]
+        try:
+            idx = hojas.index(origen_hoja)
+        except ValueError:
+            return
+        tiene_retazos = (
+            idx + 1 < len(hojas) and bool(hojas[idx + 1].get("es_retazo", False))
+        )
+        if tiene_retazos:
+            return
+        try:
+            hojas.remove(origen_hoja)
+        except ValueError:
+            pass
 
     def _aplicar_transferencia_lote(self, origen_grupo, origen_hoja, hoja_destino, piezas_mover, nueva_dest):
         overlays_dest = self._extraer_overlays_hoja(hoja_destino)
         overlays_orig = self._extraer_overlays_hoja(origen_hoja)
         mover_ids = {id(p) for p in piezas_mover}
-        piezas_orig_pack = []
-        for p in (origen_hoja.get("piezas") or []):
-            if id(p) in mover_ids or _is_virtual_piece(str(p.get("nombre", ""))):
-                continue
-            pp = self._as_pack_piece_visual(p)
-            if pp is not None:
-                piezas_orig_pack.append(pp)
 
-        params_o = self._params_hoja(origen_hoja)
-        if piezas_orig_pack:
-            nueva_orig, _ = _safe_empaquetar_una_hoja_mc(
-                piezas_orig_pack,
-                params_o["w"],
-                params_o["h"],
-                params_o["kerf"],
-                params_o["margin"],
-                params_o["opt"],
-                params_o["corner"],
-                debug_tag="transfer_orig_batch",
-            )
-        else:
-            nueva_orig = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
+        hojas_grupo = origen_grupo.get("hojas") if isinstance(origen_grupo, dict) else None
+        nueva_orig, params_o = self._renest_origen_tras_transferencia(
+            origen_hoja, mover_ids, hojas_grupo
+        )
 
         params_d = self._params_hoja(hoja_destino)
         self._copiar_meta_placa(nueva_dest, hoja_destino, params_d)
@@ -1664,11 +2571,7 @@ class MotorNesting:
             actualizar_eficiencias_hoja(hoja_destino)
             actualizar_eficiencias_hoja(origen_hoja)
 
-        if len(origen_hoja.get("piezas") or []) == 0 and isinstance(origen_grupo.get("hojas"), list):
-            try:
-                origen_grupo["hojas"].remove(origen_hoja)
-            except Exception:
-                pass
+        self._eliminar_hoja_origen_si_vacia(origen_grupo, origen_hoja)
 
     def transferir_piezas_a_placa(
         self,
@@ -1676,6 +2579,7 @@ class MotorNesting:
         hoja_origen,
         hoja_destino,
         piezas_especificas=None,
+        piezas_indices=None,
     ):
         """
         Renestea destino con todas las piezas candidatas juntas y mueve el máximo lote posible.
@@ -1685,6 +2589,7 @@ class MotorNesting:
             "movidas": 0,
             "restantes": 0,
             "solicitadas": 0,
+            "motivo": "",
         }
         try:
             if (
@@ -1692,78 +2597,169 @@ class MotorNesting:
                 or not isinstance(hoja_origen, dict)
                 or not isinstance(hoja_destino, dict)
             ):
+                resultado["motivo"] = "datos_invalidos"
                 return resultado
             if hoja_origen is hoja_destino:
+                resultado["motivo"] = "misma_placa"
                 return resultado
 
-            origen_grupo = None
-            for _, grupo in resultados_nesting.items():
-                if isinstance(grupo, dict) and hoja_origen in (grupo.get("hojas") or []):
-                    origen_grupo = grupo
-                    break
+            origen_grupo = self._grupo_de_hoja(resultados_nesting, hoja_origen)
             if origen_grupo is None:
+                resultado["motivo"] = "origen_no_encontrado"
                 return resultado
 
-            todas_origen = self._piezas_reales_en_hoja(hoja_origen)
-            if piezas_especificas:
-                candidatos = []
-                usados = set()
-                for ps in piezas_especificas:
-                    for p in todas_origen:
-                        if id(p) in usados:
-                            continue
-                        if p is ps or self._misma_pieza_visual(p, ps):
-                            candidatos.append(p)
-                            usados.add(id(p))
-                            break
-            else:
-                candidatos = list(todas_origen)
+            hojas_grupo = origen_grupo.get("hojas") or []
+            conteo_antes = self._conteo_piezas_reales_en_hojas(hojas_grupo)
+            candidatos = self._resolver_candidatos_transferencia(
+                hoja_origen,
+                piezas_especificas,
+                indices=piezas_indices,
+            )
 
-            resultado["solicitadas"] = len(candidatos)
+            resultado["solicitadas"] = len(piezas_especificas or candidatos)
+            if piezas_especificas and not candidatos:
+                resultado["motivo"] = "pieza_no_encontrada"
+                _dbg_nesting(
+                    "[TRANSFER] candidatos vacíos tras selección "
+                    f"(indices={piezas_indices})"
+                )
+                return resultado
             if not candidatos:
+                resultado["motivo"] = "sin_piezas"
                 return resultado
 
-            piezas_dest_base = self._pack_piezas_destino(hoja_destino)
-            lote = self._maximo_lote_transferible(hoja_destino, piezas_dest_base, candidatos)
+            # Una sola pieza: intento directo (más fiable en ida/vuelta y con RTZ).
+            if len(candidatos) == 1:
+                idx_hint = (
+                    piezas_indices[0]
+                    if piezas_indices and len(piezas_indices) > 0
+                    else None
+                )
+                if self.transferir_y_reoptimizar(
+                    resultados_nesting,
+                    candidatos[0],
+                    hoja_destino,
+                    hoja_origen=hoja_origen,
+                    idx_hint=idx_hint,
+                ):
+                    resultado["movidas"] = 1
+                    resultado["restantes"] = len(self._piezas_reales_en_hoja(hoja_origen))
+                    resultado["ok"] = True
+                    return resultado
 
-            if not lote:
-                movidas_fb = 0
-                while True:
-                    restantes = self._piezas_reales_en_hoja(hoja_origen)
-                    if not restantes:
-                        break
-                    movio = False
-                    for p in list(restantes):
+            es_masiva = piezas_especificas is None
+            movidas_total = 0
+            pendientes_inicial = len(candidatos)
+
+            while True:
+                if es_masiva:
+                    pendientes = self._piezas_reales_en_hoja(hoja_origen)
+                else:
+                    pendientes = self._resolver_candidatos_transferencia(
+                        hoja_origen,
+                        piezas_especificas,
+                        indices=piezas_indices,
+                    )
+                if not pendientes:
+                    break
+
+                lote, nueva_dest = self._maximo_lote_incremental(
+                    hoja_destino, pendientes, hojas_grupo, hoja_origen=hoja_origen
+                )
+
+                if not lote:
+                    piezas_dest_base = self._pack_piezas_destino(hoja_destino)
+                    lote = self._maximo_lote_transferible(
+                        hoja_destino,
+                        piezas_dest_base,
+                        pendientes,
+                        hojas_grupo,
+                        hoja_origen=hoja_origen,
+                    )
+                    if lote:
+                        ok, nueva_dest = self._simular_renest_en_destino(
+                            hoja_destino,
+                            piezas_dest_base,
+                            lote,
+                            hojas_grupo,
+                            intentos_mc=12,
+                            hoja_origen=hoja_origen,
+                        )
+                        if not ok or nueva_dest is None:
+                            lote = []
+
+                if not lote or nueva_dest is None:
+                    resto_fb = (
+                        self._piezas_reales_en_hoja(hoja_origen)
+                        if es_masiva
+                        else self._resolver_candidatos_transferencia(
+                            hoja_origen,
+                            piezas_especificas,
+                            indices=piezas_indices,
+                        )
+                    )
+                    for p in sorted(
+                        resto_fb,
+                        key=lambda x: float(x.get("area", 0.0) or 0.0),
+                    ):
                         if self.transferir_y_reoptimizar(
                             resultados_nesting,
                             p,
                             hoja_destino,
                             hoja_origen=hoja_origen,
                         ):
-                            movidas_fb += 1
-                            movio = True
-                            break
-                    if not movio:
+                            movidas_total += 1
+                    if movidas_total > 0:
                         break
-                resultado["movidas"] = movidas_fb
-                resultado["restantes"] = len(self._piezas_reales_en_hoja(hoja_origen))
-                resultado["ok"] = movidas_fb > 0
-                return resultado
+                    resultado["movidas"] = 0
+                    resultado["restantes"] = len(
+                        self._piezas_reales_en_hoja(hoja_origen)
+                    )
+                    resultado["ok"] = False
+                    resultado["motivo"] = "sin_espacio"
+                    return resultado
 
-            ok, nueva_dest = self._simular_renest_en_destino(hoja_destino, piezas_dest_base, lote)
-            if not ok or nueva_dest is None:
-                return resultado
+                self._aplicar_transferencia_lote(
+                    origen_grupo,
+                    hoja_origen,
+                    hoja_destino,
+                    lote,
+                    nueva_dest,
+                )
+                movidas_total += len(lote)
 
-            self._aplicar_transferencia_lote(origen_grupo, hoja_origen, hoja_destino, lote, nueva_dest)
-            resultado["movidas"] = len(lote)
+                if not es_masiva:
+                    break
+                if len(lote) >= len(pendientes):
+                    break
+
+            conteo_despues = self._conteo_piezas_reales_en_hojas(
+                origen_grupo.get("hojas") or []
+            )
+            if conteo_despues != conteo_antes:
+                _dbg_nesting(
+                    f"[TRANSFER] conteo grupo {conteo_antes} -> {conteo_despues}"
+                )
+            resultado["movidas"] = movidas_total
             resultado["restantes"] = len(self._piezas_reales_en_hoja(hoja_origen))
-            resultado["ok"] = True
+            resultado["solicitadas"] = pendientes_inicial
+            resultado["ok"] = movidas_total > 0
+            if not resultado["ok"]:
+                resultado["motivo"] = "sin_espacio"
             return resultado
         except Exception as e:
             _dbg_nesting(f"[TRANSFER-BATCH-ERROR] {e}")
+            resultado["motivo"] = "error"
             return resultado
 
-    def transferir_y_reoptimizar(self, resultados_nesting, pieza_info, hoja_destino, hoja_origen=None):
+    def transferir_y_reoptimizar(
+        self,
+        resultados_nesting,
+        pieza_info,
+        hoja_destino,
+        hoja_origen=None,
+        idx_hint=None,
+    ):
         """
         Mueve una pieza de su hoja origen a una hoja destino y reoptimiza ambas.
         Devuelve True si la transferencia fue posible.
@@ -1781,7 +2777,10 @@ class MotorNesting:
                 return False
 
             origen_grupo, origen_hoja, idx_origen = self._localizar_hoja_origen(
-                resultados_nesting, pieza_info, hoja_origen=hoja_origen
+                resultados_nesting,
+                pieza_info,
+                hoja_origen=hoja_origen,
+                idx_hint=idx_hint,
             )
             if origen_hoja is None or idx_origen < 0:
                 return False
@@ -1789,31 +2788,40 @@ class MotorNesting:
                 return False
 
             pieza_mover = origen_hoja["piezas"][idx_origen]
-            piezas_dest = self._pack_piezas_destino(hoja_destino)
-            pp_mover = self._as_pack_piece_visual(pieza_mover)
-            if pp_mover is None:
+            if self._as_pack_piece_visual(pieza_mover) is None:
                 return False
-            piezas_dest.append(pp_mover)
 
             params_d = self._params_hoja(hoja_destino)
             if params_d["w"] <= 0 or params_d["h"] <= 0:
                 return False
 
-            piezas_dest.sort(key=lambda x: x["area"], reverse=True)
-            limite_poly = self._limite_poly_desde_hoja(hoja_destino)
-            nueva_dest, sobras_dest = _safe_empaquetar_una_hoja_mc(
-                piezas_dest,
-                params_d["w"],
-                params_d["h"],
-                params_d["kerf"],
-                params_d["margin"],
-                params_d["opt"],
-                params_d["corner"],
-                limite_poly=limite_poly,
-                debug_tag="transfer_dest",
+            hojas_grupo = (origen_grupo or {}).get("hojas") if isinstance(origen_grupo, dict) else None
+            excluir_rtz = self._rtz_ids_a_liberar_en_destino(
+                origen_hoja, hoja_destino, hojas_grupo
             )
-            if sobras_dest:
-                return False
+            nueva_dest = self._intentar_colocacion_incremental(
+                hoja_destino,
+                pieza_mover,
+                hojas_grupo,
+                excluir_rtz_ids=excluir_rtz,
+            )
+            if nueva_dest is None:
+                piezas_dest = self._pack_piezas_destino(hoja_destino)
+                piezas_dest.append(self._as_pack_piece_visual(pieza_mover))
+                nueva_dest, sobras_dest = self._empaquetar_respetando_rtz_madre(
+                    piezas_dest,
+                    hoja_destino,
+                    hojas_grupo,
+                    debug_tag="transfer_dest",
+                    intentos=12,
+                    excluir_rtz_ids=excluir_rtz,
+                )
+                if nueva_dest is None or sobras_dest:
+                    _dbg_nesting(
+                        f"[TRANSFER] falló destino {hoja_destino.get('placa_id')} "
+                        f"pieza={nombre_pieza} incremental+renest"
+                    )
+                    return False
 
             self._aplicar_transferencia_lote(
                 origen_grupo,
@@ -1846,3 +2854,27 @@ class MotorNesting:
             generar_step,
             wo_label=wo_label
         )
+
+
+def _procesar_grupo_parallel_worker(job):
+    """Worker de proceso: instancia limpia sin referencias a la UI Qt."""
+    (
+        clave,
+        piezas,
+        datos_placas,
+        config_kerf,
+        config_margin,
+        config_opt,
+        config_corner,
+        wo_name,
+    ) = job
+    return MotorNesting()._procesar_grupo_parallel(
+        clave,
+        piezas,
+        datos_placas,
+        config_kerf,
+        config_margin,
+        config_opt,
+        config_corner,
+        wo_name,
+    )

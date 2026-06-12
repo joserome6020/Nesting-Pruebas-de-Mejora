@@ -159,6 +159,10 @@ def build_exe(name: str, onefile: bool = True):
         "--hidden-import",
         "modules.nesting_engine.manager",
         "--hidden-import",
+        "modules.nesting_engine.algorithm_bridge",
+        "--hidden-import",
+        "modules.nesting_engine.algorithm_cpp",
+        "--hidden-import",
         "modules.nesting_engine.algorithm",
         "--hidden-import",
         "modules.consulta_herinox_bridge",
@@ -356,7 +360,7 @@ def create_shortcuts(exe_path: Path, app_name: str = "ArgaNestingSuite"):
             f"$S.TargetPath='{str(exe_path)}';"
             f"$S.IconLocation='{str(exe_path)},0';"
             f"$S.WorkingDirectory='{str(exe_path.parent)}';"
-            f"$S.Description='GRUPO ARGA | NESTING SUITE V4.0';"
+            f"$S.Description='ARGA NESTING SUITE';"
             "$S.Save();"
         )
         _run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps])

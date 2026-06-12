@@ -1,5 +1,14 @@
 import os
+
 import config
+
+
+def _norm_ruta(ruta: str) -> str:
+    try:
+        return os.path.normcase(os.path.normpath(str(ruta or "")))
+    except Exception:
+        return str(ruta or "")
+
 
 class EscanerServidor:
     def __init__(self):
@@ -11,40 +20,54 @@ class EscanerServidor:
         Retorna: (lista_jobs, mensaje_error)
         """
         jobs_encontrados = []
-        
-        # 1. Validación inicial
+        historial = {_norm_ruta(p) for p in (jobs_ya_procesados or [])}
+
         if not os.path.exists(self.ruta_base):
             return [], "No se encuentra la ruta del servidor.\nVerifique VPN o conexión LAN."
 
         try:
-            # 2. Navegación Jerárquica: Producto -> Cliente -> Job
-            # Usamos os.scandir para mayor rendimiento
-            for producto in os.scandir(self.ruta_base):
-                if not producto.is_dir(): continue
-                
-                for cliente in os.scandir(producto.path):
-                    if not cliente.is_dir(): continue
-                    
-                    for job in os.scandir(cliente.path):
-                        if not job.is_dir(): continue
-                        
-                        # RUTA OBJETIVO
+            productos = list(os.scandir(self.ruta_base))
+        except OSError as e:
+            return [], f"No se pudo leer el servidor:\n{e}"
+
+        try:
+            for producto in productos:
+                if not producto.is_dir():
+                    continue
+                try:
+                    clientes = list(os.scandir(producto.path))
+                except OSError:
+                    continue
+
+                for cliente in clientes:
+                    if not cliente.is_dir():
+                        continue
+                    try:
+                        jobs = list(os.scandir(cliente.path))
+                    except OSError:
+                        continue
+
+                    for job in jobs:
+                        if not job.is_dir():
+                            continue
+
                         ruta_autodxf = os.path.join(job.path, "MODEL CORE FILES", "AutoDXF")
-                        
-                        # VALIDACIONES
-                        # 1. Existe la carpeta AutoDXF
-                        # 2. No está en el historial
-                        if os.path.exists(ruta_autodxf):
-                            if job.path not in jobs_ya_procesados:
-                                info = {
-                                    "job_name": job.name,
-                                    "cliente": cliente.name,
-                                    "producto": producto.name,
-                                    "ruta_full": ruta_autodxf,
-                                    "ruta_job_root": job.path
-                                }
-                                jobs_encontrados.append(info)
-                                
+                        if not os.path.isdir(ruta_autodxf):
+                            continue
+
+                        if _norm_ruta(job.path) in historial:
+                            continue
+
+                        jobs_encontrados.append(
+                            {
+                                "job_name": job.name,
+                                "cliente": cliente.name,
+                                "producto": producto.name,
+                                "ruta_full": ruta_autodxf,
+                                "ruta_job_root": job.path,
+                            }
+                        )
+
         except Exception as e:
             return [], str(e)
 

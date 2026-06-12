@@ -2,7 +2,8 @@ import sys, os, re, json, threading
 import socket, time
 import customtkinter as ctk
 from tkinter import messagebox
-from PIL import Image, ImageTk
+from PIL import Image
+from interface.ctk_qt.widgets import CTkImage
 
 # ==========================================
 # AUTO-KILLER: Evita ventanas dobles al dar "Run"
@@ -66,7 +67,7 @@ class SistemaNestingPro(ctk.CTk):
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GrupoArga.NestingSuite.V4")
         except Exception:
             pass
-        self.title("GRUPO ARGA | NESTING SUITE V4.0")
+        self.title("ARGA NESTING SUITE")
         ctk.set_appearance_mode("light")
         self._geometry_inicial_aplicada = False
         self.configure(fg_color=COLOR_FONDO_APP)
@@ -75,7 +76,7 @@ class SistemaNestingPro(ctk.CTk):
             if not os.path.exists(icon_path):
                 icon_path = config.ruta_recurso("grupo_arga_cover.jpeg")
             icon_img = Image.open(icon_path)
-            self._app_icon_photo = ImageTk.PhotoImage(icon_img)
+            self._app_icon_photo = CTkImage(light_image=icon_img, size=(32, 32))
             self.iconphoto(True, self._app_icon_photo)
         except Exception:
             pass
@@ -337,7 +338,7 @@ class SistemaNestingPro(ctk.CTk):
             print(f"No se cargó logo: {e}")
             ctk.CTkLabel(self.navbar, text="GRUPO ARGA", font=("Inter", 22, "bold"), text_color=COLOR_GRIS_DARK).pack(side="left", padx=35)
 
-        ctk.CTkLabel(self.navbar, text="|  NESTING SUITE V4.0", font=("Inter", 14, "bold"), text_color=COLOR_TEXTO_SECUNDARIO).pack(side="left", padx=15)
+        ctk.CTkLabel(self.navbar, text="|  ARGA NESTING SUITE", font=("Inter", 14, "bold"), text_color=COLOR_TEXTO_SECUNDARIO).pack(side="left", padx=15)
 
         # Tabview
         self.tabview = ctk.CTkTabview(self, fg_color="transparent", segmented_button_selected_color=COLOR_GRIS_DARK, corner_radius=12)

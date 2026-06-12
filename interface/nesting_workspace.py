@@ -8,6 +8,45 @@ SCHEMA_WORKSPACE = "arga_nesting_workspace_v2"
 COMPRESSED_WORKSPACE_EXTS = {".arganest", ".navanest"}
 
 
+def _combo_text(combo):
+    if combo is None:
+        return "OPTIMIZAR LARGO Y ANCHO"
+    if hasattr(combo, "currentText"):
+        return combo.currentText()
+    if hasattr(combo, "get"):
+        return combo.get()
+    return "OPTIMIZAR LARGO Y ANCHO"
+
+
+def _combo_set_text(combo, value):
+    if combo is None:
+        return
+    text = str(value or "")
+    if hasattr(combo, "setCurrentText"):
+        combo.setCurrentText(text)
+    elif hasattr(combo, "set"):
+        combo.set(text)
+
+
+def _combo_values(combo):
+    if combo is None:
+        return []
+    if hasattr(combo, "count"):
+        return [combo.itemText(i) for i in range(combo.count())]
+    if hasattr(combo, "cget"):
+        return list(combo.cget("values") or [])
+    return []
+
+
+def _label_set_text(label, text):
+    if label is None:
+        return
+    if hasattr(label, "setText"):
+        label.setText(str(text))
+    elif hasattr(label, "configure"):
+        label.configure(text=str(text))
+
+
 def _now_iso():
     return datetime.now().isoformat(timespec="seconds")
 
@@ -283,7 +322,7 @@ def construir_payload_workspace(tab):
             "global_corner_val": getattr(tab, "global_corner_val", "INFERIOR IZQUIERDA"),
             "costo_usd_val": getattr(tab, "costo_usd_val", 0.0),
             "costo_mxn_val": getattr(tab, "costo_mxn_val", 0.0),
-            "cmb_opt_val": tab.cmb_opt.get() if hasattr(tab, "cmb_opt") else "OPTIMIZAR LARGO",
+            "cmb_opt_val": _combo_text(getattr(tab, "cmb_opt", None)),
             "ajuste_desplegado": bool(getattr(tab, "ajuste_desplegado", False)),
         },
         "vista_actual": {
@@ -437,21 +476,18 @@ def aplicar_workspace(tab, payload):
     tab.costo_mxn_val = float(ui.get("costo_mxn_val", 0.0) or 0.0)
     tab.lote_actual_idx = lote_idx
 
-    if hasattr(tab, "lbl_cantidad"):
-        tab.lbl_cantidad.configure(text=f"Cantidad: {tab.cantidad_tanques}")
-
-    if hasattr(tab, "cmb_opt"):
-        try:
-            tab.cmb_opt.set(ui.get("cmb_opt_val", "OPTIMIZAR LARGO"))
-        except Exception:
-            pass
+    _label_set_text(getattr(tab, "lbl_cantidad", None), f"Cantidad: {tab.cantidad_tanques}")
+    try:
+        _combo_set_text(getattr(tab, "cmb_opt", None), ui.get("cmb_opt_val", "OPTIMIZAR LARGO"))
+    except Exception:
+        pass
 
     # =========================================================
     # 6) Reconstruir dropdown y lote actual
     # =========================================================
     tab.actualizar_dropdown_lotes()
 
-    valores = list(tab.cmb_lotes.cget("values") or [])
+    valores = _combo_values(getattr(tab, "cmb_lotes", None))
     if valores and valores[0] != "SIN ÓRDENES":
         idx = tab.lote_actual_idx
         if idx < 0 or idx >= len(valores):
@@ -459,7 +495,7 @@ def aplicar_workspace(tab, payload):
             tab.lote_actual_idx = 0
 
         opcion = valores[idx]
-        tab.cmb_lotes.set(opcion)
+        _combo_set_text(getattr(tab, "cmb_lotes", None), opcion)
         tab.on_lote_selected(opcion)
 
     # =========================================================

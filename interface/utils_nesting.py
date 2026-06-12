@@ -8,6 +8,30 @@ import copy
 import csv
 import glob
 
+def _espesor_pulgadas_desde_clave(clave: str) -> float:
+    """Extrae espesor numérico (pulg.) de claves tipo '0.188_A 36' para ordenar."""
+    base = str(clave or "").strip().split("_", 1)[0].strip().replace(",", ".")
+    if not base:
+        return float("inf")
+    if "/" in base:
+        try:
+            num, den = base.split("/", 1)
+            return float(num) / float(den)
+        except Exception:
+            return float("inf")
+    try:
+        return float(base)
+    except Exception:
+        return float("inf")
+
+
+def clave_nesting_sort_key(clave: str) -> tuple:
+    """Orden: menor calibre/espesor → mayor; desempate por material."""
+    esp = _espesor_pulgadas_desde_clave(clave)
+    mat = str(clave or "").split("_", 1)[1].strip().upper() if "_" in str(clave) else ""
+    return (esp, mat, str(clave).upper())
+
+
 def _normalizar_espesor_a_calibre(valor_calibre):
     """
     Alinea el formato de espesor con la lógica de reporte_cortes/calibre_nominal.
@@ -54,16 +78,34 @@ def obtener_siguiente_consecutivo(db_config):
             cursor.close()
             conexion.close()
             
-def crear_estructura_carpetas(ruta_origen_dxfs, consecutivo, qty_tanks, es_swo=False):
+def crear_estructura_carpetas(
+    ruta_origen_dxfs, consecutivo, qty_tanks, es_swo=False, modo_local=False
+):
     """Crea el árbol de directorios estandarizado de Grupo Arga.
        Redirige a 'Máxima Optimización' si es una S.W.O."""
     if es_swo:
         nombre_carpeta_raiz = f"S.W.O {int(consecutivo):02d} X{qty_tanks}"
-        if "ARGA METALS CORPORATE SYSTEM" in ruta_origen_dxfs:
+        if modo_local:
+            try:
+                from interface.qt.export_paths import desktop_nesteos_locales
+
+                ruta_base_wo = os.path.join(
+                    desktop_nesteos_locales(), "Máxima Optimización", nombre_carpeta_raiz
+                )
+            except Exception:
+                ruta_base_wo = os.path.join(
+                    os.path.expanduser("~"),
+                    "Desktop",
+                    "Nesteos Locales",
+                    "Máxima Optimización",
+                    nombre_carpeta_raiz,
+                )
+        elif "ARGA METALS CORPORATE SYSTEM" in ruta_origen_dxfs:
             raiz_arga = ruta_origen_dxfs.split("ARGA METALS CORPORATE SYSTEM")[0]
+            ruta_base_wo = os.path.join(raiz_arga, "Máxima Optimización", nombre_carpeta_raiz)
         else:
             raiz_arga = "X:\\"
-        ruta_base_wo = os.path.join(raiz_arga, "Máxima Optimización", nombre_carpeta_raiz)
+            ruta_base_wo = os.path.join(raiz_arga, "Máxima Optimización", nombre_carpeta_raiz)
     else:
         nombre_carpeta_raiz = f"W.O. {consecutivo} X{qty_tanks}"
         ruta_base_wo = os.path.join(ruta_origen_dxfs, nombre_carpeta_raiz)
@@ -253,11 +295,10 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     for clave_mat, info_mat in resultados.items():
         espesor = _normalizar_espesor_a_calibre(clave_mat)
         for idx, hoja in enumerate(info_mat.get("hojas", [])):
-            if hoja.get("ignorar_deduccion") and not hoja.get("es_retazo"):
-                continue
             p_id_base = hoja.get("placa_id", "DESCONOCIDO")
             sheet_uid = f"{p_id_base} P{idx+1}"
             precio_placa = float(hoja.get("precio_placa", 0.0))
+            excluir_compra = bool(hoja.get("ignorar_deduccion")) and not hoja.get("es_retazo")
             
             largo_in = float(hoja.get("placa_h", 0.0)) / 25.4
             ancho_in = float(hoja.get("placa_w", 0.0)) / 25.4
@@ -266,7 +307,8 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
             if sheet_uid not in reporte_placas:
                 reporte_placas[sheet_uid] = {
                     "largo_in": largo_in, "ancho_in": ancho_in, "espesor": espesor, 
-                    "area_total_in2": area_total_placa_in2, "precio": precio_placa, "asignaciones": {}
+                    "area_total_in2": area_total_placa_in2, "precio": precio_placa,
+                    "ignorar_deduccion": excluir_compra, "asignaciones": {}
                 }
             
             for pieza in hoja.get("piezas", []):
@@ -305,7 +347,8 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     match_qty = re.search(r'X(\d+)', nombre_wo.upper())
     qty_lote = int(match_qty.group(1)) if match_qty else 1
 
-    datos_para_db = [] 
+    datos_para_erp = []
+    datos_para_costos = []
     for s_id, d in reporte_placas.items():
         area_tot = d["area_total_in2"]
         precio = d["precio"]
@@ -322,31 +365,35 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
             scrap_cliente = scrap_total_placa * proporcion_cliente
             costo_scrap_cliente = costo_scrap_total_placa * proporcion_cliente
             
-            # 🚀 INYECCIÓN: qty_lote agregado en la posición 2
-            datos_para_db.append((
+            fila = (
                 nombre_wo, qty_lote, s_id, round(d["largo_in"], 2), round(d["ancho_in"], 2), 
                 str(d["espesor"]), round(precio, 2), round(area_tot, 2), 
                 cli, prod, job, wo_o, round(area_p, 2), 
                 round(pct_area*100, 2), round(costo_p, 2), 
                 round(scrap_cliente, 2), round(costo_scrap_cliente, 2)
-            ))
+            )
+            datos_para_erp.append(fila)
+            if not d.get("ignorar_deduccion"):
+                datos_para_costos.append(fila)
 
     # =====================================================================
     # 5. INYECCIÓN DIRECTA A POSTGRESQL 
     # =====================================================================
-    if db_config and datos_para_db:
+    if db_config and datos_para_erp:
         try:
-            with psycopg2.connect(**db_config) as conn:
-                with conn.cursor() as cur:
-                    # 🚀 INYECCIÓN: Agregada la columna qty_lote y un %s extra (17 en total)
-                    query = """INSERT INTO costos_prorrateo (work_order, qty_lote, plate_id, largo_in, ancho_in, espesor, precio_placa, area_total_in2, cliente, producto, job, wo_origen, area_asignada_in2, porcentaje_area, costo_asignado, scrap_in2, costo_scrap) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
-                    cur.executemany(query, datos_para_db)
-                conn.commit()  
-                print(f"✅ [BD] Costos_prorrateo guardado exitosamente.")
-                
+            if datos_para_costos:
+                with psycopg2.connect(**db_config) as conn:
+                    with conn.cursor() as cur:
+                        query = """INSERT INTO costos_prorrateo (work_order, qty_lote, plate_id, largo_in, ancho_in, espesor, precio_placa, area_total_in2, cliente, producto, job, wo_origen, area_asignada_in2, porcentaje_area, costo_asignado, scrap_in2, costo_scrap) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+                        cur.executemany(query, datos_para_costos)
+                    conn.commit()
+                print(f"✅ [BD] Costos_prorrateo guardado ({len(datos_para_costos)} filas; {len(datos_para_erp) - len(datos_para_costos)} placa(s) sobrante omitidas).")
+            else:
+                print("ℹ️ [BD] Sin filas de compra: todas las placas madre están marcadas como sobrante.")
+
             try:
                 from postgres_connector import guardar_tracking_erp
-                guardar_tracking_erp(nombre_wo, datos_para_db, piezas_detalladas_db, db_config, datos_financieros)
+                guardar_tracking_erp(nombre_wo, datos_para_erp, piezas_detalladas_db, db_config, datos_financieros)
             except Exception as e_erp:
                 print(f"⚠️ [Error ERP Tracking]: {e_erp}")
 

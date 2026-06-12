@@ -1,6 +1,10 @@
 import os
 import sys
-import customtkinter as ctk
+
+try:
+    import customtkinter as ctk
+except ImportError:
+    ctk = None
 
 def ruta_recurso(ruta_relativa):
     """Para archivos estáticos empaquetados dentro del .exe (imágenes, scripts, macros)"""
@@ -40,8 +44,9 @@ COLOR_SUCCESS = "#2EA043"
 COLOR_TEXT = "#E0E0E0"
 
 def setup_theme():
-    ctk.set_appearance_mode("Dark")
-    ctk.set_default_color_theme("dark-blue")
+    if ctk is not None:
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("dark-blue")
 
 # =========================================================
 # --- INTEGRACIÓN FREECAD (DXF -> STEP) ---

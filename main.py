@@ -1,25 +1,70 @@
 import multiprocessing
+
 import os
+
 import sys
+
+
+
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+_IFACE = os.path.join(_ROOT, "interface")
+
+for _p in (_ROOT, _IFACE):
+
+    if _p not in sys.path:
+
+        sys.path.insert(0, _p)
+
+
 
 if __name__ == "__main__":
 
+
+
     multiprocessing.freeze_support()
 
-    import config
-    from interface.main_window import SistemaNestingPro
-    
-    config.setup_theme()
-    
-    app = SistemaNestingPro()
+
+
+    from PySide6.QtWidgets import QApplication
+
+
+
+    from interface.qt.theme import apply_theme
+
+    from interface.qt.main_window import SistemaNestingPro
+
+
+
+    qt_app = QApplication(sys.argv)
+    qt_app.setApplicationName("ARGA NESTING SUITE")
+    qt_app.setApplicationDisplayName("ARGA NESTING SUITE")
+
+    apply_theme(qt_app)
+
+
+
+    window = SistemaNestingPro()
+
     try:
+
         if len(sys.argv) > 1:
+
             arg_path = os.path.abspath(str(sys.argv[1]))
+
             if os.path.isfile(arg_path) and os.path.splitext(arg_path)[1].lower() in {".arganest", ".navanest"}:
-                app.after(250, lambda p=arg_path: app.abrir_workspace_arganest_en_arranque(p))
+
+                window.after(250, lambda p=arg_path: window.abrir_workspace_arganest_en_arranque(p))
+
     except Exception:
+
         pass
-    app.mainloop()
+
+
+
+    window.show()
+
+    sys.exit(qt_app.exec())
 
 """
 Codigo para app web

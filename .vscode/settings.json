@@ -1,1 +1,37 @@
-{}
+{
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "192.168.2.80",
+            "port": 5433,
+            "driver": "PostgreSQL",
+            "name": "NestingPro",
+            "database": "nestingpro_db",
+            "username": "postgres",
+            "password": "nesting123"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "192.168.2.80",
+            "port": 5439,
+            "driver": "PostgreSQL",
+            "name": "Herinox",
+            "database": "herinox",
+            "username": "herinox",
+            "password": "herinox_password_2024"
+        },
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "192.168.2.80",
+            "port": 5437,
+            "driver": "PostgreSQL",
+            "name": "Cantralized System Local ",
+            "database": "foldertree",
+            "username": "user",
+            "password": "password"
+        }
+    ]
+}

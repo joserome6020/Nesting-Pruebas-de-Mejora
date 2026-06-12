@@ -7,15 +7,16 @@ from shapely import affinity
 class GeometriaDXF:
     def __init__(self, escala=25.4):
         self.escala_dxf = escala
-        self.LAYER_OUTER = ["CUT_OUTER", "OUTER", "CORTE_EXTERNO", "0"] 
-        self.LAYER_INNER = ["CUT_INNER", "INNER", "CORTE_INTERNO"]
-        self.LAYER_MARK = ["MARK", "MARKING", "ETCH", "TEXT", "MARCADO"]
+        self.LAYER_OUTER = ["CUT_OUTER", "OUTER", "CORTE_EXTERNO", "IV_OUTER", "0"]
+        self.LAYER_INNER = ["CUT_INNER", "INNER", "CORTE_INTERNO", "INTERIOR", "IV_INTERIOR"]
+        self.LAYER_MARK = ["MARK", "MARKING", "ETCH", "TEXT", "MARCADO", "IV_MARK"]
 
     def _entidad_a_lineas(self, entity):
         lineas = []
         try:
             p = path.make_path(entity)
-            vertices = list(p.flattening(distance=0.5)) 
+            from modules.nesting_engine.geometry_parser import DXF_FLATTEN_DISTANCE
+            vertices = list(p.flattening(distance=DXF_FLATTEN_DISTANCE)) 
             if len(vertices) > 1:
                 v_scaled = [(v[0] * self.escala_dxf, v[1] * self.escala_dxf) for v in vertices]
                 lineas.append(LineString(v_scaled))
@@ -46,10 +47,26 @@ class GeometriaDXF:
             
             shell_poly = max(candidatos_outer, key=lambda x: x.area)
             holes = []
-            if lines_inner:
-                candidatos_inner = list(polygonize(lines_inner))
-                for h in candidatos_inner:
-                    if shell_poly.buffer(0.1).contains(h.centroid): holes.append(h)
+            seen = set()
+            candidatos_inner = list(polygonize(lines_inner)) if lines_inner else []
+
+            def _add_hole(h):
+                if h is None or h.is_empty or h.area >= shell_poly.area * 0.995:
+                    return
+                if not shell_poly.buffer(0.05).contains(h.centroid):
+                    return
+                c = h.centroid
+                key = (round(c.x, 2), round(c.y, 2), round(h.area, 2))
+                if key in seen:
+                    return
+                seen.add(key)
+                holes.append(h)
+
+            for h in candidatos_inner:
+                _add_hole(h)
+            for h in candidatos_outer:
+                if h is not shell_poly:
+                    _add_hole(h)
             
             pieza_final = Polygon(shell_poly.exterior.coords, [h.exterior.coords for h in holes])
             if not pieza_final.is_valid: pieza_final = pieza_final.buffer(0)

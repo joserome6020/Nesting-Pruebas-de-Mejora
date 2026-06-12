@@ -1,0 +1,644 @@
+"""Pestaña FILES — PySide6 nativo (paridad con interface/tab_files.py oficial)."""
+from __future__ import annotations
+
+import csv
+import glob
+import os
+import re
+import shutil
+import threading
+import concurrent.futures
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+import config
+from modules.processed_layers import ProcesadorDXF
+from modules.scanner import EscanerServidor
+from interface.qt.layout_helpers import make_card
+from interface.qt.thread_bridge import call_on_main
+from interface.qt.theme import (
+    COLOR_BORDE,
+    COLOR_FONDO_APP,
+    COLOR_GRIS_DARK,
+    COLOR_GRIS_MED,
+    COLOR_TARJETA,
+    COLOR_TEXTO_SECUNDARIO,
+    COLOR_TEXTO_SUBTITULO,
+    COLOR_TEXTO_TITULO,
+    apply_push_button,
+    surface_dialog_stylesheet,
+)
+
+
+class TabFiles(QWidget):
+    def __init__(self, parent, app_principal):
+        super().__init__(parent)
+        self.app = app_principal
+        self.escaner = EscanerServidor()
+        self.procesador = ProcesadorDXF()
+        if not hasattr(self.app, "meta_pdf_por_ruta"):
+            self.app.meta_pdf_por_ruta = {}
+        self._build_ui()
+
+    def _build_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = make_card()
+        card.setMinimumSize(720, 420)
+        card.setMaximumWidth(980)
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(48, 44, 48, 44)
+        lay.setSpacing(18)
+
+        title = QLabel("CONEXIÓN CON EL SERVIDOR")
+        title.setStyleSheet(f"font-size:22px;font-weight:700;color:{COLOR_TEXTO_SUBTITULO};")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        self.btn_nest_scan = QPushButton("☁  IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        self.btn_nest_scan.setFixedSize(450, 80)
+        apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
+        self.btn_nest_scan.clicked.connect(self.ejecutar_escaneo_servidor)
+        lay.addWidget(self.btn_nest_scan, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_swo_web = QPushButton("📥 IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        self.btn_swo_web.setFixedSize(450, 80)
+        apply_push_button(self.btn_swo_web, "#455E75", hover="#334659", font_size=16, padding="12px 20px")
+        self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
+        lay.addWidget(self.btn_swo_web, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.lbl_status = QLabel(f"Ruta Objetivo: {config.RUTA_SERVIDOR_RAIZ}")
+        self.lbl_status.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_status)
+
+        outer.addStretch()
+        outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+        outer.addStretch()
+
+    def _ui(self, fn, *args):
+        call_on_main(fn, *args)
+
+    # --- lógica copiada 1:1 del original (solo cambia capa UI) ---
+    def _normalizar_ruta(self, ruta):
+        try:
+            return os.path.normcase(os.path.normpath(str(ruta)))
+        except Exception:
+            return str(ruta)
+
+    def _normalizar_material(self, texto_material):
+        mat = str(texto_material or "").strip().upper().replace("_", " ")
+        mat = re.sub(r"\s+", " ", mat)
+        if ("CARBON" in mat and "STEEL" in mat) or ("STEEL" in mat and "CARBON" in mat):
+            return "CARBONO"
+        if "ACERO" in mat and "CARBONO" in mat:
+            return "CARBONO"
+        if "STAINLESS" in mat or "INOX" in mat or "INOXIDABLE" in mat:
+            return "INOXIDABLE"
+        if "ALUMINUM" in mat or "ALUMINIO" in mat:
+            return "ALUMINIO"
+        if "GALVANIZED" in mat or "GALVANIZADO" in mat:
+            return "GALVANIZADO"
+        return mat if mat else "CARBONO"
+
+    def _parsear_nombre_dxf(self, nombre_archivo):
+        nombre_base = os.path.splitext(os.path.basename(str(nombre_archivo)))[0]
+        partes = [p.strip() for p in nombre_base.split(",") if p.strip()]
+        if not partes:
+            return nombre_base, "CARBONO", "1", "0.375"
+        pieza = partes[0]
+        qty_str, cal, material_tokens = "1", "0.375", []
+        for token in partes[1:]:
+            token_up = token.strip().upper()
+            m_qty = re.search(r"\b(?:QTY|QUANTITY|CANT|CANTIDAD)\b\s*[:=]?\s*(\d+)", token_up)
+            if m_qty:
+                qty_str = m_qty.group(1)
+                continue
+            m_cal = re.search(
+                r"\b(?:CAL|CALIBRE|GA|GAUGE|THK|THICK|THICKNESS|ESP|ESPESOR)\b\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)",
+                token_up,
+            )
+            if m_cal:
+                cal = m_cal.group(1)
+                continue
+            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", token_up):
+                cal = token_up
+                continue
+            material_tokens.append(token.strip())
+        return pieza, self._normalizar_material(", ".join(material_tokens)), qty_str, cal
+
+    def _listar_dxfs_recursivo(self, carpeta_base):
+        out = []
+        base = str(carpeta_base or "").strip()
+        if not base or not os.path.isdir(base):
+            return out
+        excluidas = {"processed files", "procesados", "nesting", "__pycache__"}
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d.strip().lower() not in excluidas]
+            for f in files:
+                if str(f).lower().endswith(".dxf"):
+                    out.append(os.path.join(root, f))
+        return out
+
+    def _nombre_destino_unico(self, nombre_original, usados):
+        base, ext = os.path.splitext(str(nombre_original))
+        candidato = f"{base}{ext}"
+        i = 2
+        while candidato.lower() in usados:
+            candidato = f"{base}__{i}{ext}"
+            i += 1
+        usados.add(candidato.lower())
+        return candidato
+
+    def _buscar_dxf_item_en_autodxf(self, ruta_autodxf, item):
+        item_limpio = str(item or "").strip().lower()
+        if not item_limpio:
+            return ""
+        candidatos = []
+        ruta_proc = os.path.join(ruta_autodxf, "Processed Files")
+        if os.path.isdir(ruta_proc):
+            candidatos.extend(self._listar_dxfs_recursivo(ruta_proc))
+        if os.path.isdir(ruta_autodxf):
+            candidatos.extend(self._listar_dxfs_recursivo(ruta_autodxf))
+        vistos, ordenados = set(), []
+        for p in candidatos:
+            k = self._normalizar_ruta(p)
+            if k not in vistos:
+                vistos.add(k)
+                ordenados.append(p)
+        for ruta in ordenados:
+            f_lower = os.path.basename(ruta).lower()
+            if f_lower == f"{item_limpio}.dxf" or f_lower.startswith(f"{item_limpio},") or f_lower.startswith(f"{item_limpio} "):
+                return ruta
+        return ""
+
+    def ejecutar_escaneo_servidor(self):
+        self.btn_nest_scan.setEnabled(False)
+        self.btn_nest_scan.setText("ESCANEANDO...")
+        apply_push_button(self.btn_nest_scan, "#E2E8F0", font_size=16, padding="12px 20px")
+        threading.Thread(target=self.thread_escaneo, daemon=True).start()
+
+    def thread_escaneo(self):
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        jobs, err = [], None
+        try:
+            fut = pool.submit(self.escaner.buscar_nuevos_jobs, self.app.jobs_procesados)
+            try:
+                jobs, err = fut.result(timeout=120)
+            except concurrent.futures.TimeoutError:
+                jobs, err = [], (
+                    "El escaneo del servidor tardó demasiado.\n"
+                    "Verifique VPN/conexión LAN o use nesteos locales con el switch desactivado."
+                )
+        except Exception as e:
+            jobs, err = [], str(e)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        self._ui(self.after_escaneo, jobs, err)
+
+    def after_escaneo(self, jobs, err=None):
+        self.btn_nest_scan.setEnabled(True)
+        self.btn_nest_scan.setText("☁  IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
+        try:
+            if err:
+                QMessageBox.critical(self, "Error", str(err))
+                return
+            if not jobs:
+                QMessageBox.information(self, "Estatus", "No hay nuevos Jobs.")
+                return
+            self.mostrar_selector_jobs(jobs)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo mostrar la lista de jobs:\n{e}")
+
+    def _dialogo_lista(self, titulo, ancho=800, alto=600):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(titulo)
+        dlg.resize(ancho, alto)
+        dlg.setStyleSheet(surface_dialog_stylesheet())
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("AppScroll")
+        inner = QWidget()
+        scroll.setWidget(inner)
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(8)
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.addWidget(scroll)
+        return dlg, inner_lay
+
+    @staticmethod
+    def _limpiar_layout(layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+            sub = item.layout()
+            if sub:
+                TabFiles._limpiar_layout(sub)
+
+    def _agrupar_jobs_por_cliente(self, jobs):
+        por_cliente: dict[str, list] = {}
+        for job in jobs:
+            cliente = str(job.get("cliente") or "Sin cliente").strip() or "Sin cliente"
+            por_cliente.setdefault(cliente, []).append(job)
+        for lista in por_cliente.values():
+            lista.sort(key=lambda j: str(j.get("job_name", "")).upper())
+        return dict(sorted(por_cliente.items(), key=lambda kv: kv[0].upper()))
+
+    def mostrar_selector_jobs(self, jobs):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("IMPORTAR TRABAJOS")
+        dlg.resize(820, 620)
+        dlg.setStyleSheet(surface_dialog_stylesheet())
+        dlg.setModal(True)
+
+        por_cliente = self._agrupar_jobs_por_cliente(jobs)
+        estado = {"cliente": None}
+
+        root = QVBoxLayout(dlg)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(12)
+
+        hdr = QLabel("Seleccione el cliente y el job a procesar")
+        hdr.setStyleSheet(f"font-size:18px;font-weight:700;color:{COLOR_TEXTO_TITULO};")
+        root.addWidget(hdr)
+
+        search_wrap = QFrame()
+        search_wrap.setStyleSheet(
+            f"QFrame{{background:{COLOR_TARJETA};border:1px solid {COLOR_BORDE};border-radius:10px;}}"
+        )
+        search_lay = QHBoxLayout(search_wrap)
+        search_lay.setContentsMargins(10, 4, 10, 4)
+        search_lay.setSpacing(8)
+        search_icon = QLabel("🔍")
+        search_icon.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:16px;background:transparent;")
+        search_lay.addWidget(search_icon)
+        ent_buscar = QLineEdit()
+        ent_buscar.setObjectName("HerinoxSearch")
+        ent_buscar.setPlaceholderText("Buscar por cliente, job o producto…")
+        ent_buscar.setStyleSheet(
+            f"QLineEdit{{background:transparent;border:none;color:{COLOR_TEXTO_TITULO};font-size:13px;}}"
+            f"QLineEdit:focus{{border:none;}}"
+        )
+        search_lay.addWidget(ent_buscar, 1)
+        root.addWidget(search_wrap)
+
+        lbl_ruta = QLabel("Clientes")
+        lbl_ruta.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-weight:700;font-size:11px;")
+        root.addWidget(lbl_ruta)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setObjectName("AppScroll")
+        inner = QWidget()
+        lista = QVBoxLayout(inner)
+        lista.setSpacing(8)
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
+
+        btn_volver = QPushButton("← Volver a clientes")
+        apply_push_button(btn_volver, "#FFFFFF", font_size=11, padding="6px 12px")
+        btn_volver.hide()
+        root.addWidget(btn_volver)
+
+        def _card_job(job_info):
+            row = QFrame()
+            row.setObjectName("HerinoxCard")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(14, 12, 14, 12)
+            info = QVBoxLayout()
+            lbl_job = QLabel(str(job_info.get("job_name", "")))
+            lbl_job.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:700;font-size:13px;")
+            info.addWidget(lbl_job)
+            sub = QLabel(
+                f"{job_info.get('producto', '—')}  ·  {job_info.get('cliente', '—')}"
+            )
+            sub.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+            info.addWidget(sub)
+            rl.addLayout(info, 1)
+            btn = QPushButton("IMPORTAR")
+            apply_push_button(btn, COLOR_GRIS_DARK, font_size=11, padding="6px 14px")
+            btn.clicked.connect(lambda _c=False, j=job_info: (dlg.accept(), self.procesar_seleccion(j)))
+            rl.addWidget(btn)
+            return row
+
+        def _card_cliente(nombre_cliente, lista_jobs):
+            row = QFrame()
+            row.setObjectName("HerinoxCard")
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(14, 12, 14, 12)
+            info = QVBoxLayout()
+            lbl_c = QLabel(f"📁 {nombre_cliente}")
+            lbl_c.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:700;font-size:14px;")
+            info.addWidget(lbl_c)
+            productos = sorted({str(j.get("producto", "")).strip() for j in lista_jobs if j.get("producto")})
+            det = QLabel(f"{len(lista_jobs)} job(s)" + (f"  ·  {', '.join(productos[:3])}" if productos else ""))
+            det.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+            info.addWidget(det)
+            rl.addLayout(info, 1)
+            btn = QPushButton("VER JOBS")
+            apply_push_button(btn, "#FFFFFF", font_size=11, padding="6px 14px")
+
+            def abrir_cliente(_c=False, c=nombre_cliente):
+                estado["cliente"] = c
+                ent_buscar.clear()
+                refrescar()
+
+            btn.clicked.connect(abrir_cliente)
+            rl.addWidget(btn)
+            return row
+
+        def refrescar():
+            self._limpiar_layout(lista)
+            filtro = ent_buscar.text().strip().lower()
+            cliente_activo = estado.get("cliente")
+
+            if filtro:
+                btn_volver.hide()
+                lbl_ruta.setText("Resultados de búsqueda")
+                vistos = set()
+                coincidencias = []
+                for job in jobs:
+                    clave = (job.get("ruta_job_root"), job.get("job_name"))
+                    if clave in vistos:
+                        continue
+                    vistos.add(clave)
+                    texto = " ".join(
+                        str(job.get(k, ""))
+                        for k in ("job_name", "cliente", "producto")
+                    ).lower()
+                    if filtro in texto:
+                        coincidencias.append(job)
+                coincidencias.sort(key=lambda j: str(j.get("job_name", "")).upper())
+                if not coincidencias:
+                    vacio = QLabel("No se encontraron jobs con ese criterio.")
+                    vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:12px;")
+                    lista.addWidget(vacio)
+                else:
+                    for job in coincidencias:
+                        lista.addWidget(_card_job(job))
+                lista.addStretch()
+                return
+
+            if cliente_activo:
+                btn_volver.show()
+                lbl_ruta.setText(f"Clientes  ›  {cliente_activo}")
+                jobs_cliente = por_cliente.get(cliente_activo, [])
+                vistos = set()
+                for job in jobs_cliente:
+                    clave = job.get("job_name")
+                    if clave in vistos:
+                        continue
+                    vistos.add(clave)
+                    lista.addWidget(_card_job(job))
+                if not jobs_cliente:
+                    vacio = QLabel("Este cliente no tiene jobs pendientes.")
+                    vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:12px;")
+                    lista.addWidget(vacio)
+            else:
+                btn_volver.hide()
+                lbl_ruta.setText("Clientes")
+                if not por_cliente:
+                    vacio = QLabel("No hay jobs disponibles.")
+                    vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:12px;")
+                    lista.addWidget(vacio)
+                else:
+                    for nombre, lista_jobs in por_cliente.items():
+                        lista.addWidget(_card_cliente(nombre, lista_jobs))
+            lista.addStretch()
+
+        def volver_clientes():
+            estado["cliente"] = None
+            ent_buscar.clear()
+            refrescar()
+
+        btn_volver.clicked.connect(volver_clientes)
+        ent_buscar.textChanged.connect(lambda _t: refrescar())
+        refrescar()
+        dlg.exec()
+
+    def procesar_seleccion(self, job_info):
+        carpeta_origen = job_info["ruta_full"]
+        job_name = job_info["job_name"]
+        self.app.job_activo = job_name
+        ruta_root = os.path.dirname(os.path.dirname(carpeta_origen))
+        ruta_csv = os.path.join(ruta_root, f"job_data_{job_name}.csv")
+        multiplicador = 1
+        if os.path.exists(ruta_csv):
+            try:
+                with open(ruta_csv, newline="", encoding="utf-8", errors="ignore") as f:
+                    reader = list(csv.reader(f))
+                    if len(reader) > 1 and len(reader[1]) > 3 and str(reader[1][3]).strip().isdigit():
+                        multiplicador = int(str(reader[1][3]).strip())
+            except Exception:
+                pass
+        self.app.multiplicador_tanques = multiplicador
+        try:
+            rutas_dxf = sorted(set(self._listar_dxfs_recursivo(carpeta_origen)), key=self._normalizar_ruta)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error: {e}")
+            return
+        if not rutas_dxf:
+            QMessageBox.warning(self, "Aviso", "No se encontraron DXF en AutoDXF (ni en subcarpetas).")
+            return
+        carpeta_procesados = os.path.join(carpeta_origen, "Processed Files")
+        os.makedirs(carpeta_procesados, exist_ok=True)
+        items_procesados, nombres_usados = [], set()
+        self.app.meta_pdf_por_ruta = {}
+        for ruta_in in rutas_dxf:
+            arch = os.path.basename(ruta_in)
+            ruta_out_real = os.path.join(carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados))
+            try:
+                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
+                if (not ok_proc) or (not os.path.exists(ruta_out_real)):
+                    shutil.copy2(ruta_in, ruta_out_real)
+                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch)
+                try:
+                    qty_final = str(int(qty_str) * multiplicador)
+                except Exception:
+                    qty_final = qty_str
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job_name, "item": pieza}
+                items_procesados.append((pieza, mat, qty_final, cal, "LISTO", ruta_out_real))
+            except Exception:
+                try:
+                    if not os.path.exists(ruta_out_real):
+                        shutil.copy2(ruta_in, ruta_out_real)
+                except Exception:
+                    pass
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
+                items_procesados.append((arch, "?", str(multiplicador), "?", "LISTO", ruta_out_real))
+        self.app.cargar_datos_parts(items_procesados)
+        self.app.guardar_historial(job_info.get("ruta_job_root", ruta_root))
+        self.app.ir_a_tab("PARTS")
+
+    def buscar_swos_pendientes(self):
+        self.btn_swo_web.setEnabled(False)
+        self.btn_swo_web.setText("BUSCANDO S.W.O...")
+        threading.Thread(target=self.thread_swos, daemon=True).start()
+
+    def thread_swos(self):
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            cred = {"host": "192.168.2.80", "database": "nestingpro_db", "user": "postgres", "password": "nesting123", "port": "5433"}
+            con = psycopg2.connect(**cred)
+            cur = con.cursor(cursor_factory=RealDictCursor)
+            cur.execute("SELECT DISTINCT super_work_order FROM reporte_cortes WHERE estatus = 'Pendiente SWO' AND super_work_order IS NOT NULL;")
+            lista = [s["super_work_order"] for s in cur.fetchall()]
+            cur.close()
+            con.close()
+            self._ui(self.mostrar_selector_swo, lista)
+        except Exception as e:
+            self._ui(self.restaurar_boton_swo, str(e))
+
+    def restaurar_boton_swo(self, err=None):
+        self.btn_swo_web.setEnabled(True)
+        self.btn_swo_web.setText("📥 IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        if err:
+            QMessageBox.critical(self, "Error BD", f"No se pudo conectar a PostgreSQL:\n{err}")
+
+    def mostrar_selector_swo(self, swos):
+        self.restaurar_boton_swo()
+        if not swos:
+            QMessageBox.information(self, "Bandeja Vacía", "No hay Súper Work Orders pendientes por descargar.")
+            return
+        dlg, lay = self._dialogo_lista("IMPORTAR SÚPER WORK ORDER", 600, 450)
+        hdr_swo = QLabel("Seleccione la SWO a Descargar")
+        hdr_swo.setStyleSheet(f"font-size:16px;font-weight:700;color:{COLOR_TEXTO_TITULO};")
+        lay.addWidget(hdr_swo)
+        for swo in swos:
+            row = QFrame()
+            row.setObjectName("HerinoxCard")
+            row.setStyleSheet(
+                f"QFrame#HerinoxCard{{background:#ECFDF5;border:1px solid #10B981;border-radius:10px;}}"
+            )
+            rl = QHBoxLayout(row)
+            lbl_swo = QLabel(f"⚡ {swo}")
+            lbl_swo.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:600;")
+            rl.addWidget(lbl_swo)
+            btn = QPushButton("DESCARGAR")
+            apply_push_button(btn, "#10B981", font_size=11, padding="6px 14px")
+            btn.clicked.connect(lambda _c=False, s=swo: (dlg.accept(), self.procesar_descarga_swo(s)))
+            rl.addWidget(btn)
+            lay.addWidget(row)
+        dlg.exec()
+
+    def obtener_ruta_real_job(self, ruta_raiz, nombre_job):
+        if not os.path.exists(ruta_raiz):
+            return None
+        try:
+            for producto in os.listdir(ruta_raiz):
+                ruta_prod = os.path.join(ruta_raiz, producto)
+                if not os.path.isdir(ruta_prod):
+                    continue
+                for cliente in os.listdir(ruta_prod):
+                    ruta_cli = os.path.join(ruta_prod, cliente)
+                    if not os.path.isdir(ruta_cli):
+                        continue
+                    ruta_job = os.path.join(ruta_cli, nombre_job)
+                    if os.path.isdir(ruta_job):
+                        return ruta_job
+        except Exception:
+            pass
+        return None
+
+    def procesar_descarga_swo(self, swo_id):
+        self.app.abrir_ventana_carga(f"Descargando {swo_id}...")
+        threading.Thread(target=self.thread_descarga_swo, args=(swo_id,), daemon=True).start()
+
+    def thread_descarga_swo(self, swo_id):
+        try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+            from postgres_connector import registrar_diccionario_swo
+            cred = {"host": "192.168.2.80", "database": "nestingpro_db", "user": "postgres", "password": "nesting123", "port": "5433"}
+            con = psycopg2.connect(**cred)
+            cur = con.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "SELECT job, work_order, calibre, item, COUNT(*) as qty FROM reporte_cortes "
+                "WHERE super_work_order = %s AND estatus = 'Pendiente SWO' GROUP BY job, work_order, calibre, item",
+                (swo_id,),
+            )
+            items_db = cur.fetchall()
+            cur.close()
+            con.close()
+            items_procesados, errores, prefijos = [], 0, set()
+            self.app.meta_pdf_por_ruta = {}
+            for row in items_db:
+                job, work_order, item = row["job"], row["work_order"], row["item"]
+                prefijo_adn = work_order.strip().upper()
+                if prefijo_adn not in prefijos:
+                    ruta_base_job = self.obtener_ruta_real_job(config.RUTA_SERVIDOR_RAIZ, job)
+                    c_cli = c_job_com = c_prod = "N/A"
+                    if ruta_base_job:
+                        archivos_csv = glob.glob(os.path.join(ruta_base_job, f"job_data_{job}.csv"))
+                        if archivos_csv:
+                            try:
+                                with open(archivos_csv[0], encoding="utf-8-sig") as f:
+                                    reader = csv.reader(f)
+                                    enc = [str(e).strip().upper() for e in next(reader, [])]
+                                    datos = next(reader, [])
+                                    if "CLIENTE" in enc:
+                                        c_cli = datos[enc.index("CLIENTE")].strip()
+                                    if "PRODUCTO" in enc:
+                                        c_prod = datos[enc.index("PRODUCTO")].strip()
+                                    if "JOB NUMBER" in enc:
+                                        c_job_com = datos[enc.index("JOB NUMBER")].strip()
+                                    elif "JOB" in enc:
+                                        c_job_com = datos[enc.index("JOB")].strip()
+                            except Exception:
+                                pass
+                    registrar_diccionario_swo(swo_id, prefijo_adn, c_cli, c_job_com, c_prod, cred)
+                    prefijos.add(prefijo_adn)
+                partes_cal = row["calibre"].split("_")
+                cal_num = partes_cal[0]
+                mat = partes_cal[1] if len(partes_cal) > 1 else "CARBONO"
+                ruta_base_job = self.obtener_ruta_real_job(config.RUTA_SERVIDOR_RAIZ, job)
+                ruta_dxf = ""
+                if ruta_base_job:
+                    ruta_dxf = self._buscar_dxf_item_en_autodxf(os.path.join(ruta_base_job, "MODEL CORE FILES", "AutoDXF"), item)
+                if ruta_dxf:
+                    item_pref = f"{prefijo_adn}__{item}"
+                    ruta_norm = self._normalizar_ruta(ruta_dxf)
+                    self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job, "item": item, "work_order": prefijo_adn}
+                    items_procesados.append((item_pref, mat, str(row["qty"]), cal_num, "LISTO", ruta_dxf))
+                else:
+                    errores += 1
+            self._ui(self.finalizar_descarga_swo, swo_id, items_procesados, errores)
+        except Exception as e:
+            self._ui(self.error_descarga_swo, str(e))
+
+    def finalizar_descarga_swo(self, swo_id, items, errores):
+        self.app.cerrar_ventana_carga()
+        if not items:
+            QMessageBox.critical(self, "Fallo Crítico", "No se encontró archivos .dxf para esta SWO.")
+            return
+        if errores > 0:
+            QMessageBox.warning(self, "Advertencia", f"Faltaron {errores} archivos en la red.")
+        self.app.job_activo = swo_id
+        self.app.multiplicador_tanques = 1
+        self.app.cargar_datos_parts(items)
+        self.app.ir_a_tab("PARTS")
+        QMessageBox.information(self, "SWO Descargada", f"¡{swo_id} inyectada con éxito!")
+
+    def error_descarga_swo(self, err):
+        self.app.cerrar_ventana_carga()
+        QMessageBox.critical(self, "Error en Descarga", f"Ocurrió un problema:\n{err}")

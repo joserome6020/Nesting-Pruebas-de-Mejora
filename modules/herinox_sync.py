@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import socket
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -89,11 +90,21 @@ class HerinoxPlateSync:
             api_error = f"Faltan credenciales API en {self.settings_file}"
 
         if not plates_by_code and self.db_enabled:
-            try:
-                plates_by_code = self._fetch_plates_from_db()
-                source = "postgres"
-            except Exception as exc:
-                db_error = str(exc)
+            db_error = ""
+            host = str(self.db_config.get("host") or "").strip()
+            port = int(self.db_config.get("port") or 5439)
+            probe_s = min(2, max(1, int(self.db_config.get("connect_timeout", 5))))
+            if host and not self._host_reachable(host, port, probe_s):
+                db_error = f"sin conexion a {host}:{port} (red/VPN)"
+            else:
+                try:
+                    plates_by_code = self._fetch_plates_from_db()
+                    source = "postgres"
+                except Exception as exc:
+                    db_error = str(exc)
+            if not plates_by_code and not db_error:
+                db_error = "sin datos desde PostgreSQL"
+            if not plates_by_code and db_error:
                 if api_error:
                     return HerinoxSyncResult(
                         ok=False,
@@ -243,6 +254,14 @@ class HerinoxPlateSync:
                 continue
             by_code[code] = row
         return by_code
+
+    @staticmethod
+    def _host_reachable(host: str, port: int, timeout_s: float = 1.5) -> bool:
+        try:
+            with socket.create_connection((host, int(port)), timeout=max(0.5, float(timeout_s))):
+                return True
+        except OSError:
+            return False
 
     def _fetch_plates_from_db(self) -> Dict[str, dict]:
         conn = None

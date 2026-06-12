@@ -4,7 +4,8 @@
 # ==========================================
 import customtkinter as ctk
 import matplotlib
-matplotlib.use("TkAgg")
+if matplotlib.get_backend().lower() not in ("qtagg", "qt5agg"):
+    matplotlib.use("QtAgg")
 import time
 import copy
 from matplotlib import patheffects as mpe
