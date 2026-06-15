@@ -337,6 +337,11 @@ def _mapear_columnas(fieldnames: list[str]) -> dict:
         "clasificacion": mapa.get("clasificacion") or mapa.get("clasificación"),
         "largo_in": mapa.get("largo (in)") or mapa.get("largo"),
         "cantidad": mapa.get("cantidad") or mapa.get("qty"),
+        "codigo": mapa.get("codigo herinox")
+        or mapa.get("codigo_herinox")
+        or mapa.get("codigo"),
+        "perfil": mapa.get("perfil") or mapa.get("perfil_estructural"),
+        "material": mapa.get("material") or mapa.get("material_grade"),
     }
 
 
@@ -375,12 +380,31 @@ def _leer_csv_lista_largos(csv_path: Path) -> list[dict]:
                     except Exception:
                         cantidad_base = 0
 
+                    codigo_csv = (
+                        _norm_text(raw.get(columnas["codigo"]))
+                        if columnas.get("codigo")
+                        else ""
+                    )
+                    perfil_csv = (
+                        _norm_text(raw.get(columnas["perfil"]))
+                        if columnas.get("perfil")
+                        else ""
+                    )
+                    material_csv = (
+                        _norm_text(raw.get(columnas["material"]))
+                        if columnas.get("material")
+                        else ""
+                    )
+
                     rows.append(
                         {
                             "nombre": nombre,
                             "clasificacion": clasificacion,
                             "largo_in": largo_in,
                             "cantidad_base": cantidad_base,
+                            "herinox_codigo": codigo_csv,
+                            "perfil_estructural": perfil_csv or None,
+                            "material_grade": material_csv or None,
                         }
                     )
 
@@ -456,7 +480,7 @@ def asegurar_tabla_lista_largos(cursor) -> None:
     cursor.execute(
         """
         UPDATE public.lista_largos_job
-        SET job_key = UPPER(REGEXP_REPLACE(BTRIM(job), '\s+', ' ', 'g'))
+        SET job_key = UPPER(REGEXP_REPLACE(BTRIM(job), '\\s+', ' ', 'g'))
         WHERE job IS NOT NULL
         AND (job_key IS NULL OR BTRIM(job_key) = '')
         """
@@ -484,7 +508,13 @@ def asegurar_tabla_lista_largos(cursor) -> None:
     )
 
 
-def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) -> dict:
+def importar_lista_largos_job(
+    job: str,
+    ruta_exportacion: str,
+    db_config: dict,
+    work_order_alcance: str | None = None,
+    propagar_material: bool = True,
+) -> dict:
     job = _norm_text(job)
     job_key = _norm_job(job)
     ruta_exportacion = _norm_text(ruta_exportacion)
@@ -531,6 +561,7 @@ def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) 
         }
 
     rows = _leer_csv_lista_largos(csv_path)
+    print(f"[IMPORTADOR_LARGOS] filas_csv={len(rows)}")
     if not rows:
         return {
             "ok": True,
@@ -546,21 +577,81 @@ def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) 
         cursor = conexion.cursor()
 
         asegurar_tabla_lista_largos(cursor)
+        try:
+            from catalogo_largos import asegurar_columnas_lista_largos_job
+
+            asegurar_columnas_lista_largos_job(cursor)
+        except ImportError:
+            pass
 
         # Si reimportas el mismo job, reemplazas el snapshot completo
         cursor.execute(
             """
             DELETE FROM public.lista_largos_job
             WHERE job_key = %s
-            OR UPPER(REGEXP_REPLACE(BTRIM(job), '\s+', ' ', 'g')) = %s
+            OR UPPER(REGEXP_REPLACE(BTRIM(job), '\\s+', ' ', 'g')) = %s
             """,
             (job_key, job_key)
         )
 
         insertados = 0
+        catalogo_herinox = None
+        try:
+            from catalogo_largos import (
+                _cargar_placas_largos_desde_herinox,
+                buscar_placa_herinox,
+                normalizar_fila_lista_largos,
+            )
+
+            catalogo_herinox = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+        except ImportError:
+            buscar_placa_herinox = None  # type: ignore[assignment]
+            normalizar_fila_lista_largos = None  # type: ignore[assignment]
+
         for row in rows:
             cantidad_base = int(row.get("cantidad_base", 0) or 0)
             cantidad_total = cantidad_base * max(1, int(cantidad_job or 1))
+
+            perfil_estructural = row.get("perfil_estructural")
+            material_grade = row.get("material_grade")
+            ancho_in = None
+            espesor_in = None
+            herinox_codigo = str(row.get("herinox_codigo") or "").strip()
+            material_key = row.get("clasificacion") or ""
+
+            try:
+                if normalizar_fila_lista_largos is None:
+                    raise ImportError
+
+                norm = normalizar_fila_lista_largos(
+                    {
+                        "clasificacion": row.get("clasificacion"),
+                        "largo_in": row.get("largo_in"),
+                    }
+                )
+                material_key = norm.get("material_key") or material_key
+                if not perfil_estructural:
+                    perfil_estructural = norm.get("perfil_estructural")
+                if not material_grade:
+                    material_grade = norm.get("material_grade")
+                ancho_in = norm.get("ancho_in")
+                espesor_in = norm.get("espesor_in")
+
+                if not herinox_codigo and buscar_placa_herinox is not None:
+                    placa = buscar_placa_herinox(
+                        material_key,
+                        float(row.get("largo_in") or 0),
+                        solo_disponibles=False,
+                        catalogo=catalogo_herinox,
+                    )
+                    if placa:
+                        herinox_codigo = placa.get("codigo") or ""
+                        if not perfil_estructural:
+                            perfil_estructural = placa.get("perfil_estructural")
+                        if not material_grade:
+                            material_grade = placa.get("material_grade")
+            except ImportError:
+                pass
 
             cursor.execute(
                 """
@@ -576,9 +667,15 @@ def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) 
                     cantidad_base,
                     cantidad_job,
                     cantidad_total,
-                    row_hash
+                    row_hash,
+                    perfil_estructural,
+                    material_grade,
+                    ancho_in,
+                    espesor_in,
+                    herinox_codigo,
+                    material_key
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job,
@@ -593,11 +690,37 @@ def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) 
                     cantidad_job,
                     cantidad_total,
                     _row_hash(job, row),
+                    perfil_estructural,
+                    material_grade,
+                    ancho_in,
+                    espesor_in,
+                    herinox_codigo,
+                    material_key,
                 ),
             )
             insertados += 1
 
         conexion.commit()
+
+        pedidos_material: list = []
+        if propagar_material:
+            try:
+                import api_server
+
+                wo_scope = str(work_order_alcance or "").strip() or None
+                print(
+                    f"[IMPORTADOR_LARGOS] propagar_material job={job} "
+                    f"wo_alcance={wo_scope or 'TODAS'}"
+                )
+                pedidos_material = api_server._propagar_material_requerido_por_job(
+                    db_config,
+                    job,
+                    solo_work_order=wo_scope,
+                )
+            except Exception as e_ped:
+                print(
+                    f"[IMPORTADOR_LARGOS][WARN] material requerido tras import job '{job}': {e_ped}"
+                )
 
         return {
             "ok": True,
@@ -606,6 +729,7 @@ def importar_lista_largos_job(job: str, ruta_exportacion: str, db_config: dict) 
             "csv_path": str(csv_path),
             "cantidad_job": cantidad_job,
             "insertados": insertados,
+            "pedidos_material": pedidos_material,
         }
 
     except Exception:

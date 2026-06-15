@@ -17,6 +17,15 @@ from pathlib import Path
 import re
 import tempfile
 from reporte_pdf_lista_largos import generar_pdf_lista_largos, build_remanentes_resultantes
+from lista_largos_material_requerido import (
+    asegurar_tabla_material_requerido_ldg,
+    consultar_pedido,
+    refrescar_pedido_herinox,
+    sincronizar_pedido_desde_plan,
+    existe_pedido,
+    insertar_pedido_desde_plan_cursor,
+    reconstruir_pedido_desde_plan,
+)
 
 app = FastAPI(title="API NestingPro")
 
@@ -155,6 +164,7 @@ def startup_event():
     Al arrancar la API, asegura la tabla nueva.
     """
     asegurar_tabla_lista_largos_sesiones()
+    asegurar_tabla_material_requerido_ldg()
 
 
 def normalizar_tipo_orden(tipo_orden: str) -> str:
@@ -533,6 +543,15 @@ def construir_lista_largos_wo(wo_id: str) -> dict:
 
             rows.extend(_expandir_lista_para_wo(cursor, job, work_order))
 
+        if len(rows) > 0:
+            asegurar_tablas_lista_largos_operativas()
+            asegurar_tabla_material_requerido_ldg()
+            try:
+                _asegurar_material_requerido_orden(cursor, wo_limpia, "WO")
+            except Exception as e_plan:
+                print(f"[LISTA_LARGOS][WARN] Plan/pedido WO '{wo_limpia}': {e_plan}")
+            conexion.commit()
+
         return {
             "tipo": "wo",
             "identificador": wo_limpia,
@@ -594,6 +613,15 @@ def construir_lista_largos_swo(swo_id: str) -> dict:
             })
 
             rows.extend(_expandir_lista_para_wo(cursor, job, work_order))
+
+        if len(rows) > 0:
+            asegurar_tablas_lista_largos_operativas()
+            asegurar_tabla_material_requerido_ldg()
+            try:
+                _asegurar_material_requerido_orden(cursor, swo_limpia, "SWO")
+            except Exception as e_plan:
+                print(f"[LISTA_LARGOS][WARN] Plan/pedido SWO '{swo_limpia}': {e_plan}")
+            conexion.commit()
 
         return {
             "tipo": "swo",
@@ -812,6 +840,12 @@ class ListaLargosSobrantePayload(BaseModel):
     sobrante_real: Optional[float] = None
 
 
+class MaterialRequeridoLdGSincronizar(BaseModel):
+    orden_id: str
+    tipo_orden: str
+    plan: dict
+
+
 class ListaLargosFinalizarPayload(BaseModel):
     orden_id: str
     tipo_orden: str
@@ -834,10 +868,25 @@ def disparar_gatillo_combinacion(solicitud: SolicitudCombinacion):
             WHERE work_order = ANY(%s) AND super_work_order IS NULL
         """, (nuevo_swo_id, solicitud.work_orders_ids))
         piezas_agrupadas = cursor.rowcount
+
+        pedido_msg = ""
+        try:
+            _, pedido_msg = _asegurar_material_requerido_orden(
+                cursor, nuevo_swo_id, "SWO"
+            )
+        except Exception as e_ped:
+            pedido_msg = str(e_ped)
+
         conexion.commit()
+        mensaje = (
+            f"¡Fusión Exitosa! Se agruparon {piezas_agrupadas} piezas bajo la {nuevo_swo_id}."
+        )
+        if pedido_msg:
+            mensaje += f" Material requerido: {pedido_msg}"
         return {
             "estatus": "ok",
-            "mensaje": f"¡Fusión Exitosa! Se agruparon {piezas_agrupadas} piezas bajo la {nuevo_swo_id}."
+            "mensaje": mensaje,
+            "swo_id": nuevo_swo_id,
         }
     except Exception as e:
         if conexion:
@@ -2469,10 +2518,189 @@ def _ll_material_key(value: str) -> str:
     return str(value or "").strip() or "SIN_CLASIFICACION"
 
 
-def _ll_source_payload(orden_id: str, tipo_orden: str) -> dict:
-    if tipo_orden == "SWO":
-        return construir_lista_largos_swo(orden_id)
-    return construir_lista_largos_wo(orden_id)
+def _ll_rows_para_orden(cursor, orden_id: str, tipo_orden: str) -> tuple[list[dict], list[str]]:
+    """
+    Filas de lista_largos_job expandidas por WO/SWO.
+    No llama a construir_lista_largos_* (evita recursión con _ll_obtener_o_generar_plan).
+    """
+    orden = str(orden_id or "").strip()
+    tipo = str(tipo_orden or "").strip().upper()
+    if tipo == "SWO":
+        jobs = _obtener_jobs_de_swo(cursor, orden)
+    else:
+        jobs = _obtener_jobs_de_wo(cursor, orden)
+
+    rows: list[dict] = []
+    jobs_unicos: list[str] = []
+    vistos: set[tuple[str, str]] = set()
+
+    for item in jobs:
+        job = str(item.get("job") or "").strip()
+        work_order = str(item.get("work_order") or "").strip()
+        if not job or not work_order:
+            continue
+        if job not in jobs_unicos:
+            jobs_unicos.append(job)
+        clave = (job, work_order)
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        rows.extend(_expandir_lista_para_wo(cursor, job, work_order))
+
+    return rows, jobs_unicos
+
+
+def _asegurar_material_requerido_orden(
+    cursor,
+    orden_id: str,
+    tipo_orden: str,
+) -> tuple[bool, str]:
+    """Genera material_requerido_ldg desde lista + plan (sin abrir estación)."""
+    orden = str(orden_id or "").strip()
+    tipo = str(tipo_orden or "").strip().upper()
+    if tipo not in ("WO", "SWO"):
+        return False, "tipo_orden debe ser WO o SWO"
+
+    asegurar_tabla_material_requerido_ldg()
+    rows, _ = _ll_rows_para_orden(cursor, orden, tipo)
+    if not rows:
+        return (
+            False,
+            f"No hay lista de largos importada para {tipo} {orden}.",
+        )
+
+    plan_json, _ = _ll_obtener_o_generar_plan(
+        cursor, orden, tipo, reservar=False
+    )
+    return reconstruir_pedido_desde_plan(cursor, orden, tipo, plan_json)
+
+
+def _propagar_material_requerido_tras_jobs(cursor, jobs: list[dict]) -> list[dict]:
+    wos: set[str] = set()
+    swos: set[str] = set()
+    logs: list[dict] = []
+
+    for item in jobs or []:
+        wo = str(item.get("work_order") or "").strip()
+        swo = str(item.get("super_work_order") or "").strip()
+        if wo:
+            wos.add(wo)
+        if swo:
+            swos.add(swo)
+
+    for wo in sorted(wos):
+        try:
+            ok, msg = _asegurar_material_requerido_orden(cursor, wo, "WO")
+            logs.append(
+                {"orden_id": wo, "tipo_orden": "WO", "ok": ok, "mensaje": msg}
+            )
+        except Exception as e:
+            logs.append(
+                {
+                    "orden_id": wo,
+                    "tipo_orden": "WO",
+                    "ok": False,
+                    "mensaje": str(e),
+                }
+            )
+
+    for swo in sorted(swos):
+        try:
+            ok, msg = _asegurar_material_requerido_orden(cursor, swo, "SWO")
+            logs.append(
+                {"orden_id": swo, "tipo_orden": "SWO", "ok": ok, "mensaje": msg}
+            )
+        except Exception as e:
+            logs.append(
+                {
+                    "orden_id": swo,
+                    "tipo_orden": "SWO",
+                    "ok": False,
+                    "mensaje": str(e),
+                }
+            )
+
+    return logs
+
+
+def _propagar_material_requerido_por_job(
+    db_config: dict,
+    job: str,
+    solo_work_order: str | None = None,
+) -> list[dict]:
+    job_limpio = str(job or "").strip()
+    if not job_limpio:
+        return []
+
+    wo_filtro = str(solo_work_order or "").strip()
+
+    conexion = None
+    cursor = None
+    try:
+        conexion = db_connect()
+        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        cursor.execute(
+            """
+            SELECT DISTINCT TRIM(work_order) AS work_order,
+                   NULLIF(TRIM(super_work_order), '') AS super_work_order
+            FROM reporte_cortes
+            WHERE TRIM(job) = %s
+              AND work_order IS NOT NULL
+            """,
+            (job_limpio,),
+        )
+        jobs: list[dict] = []
+        for row in cursor.fetchall() or []:
+            wo = str(row.get("work_order") or "").strip()
+            if not wo:
+                continue
+            if wo_filtro and wo != wo_filtro:
+                continue
+            jobs.append(
+                {
+                    "job": job_limpio,
+                    "work_order": wo,
+                    "super_work_order": str(row.get("super_work_order") or "").strip(),
+                }
+            )
+        if not jobs:
+            return []
+        logs = _propagar_material_requerido_tras_jobs(cursor, jobs)
+        conexion.commit()
+        return logs
+    except Exception:
+        if conexion:
+            conexion.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
+def _ll_source_payload(cursor, orden_id: str, tipo_orden: str) -> dict:
+    orden = str(orden_id or "").strip()
+    tipo = str(tipo_orden or "").strip().upper()
+    rows, jobs_unicos = _ll_rows_para_orden(cursor, orden, tipo)
+
+    if tipo == "SWO":
+        return {
+            "tipo": "swo",
+            "identificador": orden,
+            "super_work_order": orden,
+            "jobs": jobs_unicos,
+            "rows": rows,
+        }
+
+    return {
+        "tipo": "wo",
+        "identificador": orden,
+        "work_order": orden,
+        "jobs": jobs_unicos,
+        "factor_wo": _extraer_factor_wo(orden),
+        "rows": rows,
+    }
 
 
 def _ll_expandir_rows_a_piezas(rows: list[dict]) -> list[dict]:
@@ -2986,7 +3214,7 @@ def _ll_obtener_o_generar_plan(
     if _ll_plan_puede_regenerarse(cursor, orden_id, tipo_orden, existente):
         _ll_liberar_reservas_de_orden(cursor, orden_id, tipo_orden)
 
-    payload = _ll_source_payload(orden_id, tipo_orden)
+    payload = _ll_source_payload(cursor, orden_id, tipo_orden)
     plan_hash = _ll_hash_payload(payload)
     plan_json, remanentes_reservar = _ll_generar_plan_desde_payload(cursor, orden_id, tipo_orden, payload)
 
@@ -3455,6 +3683,9 @@ def obtener_plan_lista_largos(
         plan_json, plan_row = _ll_obtener_o_generar_plan(cursor, orden, tipo, reservar=False)
         plan_view = _ll_annotar_plan(cursor, orden, tipo, plan_json)
 
+        if not existe_pedido(cursor, orden, tipo):
+            insertar_pedido_desde_plan_cursor(cursor, orden, tipo, plan_view)
+
         conexion.commit()
 
         return {
@@ -3475,6 +3706,65 @@ def obtener_plan_lista_largos(
             cursor.close()
         if conexion:
             conexion.close()
+
+
+@app.get("/api/lista-largos/material-requerido")
+def obtener_material_requerido_ldg(
+    orden_id: str = Query(..., description="Identificador de la WO o SWO"),
+    tipo_orden: str = Query(..., description="WO o SWO"),
+):
+    try:
+        orden = normalizar_orden_id(orden_id)
+        tipo = normalizar_tipo_orden(tipo_orden)
+        return consultar_pedido(orden, tipo)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al consultar material requerido LdG: {str(e)}",
+        )
+
+
+@app.post("/api/lista-largos/material-requerido/refrescar-herinox")
+def refrescar_material_requerido_herinox(
+    orden_id: str = Query(..., description="Identificador de la WO o SWO"),
+    tipo_orden: str = Query(..., description="WO o SWO"),
+):
+    try:
+        orden = normalizar_orden_id(orden_id)
+        tipo = normalizar_tipo_orden(tipo_orden)
+        return refrescar_pedido_herinox(orden, tipo)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al refrescar precios Herinox: {str(e)}",
+        )
+
+
+@app.post("/api/lista-largos/material-requerido/sincronizar")
+def sincronizar_material_requerido_ldg_endpoint(payload: MaterialRequeridoLdGSincronizar):
+    try:
+        orden = normalizar_orden_id(payload.orden_id)
+        tipo = normalizar_tipo_orden(payload.tipo_orden)
+
+        if not payload.plan:
+            raise HTTPException(
+                status_code=422,
+                detail="plan es obligatorio para la primera generación.",
+            )
+
+        return sincronizar_pedido_desde_plan(orden, tipo, payload.plan)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al sincronizar material requerido LdG: {str(e)}",
+        )
+
 
 @app.post("/api/lista-largos/pieza/iniciar")
 def iniciar_pieza_lista_largos(payload: ListaLargosIniciarPiezaPayload):
