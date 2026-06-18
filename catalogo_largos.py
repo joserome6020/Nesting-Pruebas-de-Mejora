@@ -616,6 +616,10 @@ def datos_material_requerido_pedido(
     cantidad: int,
     catalogo: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    """
+    Pedido Cominox: largo comercial del catálogo Herinox por código
+    y costo = precio unitario × cantidad de barras estándar.
+    """
     codigo = extraer_codigo_herinox_combo(material)
     info = enriquecer_fila_pedido(
         material,

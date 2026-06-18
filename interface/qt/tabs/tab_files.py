@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from interface.autodxf_metadata import combinar_metadata_dxf, normalizar_material_autodxf
 from modules.processed_layers import ProcesadorDXF
 from modules.scanner import EscanerServidor
 from interface.qt.layout_helpers import make_card
@@ -67,13 +68,13 @@ class TabFiles(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
 
-        self.btn_nest_scan = QPushButton("☁  IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        self.btn_nest_scan = QPushButton("IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
         self.btn_nest_scan.setFixedSize(450, 80)
         apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
         self.btn_nest_scan.clicked.connect(self.ejecutar_escaneo_servidor)
         lay.addWidget(self.btn_nest_scan, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.btn_swo_web = QPushButton("📥 IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        self.btn_swo_web = QPushButton("IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
         self.btn_swo_web.setFixedSize(450, 80)
         apply_push_button(self.btn_swo_web, "#455E75", hover="#334659", font_size=16, padding="12px 20px")
         self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
@@ -100,45 +101,14 @@ class TabFiles(QWidget):
             return str(ruta)
 
     def _normalizar_material(self, texto_material):
-        mat = str(texto_material or "").strip().upper().replace("_", " ")
-        mat = re.sub(r"\s+", " ", mat)
-        if ("CARBON" in mat and "STEEL" in mat) or ("STEEL" in mat and "CARBON" in mat):
-            return "CARBONO"
-        if "ACERO" in mat and "CARBONO" in mat:
-            return "CARBONO"
-        if "STAINLESS" in mat or "INOX" in mat or "INOXIDABLE" in mat:
-            return "INOXIDABLE"
-        if "ALUMINUM" in mat or "ALUMINIO" in mat:
-            return "ALUMINIO"
-        if "GALVANIZED" in mat or "GALVANIZADO" in mat:
-            return "GALVANIZADO"
-        return mat if mat else "CARBONO"
+        return normalizar_material_autodxf(texto_material, default="CARBONO")
 
-    def _parsear_nombre_dxf(self, nombre_archivo):
-        nombre_base = os.path.splitext(os.path.basename(str(nombre_archivo)))[0]
-        partes = [p.strip() for p in nombre_base.split(",") if p.strip()]
-        if not partes:
-            return nombre_base, "CARBONO", "1", "0.375"
-        pieza = partes[0]
-        qty_str, cal, material_tokens = "1", "0.375", []
-        for token in partes[1:]:
-            token_up = token.strip().upper()
-            m_qty = re.search(r"\b(?:QTY|QUANTITY|CANT|CANTIDAD)\b\s*[:=]?\s*(\d+)", token_up)
-            if m_qty:
-                qty_str = m_qty.group(1)
-                continue
-            m_cal = re.search(
-                r"\b(?:CAL|CALIBRE|GA|GAUGE|THK|THICK|THICKNESS|ESP|ESPESOR)\b\s*[:=]?\s*([0-9]+(?:\.[0-9]+)?)",
-                token_up,
-            )
-            if m_cal:
-                cal = m_cal.group(1)
-                continue
-            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", token_up):
-                cal = token_up
-                continue
-            material_tokens.append(token.strip())
-        return pieza, self._normalizar_material(", ".join(material_tokens)), qty_str, cal
+    def _parsear_nombre_dxf(self, nombre_archivo, ruta_origen=None):
+        pieza, mat, qty_str, cal, _extras = combinar_metadata_dxf(
+            ruta_origen or nombre_archivo,
+            nombre_archivo=nombre_archivo,
+        )
+        return pieza, mat, qty_str, cal
 
     def _listar_dxfs_recursivo(self, carpeta_base):
         out = []
@@ -211,7 +181,7 @@ class TabFiles(QWidget):
 
     def after_escaneo(self, jobs, err=None):
         self.btn_nest_scan.setEnabled(True)
-        self.btn_nest_scan.setText("☁  IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        self.btn_nest_scan.setText("IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
         apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
         try:
             if err:
@@ -284,11 +254,8 @@ class TabFiles(QWidget):
             f"QFrame{{background:{COLOR_TARJETA};border:1px solid {COLOR_BORDE};border-radius:10px;}}"
         )
         search_lay = QHBoxLayout(search_wrap)
-        search_lay.setContentsMargins(10, 4, 10, 4)
+        search_lay.setContentsMargins(12, 4, 10, 4)
         search_lay.setSpacing(8)
-        search_icon = QLabel("🔍")
-        search_icon.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:16px;background:transparent;")
-        search_lay.addWidget(search_icon)
         ent_buscar = QLineEdit()
         ent_buscar.setObjectName("HerinoxSearch")
         ent_buscar.setPlaceholderText("Buscar por cliente, job o producto…")
@@ -344,7 +311,7 @@ class TabFiles(QWidget):
             rl = QHBoxLayout(row)
             rl.setContentsMargins(14, 12, 14, 12)
             info = QVBoxLayout()
-            lbl_c = QLabel(f"📁 {nombre_cliente}")
+            lbl_c = QLabel(nombre_cliente)
             lbl_c.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:700;font-size:14px;")
             info.addWidget(lbl_c)
             productos = sorted({str(j.get("producto", "")).strip() for j in lista_jobs if j.get("producto")})
@@ -434,9 +401,27 @@ class TabFiles(QWidget):
         dlg.exec()
 
     def procesar_seleccion(self, job_info):
+        job_name = str(job_info.get("job_name") or "job")
+        if hasattr(self.app, "abrir_ventana_carga"):
+            self.app.abrir_ventana_carga(f"Importando {job_name}…")
+        threading.Thread(
+            target=self._thread_importar_job,
+            args=(job_info,),
+            daemon=True,
+        ).start()
+
+    def _thread_importar_job(self, job_info):
+        err = None
+        payload = None
+        try:
+            payload = self._preparar_import_job(job_info)
+        except Exception as e:
+            err = str(e)
+        self._ui(self._finalizar_import_job, payload, err)
+
+    def _preparar_import_job(self, job_info):
         carpeta_origen = job_info["ruta_full"]
         job_name = job_info["job_name"]
-        self.app.job_activo = job_name
         ruta_root = os.path.dirname(os.path.dirname(carpeta_origen))
         ruta_csv = os.path.join(ruta_root, f"job_data_{job_name}.csv")
         multiplicador = 1
@@ -448,33 +433,33 @@ class TabFiles(QWidget):
                         multiplicador = int(str(reader[1][3]).strip())
             except Exception:
                 pass
-        self.app.multiplicador_tanques = multiplicador
-        try:
-            rutas_dxf = sorted(set(self._listar_dxfs_recursivo(carpeta_origen)), key=self._normalizar_ruta)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error: {e}")
-            return
+        rutas_dxf = sorted(set(self._listar_dxfs_recursivo(carpeta_origen)), key=self._normalizar_ruta)
         if not rutas_dxf:
-            QMessageBox.warning(self, "Aviso", "No se encontraron DXF en AutoDXF (ni en subcarpetas).")
-            return
+            raise RuntimeError("No se encontraron DXF en AutoDXF (ni en subcarpetas).")
         carpeta_procesados = os.path.join(carpeta_origen, "Processed Files")
         os.makedirs(carpeta_procesados, exist_ok=True)
         items_procesados, nombres_usados = [], set()
-        self.app.meta_pdf_por_ruta = {}
-        for ruta_in in rutas_dxf:
+        meta_pdf = {}
+        total = len(rutas_dxf)
+        for idx, ruta_in in enumerate(rutas_dxf, start=1):
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso(
+                    f"Procesando DXF {idx}/{total}…",
+                    idx / max(1, total),
+                )
             arch = os.path.basename(ruta_in)
             ruta_out_real = os.path.join(carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados))
             try:
                 ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
                 if (not ok_proc) or (not os.path.exists(ruta_out_real)):
                     shutil.copy2(ruta_in, ruta_out_real)
-                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch)
+                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
                 try:
                     qty_final = str(int(qty_str) * multiplicador)
                 except Exception:
                     qty_final = qty_str
                 ruta_norm = self._normalizar_ruta(ruta_out_real)
-                self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job_name, "item": pieza}
+                meta_pdf[ruta_norm] = {"job": job_name, "item": pieza}
                 items_procesados.append((pieza, mat, qty_final, cal, "LISTO", ruta_out_real))
             except Exception:
                 try:
@@ -483,10 +468,31 @@ class TabFiles(QWidget):
                 except Exception:
                     pass
                 ruta_norm = self._normalizar_ruta(ruta_out_real)
-                self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
+                meta_pdf[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
                 items_procesados.append((arch, "?", str(multiplicador), "?", "LISTO", ruta_out_real))
-        self.app.cargar_datos_parts(items_procesados)
-        self.app.guardar_historial(job_info.get("ruta_job_root", ruta_root))
+        return {
+            "job_info": job_info,
+            "job_name": job_name,
+            "items": items_procesados,
+            "meta_pdf": meta_pdf,
+            "multiplicador": multiplicador,
+            "ruta_root": job_info.get("ruta_job_root", ruta_root),
+        }
+
+    def _finalizar_import_job(self, payload, err=None):
+        if hasattr(self.app, "cerrar_ventana_carga"):
+            self.app.cerrar_ventana_carga()
+        if err:
+            QMessageBox.critical(self, "Error", f"Error al importar:\n{err}")
+            return
+        if not payload:
+            QMessageBox.critical(self, "Error", "No se pudo completar la importación.")
+            return
+        self.app.job_activo = payload["job_name"]
+        self.app.multiplicador_tanques = payload["multiplicador"]
+        self.app.meta_pdf_por_ruta = payload["meta_pdf"]
+        self.app.cargar_datos_parts(payload["items"])
+        self.app.guardar_historial(payload.get("ruta_root"))
         self.app.ir_a_tab("PARTS")
 
     def buscar_swos_pendientes(self):
@@ -511,7 +517,7 @@ class TabFiles(QWidget):
 
     def restaurar_boton_swo(self, err=None):
         self.btn_swo_web.setEnabled(True)
-        self.btn_swo_web.setText("📥 IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        self.btn_swo_web.setText("IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
         if err:
             QMessageBox.critical(self, "Error BD", f"No se pudo conectar a PostgreSQL:\n{err}")
 
@@ -531,7 +537,7 @@ class TabFiles(QWidget):
                 f"QFrame#HerinoxCard{{background:#ECFDF5;border:1px solid #10B981;border-radius:10px;}}"
             )
             rl = QHBoxLayout(row)
-            lbl_swo = QLabel(f"⚡ {swo}")
+            lbl_swo = QLabel(str(swo))
             lbl_swo.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:600;")
             rl.addWidget(lbl_swo)
             btn = QPushButton("DESCARGAR")

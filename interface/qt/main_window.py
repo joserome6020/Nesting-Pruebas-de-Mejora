@@ -128,12 +128,21 @@ class SistemaNestingPro(QMainWindow):
         _soft_shadow(navbar, blur=16, y_offset=1, alpha=24)
         nav_lay = QHBoxLayout(navbar)
         nav_lay.setContentsMargins(28, 14, 28, 14)
+        logo_lbl = QLabel()
+        logo_lbl.setStyleSheet("background:transparent;border:none;padding:0;margin:0;")
         try:
-            logo_path = config.ruta_recurso("grupo_arga_cover.jpeg")
-            pix = QPixmap(logo_path).scaled(300, 68, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            logo_lbl = QLabel()
-            logo_lbl.setPixmap(pix)
-            nav_lay.addWidget(logo_lbl)
+            logo_path = config.ruta_recurso(os.path.join("assets", "branding", "logo_main.png"))
+            if os.path.exists(logo_path):
+                pix = QPixmap(logo_path).scaled(
+                    220,
+                    56,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                logo_lbl.setPixmap(pix)
+                nav_lay.addWidget(logo_lbl)
+            else:
+                nav_lay.addWidget(QLabel("GRUPO ARGA"))
         except Exception:
             nav_lay.addWidget(QLabel("GRUPO ARGA"))
         title_lbl = QLabel("|  ARGA NESTING SUITE")

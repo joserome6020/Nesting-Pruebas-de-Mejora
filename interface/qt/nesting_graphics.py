@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, QRectF
 from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QFontMetrics,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -37,6 +38,12 @@ COLOR_PLATE_EDGE = QColor("#64748B")
 COLOR_PIECE_FILL = QColor("#DDE4EC")
 COLOR_PIECE_HOLE = QColor("#0B1220")
 COLOR_PIECE_EDGE = QColor("#475569")
+COLOR_CU_FILL = QColor("#B87333")
+COLOR_CU_FILL_LIGHT = QColor("#D4956A")
+COLOR_CU_HOLE = QColor("#6B4423")
+COLOR_CU_EDGE = QColor("#4A2F1A")
+COLOR_CU_SEL = QColor("#E8A55C")
+COLOR_CU_SEL_EDGE = QColor("#FDE68A")
 COLOR_HOLE_EDGE = QColor("#1E293B")
 COLOR_PIECE_SEL = QColor("#3B82F6")
 COLOR_PIECE_SEL_EDGE = QColor("#93C5FD")
@@ -45,7 +52,11 @@ COLOR_COMP_EDGE = QColor("#FF1A1A")  # rojo intenso — compensación plasma
 COLOR_COMP_BASE = QColor(255, 30, 30, 230)
 COLOR_MARK = QColor("#0047AB")  # azul rey — alto contraste sobre piezas claras
 COLOR_MARK_TAT = QColor("#FACC15")
-COLOR_REF_FILL = QColor("#C4B87A")
+COLOR_CONSTRUCT_RTZ = QColor("#FF2222")  # líneas constructivas en overlays RTZ
+COLOR_REF_FILL = QColor(96, 165, 250, 150)
+COLOR_REF_EDGE = QColor("#1D4ED8")
+COLOR_RTZ_PREVIEW_FILL = QColor(56, 189, 248, 120)
+COLOR_RTZ_PREVIEW_EDGE = QColor("#0369A1")
 COLOR_REM_EDGE = QColor("#94A3B8")
 COLOR_GUILL = QColor("#EF4444")
 COLOR_DIM = QColor(255, 255, 255, 200)
@@ -63,6 +74,16 @@ Z_LABEL = 30
 Z_DIM = 40
 Z_TABLE = 50
 Z_HUD = 60
+
+PIECE_ID_FONT_PT = 9
+RTZ_LABEL_FONT_PT = 9  # ~15% menor que 11pt base
+REM_LABEL_FONT_PT = 8
+COLOR_RTZ_BADGE_BG = QColor("#061428")   # azul muy oscuro, opaco (no se mezcla con piezas RTZ)
+COLOR_RTZ_BADGE_EDGE = QColor("#1E4976")
+COLOR_RTZ_BADGE_TEXT = QColor("#F8FAFC")
+RTZ_BADGE_RADIUS = 7.0
+RTZ_BADGE_PAD_X = 8.5
+RTZ_BADGE_PAD_Y = 4.0
 
 
 def _ring_to_polygon(ring) -> QPolygonF:
@@ -136,9 +157,96 @@ def piece_display_path(pieza: dict, poligonos, *, refine: bool | None = None) ->
     return piece_path_from_polys(poligonos, refine=refine)
 
 
-def _add_marks(scene: QGraphicsScene, lineas, *, es_tat: bool, bucket: list | None = None):
-    col = COLOR_MARK_TAT if es_tat else COLOR_MARK
-    pen = QPen(col, 2.0 if not es_tat else 1.25)
+def _es_virtual_nombre(nom: str) -> bool:
+    n = str(nom or "")
+    return (
+        n.startswith("REF__")
+        or n.startswith("TATUAJE__")
+        or n.startswith("RETAZO_GUILLOTINA__")
+        or n.startswith("CU_CORTE__")
+        or n.startswith("REMANENTE__")
+    )
+
+
+def _debe_mostrar_etiqueta_rtz(hoja) -> bool:
+    """
+    Etiquetas RTZ (badge) solo en placa madre.
+    En mini-nest / retazo no se dibujan: estorban al reacomodar piezas.
+    """
+    if not isinstance(hoja, dict):
+        return False
+    if hoja.get("es_retazo"):
+        return False
+    if hoja.get("modo_largos_cu"):
+        return False
+    if hoja.get("poly_borde_retazo"):
+        return False
+    pid = str(hoja.get("placa_id") or "").strip().upper()
+    if pid.startswith("RTZ"):
+        return False
+    return True
+
+
+def _es_vista_mini_retazo(hoja) -> bool:
+    """True si la hoja que se está visualizando es un RTZ/mini-nest (no placa madre)."""
+    return not _debe_mostrar_etiqueta_rtz(hoja)
+
+
+def _marcas_para_display(nom: str, marcas) -> list:
+    if _es_virtual_nombre(nom):
+        return []
+    return list(marcas or [])
+
+
+def _centro_zona_rtz(hoja: dict, rtz_id: str) -> tuple[float, float] | None:
+    """Centro del rectángulo guillotina del RTZ (mejor ancla que el dummy 2×2 mm)."""
+    guill_nom = f"RETAZO_GUILLOTINA__{rtz_id}"
+    for p in (hoja or {}).get("piezas") or []:
+        if str(p.get("nombre", "") or "") != guill_nom:
+            continue
+        pols = p.get("poligonos") or []
+        if not pols or not pols[0]:
+            continue
+        xs = [t[0] for t in pols[0]]
+        ys = [t[1] for t in pols[0]]
+        if not xs or not ys:
+            continue
+        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    return None
+
+
+def _rtz_label_anchor(
+    hoja: dict, nom: str, pols, w_mm: float, h_mm: float
+) -> tuple[float, float]:
+    """Misma ancla que generar_texto_vectorial (centro guillotina / dummy TATUAJE)."""
+    rid = nom.split("__", 1)[1] if "__" in nom else nom
+    anchor_rtz = _centro_zona_rtz(hoja, rid)
+    if anchor_rtz is not None:
+        return anchor_rtz
+    if pols and pols[0]:
+        xs = [t[0] for t in pols[0]]
+        ys = [t[1] for t in pols[0]]
+        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    return w_mm / 2.0, h_mm / 2.0
+
+
+def _add_marks(
+    scene: QGraphicsScene,
+    lineas,
+    *,
+    es_tat: bool,
+    bucket: list | None = None,
+    construct_rtz: bool = False,
+):
+    if not lineas:
+        return
+    if construct_rtz:
+        col = COLOR_CONSTRUCT_RTZ
+        pen_w = 5.5
+    else:
+        col = COLOR_MARK_TAT if es_tat else COLOR_MARK
+        pen_w = 1.25 if es_tat else 2.0
+    pen = QPen(col, pen_w)
     pen.setCosmetic(True)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -166,6 +274,74 @@ class UprightTextItem(QGraphicsSimpleTextItem):
         f.setBold(bold)
         self.setFont(f)
 
+    def center_at(self, cx: float, cy: float) -> None:
+        br = self.boundingRect()
+        self.setPos(cx - br.width() * 0.5, cy - br.height() * 0.5)
+
+
+class OutlinedUprightTextItem(UprightTextItem):
+    """ID de pieza: relleno negro y contorno blanco para contraste sobre la placa."""
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+        )
+        path = QPainterPath()
+        path.addText(0, 0, self.font(), self.text())
+        stroke = QPen(QColor("#FFFFFF"), 2.0)
+        stroke.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        stroke.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.strokePath(path, stroke)
+        painter.fillPath(path, QBrush(QColor("#0F172A")))
+
+
+class SceneFixedLabel(OutlinedUprightTextItem):
+    """Etiqueta en escena: ItemIgnoresTransformations, NUNCA agrupar con geometría."""
+
+    pass
+
+
+class RtzBadgeLabel(QGraphicsItem):
+    """Nombre RTZ: chip oscuro redondeado, texto blanco, tamaño fijo al hacer zoom."""
+
+    def __init__(self, text: str = ""):
+        super().__init__()
+        self._text = str(text or "")
+        self._font = QFont("Segoe UI", int(RTZ_LABEL_FONT_PT))
+        self._font.setBold(True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+
+    def boundingRect(self) -> QRectF:
+        fm = QFontMetrics(self._font)
+        tw = float(fm.horizontalAdvance(self._text))
+        th = float(fm.height())
+        return QRectF(
+            -tw * 0.5 - RTZ_BADGE_PAD_X,
+            -th * 0.5 - RTZ_BADGE_PAD_Y,
+            tw + RTZ_BADGE_PAD_X * 2.0,
+            th + RTZ_BADGE_PAD_Y * 2.0,
+        )
+
+    def center_at(self, cx: float, cy: float) -> None:
+        self.setPos(cx, cy)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+        )
+        rect = self.boundingRect()
+        path = QPainterPath()
+        path.addRoundedRect(rect, RTZ_BADGE_RADIUS, RTZ_BADGE_RADIUS)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(COLOR_RTZ_BADGE_BG)
+        painter.drawPath(path)
+        edge = QPen(COLOR_RTZ_BADGE_EDGE, 1.0)
+        painter.setPen(edge)
+        painter.drawPath(path)
+        painter.setFont(self._font)
+        painter.setPen(COLOR_RTZ_BADGE_TEXT)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self._text)
+
 
 class TableCellTextItem(QGraphicsSimpleTextItem):
     """Texto de tabla: escala con el zoom y queda centrado en la celda (mm)."""
@@ -175,10 +351,19 @@ class TableCellTextItem(QGraphicsSimpleTextItem):
         self.setTransform(QTransform.fromScale(1.0, -1.0))
 
     def set_font_for_row(self, row_h_mm: float, *, bold: bool = False):
-        pt = max(4.5, min(13.0, row_h_mm * 0.42))
+        pt = max(11.0, min(26.0, row_h_mm * 0.62))
         f = QFont("Segoe UI", int(round(pt)))
         f.setBold(bold)
         self.setFont(f)
+
+
+def _piece_label_center(pols) -> tuple[float, float] | None:
+    """Centro visual de la pieza (bbox del contorno colocado en placa)."""
+    path = piece_path_from_polys(pols)
+    if path.isEmpty():
+        return None
+    c = path.boundingRect().center()
+    return c.x(), c.y()
 
 
 def _place_text_centered_in_cell(
@@ -236,10 +421,111 @@ class NestingDrawParams:
     drag_preview: bool = False
 
 
-def _piece_style(nom: str, idx: int, ring_i: int, selected: bool, compensada: bool):
+def _is_copper_context(pieza: dict | None, hoja: dict | None, clave: str = "") -> bool:
+    if bool((hoja or {}).get("modo_largos_cu")):
+        return True
+    clv = str(clave or "").strip().upper()
+    partes = [p for p in clv.replace("|", "_").split("_") if p]
+    if "CU" in partes or clv.endswith("_CU"):
+        return True
+    mat = str((pieza or {}).get("material") or "").strip().upper()
+    if mat in ("CU", "COBRE", "COPPER") or "COBRE" in mat or "COPPER" in mat:
+        return True
+    return False
+
+
+def _translate_poligonos_mm(poligonos, gx: float, gy: float) -> list:
+    out: list = []
+    for pol_coords in poligonos or []:
+        ring = []
+        for pt in pol_coords or []:
+            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                ring.append((float(pt[0]) + gx, float(pt[1]) + gy))
+            else:
+                ring.append(pt)
+        if ring:
+            out.append(ring)
+    return out
+
+
+def _translate_marcas_mm(marcas, gx: float, gy: float) -> list:
+    out: list = []
+    for linea in marcas or []:
+        ring = []
+        for pt in linea or []:
+            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                ring.append((float(pt[0]) + gx, float(pt[1]) + gy))
+            else:
+                ring.append(pt)
+        if len(ring) >= 2:
+            out.append(ring)
+    return out
+
+
+def _embed_rtz_previews_on_mother(scene, hoja: dict, params: "NestingDrawParams") -> None:
+    """Dibuja piezas reales del mini-nest RTZ sobre la placa madre (fallback visual)."""
+    if hoja.get("es_retazo") or hoja.get("modo_largos_cu"):
+        return
+    app = getattr(params, "app", None)
+    clave = str(getattr(params, "clave", "") or "")
+    if not app or not clave:
+        return
+    grp = (getattr(app, "resultados_nesting", None) or {}).get(clave) or {}
+    hojas = grp.get("hojas") or []
+    if not isinstance(hojas, list):
+        return
+
+    idx_madre = -1
+    for i, h in enumerate(hojas):
+        if h is hoja:
+            idx_madre = i
+            break
+    if idx_madre < 0:
+        return
+
+    ref_noms = {
+        str(p.get("nombre") or "")
+        for p in (hoja.get("piezas") or [])
+        if str(p.get("nombre") or "").startswith("REF__")
+    }
+
+    j = idx_madre + 1
+    while j < len(hojas) and (hojas[j] or {}).get("es_retazo"):
+        rtz = hojas[j] or {}
+        gx = float(rtz.get("global_x") or 0.0)
+        gy = float(rtz.get("global_y") or 0.0)
+        for p in rtz.get("piezas") or []:
+            nom = str(p.get("nombre") or "")
+            if _es_virtual_nombre(nom):
+                continue
+            pols = _translate_poligonos_mm(p.get("poligonos") or [], gx, gy)
+            combined = piece_path_from_polys(pols, refine=False)
+            if combined.isEmpty():
+                continue
+            ref_nom = f"REF__{nom}"
+            z = Z_PIECE + (5 if ref_nom in ref_noms else 4)
+            item = QGraphicsPathItem(combined)
+            item.setBrush(QBrush(COLOR_RTZ_PREVIEW_FILL))
+            item.setPen(QPen(COLOR_RTZ_PREVIEW_EDGE, 1.0))
+            item.setZValue(z)
+            scene.addItem(item)
+        j += 1
+
+
+def _piece_style(
+    nom: str,
+    idx: int,
+    ring_i: int,
+    selected: bool,
+    compensada: bool,
+    *,
+    pieza: dict | None = None,
+    hoja: dict | None = None,
+    clave: str = "",
+):
     es_rem = nom.startswith("REMANENTE__")
     es_ref = nom.startswith("REF__")
-    es_guill = nom.startswith("RETAZO_GUILLOTINA__")
+    es_guill = nom.startswith("RETAZO_GUILLOTINA__") or nom.startswith("CU_CORTE__")
     es_tat = nom.startswith("TATUAJE__")
 
     if es_rem:
@@ -247,13 +533,25 @@ def _piece_style(nom: str, idx: int, ring_i: int, selected: bool, compensada: bo
     if es_ref:
         return QBrush(COLOR_REF_FILL), QPen(QColor("#1E293B"), 1.0), Qt.BrushStyle.SolidPattern
     if es_guill:
-        return None, QPen(COLOR_GUILL, 2.0, Qt.PenStyle.DashDotLine), Qt.BrushStyle.NoBrush
+        return None, QPen(COLOR_GUILL, 4.5, Qt.PenStyle.DashDotLine), Qt.BrushStyle.NoBrush
     if es_tat:
         return None, QPen(Qt.PenStyle.NoPen), Qt.BrushStyle.NoBrush
 
+    is_cu = _is_copper_context(pieza, hoja, clave)
+
     if selected:
-        fill = QBrush(COLOR_PIECE_SEL)
-        edge = QPen(COLOR_PIECE_SEL_EDGE, 1.6)
+        if is_cu:
+            fill = QBrush(COLOR_CU_SEL)
+            edge = QPen(COLOR_CU_SEL_EDGE, 1.6)
+        else:
+            fill = QBrush(COLOR_PIECE_SEL)
+            edge = QPen(COLOR_PIECE_SEL_EDGE, 1.6)
+    elif is_cu:
+        fill = QBrush(COLOR_CU_FILL if ring_i == 0 else COLOR_CU_HOLE)
+        edge = QPen(
+            QColor("#FF2222") if compensada else COLOR_CU_EDGE,
+            1.5 if compensada and ring_i == 0 else 0.75,
+        )
     else:
         fill = QBrush(COLOR_PIECE_FILL if ring_i == 0 else COLOR_PIECE_HOLE)
         edge = QPen(QColor("#FF2222") if compensada else COLOR_PIECE_EDGE, 1.5 if compensada and ring_i == 0 else 0.65)
@@ -300,19 +598,22 @@ def _make_comp_band_items(poly_comp, poly_base):
     return items
 
 
-def _add_dimension(scene, x1, y1, x2, y2, label, ox=0.0, oy=0.0):
+def _add_dimension(scene, x1, y1, x2, y2, label, ox=0.0, oy=0.0, dim_labels=None):
     pen = QPen(COLOR_DIM, 1.0)
     pen.setCosmetic(True)
     scene.addLine(x1, y1, x1 + ox * 0.5, y1 + oy * 0.5, pen).setZValue(Z_DIM)
     scene.addLine(x2, y2, x2 + ox * 0.5, y2 + oy * 0.5, pen).setZValue(Z_DIM)
-  # línea de cota
     scene.addLine(x1 + ox * 0.35, y1 + oy * 0.35, x2 + ox * 0.35, y2 + oy * 0.35, pen).setZValue(Z_DIM)
-    txt = UprightTextItem(label)
-    txt.set_font(9)
-    txt.setBrush(QBrush(COLOR_DIM))
-    txt.setPos((x1 + x2) * 0.5 + ox * 0.85, (y1 + y2) * 0.5 + oy * 0.85)
-    txt.setZValue(Z_DIM)
-    scene.addItem(txt)
+    if dim_labels is not None:
+        dim_labels.append(
+            {
+                "text": label,
+                "line_x": (x1 + x2) * 0.5 + ox * 0.35,
+                "line_y": (y1 + y2) * 0.5 + oy * 0.35,
+                "out_x": 1.0 if ox > 0 else (-1.0 if ox < 0 else 0.0),
+                "out_y": 1.0 if oy > 0 else (-1.0 if oy < 0 else 0.0),
+            }
+        )
 
 
 def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
@@ -331,26 +632,31 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
     frac_tabla = min(0.42, max(0.24, 0.075 * float(nrows + 1)))
     tbl_h = h_mm * frac_tabla
     es_rtz = bool(hoja.get("es_retazo"))
+    modo_cu = bool(hoja.get("modo_largos_cu"))
     if es_rtz or w_mm < 920.0:
         tbl_w = 1750.0
         tbl_h = max(tbl_h, 340.0)
     else:
         tbl_w = w_mm * 0.90
+    if modo_cu or h_mm < 220.0 or w_mm > h_mm * 6.0:
+        tbl_w = max(tbl_w, 2400.0)
+        tbl_h = max(420.0, 58.0 * float(nrows + 1))
     tbl_x0 = (w_mm - tbl_w) * 0.5
     y_tbl_top = -gap_mm
+    row_h = max(54.0, tbl_h / max(1, nrows + 1))
+    tbl_h = row_h * (nrows + 1)
     y_tbl_bottom = y_tbl_top - tbl_h
 
     col_labels = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
     col_fracs = [0.07, 0.19, 0.34, 0.12, 0.12, 0.16]
     col_w = [tbl_w * f for f in col_fracs]
-    row_h = tbl_h / max(1, nrows + 1)
 
     def cell_rect(col, row):
         x = tbl_x0 + sum(col_w[:col])
         y = y_tbl_bottom + row * row_h
         return x, y, col_w[col], row_h
 
-    edge_pen = QPen(COLOR_TABLE_EDGE, 0.5)
+    edge_pen = QPen(COLOR_TABLE_EDGE, 1.2)
     edge_pen.setCosmetic(True)
 
     for c, lbl in enumerate(col_labels):
@@ -416,7 +722,7 @@ def populate_nesting_scene(
             borde = hoja["poly_borde_retazo"]
             if borde and len(borde) >= 3:
                 rtz = QGraphicsPathItem(polygon_path(borde))
-                rtz.setPen(QPen(COLOR_REM_EDGE, 1.2, Qt.PenStyle.DashLine))
+                rtz.setPen(QPen(COLOR_REM_EDGE, 2.8, Qt.PenStyle.DashLine))
                 rtz.setBrush(Qt.BrushStyle.NoBrush)
                 rtz.setZValue(Z_PLATE + 1)
                 scene.addItem(rtz)
@@ -426,16 +732,21 @@ def populate_nesting_scene(
     resumen = {}
     dims_nom = {}
     rem_data = None
+    scene_fixed_labels: list = []
     offset_comp = float(hoja.get("plasma_offset_mm_manual", 0.0) or 0.0)
     piece_gfx: dict[int, list] = {}
+    mostrar_etiquetas_rtz = _debe_mostrar_etiqueta_rtz(hoja)
+    es_rtz_hoja = _es_vista_mini_retazo(hoja)
 
     for idx_pieza, p in enumerate(hoja.get("piezas", [])):
         gfx_items: list = []
         nom = p.get("nombre", "DXF")
         es_rem = nom.startswith("REMANENTE__")
         es_ref = nom.startswith("REF__")
-        es_guill = nom.startswith("RETAZO_GUILLOTINA__")
+        es_guill = nom.startswith("RETAZO_GUILLOTINA__") or nom.startswith("CU_CORTE__")
         es_tat = nom.startswith("TATUAJE__")
+        if es_tat and not mostrar_etiquetas_rtz:
+            continue
         compensada = bool(p.get("plasma_compensada_manual"))
 
         if not (es_rem or es_ref or es_guill or es_tat):
@@ -458,20 +769,39 @@ def populate_nesting_scene(
 
         pols = p.get("poligonos") or []
         if pols and not es_tat:
-            fill, pen, brush_style = _piece_style(
-                nom, idx_pieza, 0, idx_pieza in selected, compensada
-            )
-            combined = piece_display_path(p, pols)
-            if not combined.isEmpty():
-                item = QGraphicsPathItem(combined)
-                if fill is not None:
-                    item.setBrush(fill)
-                item.setPen(pen)
-                if brush_style == Qt.BrushStyle.NoBrush:
-                    item.setBrush(Qt.BrushStyle.NoBrush)
-                item.setZValue(Z_PIECE + (1 if idx_pieza in selected else 0))
-                scene.addItem(item)
-                gfx_items.append(item)
+            if es_ref:
+                combined = piece_path_from_polys(pols, refine=False)
+                if not combined.isEmpty():
+                    item = QGraphicsPathItem(combined)
+                    item.setBrush(QBrush(COLOR_REF_FILL))
+                    item.setPen(QPen(COLOR_REF_EDGE, 1.2))
+                    item.setZValue(Z_PIECE + 2)
+                    scene.addItem(item)
+                    gfx_items.append(item)
+            else:
+                fill, pen, brush_style = _piece_style(
+                    nom,
+                    idx_pieza,
+                    0,
+                    idx_pieza in selected,
+                    compensada,
+                    pieza=p,
+                    hoja=hoja,
+                    clave=params.clave,
+                )
+                combined = piece_display_path(p, pols)
+                if not combined.isEmpty():
+                    item = QGraphicsPathItem(combined)
+                    if fill is not None:
+                        item.setBrush(fill)
+                    item.setPen(pen)
+                    if brush_style == Qt.BrushStyle.NoBrush:
+                        item.setBrush(Qt.BrushStyle.NoBrush)
+                    item.setZValue(Z_PIECE + (1 if idx_pieza in selected else 0))
+                    if es_guill:
+                        item.setZValue(Z_PIECE + 5)
+                    scene.addItem(item)
+                    gfx_items.append(item)
 
         if (
             compensada
@@ -490,36 +820,52 @@ def populate_nesting_scene(
             except Exception:
                 pass
 
-        _add_marks(scene, p.get("marcas"), es_tat=es_tat, bucket=gfx_items)
+        if es_ref:
+            pass
+        elif es_tat and mostrar_etiquetas_rtz:
+            rid = nom.split("__", 1)[1] if "__" in nom else nom
+            cx, cy = _rtz_label_anchor(hoja, nom, pols, w_mm, h_mm)
+            badge = RtzBadgeLabel(rid)
+            badge.center_at(cx, cy)
+            badge.setZValue(Z_LABEL + 3)
+            scene.addItem(badge)
+            scene_fixed_labels.append(badge)
+        else:
+            marcas_disp = _marcas_para_display(nom, p.get("marcas"))
+            if marcas_disp:
+                _add_marks(
+                    scene,
+                    marcas_disp,
+                    es_tat=False,
+                    bucket=gfx_items,
+                    construct_rtz=es_rtz_hoja,
+                )
 
         pols = p.get("poligonos") or []
         if pols and not drag_preview:
-            v = pols[0][:-1] if len(pols[0]) > 1 else pols[0]
-            if v:
-                cx = sum(pt[0] for pt in v) / len(v)
-                cy = sum(pt[1] for pt in v) / len(v)
+            anchor = _piece_label_center(pols)
+            if anchor is not None:
+                cx, cy = anchor
                 if es_rem:
-                    minx_r = min(pt[0] for pt in v)
-                    maxx_r = max(pt[0] for pt in v)
-                    miny_r = min(pt[1] for pt in v)
-                    maxy_r = max(pt[1] for pt in v)
+                    minx_r = min(pt[0] for pt in (pols[0][:-1] if len(pols[0]) > 1 else pols[0]))
+                    maxx_r = max(pt[0] for pt in (pols[0][:-1] if len(pols[0]) > 1 else pols[0]))
+                    miny_r = min(pt[1] for pt in (pols[0][:-1] if len(pols[0]) > 1 else pols[0]))
+                    maxy_r = max(pt[1] for pt in (pols[0][:-1] if len(pols[0]) > 1 else pols[0]))
                     rem_data = (minx_r, miny_r, maxx_r - minx_r, maxy_r - miny_r)
                     id_rem = nom.split("__")[1] if "__" in nom else nom
-                    t = UprightTextItem(id_rem)
-                    t.set_font(8, bold=True)
-                    t.setBrush(QBrush(QColor("#0F172A")))
-                    t.setPos(cx - 8, cy)
+                    t = SceneFixedLabel(id_rem)
+                    t.set_font(REM_LABEL_FONT_PT, bold=True)
+                    t.center_at(cx, cy)
                     t.setZValue(Z_LABEL)
                     scene.addItem(t)
-                    gfx_items.append(t)
+                    scene_fixed_labels.append(t)
                 elif not es_ref and not es_guill and not es_tat and nom in resumen:
-                    t = UprightTextItem(str(resumen[nom]["id"]))
-                    t.set_font(9, bold=True)
-                    t.setBrush(QBrush(QColor("#0F172A")))
-                    t.setPos(cx - 4, cy)
+                    t = SceneFixedLabel(str(resumen[nom]["id"]))
+                    t.set_font(PIECE_ID_FONT_PT, bold=True)
+                    t.center_at(cx, cy)
                     t.setZValue(Z_LABEL)
                     scene.addItem(t)
-                    gfx_items.append(t)
+                    scene_fixed_labels.append(t)
 
         if gfx_items:
             if len(gfx_items) == 1:
@@ -531,25 +877,31 @@ def populate_nesting_scene(
                     grp.addToGroup(gi)
                 piece_gfx[idx_pieza] = [grp]
 
+    if not drag_preview:
+        _embed_rtz_previews_on_mother(scene, hoja, params)
+
     meta = {
         "resumen": resumen,
         "dims_nom": dims_nom,
         "w_mm": w_mm,
         "h_mm": h_mm,
         "piece_gfx": piece_gfx,
+        "scene_fixed_labels": scene_fixed_labels,
     }
 
     if not drag_preview:
-        _add_dimension(scene, 0, h_mm, w_mm, h_mm, f'Largo: {w_mm / 25.4:.1f}"', oy=90)
-        _add_dimension(scene, w_mm, 0, w_mm, h_mm, f'Ancho: {h_mm / 25.4:.1f}"', ox=90)
+        dim_labels: list[dict] = []
+        _add_dimension(scene, 0, h_mm, w_mm, h_mm, f'Largo: {w_mm / 25.4:.1f}"', oy=90, dim_labels=dim_labels)
+        _add_dimension(scene, w_mm, 0, w_mm, h_mm, f'Ancho: {h_mm / 25.4:.1f}"', ox=90, dim_labels=dim_labels)
         if rem_data:
             rx, ry, rw, rh = rem_data
             if rx > 0.1:
-                _add_dimension(scene, 0, 0, rx, 0, f"Uso: {rx / 25.4:.1f}\"", oy=-90)
-                _add_dimension(scene, rx, 0, w_mm, 0, f"Sob: {rw / 25.4:.1f}\"", oy=-90)
+                _add_dimension(scene, 0, 0, rx, 0, f"Uso: {rx / 25.4:.1f}\"", oy=-90, dim_labels=dim_labels)
+                _add_dimension(scene, rx, 0, w_mm, 0, f"Sob: {rw / 25.4:.1f}\"", oy=-90, dim_labels=dim_labels)
             elif ry > 0.1:
-                _add_dimension(scene, 0, 0, 0, ry, f"Uso: {ry / 25.4:.1f}\"", ox=-90)
-                _add_dimension(scene, 0, ry, 0, h_mm, f"Sob: {rh / 25.4:.1f}\"", ox=-90)
+                _add_dimension(scene, 0, 0, 0, ry, f"Uso: {ry / 25.4:.1f}\"", ox=-90, dim_labels=dim_labels)
+                _add_dimension(scene, 0, ry, 0, h_mm, f"Sob: {rh / 25.4:.1f}\"", ox=-90, dim_labels=dim_labels)
+        meta["dim_labels"] = dim_labels
 
         job_raw = ""
         if params.app is not None:

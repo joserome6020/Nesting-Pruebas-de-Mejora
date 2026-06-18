@@ -17,6 +17,8 @@ Eficiencia del tanque (por calibre/grupo):
 
 from shapely.geometry import Polygon
 
+from .geometry_parser import area_poligonos_colocados
+
 # Umbral para ofrecer "ignorar placa" en deducción de inventario/compras.
 UMBRAL_EFICIENCIA_IGNORAR_PLACA = 25.0
 
@@ -27,8 +29,18 @@ def _es_pieza_real_nombre(nombre: str) -> bool:
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
         or n.startswith("RETAZO_GUILLOTINA__")
+        or n.startswith("CU_CORTE__")
         or n.startswith("REMANENTE__")
     )
+
+
+def _area_pieza_colocada(p) -> float:
+    """Área neta en mm² desde polígonos colocados (fuente de verdad visual)."""
+    pols = (p or {}).get("poligonos") or []
+    area_geom = area_poligonos_colocados(pols)
+    if area_geom > 0.0:
+        return area_geom
+    return float((p or {}).get("area", 0.0) or 0.0)
 
 
 def area_piezas_reales_hoja(hoja) -> float:
@@ -36,7 +48,10 @@ def area_piezas_reales_hoja(hoja) -> float:
     for p in (hoja or {}).get("piezas") or []:
         if not _es_pieza_real_nombre(p.get("nombre", "")):
             continue
-        total += float(p.get("area", 0.0) or 0.0)
+        a = _area_pieza_colocada(p)
+        if a > 0.0:
+            p["area"] = a
+        total += a
     return total
 
 
@@ -200,10 +215,36 @@ def calcular_eficiencias_grupo(hojas) -> dict:
     }
 
 
+def _es_pieza_contable(pieza) -> bool:
+    nom = str((pieza or {}).get("nombre", "") or "")
+    return not (
+        nom.startswith("REMANENTE__")
+        or nom.startswith("REF__")
+        or nom.startswith("RETAZO_GUILLOTINA__")
+        or nom.startswith("CU_CORTE__")
+        or nom.startswith("TATUAJE__")
+    )
+
+
+def contar_piezas_hoja(hoja) -> int:
+    piezas = (hoja or {}).get("piezas") or []
+    return sum(1 for p in piezas if _es_pieza_contable(p))
+
+
+def contar_piezas_grupo(info_grupo) -> int:
+    if not isinstance(info_grupo, dict):
+        return 0
+    total = 0
+    for hoja in info_grupo.get("hojas") or []:
+        total += contar_piezas_hoja(hoja)
+    return total
+
+
 def formatear_eficiencias_placa(hoja) -> str:
     d = float((hoja or {}).get("eficiencia_directa", (hoja or {}).get("eficiencia", 0.0)) or 0.0)
     r = float((hoja or {}).get("eficiencia_real", d) or 0.0)
-    return f"Dir {d:.1f}% | Real {r:.1f}%"
+    n = contar_piezas_hoja(hoja)
+    return f"Dir {d:.1f}% | Real {r:.1f}% · {n} pzas"
 
 
 def formatear_eficiencias_tanque(info_grupo) -> str:
@@ -211,7 +252,8 @@ def formatear_eficiencias_tanque(info_grupo) -> str:
         return ""
     d = float(info_grupo.get("eficiencia_tanque_directa", 0.0) or 0.0)
     r = float(info_grupo.get("eficiencia_tanque_real", 0.0) or 0.0)
-    return f"Tanque Dir {d:.1f}% | Real {r:.1f}%"
+    n = contar_piezas_grupo(info_grupo)
+    return f"Tanque Dir {d:.1f}% | Real {r:.1f}% · {n} pzas"
 
 
 def eficiencia_para_umbral_ignorar(hoja, hojas_grupo=None) -> float:

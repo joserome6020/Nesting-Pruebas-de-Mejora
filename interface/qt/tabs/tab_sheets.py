@@ -110,7 +110,7 @@ class TabSheets(QWidget, TimerHost):
         _filtro("STOCK HERINOX", "stock", 140, ["TODOS", "DISPONIBLE", "NO DISPONIBLE", "NO EXISTENTE"], self._on_filter_change)
         _filtro("FILTRO $$/LB", "precio", 140, ["TODOS", "MENOR PRECIO", "MAYOR PRECIO"], self.aplicar_filtros)
         filtros_lay.addStretch()
-        self.btn_remanentes = QPushButton("📦 REMANENTES DISPONIBLES")
+        self.btn_remanentes = QPushButton("REMANENTES DISPONIBLES")
         apply_push_button(self.btn_remanentes, COLOR_GRIS_MED, font_size=11)
         self.btn_remanentes.clicked.connect(self.abrir_inventario_remanentes)
         filtros_lay.addWidget(self.btn_remanentes)
@@ -121,8 +121,8 @@ class TabSheets(QWidget, TimerHost):
         self.tabs.setDocumentMode(True)
         self.tab_empresa = QWidget()
         self.tab_proveedor = QWidget()
-        self.tabs.addTab(self.tab_empresa, "🏢 STOCK EMPRESA")
-        self.tabs.addTab(self.tab_proveedor, "🚚 STOCK PROVEEDOR")
+        self.tabs.addTab(self.tab_empresa, "STOCK EMPRESA")
+        self.tabs.addTab(self.tab_proveedor, "STOCK PROVEEDOR")
         self.tabs.currentChanged.connect(lambda _i: self.aplicar_filtros())
 
         for tab_w, lista_attr in [(self.tab_empresa, "lista_empresa"), (self.tab_proveedor, "lista_proveedor")]:
@@ -141,7 +141,7 @@ class TabSheets(QWidget, TimerHost):
         cont_lay.addWidget(self.tabs, 1)
         acciones = QHBoxLayout()
         acciones.setSpacing(0)
-        self.btn_sync_herinox = QPushButton("⟳ Sincronizar con Herinox")
+        self.btn_sync_herinox = QPushButton("Sincronizar con Herinox")
         apply_push_button(self.btn_sync_herinox, COLOR_GRIS_MED, font_size=11)
         self.btn_sync_herinox.clicked.connect(self.sincronizar_con_herinox)
         acciones.addWidget(self.btn_sync_herinox)
@@ -231,8 +231,7 @@ class TabSheets(QWidget, TimerHost):
         pass
 
     def _datos_base_activos(self):
-        pestaña_actual = self.tabs.tabText(self.tabs.currentIndex())
-        if pestaña_actual == "🏢 STOCK EMPRESA":
+        if self.tabs.currentIndex() == 0:
             return list(self.app.datos_placas_empresa or [])
         return list(self.app.datos_placas_proveedor or [])
 
@@ -390,8 +389,7 @@ class TabSheets(QWidget, TimerHost):
 
     def aplicar_filtros(self, *args):
         self._refresh_tabs_text_color()
-        pestaña_actual = self.tabs.tabText(self.tabs.currentIndex())
-        if pestaña_actual == "🏢 STOCK EMPRESA":
+        if self.tabs.currentIndex() == 0:
             datos_base = self.app.datos_placas_empresa
             lista_activa = self.lista_empresa
         else:
@@ -423,6 +421,9 @@ class TabSheets(QWidget, TimerHost):
             row.setObjectName("SheetRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
             row.setFixedHeight(54)
+            mat_row = str(fila[1] if str(fila[1]) != "nan" else "").strip().upper()
+            if mat_row in ("CU", "COBRE", "COPPER") or "COBRE" in mat_row:
+                row.setStyleSheet("background:#F3E2CF;border-radius:6px;")
             row_lay = QGridLayout(row)
             row_lay.setContentsMargins(12, 8, 12, 8)
             try:
@@ -535,7 +536,7 @@ class TabSheets(QWidget, TimerHost):
         except Exception as e:
             QMessageBox.critical(self, "Error en Sync Herinox", str(e))
         finally:
-            self.btn_sync_herinox.setEnabled(True); self.btn_sync_herinox.setText("⟳ Sincronizar con Herinox")
+            self.btn_sync_herinox.setEnabled(True); self.btn_sync_herinox.setText("Sincronizar con Herinox")
 
     def mostrar_cambios_sincronizacion(self):
         resultado = getattr(self.app, "ultimo_resultado_sync_herinox", None)
@@ -679,7 +680,7 @@ class TabSheets(QWidget, TimerHost):
         dlg.resize(1120, 680)
         dlg.setStyleSheet(surface_dialog_stylesheet())
         lay = QVBoxLayout(dlg)
-        tit = QLabel("📋 ULTIMA SINCRONIZACION DE PLACAS")
+        tit = QLabel("ULTIMA SINCRONIZACION DE PLACAS")
         tit.setStyleSheet(f"font-weight:700;font-size:18px;color:{COLOR_TEXTO_TITULO};")
         lay.addWidget(tit)
         resumen = (
@@ -762,7 +763,7 @@ class TabSheets(QWidget, TimerHost):
         dlg.setModal(True)
         dlg.setStyleSheet(surface_dialog_stylesheet())
         lay = QVBoxLayout(dlg)
-        tit = QLabel("📂 HISTORIAL DE REMANENTES DISPONIBLES")
+        tit = QLabel("HISTORIAL DE REMANENTES DISPONIBLES")
         tit.setStyleSheet(f"font-weight:700;font-size:18px;color:{COLOR_TEXTO_TITULO};")
         tit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(tit)
@@ -785,12 +786,12 @@ class TabSheets(QWidget, TimerHost):
                         card.setObjectName("HerinoxCard")
                         card_lay = QHBoxLayout(card)
                         info = QVBoxLayout()
-                        id_lbl = QLabel(f"🆔 {fila[1]}")
+                        id_lbl = QLabel(f"ID: {fila[1]}")
                         id_lbl.setStyleSheet(f"font-weight:700;color:{COLOR_AZUL_ACCENTO};")
                         info.addWidget(id_lbl)
-                        info.addWidget(QLabel(f"📅 {fila[0]}  |  🛠 {fila[2]}  •  📏 CAL: {fila[3]}"))
+                        info.addWidget(QLabel(f"{fila[0]}  |  {fila[2]}  •  CAL: {fila[3]}"))
                         card_lay.addLayout(info, 1)
-                        area_lbl = QLabel(f"✨ {fila[4]} in²")
+                        area_lbl = QLabel(f"{fila[4]} in²")
                         area_lbl.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
                         card_lay.addWidget(area_lbl)
                         inner_lay.addWidget(card)

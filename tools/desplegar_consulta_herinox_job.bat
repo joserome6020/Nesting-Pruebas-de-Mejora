@@ -9,9 +9,10 @@ if "%~1"=="" (
 set "JOB=%~1"
 set "DEST=%JOB%\AutoDXF"
 if not exist "%DEST%" mkdir "%DEST%"
-set "ORIGEN=Z:\♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK\21. Desarrollo y Tecnologia\2.- Códigos Desarrollo y Tecnología\7.- Configuración para equipos de Computo\AutoDXF 2.0\Consulta_Herinox.py"
+set "REL=♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK\21. Desarrollo y Tecnologia\2.- Códigos Desarrollo y Tecnología\7.- Configuración para equipos de Computo\AutoDXF 2.0"
+set "ORIGEN=\\192.168.2.47\arga\%REL%\Consulta_Herinox.py"
+if not exist "%ORIGEN%" set "ORIGEN=Z:\%REL%\Consulta_Herinox.py"
 if not exist "%ORIGEN%" (
-  REM Fallback: script autocontenido del repo (no el wrapper tools\Consulta_Herinox.py)
   set "ORIGEN=%~dp0..\modules\consulta_herinox_bridge.py"
 )
 copy /Y "%ORIGEN%" "%DEST%\Consulta_Herinox.py"

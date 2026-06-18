@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QFrame,
     QGridLayout,
@@ -164,14 +165,26 @@ class TabParts(QWidget, TimerHost):
 
         frame_visor_bg = make_card()
         vis_lay = QVBoxLayout(frame_visor_bg)
-        vis_lay.setContentsMargins(16, 16, 16, 16)
+        vis_lay.setContentsMargins(12, 12, 12, 12)
+        vis_lay.setSpacing(8)
+
+        hdr_row = QHBoxLayout()
         tit = QLabel("DETALLE DE PIEZA")
-        tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
-        tit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        vis_lay.addWidget(tit)
+        tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:14px;")
+        hdr_row.addWidget(tit)
+        hdr_row.addStretch()
+        lbl_sub = QLabel("Vista CAD con cotas interactivas")
+        lbl_sub.setStyleSheet(f"color:{COLOR_GRIS_MED};font-size:11px;")
+        hdr_row.addWidget(lbl_sub)
+        vis_lay.addLayout(hdr_row)
+
         self.frame_black_visor = QFrame()
-        self.frame_black_visor.setStyleSheet("background:#0F172A;border-radius:10px;border:none;")
-        QVBoxLayout(self.frame_black_visor)
+        self.frame_black_visor.setStyleSheet(
+            "background:#0B1220;border-radius:10px;border:1px solid #334155;"
+        )
+        fbl = QVBoxLayout(self.frame_black_visor)
+        fbl.setContentsMargins(0, 0, 0, 0)
+        fbl.setSpacing(0)
         self.visor = VisorDXF(self.frame_black_visor)
         vis_lay.addWidget(self.frame_black_visor, 1)
         splitter.addWidget(frame_visor_bg)
@@ -203,6 +216,9 @@ class TabParts(QWidget, TimerHost):
                 tot_val, qty_unidad = qty_total, qty_total
 
             color_fondo = "#FFFFFF" if idx % 2 == 0 else "#F8FAFC"
+            mat_u = str(mat or "").strip().upper()
+            if mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u:
+                color_fondo = "#F3E2CF" if idx % 2 == 0 else "#E8D4BC"
             row = QFrame()
             row.setObjectName("PartsRowAlt" if idx % 2 else "PartsRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
@@ -222,27 +238,27 @@ class TabParts(QWidget, TimerHost):
                         lbl = _NombrePiezaLabel(
                             pieza,
                             row,
-                            on_select=lambda r=ruta, f=row, p=pieza: self.seleccionar_fila(r, f, p),
+                            on_select=lambda r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m),
                         )
                     else:
                         lbl = QLabel(valores[i])
                         lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
                         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza: self.seleccionar_fila(r, f, p)
+                        lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                     row_lay.addWidget(lbl, 0, i)
                 elif i == 6:
                     try:
-                        thumb = generar_thumbnail(ruta, size=(32, 32))
+                        thumb = generar_thumbnail(ruta, size=(32, 32), material=mat)
                         if thumb:
                             l_t = QLabel()
                             l_t.setPixmap(thumb)
                             l_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                            l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza: self.seleccionar_fila(r, f, p)
+                            l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                             row_lay.addWidget(l_t, 0, i)
                     except Exception:
                         pass
 
-            row.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza: self.seleccionar_fila(r, f, p)
+            row.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
             scroll_add_widget(self.lista_scroll, row)
 
     def _resolver_job_data_csv_actual(self):
@@ -357,7 +373,7 @@ class TabParts(QWidget, TimerHost):
         self.app.cargar_datos_parts(nuevos_datos)
         QMessageBox.information(self, "Actualizado", f"Cantidad de tanques actualizada a X{nuevo_mult}.")
 
-    def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza):
+    def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
         inner = self.lista_scroll.widget()
         if inner:
             for i in range(self._lista_layout.count()):
@@ -369,6 +385,7 @@ class TabParts(QWidget, TimerHost):
         frame_fila.setStyleSheet("background:#DBEAFE;border-radius:6px;")
 
         if os.path.exists(ruta_dxf):
+            self.visor.set_material(material)
             self.visor.renderizar_dxf(ruta_dxf)
             # Mantener una sola fuente de verdad para medidas: el propio render del visor (con detección de unidades).
             self.visor.actualizar_info_extra(referencia=nombre_pieza)
@@ -602,13 +619,32 @@ class TabParts(QWidget, TimerHost):
             fj_lay.addWidget(msg_lbl)
             contenedor.layout().addWidget(frame_job)
             return
-        table = QTableWidget(min(max(len(grupo["rows"]), 3), 10), len(columnas))
+        n_rows = len(grupo["rows"])
+        table = QTableWidget(n_rows, len(columnas))
         table.setHorizontalHeaderLabels([encabezados[c] for c in columnas])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        hdr = table.horizontalHeader()
+        for ci, col in enumerate(columnas):
+            hdr.resizeSection(ci, anchos.get(col, 120))
+        row_px = 30
+        header_px = max(32, hdr.height())
+        max_view = 480
+        content_h = n_rows * row_px + header_px + 6
+        view_h = min(content_h, max_view)
+        table.setMinimumHeight(view_h)
+        table.setMaximumHeight(view_h)
+        if content_h > max_view:
+            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         for ri, row in enumerate(grupo["rows"]):
             table.setItem(ri, 0, QTableWidgetItem(str(row.get("nombre", ""))))
             table.setItem(ri, 1, QTableWidgetItem(str(row.get("clasificacion", ""))))
             table.setItem(ri, 2, QTableWidgetItem(f"{float(row.get('largo_in', 0) or 0):.3f}"))
             table.setItem(ri, 3, QTableWidgetItem(str(row.get("cantidad", 0))))
+        table.resizeRowsToContents()
         fj_lay.addWidget(table)
         contenedor.layout().addWidget(frame_job)
 

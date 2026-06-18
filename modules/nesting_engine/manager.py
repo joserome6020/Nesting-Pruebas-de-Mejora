@@ -13,6 +13,12 @@ from shapely import affinity
 from shapely.ops import unary_union
 from shapely.prepared import prep
 
+try:
+    from interface.utils_nesting import clave_nesting_sort_key as _orden_clave_nesting
+except ImportError:
+    def _orden_clave_nesting(clave: str) -> tuple:
+        return (str(clave or "").upper(),)
+
 from .geometry_parser import (
     recuperar_geometria_robusta,
     reconstruir_poly_seguro,
@@ -22,12 +28,15 @@ from .geometry_parser import (
 )
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .efficiency_metrics import actualizar_eficiencias_hoja, calcular_eficiencias_grupo
+from .nest_optimization import get_nest_profile, score_placa_simulacion
 from .exporter import exportar_resultados_a_dxf
+from .cu_largos_nesting import procesar_grupo_largos_cu
 from .rtz_overlays import (
     sincronizar_overlays_grupo,
     sincronizar_overlays_resultados,
     _rtz_hojas_de_madre,
     _inferir_global_rtz,
+    _translate_poligonos_for_overlay,
 )
 
 DEBUG_DIR = r"C:\NEST_EXPORTS"
@@ -107,6 +116,7 @@ def _piece_name_base(nombre: str) -> str:
         .replace("REF__", "")
         .replace("TATUAJE__", "")
         .replace("RETAZO_GUILLOTINA__", "")
+        .replace("CU_CORTE__", "")
         .replace("REMANENTE__", "")
         .strip()
     )
@@ -118,6 +128,7 @@ def _is_virtual_piece(nombre: str) -> bool:
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
         or n.startswith("RETAZO_GUILLOTINA__")
+        or n.startswith("CU_CORTE__")
         or n.startswith("REMANENTE__")
     )
 
@@ -399,6 +410,308 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
     except Exception:
         return None
 
+
+def _area_total_piezas(piezas) -> float:
+    total = 0.0
+    for p in piezas or []:
+        total += float(p.get("area", 0.0) or 0.0)
+    return total
+
+
+def _es_cola_de_grupo(pendientes_est, accesorios) -> bool:
+    """True cuando el material restante es poco vs una placa estándar."""
+    restantes = list(pendientes_est or []) + list(accesorios or [])
+    if len(restantes) <= 8:
+        return True
+    areas = [float(p.get("area", 0) or 0) for p in restantes]
+    if not areas:
+        return False
+    total = sum(areas)
+    max_piece = max(areas)
+    # Cola: pocas piezas grandes ya colocadas o área total modesta
+    return total < max(2_500_000.0, max_piece * 12.0)
+
+
+def _ordenar_placas_cola(pendientes, placas_validas):
+    """Favorece placas más ajustadas al área restante (menos desperdicio)."""
+    if not pendientes or not placas_validas:
+        return placas_validas
+    total_area = _area_total_piezas(pendientes)
+    if total_area <= 0:
+        return placas_validas
+
+    def key(p):
+        pa = float(p.get("w", 0) or 0) * float(p.get("h", 0) or 0)
+        if pa <= 0:
+            return float("inf")
+        util = total_area / pa
+        precio = float(p.get("precio", 0) or 0)
+        # Ideal: util 0.35–0.90; penalizar placa demasiado grande
+        if util > 0.95:
+            waste = 0.05
+        elif util < 0.15:
+            waste = 1.0 - util + 0.5
+        else:
+            waste = max(0.0, 0.70 - util) if util < 0.70 else max(0.0, util - 0.88) * 0.5
+        return (waste * 800.0) + (precio * 0.02)
+
+    return sorted(placas_validas, key=key)
+
+
+def _refinar_hoja_empaque(
+    hoja,
+    piezas_origen,
+    w_placa,
+    h_placa,
+    kerf,
+    margin,
+    opt,
+    corner,
+    limite_poly=None,
+    intentos=12,
+):
+    """Reempaqueta la hoja ganadora buscando mejor compactación (mismo set de piezas)."""
+    from .sheet_integrity import batch_reempaque_desde_hoja
+
+    if not hoja or not piezas_origen:
+        return hoja
+
+    batch = batch_reempaque_desde_hoja(hoja, piezas_origen)
+    if not batch:
+        return hoja
+
+    mc_iters = int(get_nest_profile().get("mc_iterations", 15))
+    mejor = hoja
+    mejor_area = float(hoja.get("area_usada", 0) or 0)
+    mejor_n = len(hoja.get("piezas") or [])
+
+    for intento in range(max(1, int(intentos))):
+        if intento == 0:
+            orden = sorted(batch, key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+        else:
+            orden = batch.copy()
+            random.shuffle(orden)
+            orden.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+
+        nh, sobras = _safe_empaquetar_una_hoja_mc(
+            orden,
+            w_placa,
+            h_placa,
+            kerf,
+            margin,
+            opt,
+            corner,
+            limite_poly=limite_poly,
+            debug_tag=f"refinar_hoja|try={intento + 1}",
+            mc_iterations=mc_iters,
+        )
+        if not nh or not nh.get("piezas"):
+            continue
+        n_col = len([p for p in nh["piezas"] if not str(p.get("nombre", "")).startswith("REMANENTE")])
+        area = float(nh.get("area_usada", 0) or 0)
+        if sobras:
+            if area > mejor_area or (area == mejor_area and n_col > mejor_n):
+                mejor_area = area
+                mejor_n = n_col
+                mejor = nh
+            continue
+        if area >= mejor_area:
+            mejor_area = area
+            mejor_n = n_col
+            mejor = nh
+            break
+
+    n_esperado = len(batch)
+    n_mejor = len(
+        [p for p in (mejor.get("piezas") or []) if not str(p.get("nombre", "")).startswith("REMANENTE")]
+    )
+    if n_mejor < n_esperado:
+        return hoja
+    return mejor
+
+
+def _filtrar_placas_para_accesorios(piezas, placas_validas):
+    """
+    Con accesorios restantes, descarta placas gigantes cuando el área de piezas
+    no justifica una madre 240x96 (cola de accesorios / RTZ).
+    """
+    if not piezas or not placas_validas:
+        return placas_validas
+    total_area = _area_total_piezas(piezas)
+    if total_area <= 0:
+        return placas_validas
+
+    scored = []
+    for p in placas_validas:
+        pa = float(p.get("w", 0) or 0) * float(p.get("h", 0) or 0)
+        if pa <= 0:
+            continue
+        util = total_area / pa
+        scored.append((p, util, pa))
+
+    if not scored:
+        return placas_validas
+
+    # Si cabe razonablemente en placas medianas, no simular las enormes (<18% util)
+    medianas = [t for t in scored if 0.18 <= t[1] <= 0.92]
+    if len(medianas) >= 2:
+        medianas.sort(key=lambda t: (abs(t[1] - 0.62), t[2]))
+        return [t[0] for t in medianas]
+    scored.sort(key=lambda t: (abs(t[1] - 0.55), t[2]))
+    return [t[0] for t in scored[: max(3, len(scored))]]
+
+
+def _empaquetar_mejor_hoja_mc(
+    piezas,
+    w_placa,
+    h_placa,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    limite_poly=None,
+    debug_tag="",
+    mc_iterations=None,
+    solo_accesorios=False,
+):
+    """Empaque de hoja: accesorios/RTZ con reintentos; estructurales en un paso MC."""
+    if solo_accesorios and piezas:
+        base = sorted(
+            [copy.deepcopy(p) for p in piezas],
+            key=lambda x: float(x.get("area", 0) or 0),
+            reverse=True,
+        )
+        mc_iters = int(mc_iterations or get_nest_profile().get("mc_iterations", 15))
+        mejor_hoja = None
+        mejor_restos = list(piezas)
+        mejor_n = len(piezas) + 1
+
+        for intento in range(14):
+            if intento == 0:
+                batch = base
+            else:
+                batch = base.copy()
+                random.shuffle(batch)
+                batch.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+
+            nh, sobras = _safe_empaquetar_una_hoja_mc(
+                batch,
+                w_placa,
+                h_placa,
+                kerf,
+                margin,
+                opt,
+                corner,
+                limite_poly=limite_poly,
+                debug_tag=f"{debug_tag}|acc_try={intento + 1}",
+                mc_iterations=mc_iters,
+            )
+            if not nh or not nh.get("piezas"):
+                continue
+            n_sob = len(sobras or [])
+            if not sobras:
+                return nh, []
+            if n_sob < mejor_n:
+                mejor_n = n_sob
+                mejor_hoja = nh
+                mejor_restos = list(sobras or [])
+
+        if mejor_hoja:
+            return mejor_hoja, mejor_restos
+
+    return _safe_empaquetar_una_hoja_mc(
+        piezas,
+        w_placa,
+        h_placa,
+        kerf,
+        margin,
+        opt,
+        corner,
+        limite_poly=limite_poly,
+        debug_tag=debug_tag,
+        mc_iterations=mc_iterations,
+    )
+
+
+def _placas_que_caben_pieza(placas, max_req, min_req, tol=10.0):
+    out = []
+    for p in placas or []:
+        max_p, min_p = max(p["w"], p["h"]), min(p["w"], p["h"])
+        if max_p >= (max_req - tol) and min_p >= (min_req - tol):
+            out.append(p)
+    return out
+
+
+def _estimar_costo_lookahead(
+    restos_est,
+    restos_acc,
+    placas_validas,
+    config_kerf,
+    config_margin,
+    config_opt,
+    config_corner,
+    mc_fast,
+):
+    """Simula una placa siguiente barata para penalizar candidatas que dejan muchos restos."""
+    if not placas_validas:
+        return 0.0
+    if not restos_est and not restos_acc:
+        return 0.0
+
+    target = restos_est[0] if restos_est else restos_acc[0]
+    poly = target.get("poly")
+    if poly is None:
+        return float(len(restos_est) + len(restos_acc)) * 50.0
+
+    minx, miny, maxx, maxy = poly.bounds
+    max_req = max(maxx - minx, maxy - miny)
+    min_req = min(maxx - minx, maxy - miny)
+    candidatos = _placas_que_caben_pieza(placas_validas, max_req, min_req)
+    if not candidatos:
+        return float(len(restos_est) + len(restos_acc)) * 80.0
+
+    candidatos = sorted(candidatos, key=lambda x: (x.get("precio_lb", 0), x.get("precio", 0)))[:3]
+    mejor_extra = float("inf")
+    for p2 in candidatos:
+        if restos_est:
+            h2, r2 = _safe_empaquetar_una_hoja_mc(
+                restos_est,
+                p2["w"],
+                p2["h"],
+                config_kerf,
+                config_margin,
+                config_opt,
+                config_corner,
+                debug_tag="lookahead-est",
+                mc_iterations=mc_fast,
+            )
+            restos_count = len(r2) + len(restos_acc)
+        else:
+            h2, r2 = _safe_empaquetar_una_hoja_mc(
+                restos_acc,
+                p2["w"],
+                p2["h"],
+                config_kerf,
+                config_margin,
+                config_opt,
+                config_corner,
+                debug_tag="lookahead-acc",
+                mc_iterations=mc_fast,
+            )
+            restos_count = len(r2)
+
+        if not h2.get("piezas"):
+            continue
+        extra = float(p2.get("precio", 0.0) or 0.0)
+        extra += score_placa_simulacion(p2, h2, restos_count=restos_count) * 0.50
+        mejor_extra = min(mejor_extra, extra)
+
+    if mejor_extra == float("inf"):
+        return float(len(restos_est) + len(restos_acc)) * 60.0
+    return mejor_extra
+
+
 def _safe_empaquetar_una_hoja_mc(
     piezas,
     w_placa,
@@ -408,7 +721,8 @@ def _safe_empaquetar_una_hoja_mc(
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
-    debug_tag=""
+    debug_tag="",
+    mc_iterations=None,
 ):
     hoja_vacia = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     restos_default = list(piezas or [])
@@ -422,7 +736,8 @@ def _safe_empaquetar_una_hoja_mc(
             margin_override,
             opt_override,
             corner_override,
-            limite_poly=limite_poly
+            limite_poly=limite_poly,
+            mc_iterations=mc_iterations,
         )
 
         if result is None:
@@ -455,9 +770,16 @@ class MotorNesting:
         self.escala_dxf = 25.4
         self._cancel_checker = None
         try:
-            print(f"[NESTING ENGINE] backend={nesting_engine_name()}")
+            profile = get_nest_profile()
+            print(
+                f"[NESTING ENGINE] backend={nesting_engine_name()} | "
+                f"mode=standard mc={profile.get('mc_iterations')} lookahead={profile.get('lookahead')}"
+            )
         except Exception:
-            pass
+            try:
+                print(f"[NESTING ENGINE] backend={nesting_engine_name()}")
+            except Exception:
+                pass
 
     def set_cancel_checker(self, fn):
         self._cancel_checker = fn
@@ -535,8 +857,10 @@ class MotorNesting:
             reverse=True,
         )
         n = max(1, int(intentos or 1))
+        mc_iters = int(get_nest_profile().get("mc_iterations", 15))
         mejor_parcial = None
-        mejor_eficiencia = -1.0
+        mejor_area = -1.0
+        mejor_resto_n = len(base) + 1
 
         for intento in range(n):
             if self._cancelado():
@@ -559,16 +883,19 @@ class MotorNesting:
                 corner_override,
                 limite_poly=limite_poly,
                 debug_tag=f"{debug_tag}|try={intento + 1}",
+                mc_iterations=mc_iters,
             )
             if not nh:
                 continue
 
+            n_sob = len(sobras or [])
+            area = float(nh.get("area_usada", 0) or 0)
             if not sobras:
                 return actualizar_eficiencias_hoja(nh)
 
-            eff = float(nh.get("eficiencia", 0) or 0)
-            if eff > mejor_eficiencia:
-                mejor_eficiencia = eff
+            if n_sob < mejor_resto_n or (n_sob == mejor_resto_n and area > mejor_area):
+                mejor_resto_n = n_sob
+                mejor_area = area
                 mejor_parcial = nh
 
         return actualizar_eficiencias_hoja(mejor_parcial) if mejor_parcial else None
@@ -874,6 +1201,10 @@ class MotorNesting:
             for clave, piezas in grupos.items()
             if piezas
         }
+        grupos_ordenados = sorted(
+            grupos_con_piezas.items(),
+            key=lambda kv: _orden_clave_nesting(kv[0]),
+        )
 
         total_lotes_reales = len(grupos_con_piezas)
 
@@ -899,7 +1230,7 @@ class MotorNesting:
                         wo_name,
                     ),
                 ): clave
-                for clave, piezas in grupos_con_piezas.items()
+                for clave, piezas in grupos_ordenados
             }
 
             for i, futuro in enumerate(concurrent.futures.as_completed(futuros)):
@@ -1000,6 +1331,15 @@ class MotorNesting:
             )
             return clave, {"error": f"Sin placa. No se halló inventario para {req_cal} {req_mat}."}
 
+        if str(req_mat).strip().upper() == "CU":
+            return procesar_grupo_largos_cu(
+                clave,
+                piezas,
+                placas_ok,
+                wo_name=wo_name,
+                dbg_fn=_dbg_nesting,
+            )
+
         placas_ok.sort(key=lambda x: (x['precio_lb'], x['precio']))
 
         formatos_vistos = set()
@@ -1014,6 +1354,14 @@ class MotorNesting:
         estructurales = [p for p in piezas if p['area'] > AREA_LIMITE_MM2]
         accesorios_base = [p for p in piezas if p['area'] <= AREA_LIMITE_MM2]
 
+        nest_profile = get_nest_profile()
+        mc_iters = int(nest_profile.get("mc_iterations", 15))
+        mc_fast = int(nest_profile.get("mc_lookahead_iterations", 5))
+        use_lookahead = bool(nest_profile.get("lookahead", True))
+        _dbg_nesting(
+            f"[NEST-PROFILE] clave={clave} | mc={mc_iters} | lookahead={use_lookahead} | mc_fast={mc_fast}"
+        )
+
         hojas_finales = []
         costo_total_lote = 0
         
@@ -1022,6 +1370,8 @@ class MotorNesting:
         num_placa_actual = 1
 
         while pendientes_est or accesorios:
+            pool_est_snapshot = copy.deepcopy(pendientes_est)
+            pool_acc_snapshot = copy.deepcopy(accesorios)
             if pendientes_est: pendientes_est.sort(key=lambda x: x['area'], reverse=True)
             if accesorios: accesorios.sort(key=lambda x: x['area'], reverse=True)
             
@@ -1063,13 +1413,31 @@ class MotorNesting:
                 )
                 return clave, {"error": f"Error: La pieza {target_piece['nombre']} es demasiado grande para el inventario."}
 
+            candidatos_sim = placas_simulacion_validas
+            solo_accesorios_fase = not pendientes_est and bool(accesorios)
+            if solo_accesorios_fase:
+                candidatos_sim = _filtrar_placas_para_accesorios(accesorios, placas_simulacion_validas)
+                _dbg_nesting(
+                    f"[ACCESORIOS-FASE] clave={clave} | candidatos={len(candidatos_sim)}/{len(placas_simulacion_validas)} | "
+                    f"area={_area_total_piezas(accesorios):.0f}"
+                )
+            elif _es_cola_de_grupo(pendientes_est, accesorios):
+                candidatos_sim = _ordenar_placas_cola(
+                    pendientes_est + accesorios,
+                    placas_simulacion_validas,
+                )
+                _dbg_nesting(
+                    f"[COLA-GRUPO] clave={clave} | piezas_restantes={len(pendientes_est) + len(accesorios)} | "
+                    f"area_restante={_area_total_piezas(pendientes_est + accesorios):.0f}"
+                )
+
             mejor_hoja_temp = None
             mejor_score = float('inf')
             mejor_restos_est = []
             mejor_restos_acc = []
             mejor_placa = None
             
-            for candidato_placa in placas_simulacion_validas:
+            for candidato_placa in candidatos_sim:
                 sim_est = copy.deepcopy(pendientes_est)
                 sim_acc = copy.deepcopy(accesorios)
 
@@ -1080,73 +1448,91 @@ class MotorNesting:
                     f"pendientes_est={len(sim_est)} | accesorios={len(sim_acc)}"
                 )
 
-                if q_msg: q_msg.put(f"[{req_cal}] Procesando Placa #{num_placa_actual} | Quedan: {len(sim_est) + len(sim_acc)} piezas...")
+                if q_msg:
+                    q_msg.put(
+                        f"[{req_cal}] Procesando Placa #{num_placa_actual} | "
+                        f"Quedan: {len(sim_est) + len(sim_acc)} piezas..."
+                    )
+
+                hoja_sim = None
+                restos_sim = []
+                restos_est_out = []
+                restos_acc_out = []
 
                 if sim_est:
                     hoja_sim, restos_sim = _safe_empaquetar_una_hoja_mc(
                         sim_est,
-                        candidato_placa['w'],
-                        candidato_placa['h'],
+                        candidato_placa["w"],
+                        candidato_placa["h"],
                         config_kerf,
                         config_margin,
                         config_opt,
                         config_corner,
-                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=estructurales"
+                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=estructurales",
+                        mc_iterations=mc_iters,
                     )
-                    _dbg_nesting(
-                        f"[SIM-PLACA-RESULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                        f"modo=estructurales | piezas_colocadas={len(hoja_sim.get('piezas', []))} | "
-                        f"area_usada={hoja_sim.get('area_usada', 0.0):.3f} | restos={len(restos_sim)}"
-                    )
-                    if hoja_sim['piezas']:
-                        area = hoja_sim['area_usada']
-                        efi = area / (candidato_placa['w'] * candidato_placa['h'])
-                        costo_por_area = candidato_placa['precio'] / area
-                        
-                        # CASTIGO DE OPTIMIZACIÓN
-                        if efi < 0.60: penalizacion = 100.0 + ((1.0 - efi) * 50.0)
-                        else: penalizacion = 1.0 + ((1.0 - efi) ** 2) * 5.0 
-                            
-                        score = costo_por_area * penalizacion
-                            
-                        if score < mejor_score:
-                            mejor_score = score
-                            mejor_hoja_temp = hoja_sim
-                            mejor_restos_est = restos_sim
-                            mejor_placa = candidato_placa
-                            
+                    restos_est_out = restos_sim
+                    restos_acc_out = sim_acc
+                    modo = "estructurales"
                 elif sim_acc:
-                    hoja_sim, restos_sim = _safe_empaquetar_una_hoja_mc(
+                    hoja_sim, restos_sim = _empaquetar_mejor_hoja_mc(
                         sim_acc,
-                        candidato_placa['w'],
-                        candidato_placa['h'],
+                        candidato_placa["w"],
+                        candidato_placa["h"],
                         config_kerf,
                         config_margin,
                         config_opt,
                         config_corner,
-                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=accesorios"
+                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=accesorios",
+                        mc_iterations=mc_iters,
+                        solo_accesorios=True,
                     )
-                    _dbg_nesting(
-                        f"[SIM-PLACA-RESULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                        f"modo=accesorios | piezas_colocadas={len(hoja_sim.get('piezas', []))} | "
-                        f"area_usada={hoja_sim.get('area_usada', 0.0):.3f} | restos={len(restos_sim)}"
+                    restos_est_out = []
+                    restos_acc_out = restos_sim
+                    modo = "accesorios"
+                else:
+                    continue
+
+                _dbg_nesting(
+                    f"[SIM-PLACA-RESULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
+                    f"modo={modo} | piezas_colocadas={len(hoja_sim.get('piezas', []))} | "
+                    f"area_usada={hoja_sim.get('area_usada', 0.0):.3f} | restos={len(restos_sim)}"
+                )
+
+                if not hoja_sim.get("piezas"):
+                    continue
+
+                restos_count = len(restos_est_out) + len(restos_acc_out)
+                area_restos = _area_total_piezas(restos_est_out) + _area_total_piezas(restos_acc_out)
+                piezas_colocadas = len(hoja_sim.get("piezas") or [])
+                lookahead_cost = 0.0
+                if use_lookahead and restos_count > 0:
+                    lookahead_cost = _estimar_costo_lookahead(
+                        restos_est_out,
+                        restos_acc_out,
+                        placas_simulacion_validas,
+                        config_kerf,
+                        config_margin,
+                        config_opt,
+                        config_corner,
+                        mc_fast,
                     )
-                    if hoja_sim['piezas']:
-                        area = hoja_sim['area_usada']
-                        efi = area / (candidato_placa['w'] * candidato_placa['h'])
-                        costo_por_area = candidato_placa['precio'] / area
-                        
-                        # CASTIGO DE OPTIMIZACIÓN
-                        if efi < 0.60: penalizacion = 100.0 + ((1.0 - efi) * 50.0)
-                        else: penalizacion = 1.0 + ((1.0 - efi) ** 2) * 5.0 
-                            
-                        score = costo_por_area * penalizacion
-                        
-                        if score < mejor_score:
-                            mejor_score = score
-                            mejor_hoja_temp = hoja_sim
-                            mejor_restos_acc = restos_sim
-                            mejor_placa = candidato_placa
+
+                score = score_placa_simulacion(
+                    candidato_placa,
+                    hoja_sim,
+                    restos_count=restos_count,
+                    area_restos=area_restos,
+                    piezas_colocadas=piezas_colocadas,
+                    lookahead_cost=lookahead_cost,
+                )
+
+                if score < mejor_score:
+                    mejor_score = score
+                    mejor_hoja_temp = hoja_sim
+                    mejor_restos_est = restos_est_out
+                    mejor_restos_acc = restos_acc_out
+                    mejor_placa = candidato_placa
 
             if not mejor_hoja_temp:
                 _dbg_nesting(
@@ -1168,6 +1554,28 @@ class MotorNesting:
 
             hoja_ganadora = mejor_hoja_temp
             candidato_ganador = mejor_placa
+
+            # Refinar compactación de la hoja (mismas piezas, mejor orden MC)
+            piezas_pool_ref = pendientes_est if pendientes_est else accesorios
+            hoja_ref = _refinar_hoja_empaque(
+                hoja_ganadora,
+                piezas_pool_ref,
+                candidato_ganador["w"],
+                candidato_ganador["h"],
+                config_kerf,
+                config_margin,
+                config_opt,
+                config_corner,
+            )
+            if hoja_ref and hoja_ref.get("piezas"):
+                hoja_ganadora = hoja_ref
+
+            from .sheet_integrity import calcular_restos_desde_colocados
+
+            if pendientes_est:
+                mejor_restos_est = calcular_restos_desde_colocados(pool_est_snapshot, hoja_ganadora)
+            else:
+                mejor_restos_acc = calcular_restos_desde_colocados(pool_acc_snapshot, hoja_ganadora)
             
             _dbg_nesting(
                 f"[SIM-PLACA-GANADORA] clave={clave} | placa_id={candidato_ganador.get('id')} | "
@@ -1268,7 +1676,7 @@ class MotorNesting:
                             candidatos_seguro.append(copy.deepcopy(p))
                             
                     if candidatos_seguro:
-                        hoja_retazo, restos_mezclados = _safe_empaquetar_una_hoja_mc(
+                        hoja_retazo, restos_mezclados = _empaquetar_mejor_hoja_mc(
                             candidatos_seguro,
                             retazo['w'],
                             retazo['h'],
@@ -1277,25 +1685,41 @@ class MotorNesting:
                             config_opt,
                             config_corner,
                             limite_poly=retazo['poly_borde'],
-                            debug_tag=f"clave={clave} | retazo={retazo.get('id')} | modo=retazo"
+                            debug_tag=f"clave={clave} | retazo={retazo.get('id')} | modo=retazo",
+                            mc_iterations=mc_iters,
+                            solo_accesorios=True,
                         )
+                        hoja_ref_rtz = _refinar_hoja_empaque(
+                            hoja_retazo,
+                            candidatos_seguro,
+                            retazo['w'],
+                            retazo['h'],
+                            config_kerf,
+                            config_margin,
+                            config_opt,
+                            config_corner,
+                            limite_poly=retazo['poly_borde'],
+                            intentos=16,
+                        )
+                        if hoja_ref_rtz and hoja_ref_rtz.get("piezas"):
+                            hoja_retazo = hoja_ref_rtz
+                            from .sheet_integrity import calcular_restos_desde_colocados
+
+                            restos_mezclados = calcular_restos_desde_colocados(
+                                candidatos_seguro, hoja_retazo
+                            )
                         
                         if hoja_retazo['piezas']:
                             rtz_usado = True
 
-                            piezas_usadas = [p['nombre'] for p in hoja_retazo['piezas'] if not p['nombre'].startswith("REMANENTE")]
-                            
-                            def remover_usadas(lista_piezas, usadas_nombres):
-                                nueva_lista = []
-                                for item in lista_piezas:
-                                    if item['nombre'] in usadas_nombres:
-                                        usadas_nombres.remove(item['nombre'])
-                                    else:
-                                        nueva_lista.append(item)
-                                return nueva_lista
-                                
-                            pendientes_est = remover_usadas(pendientes_est, list(piezas_usadas))
-                            accesorios = remover_usadas(accesorios, list(piezas_usadas))
+                            from .sheet_integrity import calcular_restos_desde_colocados
+
+                            pendientes_est = calcular_restos_desde_colocados(
+                                pendientes_est, hoja_retazo
+                            )
+                            accesorios = calcular_restos_desde_colocados(
+                                accesorios, hoja_retazo
+                            )
 
                             hoja_retazo.update({
                                 'placa_id': retazo['id'],
@@ -1348,15 +1772,12 @@ class MotorNesting:
                                     p_clon['nombre'] = f"{p_clon['nombre']}"
                                 else:
                                     p_clon['nombre'] = f"REF__{p_clon['nombre']}"
-                                
+                                    p_clon["rtz_overlay_id"] = retazo["id"]
+
                                 if p_clon['poligonos']:
-                                    nuevos_polys = []
-                                    for pol_coords in p_clon['poligonos']:
-                                        try:
-                                            nuevos_polys.append(list(affinity.translate(Polygon(pol_coords), xoff=gx, yoff=gy).exterior.coords))
-                                        except:
-                                            nuevos_polys.append(pol_coords)
-                                    p_clon['poligonos'] = nuevos_polys
+                                    p_clon['poligonos'] = _translate_poligonos_for_overlay(
+                                        p_clon['poligonos'], gx, gy
+                                    )
                                     
                                 if p_clon['marcas']:
                                     nuevas_marcas = []
@@ -1386,6 +1807,7 @@ class MotorNesting:
                         p_acc['nombre'].startswith("REMANENTE__")
                         or p_acc['nombre'].startswith("TATUAJE__")
                         or p_acc['nombre'].startswith("RETAZO_GUILLOTINA__")
+                        or p_acc['nombre'].startswith("CU_CORTE__")
                     ):
                         continue
                     try:
@@ -1480,6 +1902,11 @@ class MotorNesting:
 
         # REEMPLAZA ESTE BLOQUE EN manager.py (CASI AL FINAL DE LA FUNCIÓN)
         if hojas_finales:
+            from .sheet_integrity import sanitizar_hojas_grupo
+
+            hojas_finales = sanitizar_hojas_grupo(
+                piezas, hojas_finales, clave=clave, kerf_global=config_kerf
+            )
             # Construimos mapa 1-a-1 por nombre base para no agarrar siempre
             # la primera coincidencia cuando hay piezas repetidas.
             source_map = {}
@@ -1506,6 +1933,9 @@ class MotorNesting:
 
                     # Consumo secuencial para evitar usar siempre el mismo original
                     p_orig = candidatos.pop(0)
+
+                    if p_orig.get("debug_id"):
+                        p_final["debug_id"] = p_orig.get("debug_id")
 
                     p_final['ruta'] = p_orig.get('ruta')
                     p_final['orig_minx'] = p_orig.get('orig_minx', 0.0)
@@ -1561,6 +1991,12 @@ class MotorNesting:
                 "placa": "Óptima",
                 "dim": "Multi",
                 "hojas": hojas_finales,
+                "piezas_pool": [
+                    {"nombre": str(p.get("nombre") or "")}
+                    for p in (piezas or [])
+                    if str(p.get("nombre") or "")
+                ],
+                "piezas_pool_engine": True,
                 "costo_total": costo_total_lote,
                 "costo_empresa": costo_empresa,
                 "costo_proveedor": costo_proveedor,
@@ -2839,12 +3275,14 @@ class MotorNesting:
     # 🚀 NUEVO: PUENTE DE EXPORTACIÓN (Soluciona el AttributeError en main.py)
     # =========================================================================
     def exportar_resultados_a_dxf(
-    self,
-    resultados,
-    out_dir,
-    base_name="NEST",
-    generar_step=False,
-    wo_label=None
+        self,
+        resultados,
+        out_dir,
+        base_name="NEST",
+        generar_step=False,
+        wo_label=None,
+        es_swo=False,
+        swo_id=None,
     ):
         """Redirige la orden de la interfaz gráfica hacia el archivo exporter.py"""
         return exportar_resultados_a_dxf(
@@ -2852,7 +3290,9 @@ class MotorNesting:
             out_dir,
             base_name,
             generar_step,
-            wo_label=wo_label
+            wo_label=wo_label,
+            es_swo=es_swo,
+            swo_id=swo_id,
         )
 
 

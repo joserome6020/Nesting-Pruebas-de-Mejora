@@ -11,14 +11,56 @@ import base64
 import json
 import os
 import re
+import shutil
 import sys
 from datetime import datetime
 from typing import Any, Dict, List, Set
 
-_CORPORATE_AUTODXF20 = (
-    r"Z:\♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK"
+AUTODXF20_REL = (
+    r"♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK"
     r"\21. Desarrollo y Tecnologia\2.- Códigos Desarrollo y Tecnología"
     r"\7.- Configuración para equipos de Computo\AutoDXF 2.0"
+)
+UNC_SHARE_ROOTS = (r"\\192.168.2.47\arga",)
+
+
+def _join_unc(root: str, rel: str) -> str:
+    return root.rstrip("\\") + "\\" + rel.lstrip("\\")
+
+
+def autodxf20_candidate_paths() -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+
+    def add(path: str) -> None:
+        p = os.path.normpath(str(path or "").strip())
+        if not p:
+            return
+        key = p.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(p)
+
+    env_dir = (os.environ.get("ARGA_AUTODXF20_DIR") or "").strip()
+    if env_dir:
+        add(env_dir)
+    for root in UNC_SHARE_ROOTS:
+        add(_join_unc(root, AUTODXF20_REL))
+    add(_join_unc("Z:", AUTODXF20_REL))
+    return out
+
+
+def resolve_autodxf20_dir(*, prefer_existing: bool = True) -> str:
+    for path in autodxf20_candidate_paths():
+        if not prefer_existing or os.path.isdir(path):
+            return path
+    paths = autodxf20_candidate_paths()
+    return paths[0] if paths else ""
+
+
+_CORPORATE_AUTODXF20 = resolve_autodxf20_dir(prefer_existing=False) or _join_unc(
+    UNC_SHARE_ROOTS[0], AUTODXF20_REL
 )
 _VENDOR_DIR: str | None = None
 _LARGOS_ESPESOR_CATALOG: Dict[str, dict] | None = None
@@ -29,6 +71,66 @@ _LARGO_PROFILE_LABELS = frozenset(
 
 def _python_vendor_tag() -> str:
     return f"Python{sys.version_info.major}{sys.version_info.minor}"
+
+
+def _is_unc_or_remote(path: str) -> bool:
+    p = os.path.abspath(path or "")
+    if p.startswith("\\\\"):
+        return True
+    if len(p) >= 2 and p[1] == ":":
+        drive = p[:2] + "\\"
+        try:
+            import ctypes
+
+            if int(ctypes.windll.kernel32.GetDriveTypeW(drive)) == 4:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _needs_local_vendor_mirror(vendor_dir: str) -> bool:
+    p = os.path.abspath(vendor_dir or "")
+    if not p:
+        return False
+    if len(p) >= 200:
+        return True
+    return _is_unc_or_remote(p)
+
+
+def _local_vendor_cache_dir(tag: str) -> str:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "Arga", "AutoDXF20_vendor", tag)
+
+
+def _mirror_vendor_to_local(source: str, tag: str) -> str:
+    """Copia _vendor de red a ruta local corta (psycopg2 no carga DLL en UNC largo)."""
+    dest = _local_vendor_cache_dir(tag)
+    stamp_src = os.path.join(source, ".vendor_ok")
+    stamp_dst = os.path.join(dest, ".vendor_ok")
+    psyc_src = os.path.join(source, "psycopg2")
+    psyc_dst = os.path.join(dest, "psycopg2")
+
+    need = not os.path.isdir(psyc_dst)
+    if not need and os.path.isfile(stamp_src):
+        try:
+            need = (not os.path.isfile(stamp_dst)) or (
+                os.path.getmtime(stamp_src) > os.path.getmtime(stamp_dst)
+            )
+        except OSError:
+            need = True
+    if not need and os.path.isdir(psyc_src):
+        try:
+            need = os.path.getmtime(psyc_src) > os.path.getmtime(psyc_dst)
+        except OSError:
+            need = True
+
+    if need:
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest, ignore_errors=True)
+        shutil.copytree(source, dest)
+    return dest
 
 
 def _vendor_roots() -> List[str]:
@@ -50,13 +152,15 @@ def _vendor_roots() -> List[str]:
     env_dir = (os.environ.get("ARGA_AUTODXF20_DIR") or "").strip()
     if env_dir:
         add(env_dir)
-    add(_CORPORATE_AUTODXF20)
+    for corp in autodxf20_candidate_paths():
+        add(corp)
     return roots
 
 
 def _bootstrap_vendor() -> str:
     """
     Carga psycopg2 desde _vendor/Python312|313|314 sin pip en cada PC.
+    Si _vendor esta en red con ruta larga, lo espeja a %LOCALAPPDATA%\\Arga\\...
     Devuelve la ruta usada o cadena vacía.
     """
     global _VENDOR_DIR
@@ -64,6 +168,7 @@ def _bootstrap_vendor() -> str:
         return _VENDOR_DIR
 
     tag = _python_vendor_tag()
+    candidates: List[str] = []
     for base in _vendor_roots():
         for sub in (os.path.join("_vendor", tag), "_vendor"):
             vendor_dir = os.path.join(base, sub)
@@ -72,10 +177,27 @@ def _bootstrap_vendor() -> str:
             marker = os.path.join(vendor_dir, "psycopg2")
             if not os.path.isdir(marker) and not os.path.isfile(marker + ".py"):
                 continue
-            if vendor_dir not in sys.path:
-                sys.path.insert(0, vendor_dir)
-            _VENDOR_DIR = vendor_dir
-            return vendor_dir
+            candidates.append(vendor_dir)
+
+    for vendor_dir in candidates:
+        attempt_dirs = [vendor_dir]
+        if _needs_local_vendor_mirror(vendor_dir):
+            try:
+                attempt_dirs.append(_mirror_vendor_to_local(vendor_dir, tag))
+            except Exception:
+                pass
+
+        for attempt_dir in attempt_dirs:
+            if attempt_dir not in sys.path:
+                sys.path.insert(0, attempt_dir)
+            try:
+                import psycopg2  # type: ignore  # noqa: F401
+            except ImportError:
+                if attempt_dir in sys.path:
+                    sys.path.remove(attempt_dir)
+                continue
+            _VENDOR_DIR = attempt_dir
+            return attempt_dir
 
     _VENDOR_DIR = ""
     return ""
@@ -177,11 +299,9 @@ def _load_largos_espesor_catalog() -> Dict[str, dict]:
     merged: Dict[str, dict] = {}
     candidates = [
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "largos_espesor_catalog.json"),
-        os.path.join(_CORPORATE_AUTODXF20, "largos_espesor_catalog.json"),
     ]
-    env_dir = (os.environ.get("ARGA_AUTODXF20_DIR") or "").strip()
-    if env_dir:
-        candidates.insert(0, os.path.join(env_dir, "largos_espesor_catalog.json"))
+    for corp in autodxf20_candidate_paths():
+        candidates.append(os.path.join(corp, "largos_espesor_catalog.json"))
 
     for path in candidates:
         try:
@@ -274,12 +394,19 @@ def _connect_db():
     try:
         import psycopg2  # type: ignore
     except ImportError as exc:
-        hint = (
-            f" Ejecute bootstrap_herinox_vendor.bat en la carpeta AutoDXF 2.0 "
-            f"(falta _vendor/{_python_vendor_tag()})"
-            if not vendor_dir
-            else f" Revise _vendor en {vendor_dir} para {_python_vendor_tag()}"
-        )
+        msg = str(exc).lower()
+        if "demasiado largo" in msg or "too long" in msg:
+            hint = (
+                f" psycopg2 no carga desde ruta de red larga; "
+                f"revise %LOCALAPPDATA%\\Arga\\AutoDXF20_vendor\\{_python_vendor_tag()}"
+            )
+        elif not vendor_dir:
+            hint = (
+                f" Ejecute bootstrap_herinox_vendor.bat en la carpeta AutoDXF 2.0 "
+                f"(falta _vendor/{_python_vendor_tag()})"
+            )
+        else:
+            hint = f" Revise _vendor en {vendor_dir} para {_python_vendor_tag()}"
         raise ImportError(f"No module named 'psycopg2'.{hint}") from exc
 
     return psycopg2.connect(
@@ -317,12 +444,41 @@ def fetch_materials_from_db() -> List[str]:
             conn.close()
 
 
+def _perfil_estructural_tarjeton(perfil: str) -> str:
+    """Etiqueta del tarjetón Herinox (ej. SOLERA -> SOLERA perfil)."""
+    p = str(perfil or "").strip()
+    if not p:
+        return ""
+    if re.search(r"\bperfil\b", p, re.IGNORECASE):
+        return p
+    return f"{p} perfil"
+
+
+def _descripcion_tarjeton(row: dict) -> str:
+    """Descripción mostrada en el tarjetón (columna descripcion de Plate)."""
+    desc = str(row.get("descripcion") or "").strip()
+    if desc:
+        return desc
+    return _clasificacion_largo(row)
+
+
+def _tarjeton_largo(row: dict) -> dict:
+    """Campos visibles en el tarjetón de Lista de largos / Herinox."""
+    return {
+        "codigo": str(row.get("codigo") or "").strip(),
+        "perfil_estructural": _perfil_estructural_tarjeton(row.get("perfil", "")),
+        "tipo_material": str(row.get("material") or "").strip(),
+        "descripcion": _descripcion_tarjeton(row),
+    }
+
+
 def fetch_largos_from_db() -> List[dict]:
     sql = """
         SELECT
             p."codigo",
             p."material",
             p."perfilEstructural",
+            p."descripcion",
             p."thickness",
             p."thk",
             p."width",
@@ -349,12 +505,13 @@ def fetch_largos_from_db() -> List[dict]:
                     "codigo": str(row[0] or "").strip(),
                     "material": str(row[1] or "").strip(),
                     "perfil": str(row[2] or "").strip(),
-                    "thickness": row[3],
-                    "thk": row[4],
-                    "width": row[5],
-                    "length": row[6],
-                    "lb": row[7],
-                    "disponible": bool(row[8]),
+                    "descripcion": str(row[3] or "").strip(),
+                    "thickness": row[4],
+                    "thk": row[5],
+                    "width": row[6],
+                    "length": row[7],
+                    "lb": row[8],
+                    "disponible": bool(row[9]),
                 }
             )
         return _enrich_largos_rows(out)
@@ -366,6 +523,10 @@ def fetch_largos_from_db() -> List[dict]:
 
 
 def _clasificacion_largo(row: dict) -> str:
+    desc = str(row.get("descripcion") or "").strip()
+    if desc:
+        return _sanitize_csv_token(desc)
+
     catalogo = str(row.get("clasificacion_catalogo") or "").strip()
     if catalogo:
         return _sanitize_csv_token(catalogo)
@@ -386,19 +547,12 @@ def _clasificacion_largo(row: dict) -> str:
 
 
 def _texto_combo_largo(row: dict) -> str:
+    """Texto del combo Inventor: mismos 4 campos visibles en el tarjetón Herinox."""
     codigo = _tsv_cell(row.get("codigo", ""))
-    perfil = _tsv_cell(row.get("perfil", ""))
+    perfil = _tsv_cell(_perfil_estructural_tarjeton(row.get("perfil", "")))
     material = _tsv_cell(row.get("material", ""))
-    width = _fmt_num(row.get("width")) or "1"
-    length_ft = _fmt_num(row.get("length")) or "20"
-    esp = str(row.get("espesor_resuelto") or _resolve_largo_espesor(row))
-    lb = _fmt_num(row.get("lb")) or "0"
-    disp = "DISP" if row.get("disponible") else "NO DISP"
-    esp_txt = f"esp {esp} in" if esp else "esp N/D"
-    return (
-        f"{codigo} | {perfil} | {material} | {width} in x {length_ft} ft | "
-        f"{esp_txt} | {lb} lb | {disp}"
-    )
+    descripcion = _tsv_cell(_descripcion_tarjeton(row))
+    return f"{codigo} | {perfil} | {material} | {descripcion}"
 
 
 def build_largos_catalog_tsv(rows: List[dict]) -> str:
@@ -407,8 +561,8 @@ def build_largos_catalog_tsv(rows: List[dict]) -> str:
         codigo = _sanitize_csv_token(row.get("codigo", ""))
         if not codigo:
             continue
-        clasif = _tsv_cell(_clasificacion_largo(row))
-        perfil = _tsv_cell(row.get("perfil", ""))
+        clasif = _tsv_cell(_descripcion_tarjeton(row))
+        perfil = _tsv_cell(_perfil_estructural_tarjeton(row.get("perfil", "")))
         material = _tsv_cell(row.get("material", ""))
         width = _fmt_num(row.get("width"))
         esp = str(row.get("espesor_resuelto") or _resolve_largo_espesor(row))
@@ -464,6 +618,11 @@ def build_largos_payload(rows: List[dict], source: str, detail: str) -> dict:
     tsv = build_largos_catalog_tsv(rows)
     b64 = base64.b64encode(tsv.encode("utf-8")).decode("ascii") if tsv else ""
     combo_lines = [_texto_combo_largo(row) for row in rows if _texto_combo_largo(row)]
+    largos_items = [
+        _tarjeton_largo(row)
+        for row in rows
+        if str(row.get("codigo") or "").strip()
+    ]
     return {
         "largos_enabled": bool(rows),
         "largos_count": len(rows),
@@ -472,6 +631,9 @@ def build_largos_payload(rows: List[dict], source: str, detail: str) -> dict:
         "largos_catalog_b64": b64,
         # Separador de registro improbable en texto de combo (Inventor usa b64 TSV).
         "largos_combo_lines_csv": "\x1e".join(combo_lines),
+        # Tarjetones Herinox: codigo, perfil estructural, tipo material, descripcion.
+        "largos_items": largos_items,
+        "largos_items_json": json.dumps(largos_items, ensure_ascii=False),
         "largos_updated_at": datetime.now().isoformat(timespec="seconds"),
     }
 

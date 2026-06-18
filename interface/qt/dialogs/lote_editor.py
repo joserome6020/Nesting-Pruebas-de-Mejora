@@ -67,17 +67,17 @@ class EditorLoteWindow(QDialog):
         lay.addWidget(self.table, 1)
 
         footer = QHBoxLayout()
-        self.btn_agregar = QPushButton("➕ AGREGAR DXF")
+        self.btn_agregar = QPushButton("AGREGAR DXF")
         apply_push_button(self.btn_agregar, ARGB_BTN_2, font_size=11)
         self.btn_agregar.clicked.connect(self._agregar_dxfs)
         footer.addWidget(self.btn_agregar)
 
-        self.btn_eliminar = QPushButton("🗑 ELIMINAR")
+        self.btn_eliminar = QPushButton("ELIMINAR")
         apply_push_button(self.btn_eliminar, ARGB_BTN_1, font_size=11)
         self.btn_eliminar.clicked.connect(self._eliminar_seleccionados)
         footer.addWidget(self.btn_eliminar)
 
-        self.btn_reemplazar = QPushButton("♻ REEMPLAZAR DXF")
+        self.btn_reemplazar = QPushButton("REEMPLAZAR DXF")
         apply_push_button(self.btn_reemplazar, ARGB_BTN_3, font_size=11)
         self.btn_reemplazar.clicked.connect(self._reemplazar_dxf)
         footer.addWidget(self.btn_reemplazar)
@@ -88,7 +88,7 @@ class EditorLoteWindow(QDialog):
         self.btn_cerrar.clicked.connect(self.accept)
         footer.addWidget(self.btn_cerrar)
 
-        self.btn_renestear = QPushButton("🚀 RENESTEAR LOTE")
+        self.btn_renestear = QPushButton("RENESTEAR LOTE")
         apply_push_button(self.btn_renestear, "#1E293B", font_size=11)
         self.btn_renestear.clicked.connect(self._renestear_lote)
         footer.addWidget(self.btn_renestear)

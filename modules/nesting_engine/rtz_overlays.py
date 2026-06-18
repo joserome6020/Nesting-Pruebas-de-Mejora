@@ -12,17 +12,45 @@ from shapely.ops import unary_union
 from .geometry_parser import generar_texto_vectorial
 
 
+def _translate_poligonos_for_overlay(poligonos, gx: float, gy: float) -> list:
+    out: list = []
+    for pol_coords in poligonos or []:
+        try:
+            ring = []
+            for pt in pol_coords or []:
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    ring.append((float(pt[0]) + gx, float(pt[1]) + gy))
+                else:
+                    ring.append(pt)
+            if ring:
+                out.append(ring)
+        except Exception:
+            out.append(pol_coords)
+    return out
+
+
+def _translate_marcas_for_overlay(marcas, gx: float, gy: float) -> list:
+    out: list = []
+    for line_coords in marcas or []:
+        try:
+            line = []
+            for pt in line_coords or []:
+                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                    line.append((float(pt[0]) + gx, float(pt[1]) + gy))
+                else:
+                    line.append(pt)
+            if len(line) >= 2:
+                out.append(line)
+        except Exception:
+            out.append(line_coords)
+    return out
+
+
 def _overlay_ligado_a_rtz(nombre: str, rtz_id: str) -> bool:
-    """Overlays cuyo nombre incluye el id del RTZ (tatuaje, guillotina)."""
     n = str(nombre or "")
     rid = str(rtz_id or "")
     if not rid or rid not in n:
         return False
-    return n.startswith("TATUAJE__") or n.startswith("RETAZO_GUILLOTINA__")
-
-
-def _es_overlay_rtz_madre(nombre: str) -> bool:
-    n = str(nombre or "")
     return (
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
@@ -94,14 +122,42 @@ def _inferir_global_rtz(madre, rtz_hoja):
     return 0.0, 0.0
 
 
-def _purge_rtz_overlays_madre(madre):
-    """Quita REF__/TATUAJE__/RETAZO_GUILLOTINA__ antes de regenerar desde cero."""
-    if not isinstance(madre, dict):
-        return
+def _punto_en_rect_rtz(cx, cy, gx, gy, rw, rh, tol=2.0):
+    return (gx - tol <= cx <= gx + rw + tol) and (gy - tol <= cy <= gy + rh + tol)
+
+
+def _ref_pertenece_a_rtz(p, rtz_id, gx, gy, rw, rh):
+    """Identifica overlays REF de un RTZ (incluye piezas legacy sin rtz_overlay_id)."""
+    nom = str((p or {}).get("nombre", "") or "")
+    rid = str(rtz_id or "")
+    if not rid:
+        return False
+    if str((p or {}).get("rtz_overlay_id", "") or "") == rid:
+        return True
+    if _overlay_ligado_a_rtz(nom, rid):
+        return True
+    if nom.startswith(f"REF__{rid}__"):
+        return True
+    if not nom.startswith("REF__"):
+        return False
+    if rw <= 0 or rh <= 0:
+        return True
+    try:
+        poly = (p.get("poligonos") or [[]])[0]
+        if not poly:
+            return False
+        cx = sum(pt[0] for pt in poly) / len(poly)
+        cy = sum(pt[1] for pt in poly) / len(poly)
+        return _punto_en_rect_rtz(cx, cy, gx, gy, rw, rh)
+    except Exception:
+        return False
+
+
+def _quitar_overlays_rtz(madre, rtz_id, gx=0.0, gy=0.0, rw=0.0, rh=0.0):
     madre["piezas"] = [
         p
         for p in (madre.get("piezas") or [])
-        if not _es_overlay_rtz_madre(str(p.get("nombre", "") or ""))
+        if not _ref_pertenece_a_rtz(p, rtz_id, gx, gy, rw, rh)
     ]
 
 
@@ -140,11 +196,14 @@ def _reconstruir_overlays_rtz_en_madre(madre, rtz_hoja):
         return
 
     gx, gy = _inferir_global_rtz(madre, rtz_hoja)
+    rw = float(rtz_hoja.get("placa_w", 0) or 0)
+    rh = float(rtz_hoja.get("placa_h", 0) or 0)
+
+    _quitar_overlays_rtz(madre, rtz_id, gx, gy, rw, rh)
+
     rtz_hoja["global_x"] = gx
     rtz_hoja["global_y"] = gy
 
-    rw = float(rtz_hoja.get("placa_w", 0) or 0)
-    rh = float(rtz_hoja.get("placa_h", 0) or 0)
     if rw <= 0 or rh <= 0:
         return
 
@@ -166,28 +225,15 @@ def _reconstruir_overlays_rtz_en_madre(madre, rtz_hoja):
 
         p_clon = copy.deepcopy(p_acc)
         p_clon["nombre"] = f"REF__{p_clon['nombre']}"
+        p_clon["rtz_overlay_id"] = rtz_id
 
         if p_clon.get("poligonos"):
-            nuevos_polys = []
-            for pol_coords in p_clon["poligonos"]:
-                try:
-                    nuevos_polys.append(
-                        list(affinity.translate(Polygon(pol_coords), xoff=gx, yoff=gy).exterior.coords)
-                    )
-                except Exception:
-                    nuevos_polys.append(pol_coords)
-            p_clon["poligonos"] = nuevos_polys
+            p_clon["poligonos"] = _translate_poligonos_for_overlay(
+                p_clon["poligonos"], gx, gy
+            )
 
-        if p_clon.get("marcas"):
-            nuevas_marcas = []
-            for line_coords in p_clon["marcas"]:
-                try:
-                    nuevas_marcas.append(
-                        list(affinity.translate(LineString(line_coords), xoff=gx, yoff=gy).coords)
-                    )
-                except Exception:
-                    nuevas_marcas.append(line_coords)
-            p_clon["marcas"] = nuevas_marcas
+        # Sin marcas vectoriales en overlay: el visor usa etiquetas fijas en pantalla.
+        p_clon["marcas"] = []
 
         madre.setdefault("piezas", []).append(p_clon)
 
@@ -247,7 +293,9 @@ def _reconstruir_overlays_rtz_en_madre(madre, rtz_hoja):
     cy_t_global = gy + cy_local
     w_texto = max(50, min(w_disp * 0.85, 400))
     h_texto = max(15, min(h_disp * 0.85, 40))
-    marks_t_global = generar_texto_vectorial(rtz_id, cx_t_global, cy_t_global, w_texto, h_texto)
+    marks_t_global = generar_texto_vectorial(
+        rtz_id, cx_t_global, cy_t_global, w_texto, h_texto
+    )
     dummy_p_global = [
         [
             (cx_t_global - 1, cy_t_global - 1),
@@ -313,14 +361,9 @@ def sincronizar_overlays_grupo(hojas):
     if not isinstance(hojas, list):
         return
     for i, hoja in enumerate(hojas):
-        if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        if not isinstance(hoja, dict) or hoja.get("es_retazo") or hoja.get("modo_largos_cu"):
             continue
-        rtz_hijos = _rtz_hojas_de_madre(hojas, i)
-        if not rtz_hijos:
-            continue
-        # Una sola purga por placa madre evita acumular REF__ (p. ej. ×7 en re-sync).
-        _purge_rtz_overlays_madre(hoja)
-        for rtz in rtz_hijos:
+        for rtz in _rtz_hojas_de_madre(hojas, i):
             _reconstruir_overlays_rtz_en_madre(hoja, rtz)
 
 
@@ -329,6 +372,8 @@ def sincronizar_overlays_resultados(resultados_nesting):
         return
     for _, grupo in resultados_nesting.items():
         if not isinstance(grupo, dict) or "error" in grupo:
+            continue
+        if grupo.get("modo_largos_cu"):
             continue
         hojas = grupo.get("hojas")
         if isinstance(hojas, list):

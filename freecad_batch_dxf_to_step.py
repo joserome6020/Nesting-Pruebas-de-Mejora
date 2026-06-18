@@ -106,13 +106,22 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
                     layer_str += "_" + parent.Label.upper()
 
         # Clasificación
-        if "MARK" in layer_str or "ETCH" in layer_str or "TEXT" in layer_str:
+        # CUT_CU: contorno cerrado de piezas cobre → sólidos STEP.
+        if "CUT_CU" in layer_str:
+            outer_wires.extend(_collect_closed_wires_from_obj(obj))
+        elif "MARK" in layer_str or "ETCH" in layer_str or "TEXT" in layer_str:
             mark_edges.extend(_collect_edges_from_obj(obj))
         elif "INTER" in layer_str or "INNER" in layer_str or "HOLE" in layer_str:
             inner_wires.extend(_collect_closed_wires_from_obj(obj))
         elif "PLATE" in layer_str:
             plate_wires.extend(_collect_closed_wires_from_obj(obj))
-        elif "OUTER" in layer_str or "EXTER" in layer_str or "0" in layer_str:
+        elif (
+            "OUTER" in layer_str
+            or "EXTER" in layer_str
+            or "CUT_OUTER" in layer_str
+            or layer_str.endswith("_CUT")
+            or layer_str == "CUT"
+        ):
             outer_wires.extend(_collect_closed_wires_from_obj(obj))
         else:
             # Salvavidas: si la capa es rara, asumimos que es corte externo para no perderla

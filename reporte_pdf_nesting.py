@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 MM_TO_IN = 1.0 / 25.4
-SPECIAL_PREFIXES = ("REMANENTE", "RETAZO", "TATUAJE", "REF__")
+SPECIAL_PREFIXES = ("REMANENTE", "RETAZO", "TATUAJE", "REF__", "CU_CORTE__")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BRANDING_DIR = os.path.join(BASE_DIR, "assets", "branding")
 
@@ -41,7 +41,7 @@ def _normalize_route(value):
 
 def _clean_piece_name(name):
     text = str(name or "-")
-    for pref in ("REF__", "TATUAJE__", "RETAZO_GUILLOTINA__"):
+    for pref in ("REF__", "TATUAJE__", "RETAZO_GUILLOTINA__", "CU_CORTE__"):
         if text.startswith(pref):
             text = text.replace(pref, "", 1)
     return text.strip() or "-"
@@ -50,6 +50,60 @@ def _clean_piece_name(name):
 def _is_real_piece(piece):
     name = str(piece.get("nombre", ""))
     return not name.startswith(SPECIAL_PREFIXES)
+
+
+def _piece_nombre(piece):
+    return str((piece or {}).get("nombre", "") or "")
+
+
+def _is_ref_overlay(piece):
+    return _piece_nombre(piece).startswith("REF__")
+
+
+def _is_cu_corte_overlay(piece):
+    return _piece_nombre(piece).startswith("CU_CORTE__")
+
+
+def _is_guillotina_overlay(piece):
+    return _piece_nombre(piece).startswith("RETAZO_GUILLOTINA__")
+
+
+def _is_tatuaje_overlay(piece):
+    return _piece_nombre(piece).startswith("TATUAJE__")
+
+
+def _is_rtz_overlay(piece):
+    return _is_ref_overlay(piece) or _is_guillotina_overlay(piece) or _is_tatuaje_overlay(piece)
+
+
+def _mother_has_rtz_overlays(plate):
+    if (plate or {}).get("es_retazo") or (plate or {}).get("modo_largos_cu"):
+        return False
+    return any(_is_rtz_overlay(p) for p in ((plate or {}).get("piezas") or []))
+
+
+def _rtz_ids_en_placa(plate):
+    ids = []
+    for p in (plate or {}).get("piezas") or []:
+        nom = _piece_nombre(p)
+        if nom.startswith("TATUAJE__"):
+            rid = nom.replace("TATUAJE__", "", 1).strip()
+            if rid and rid not in ids:
+                ids.append(rid)
+        elif nom.startswith("RETAZO_GUILLOTINA__"):
+            rid = nom.replace("RETAZO_GUILLOTINA__", "", 1).strip()
+            if rid and rid not in ids:
+                ids.append(rid)
+    return ids
+
+
+def _sync_rtz_overlays_para_pdf(resultados_nesting):
+    try:
+        from modules.nesting_engine.rtz_overlays import sincronizar_overlays_resultados
+
+        sincronizar_overlays_resultados(resultados_nesting)
+    except Exception:
+        pass
 
 
 def _bbox_from_points(points):
@@ -241,7 +295,18 @@ def _enumerate_plates(resultados_nesting):
     except ImportError:
         calcular_eficiencias_grupo = None
 
-    for grupo_calibre, datos_grupo in (resultados_nesting or {}).items():
+    try:
+        from utils_nesting import clave_nesting_sort_key
+    except ImportError:
+        clave_nesting_sort_key = lambda k: str(k).upper()
+
+    claves_ordenadas = sorted(
+        (k for k in (resultados_nesting or {}) if isinstance((resultados_nesting or {}).get(k), dict)),
+        key=clave_nesting_sort_key,
+    )
+
+    for grupo_calibre in claves_ordenadas:
+        datos_grupo = (resultados_nesting or {}).get(grupo_calibre) or {}
         if not isinstance(datos_grupo, dict) or "error" in datos_grupo:
             continue
 
@@ -335,6 +400,201 @@ def _draw_polygon(c, pts, scale, ox, oy, stroke_color, fill_color=None, stroke_w
         c.drawPath(path, stroke=1, fill=1)
     else:
         c.drawPath(path, stroke=1, fill=0)
+
+
+def _draw_dashed_polygon(c, pts, scale, ox, oy, stroke_color, stroke_width=1.4, dash=(5, 4)):
+    if not pts or len(pts) < 2:
+        return
+    try:
+        c.setDash(dash[0], dash[1])
+    except Exception:
+        pass
+    _draw_polygon(c, pts, scale, ox, oy, stroke_color, fill_color=None, stroke_width=stroke_width)
+    try:
+        c.setDash()
+    except Exception:
+        pass
+
+
+RTZ_REF_FILL = colors.HexColor("#BDB07E")
+RTZ_REF_STROKE = colors.HexColor("#1F2937")
+RTZ_GUILLOTINA_STROKE = colors.HexColor("#EF4444")
+RTZ_TATUAJE_MARK = colors.HexColor("#FACC15")
+
+
+def _draw_mark_paths(c, marks, scale, ox, oy, stroke_color, stroke_width=0.9):
+    c.setStrokeColor(stroke_color)
+    c.setLineWidth(stroke_width)
+    for mark in marks or []:
+        if not mark or len(mark) < 2:
+            continue
+        path = c.beginPath()
+        path.moveTo(
+            ox + _to_float(mark[0][0]) * scale,
+            oy + _to_float(mark[0][1]) * scale,
+        )
+        for x, y in mark[1:]:
+            path.lineTo(
+                ox + _to_float(x) * scale,
+                oy + _to_float(y) * scale,
+            )
+        c.drawPath(path, stroke=1, fill=0)
+
+
+def _draw_rtz_overlays(c, pieces, scale, ox, oy):
+    """Dibuja zona RTZ en placa madre: REF + guillotina + tatuaje (como en el visor)."""
+    overlays = [p for p in (pieces or []) if _is_rtz_overlay(p)]
+    if not overlays:
+        return
+
+    for pieza in overlays:
+        if not _is_ref_overlay(pieza):
+            continue
+        polys = pieza.get("poligonos") or []
+        if not polys:
+            continue
+        _draw_polygon(c, polys[0], scale, ox, oy, RTZ_REF_STROKE, RTZ_REF_FILL, 0.9)
+        for hole in polys[1:]:
+            _draw_polygon(c, hole, scale, ox, oy, RTZ_REF_STROKE, colors.white, 0.7)
+
+    for pieza in overlays:
+        if not _is_guillotina_overlay(pieza):
+            continue
+        polys = pieza.get("poligonos") or []
+        if polys:
+            _draw_dashed_polygon(
+                c, polys[0], scale, ox, oy, RTZ_GUILLOTINA_STROKE, stroke_width=1.6
+            )
+
+    for pieza in overlays:
+        if not _is_tatuaje_overlay(pieza):
+            continue
+        _draw_mark_paths(c, pieza.get("marcas") or [], scale, ox, oy, RTZ_TATUAJE_MARK, 1.1)
+
+
+def _draw_real_pieces_on_plate(c, piezas_reales, scale, ox, oy, ids_map, outer_stroke, outer_fill, mark_color):
+    for pieza in piezas_reales:
+        polys = pieza.get("poligonos") or []
+        if not polys:
+            continue
+
+        _draw_polygon(c, polys[0], scale, ox, oy, outer_stroke, outer_fill, 0.8)
+
+        for hole in polys[1:]:
+            _draw_polygon(c, hole, scale, ox, oy, outer_stroke, colors.white, 0.7)
+
+        _draw_mark_paths(c, pieza.get("marcas") or [], scale, ox, oy, mark_color, 0.7)
+
+        label = ids_map.get(id(pieza))
+        if label:
+            minx, miny, maxx, maxy = _bbox_from_points(polys[0])
+            cx = ox + ((minx + maxx) / 2.0) * scale
+            ly = oy + (miny + 8.0) * scale
+            c.setFont("Helvetica-Bold", 9)
+            c.setFillColor(colors.HexColor("#E11D48"))
+            c.drawCentredString(cx, ly, label)
+
+
+def _draw_plate_nesting_geometry(
+    c, plate, scale, ox, oy, ids_map, outer_stroke, outer_fill, mark_color
+):
+    piezas_reales = [p for p in (plate.get("piezas") or []) if _is_real_piece(p)]
+    _draw_real_pieces_on_plate(
+        c, piezas_reales, scale, ox, oy, ids_map, outer_stroke, outer_fill, mark_color
+    )
+    if plate.get("modo_largos_cu"):
+        _draw_cu_cortes(c, plate.get("piezas") or [], scale, ox, oy)
+    elif not plate.get("es_retazo"):
+        _draw_rtz_overlays(c, plate.get("piezas") or [], scale, ox, oy)
+
+
+def _draw_cu_cortes(c, piezas, scale, ox, oy):
+    """Líneas CUT_OUTER de largos CU (divisores + relieves), sin lógica RTZ."""
+    for pieza in piezas or []:
+        if not _is_cu_corte_overlay(pieza):
+            continue
+        polys = pieza.get("poligonos") or []
+        if not polys or not polys[0]:
+            continue
+        _draw_dashed_polygon(
+            c, polys[0], scale, ox, oy, RTZ_GUILLOTINA_STROKE, stroke_width=1.6
+        )
+
+
+def _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text):
+    c.setFillColor(outer_fill)
+    c.setStrokeColor(outer_stroke)
+    c.rect(18, leg_y - 6, 8, 8, fill=1, stroke=1)
+    c.setFillColor(body_text)
+    c.setFont("Helvetica", 7.3)
+    c.drawString(30, leg_y - 3, "Contorno exterior")
+
+    c.setFillColor(colors.white)
+    c.setStrokeColor(outer_stroke)
+    c.rect(95, leg_y - 6, 8, 8, fill=1, stroke=1)
+    c.setFillColor(body_text)
+    c.drawString(107, leg_y - 3, "Corte interno")
+
+    c.setStrokeColor(mark_color)
+    c.setLineWidth(1.2)
+    c.line(168, leg_y - 2, 176, leg_y - 2)
+    c.setFillColor(body_text)
+    c.drawString(180, leg_y - 3, "Marcaje")
+
+
+def _draw_rtz_legend(c, leg_y, body_text):
+    c.setFont("Helvetica", 7.3)
+    c.setFillColor(RTZ_REF_FILL)
+    c.setStrokeColor(RTZ_REF_STROKE)
+    c.rect(18, leg_y - 6, 8, 8, fill=1, stroke=1)
+    c.setFillColor(body_text)
+    c.drawString(30, leg_y - 3, "Pieza referencia RTZ")
+
+    c.setStrokeColor(RTZ_GUILLOTINA_STROKE)
+    c.setLineWidth(1.4)
+    try:
+        c.setDash(4, 3)
+    except Exception:
+        pass
+    c.line(145, leg_y - 2, 153, leg_y - 2)
+    try:
+        c.setDash()
+    except Exception:
+        pass
+    c.setFillColor(body_text)
+    c.drawString(157, leg_y - 3, "Zona retazo RTZ")
+
+    c.setStrokeColor(RTZ_TATUAJE_MARK)
+    c.setLineWidth(1.2)
+    c.line(248, leg_y - 2, 256, leg_y - 2)
+    c.setFillColor(body_text)
+    c.drawString(260, leg_y - 3, "Etiqueta RTZ")
+
+
+def _resolve_plate_page_layout(plate, tiene_rtz):
+    """
+    Posiciones Y de leyenda y techo del área de dibujo (sin solapar la leyenda).
+  En ReportLab Y crece hacia arriba: leyenda arriba, dibujo abajo.
+    """
+    legend_row_h = 14
+    legend_box_h = 8
+    gap_legend_draw = 14
+
+    if tiene_rtz:
+        leg_std = 614 if plate.get("ignorar_deduccion") else 628
+        leg_rtz = leg_std - legend_row_h
+        lowest_legend_y = leg_rtz - legend_box_h
+    elif plate.get("ignorar_deduccion"):
+        leg_std = 642
+        leg_rtz = None
+        lowest_legend_y = leg_std - legend_box_h
+    else:
+        leg_std = 650
+        leg_rtz = None
+        lowest_legend_y = leg_std - legend_box_h
+
+    draw_top = lowest_legend_y - gap_legend_draw
+    return leg_std, leg_rtz, draw_top
 
 
 def _fit_text(text, max_width, font_name, font_size):
@@ -478,7 +738,8 @@ def _format_work_order_label(work_order_label=None, work_order_num=1):
     return f"W.O.{int(work_order_num or 1)}"
 
 def _build_cover_summary(plates):
-    total_plates = sum(
+    total_plates = sum(1 for p in plates if not p.get("es_retazo"))
+    total_plates_deducibles = sum(
         1
         for p in plates
         if not p.get("es_retazo") and not p.get("ignorar_deduccion")
@@ -489,14 +750,14 @@ def _build_cover_summary(plates):
     by_calibre = OrderedDict()
     by_plate = OrderedDict()
 
+    try:
+        from utils_nesting import clave_nesting_sort_key
+    except ImportError:
+        clave_nesting_sort_key = lambda k: str(k).upper()
+
     plates_sorted = sorted(
         plates,
-        key=lambda p: (
-            str(p.get("calibre", "")).upper(),
-            str(p.get("base_id", "")).upper(),
-            _to_float(p.get("placa_w")),
-            _to_float(p.get("placa_h")),
-        ),
+        key=lambda p: clave_nesting_sort_key(str(p.get("calibre", ""))),
     )
 
     for plate in plates_sorted:
@@ -504,6 +765,7 @@ def _build_cover_summary(plates):
         material = str(plate.get("material", "-"))
         base_id = str(plate.get("base_id", "-"))
         dims = f"{_fmt_in(plate.get('placa_w', 0))} x {_fmt_in(plate.get('placa_h', 0))} in"
+        es_mother = not plate.get("es_retazo")
 
         if calibre not in by_calibre:
             by_calibre[calibre] = {
@@ -516,13 +778,10 @@ def _build_cover_summary(plates):
                 "area_madre": 0.0,
             }
 
-        cuenta_deduccion = (
-            not plate.get("es_retazo") and not plate.get("ignorar_deduccion")
-        )
-        if cuenta_deduccion:
+        if es_mother:
             by_calibre[calibre]["cantidad"] += 1
         by_calibre[calibre]["nomenclaturas"][base_id] = True
-        if not plate.get("es_retazo") and cuenta_deduccion:
+        if es_mother:
             area_madre = _to_float(plate.get("area_placa_mm2"), 0.0)
             if area_madre <= 0.0:
                 area_madre = _to_float(plate.get("placa_w")) * _to_float(plate.get("placa_h"))
@@ -543,11 +802,11 @@ def _build_cover_summary(plates):
                 "cantidad": 0,
             }
 
-        if cuenta_deduccion:
-            by_plate[key]["cantidad"] += 1
+        by_plate[key]["cantidad"] += 1
 
     calibre_rows = []
-    for row in by_calibre.values():
+    for calibre_key in sorted(by_calibre.keys(), key=clave_nesting_sort_key):
+        row = by_calibre[calibre_key]
         area_madre = row.get("area_madre", 0.0) or 0.0
         area_solo_madre = row.get("area_solo_madre", 0.0) or 0.0
         area_total_fisica = row.get("area_total_fisica", 0.0) or 0.0
@@ -578,6 +837,7 @@ def _build_cover_summary(plates):
 
     return {
         "total_plates": total_plates,
+        "total_plates_deducibles": total_plates_deducibles,
         "total_sheets": total_sheets,
         "total_real_pieces": total_real_pieces,
         "calibre_rows": calibre_rows,
@@ -684,16 +944,26 @@ def _draw_cover_pages(c, width, height, plates, nombre_orden, work_order_label,
     c.drawString(28, 682, f"Fecha de generación: {generated_at}")
     c.drawString(28, 666, f"Total de hojas del reporte: {summary['total_sheets']}")
     c.drawString(28, 650, f"Total de placas utilizadas: {summary['total_plates']}")
-    c.drawString(28, 634, f"Total de piezas reales colocadas: {summary['total_real_pieces']}")
+    if summary.get("total_plates_deducibles", summary["total_plates"]) != summary["total_plates"]:
+        c.drawString(
+            28,
+            634,
+            f"Placas que deducen inventario: {summary['total_plates_deducibles']}",
+        )
+        c.drawString(28, 618, f"Total de piezas reales colocadas: {summary['total_real_pieces']}")
+        y_resumen_calibre = 590
+    else:
+        c.drawString(28, 634, f"Total de piezas reales colocadas: {summary['total_real_pieces']}")
+        y_resumen_calibre = 606
 
     c.setFillColor(title_color)
     c.setFont("Helvetica-Bold", 11)
-    c.drawString(28, 606, "Resumen por calibre")
+    c.drawString(28, y_resumen_calibre, "Resumen por calibre")
 
     y_after_calibres = _draw_table(
         c=c,
         x=28,
-        y_top=592,
+        y_top=y_resumen_calibre - 14,
         col_widths=[88, 88, 52, 58, 58, 192],
         headers=["Calibre", "Material", "Placas", "Efi. Dir.", "Efi. Real", "Nomenclaturas"],
         rows=calibre_rows,
@@ -967,6 +1237,7 @@ def exportar_pdf_nesting(
     work_order_num=1,
     work_order_label=None,
 ):
+    _sync_rtz_overlays_para_pdf(resultados_nesting)
     plates = _enumerate_plates(resultados_nesting)
     if not plates:
         raise ValueError("No hay placas para exportar a PDF.")
@@ -1056,41 +1327,36 @@ def exportar_pdf_nesting(
         )
         efi_dir = _to_float(plate.get("eficiencia_directa"), 0.0)
         efi_real = _to_float(plate.get("eficiencia_real"), efi_dir)
-        efi_tanque_dir = _to_float(plate.get("eficiencia_tanque_directa"), 0.0)
-        efi_tanque_real = _to_float(plate.get("eficiencia_tanque_real"), 0.0)
         c.drawString(
             18,
             670,
             (
-                f"Eficiencia placa: Directa {efi_dir:.1f}% | Real {efi_real:.1f}%  |  "
-                f"Tanque: Directa {efi_tanque_dir:.1f}% | Real {efi_tanque_real:.1f}%"
+                f"Eficiencia placa: Directa {efi_dir:.1f}% (piezas en madre) | "
+                f"Real {efi_real:.1f}% (madre + RTZ)"
             ),
         )
         if plate.get("ignorar_deduccion"):
             c.setFillColor(colors.HexColor("#B45309"))
             c.drawString(18, 656, "Placa excluida de deducción de inventario (uso de sobrante en piso).")
 
+        tiene_rtz = _mother_has_rtz_overlays(plate)
+        rtz_ids = _rtz_ids_en_placa(plate) if tiene_rtz else []
+        meta_y = 656 if plate.get("ignorar_deduccion") else 670
+        if tiene_rtz:
+            c.setFillColor(colors.HexColor("#B45309"))
+            c.setFont("Helvetica-Bold", 8.0)
+            ids_txt = ", ".join(rtz_ids) if rtz_ids else "RTZ asociado"
+            c.drawString(
+                18,
+                meta_y - 14,
+                f"Retazo RTZ en uso: {ids_txt}  (zona punteada + piezas beige = referencia del mini-nest)",
+            )
+
         # ---------------- LEYENDA ----------------
-        leg_y = 642 if plate.get("ignorar_deduccion") else 650
-
-        c.setFillColor(outer_fill)
-        c.setStrokeColor(outer_stroke)
-        c.rect(18, leg_y - 6, 8, 8, fill=1, stroke=1)
-        c.setFillColor(body_text)
-        c.setFont("Helvetica", 7.3)
-        c.drawString(30, leg_y - 3, "Contorno exterior")
-
-        c.setFillColor(colors.white)
-        c.setStrokeColor(outer_stroke)
-        c.rect(95, leg_y - 6, 8, 8, fill=1, stroke=1)
-        c.setFillColor(body_text)
-        c.drawString(107, leg_y - 3, "Corte interno")
-
-        c.setStrokeColor(mark_color)
-        c.setLineWidth(1.2)
-        c.line(168, leg_y - 2, 176, leg_y - 2)
-        c.setFillColor(body_text)
-        c.drawString(180, leg_y - 3, "Marcaje")
+        leg_y, leg_y_rtz, draw_top = _resolve_plate_page_layout(plate, tiene_rtz)
+        _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text)
+        if leg_y_rtz is not None:
+            _draw_rtz_legend(c, leg_y_rtz, body_text)
 
         # ---------------- TABLA ----------------
         rows_to_draw = rows or [
@@ -1109,11 +1375,10 @@ def exportar_pdf_nesting(
         header_h = 18
         row_h = 18
 
-        # Zonas fijas de la página
-        draw_top = 650          # techo del área visual del nesteo
+        # Zonas fijas de la página (draw_top ya reserva espacio bajo la leyenda)
         table_bottom = 72       # margen inferior seguro para tabla
         gap_between = 14        # separación entre dibujo y tabla
-        min_draw_h = 185        # altura mínima legible para el nesteo
+        min_draw_h = 120        # altura mínima legible para el nesteo
 
         # Cuántas filas máximas caben en la primera página
         max_table_h_first = max(0, draw_top - table_bottom - gap_between - min_draw_h)
@@ -1129,13 +1394,19 @@ def exportar_pdf_nesting(
         draw_x = 18
         draw_y = table_y + total_h + gap_between
         draw_w = width - 36
-        draw_h = max(min_draw_h, draw_top - draw_y)
+        available_h = max(0.0, draw_top - draw_y)
+        draw_h = available_h
 
         # ---------------- ZONA DE DIBUJO ----------------
         c.setFillColor(colors.white)
         c.setStrokeColor(table_line)
         c.setLineWidth(1)
         c.rect(draw_x, draw_y, draw_w, draw_h, fill=1, stroke=1)
+
+        c.saveState()
+        clip = c.beginPath()
+        clip.rect(draw_x + 0.5, draw_y + 0.5, max(0, draw_w - 1), max(0, draw_h - 1))
+        c.clipPath(clip, stroke=0, fill=0)
 
         scale, ox, oy = _fit_plate(
             draw_x,
@@ -1157,48 +1428,10 @@ def exportar_pdf_nesting(
             stroke=1,
         )
 
-        for pieza in piezas_reales:
-            polys = pieza.get("poligonos") or []
-            if not polys:
-                continue
-
-            # exterior
-            _draw_polygon(c, polys[0], scale, ox, oy, outer_stroke, outer_fill, 0.8)
-
-            # agujeros/interiores
-            for hole in polys[1:]:
-                _draw_polygon(c, hole, scale, ox, oy, outer_stroke, colors.white, 0.7)
-
-            # marcajes
-            c.setStrokeColor(mark_color)
-            c.setLineWidth(0.7)
-            for mark in pieza.get("marcas", []):
-                if not mark or len(mark) < 2:
-                    continue
-
-                path = c.beginPath()
-                path.moveTo(
-                    ox + _to_float(mark[0][0]) * scale,
-                    oy + _to_float(mark[0][1]) * scale,
-                )
-
-                for x, y in mark[1:]:
-                    path.lineTo(
-                        ox + _to_float(x) * scale,
-                        oy + _to_float(y) * scale,
-                    )
-
-                c.drawPath(path, stroke=1, fill=0)
-
-            label = ids_map.get(id(pieza))
-            if label:
-                minx, miny, maxx, maxy = _bbox_from_points(polys[0])
-                cx = ox + ((minx + maxx) / 2.0) * scale
-                ly = oy + (miny + 8.0) * scale
-
-                c.setFont("Helvetica-Bold", 9)
-                c.setFillColor(colors.HexColor("#E11D48"))
-                c.drawCentredString(cx, ly, label)
+        _draw_plate_nesting_geometry(
+            c, plate, scale, ox, oy, ids_map, outer_stroke, outer_fill, mark_color
+        )
+        c.restoreState()
 
         # ---------------- TABLA ----------------
         c.setStrokeColor(table_line)
@@ -1476,26 +1709,22 @@ def exportar_pdf_radiografia_web(
             f"Dimensiones de placa: {_fmt_in(plate['placa_w'])} in x {_fmt_in(plate['placa_h'])} in | Piezas en placa: {len(piezas_reales)}",
         )
 
-        leg_y = 664
+        tiene_rtz = _mother_has_rtz_overlays(plate)
+        rtz_ids = _rtz_ids_en_placa(plate) if tiene_rtz else []
+        if tiene_rtz:
+            c.setFillColor(colors.HexColor("#B45309"))
+            c.setFont("Helvetica-Bold", 8.0)
+            ids_txt = ", ".join(rtz_ids) if rtz_ids else "RTZ asociado"
+            c.drawString(
+                18,
+                670,
+                f"Retazo RTZ en uso: {ids_txt}  (zona punteada + piezas beige = referencia del mini-nest)",
+            )
 
-        c.setFillColor(outer_fill)
-        c.setStrokeColor(outer_stroke)
-        c.rect(18, leg_y - 6, 8, 8, fill=1, stroke=1)
-        c.setFillColor(body_text)
-        c.setFont("Helvetica", 7.3)
-        c.drawString(30, leg_y - 3, "Contorno exterior")
-
-        c.setFillColor(colors.white)
-        c.setStrokeColor(outer_stroke)
-        c.rect(95, leg_y - 6, 8, 8, fill=1, stroke=1)
-        c.setFillColor(body_text)
-        c.drawString(107, leg_y - 3, "Corte interno")
-
-        c.setStrokeColor(mark_color)
-        c.setLineWidth(1.2)
-        c.line(168, leg_y - 2, 176, leg_y - 2)
-        c.setFillColor(body_text)
-        c.drawString(180, leg_y - 3, "Marcaje")
+        leg_y, leg_y_rtz, draw_top = _resolve_plate_page_layout(plate, tiene_rtz)
+        _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text)
+        if leg_y_rtz is not None:
+            _draw_rtz_legend(c, leg_y_rtz, body_text)
 
         rows_to_draw = rows or [
             {
@@ -1513,11 +1742,9 @@ def exportar_pdf_radiografia_web(
         header_h = 18
         row_h = 18
 
-        # Layout dinámico igual al del PDF principal
-        draw_top = 650
         table_bottom = 72
         gap_between = 14
-        min_draw_h = 185
+        min_draw_h = 120
 
         max_table_h_first = max(0, draw_top - table_bottom - gap_between - min_draw_h)
         max_rows_first = max(1, int((max_table_h_first - header_h) // row_h))
@@ -1531,13 +1758,18 @@ def exportar_pdf_radiografia_web(
         draw_x = 18
         draw_y = table_y + total_h + gap_between
         draw_w = width - 36
-        draw_h = max(min_draw_h, draw_top - draw_y)
+        draw_h = max(0.0, draw_top - draw_y)
 
         # Zona de dibujo
         c.setFillColor(colors.white)
         c.setStrokeColor(table_line)
         c.setLineWidth(1)
         c.rect(draw_x, draw_y, draw_w, draw_h, fill=1, stroke=1)
+
+        c.saveState()
+        clip = c.beginPath()
+        clip.rect(draw_x + 0.5, draw_y + 0.5, max(0, draw_w - 1), max(0, draw_h - 1))
+        c.clipPath(clip, stroke=0, fill=0)
 
         scale, ox, oy = _fit_plate(
             draw_x,
@@ -1559,45 +1791,10 @@ def exportar_pdf_radiografia_web(
             stroke=1,
         )
 
-        for pieza in piezas_reales:
-            polys = pieza.get("poligonos") or []
-            if not polys:
-                continue
-
-            _draw_polygon(c, polys[0], scale, ox, oy, outer_stroke, outer_fill, 0.8)
-
-            for hole in polys[1:]:
-                _draw_polygon(c, hole, scale, ox, oy, outer_stroke, colors.white, 0.7)
-
-            c.setStrokeColor(mark_color)
-            c.setLineWidth(0.7)
-            for mark in pieza.get("marcas", []):
-                if not mark or len(mark) < 2:
-                    continue
-
-                path = c.beginPath()
-                path.moveTo(
-                    ox + _to_float(mark[0][0]) * scale,
-                    oy + _to_float(mark[0][1]) * scale,
-                )
-
-                for x, y in mark[1:]:
-                    path.lineTo(
-                        ox + _to_float(x) * scale,
-                        oy + _to_float(y) * scale,
-                    )
-
-                c.drawPath(path, stroke=1, fill=0)
-
-            label = ids_map.get(id(pieza))
-            if label:
-                minx, miny, maxx, maxy = _bbox_from_points(polys[0])
-                cx = ox + ((minx + maxx) / 2.0) * scale
-                ly = oy + (miny + 8.0) * scale
-
-                c.setFont("Helvetica-Bold", 9)
-                c.setFillColor(colors.HexColor("#E11D48"))
-                c.drawCentredString(cx, ly, label)
+        _draw_plate_nesting_geometry(
+            c, plate, scale, ox, oy, ids_map, outer_stroke, outer_fill, mark_color
+        )
+        c.restoreState()
 
         # Tabla
         c.setStrokeColor(table_line)

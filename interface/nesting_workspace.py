@@ -160,23 +160,64 @@ def _get_placa_id_actual(tab):
     return None
 
 
-def _buscar_hoja_en_resultados(resultados_nesting, clave_objetivo=None, placa_id_objetivo=None):
+def _get_sheet_uid_actual(tab):
+    hoja = getattr(tab, "hoja_actual_data", None)
+    if isinstance(hoja, dict):
+        uid = str(hoja.get("sheet_uid") or "").strip()
+        if uid:
+            return uid
+        idx = hoja.get("_nest_list_idx")
+        if idx is not None:
+            return f"idx:{int(idx)}"
+    return None
+
+
+def _buscar_hoja_en_resultados(
+    resultados_nesting,
+    clave_objetivo=None,
+    placa_id_objetivo=None,
+    sheet_uid_objetivo=None,
+    nest_list_idx=None,
+):
     if not isinstance(resultados_nesting, dict):
         return None, None
 
+    uid_obj = str(sheet_uid_objetivo or "").strip()
+    idx_obj = nest_list_idx if nest_list_idx is not None else None
+
+    def _match_hoja(hoja):
+        if not isinstance(hoja, dict):
+            return False
+        if uid_obj:
+            if str(hoja.get("sheet_uid") or "").strip() == uid_obj:
+                return True
+            if uid_obj.startswith("idx:"):
+                try:
+                    return int(hoja.get("_nest_list_idx")) == int(uid_obj[4:])
+                except Exception:
+                    return False
+        if idx_obj is not None:
+            try:
+                return int(hoja.get("_nest_list_idx")) == int(idx_obj)
+            except Exception:
+                return False
+        if placa_id_objetivo:
+            return hoja.get("placa_id") == placa_id_objetivo
+        return False
+
     if clave_objetivo and clave_objetivo in resultados_nesting:
         hojas = resultados_nesting.get(clave_objetivo, {}).get("hojas", [])
-        if placa_id_objetivo:
+        if uid_obj or idx_obj is not None or placa_id_objetivo:
             for hoja in hojas:
-                if hoja.get("placa_id") == placa_id_objetivo:
+                if _match_hoja(hoja):
                     return hoja, clave_objetivo
         if hojas:
             return hojas[0], clave_objetivo
 
-    if placa_id_objetivo:
+    if uid_obj or idx_obj is not None or placa_id_objetivo:
         for clave, info in resultados_nesting.items():
             for hoja in info.get("hojas", []):
-                if hoja.get("placa_id") == placa_id_objetivo:
+                if _match_hoja(hoja):
                     return hoja, clave
 
     for clave, info in resultados_nesting.items():
@@ -318,7 +359,8 @@ def construir_payload_workspace(tab):
             "cantidad_tanques": getattr(tab, "cantidad_tanques", "N/A"),
             "multiplicador_tanques": int(getattr(tab.app, "multiplicador_tanques", 1) or 1),
             "lote_k_activo": int(_inferir_multiplicador_desde_multilote(multilote, getattr(tab, "lote_actual_idx", 0))),
-            "global_margin_val": getattr(tab, "global_margin_val", 0.0),
+            "global_margin_val": getattr(tab, "global_margin_val", 0.15),
+            "global_kerf_val": getattr(tab, "global_kerf_val", 0.3),
             "global_corner_val": getattr(tab, "global_corner_val", "INFERIOR IZQUIERDA"),
             "costo_usd_val": getattr(tab, "costo_usd_val", 0.0),
             "costo_mxn_val": getattr(tab, "costo_mxn_val", 0.0),
@@ -328,6 +370,12 @@ def construir_payload_workspace(tab):
         "vista_actual": {
             "clave_actual": getattr(tab, "clave_actual", "") or "",
             "placa_id": _get_placa_id_actual(tab),
+            "sheet_uid": _get_sheet_uid_actual(tab),
+            "nest_list_idx": (
+                tab.hoja_actual_data.get("_nest_list_idx")
+                if isinstance(getattr(tab, "hoja_actual_data", None), dict)
+                else None
+            ),
         },
     }
 
@@ -470,7 +518,16 @@ def aplicar_workspace(tab, payload):
         mult_ui = 1
     tab.app.multiplicador_tanques = int(mult_ui)
     tab.cantidad_tanques = f"X{int(mult_ui)}"
-    tab.global_margin_val = float(ui.get("global_margin_val", 0.0) or 0.0)
+    tab.global_margin_val = float(ui.get("global_margin_val", 0.15) or 0.15)
+    try:
+        gk = float(ui.get("global_kerf_val", 0.3) or 0.3)
+    except Exception:
+        gk = 0.3
+    if gk <= 0:
+        gk = 0.3
+    tab.global_kerf_val = gk
+    if hasattr(tab, "_sync_kerf_widget"):
+        tab._sync_kerf_widget()
     tab.global_corner_val = str(ui.get("global_corner_val", "INFERIOR IZQUIERDA") or "INFERIOR IZQUIERDA")
     tab.costo_usd_val = float(ui.get("costo_usd_val", 0.0) or 0.0)
     tab.costo_mxn_val = float(ui.get("costo_mxn_val", 0.0) or 0.0)
@@ -498,17 +555,33 @@ def aplicar_workspace(tab, payload):
         _combo_set_text(getattr(tab, "cmb_lotes", None), opcion)
         tab.on_lote_selected(opcion)
 
+    try:
+        from modules.nesting_engine.sheet_integrity import deduplicar_resultados_nesting
+
+        kerf_g = float(getattr(tab, "global_kerf_val", 0.3) or 0.3)
+        if kerf_g <= 0:
+            kerf_g = 0.3
+        res = getattr(tab.app, "resultados_nesting", None)
+        if isinstance(res, dict) and res:
+            deduplicar_resultados_nesting(res, kerf_global=kerf_g)
+    except Exception:
+        pass
+
     # =========================================================
     # 7) Restaurar vista exacta
     # =========================================================
     vista = payload.get("vista_actual", {}) or {}
     clave_guardada = vista.get("clave_actual")
     placa_guardada = vista.get("placa_id")
+    sheet_uid_guardado = vista.get("sheet_uid")
+    nest_idx_guardado = vista.get("nest_list_idx")
 
     hoja, clave = _buscar_hoja_en_resultados(
         getattr(tab.app, "resultados_nesting", {}),
         clave_guardada,
-        placa_guardada
+        placa_guardada,
+        sheet_uid_objetivo=sheet_uid_guardado,
+        nest_list_idx=nest_idx_guardado,
     )
 
     if hoja is not None and clave is not None:

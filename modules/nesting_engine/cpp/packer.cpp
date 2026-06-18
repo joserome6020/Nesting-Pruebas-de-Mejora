@@ -417,6 +417,43 @@ bool comprobar_colision(
     return false;
 }
 
+double bbox_perimeter(const std::vector<std::vector<Point2D>>& rings) {
+    const Bounds b = bounds_of_rings(rings);
+    return 2.0 * ((b.maxx - b.minx) + (b.maxy - b.miny));
+}
+
+void compact_slide_position(
+    double& px,
+    double& py,
+    const Variation& var,
+    double margin_px,
+    const LimitContext& limit,
+    const std::vector<Bounds>& fijas_bounds,
+    const std::vector<PathsD>& fijas_buff_paths) {
+    auto try_slide = [&](double step_mm) {
+        bool moved = true;
+        while (moved) {
+            moved = false;
+            const double test_px = px - step_mm;
+            if (test_px + var.b_minx >= margin_px) {
+                if (!comprobar_colision(test_px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
+                    px = test_px;
+                    moved = true;
+                }
+            }
+            const double test_py = py - step_mm;
+            if (test_py + var.b_miny >= margin_px) {
+                if (!comprobar_colision(px, test_py, var, limit, fijas_bounds, fijas_buff_paths)) {
+                    py = test_py;
+                    moved = true;
+                }
+            }
+        }
+    };
+    try_slide(kSlideStepCoarseMm);
+    try_slide(kSlideStepFineMm);
+}
+
 std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
     std::vector<PieceIn> pendientes,
     double w_placa,
@@ -473,24 +510,7 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
                     continue;
                 }
 
-                bool hubo_movimiento = true;
-                while (hubo_movimiento) {
-                    hubo_movimiento = false;
-                    const double test_px = px - kSlideStepMm;
-                    if (test_px + var.b_minx >= margin_px) {
-                        if (!comprobar_colision(test_px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
-                            px = test_px;
-                            hubo_movimiento = true;
-                        }
-                    }
-                    const double test_py = py - kSlideStepMm;
-                    if (test_py + var.b_miny >= margin_px) {
-                        if (!comprobar_colision(px, test_py, var, limit, fijas_bounds, fijas_buff_paths)) {
-                            py = test_py;
-                            hubo_movimiento = true;
-                        }
-                    }
-                }
+                compact_slide_position(px, py, var, margin_px, limit, fijas_bounds, fijas_buff_paths);
 
                 double score = 0.0;
                 if (es_estructural_grande) {
@@ -562,7 +582,8 @@ PackResult empaquetar_una_hoja_mc(
     const std::string& opt_override,
     const std::string& corner_override,
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
-    std::mt19937* rng) {
+    std::mt19937* rng,
+    int mc_iterations) {
     PackResult out;
     out.hoja.eficiencia = 0.0;
     out.restos = piezas;
@@ -595,9 +616,63 @@ PackResult empaquetar_una_hoja_mc(
     SheetOut mejor_hoja;
     std::vector<PieceIn> mejor_restos = pool_base;
 
-    for (int i = 0; i < kMonteCarloIterations; ++i) {
+    const int iteraciones = std::max(1, std::min(mc_iterations, 50));
+
+    auto es_mejor = [](const SheetOut& hoja, const std::vector<PieceIn>& restos,
+                       const SheetOut& mejor, const std::vector<PieceIn>& mejor_restos) -> bool {
+        const size_t n = hoja.piezas.size();
+        const size_t n_best = mejor.piezas.size();
+        if (n != n_best) {
+            return n > n_best;
+        }
+        if (hoja.area_usada > mejor.area_usada + 1e-6) {
+            return true;
+        }
+        if (std::abs(hoja.area_usada - mejor.area_usada) <= 1e-6) {
+            if (restos.size() < mejor_restos.size()) {
+                return true;
+            }
+            if (restos.size() == mejor_restos.size() && hoja.eficiencia > mejor.eficiencia + 1e-6) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (int i = 0; i < iteraciones; ++i) {
         std::vector<PieceIn> pool_intento = pool_base;
-        if (i > 0) {
+        if (i == 0) {
+            // Orden base (clase + área)
+        } else if (i % 4 == 1) {
+            std::sort(pool_intento.begin(), pool_intento.end(), [](const PieceIn& a, const PieceIn& b) {
+                const int ca = std::get<0>(sort_key_pool(a));
+                const int cb = std::get<0>(sort_key_pool(b));
+                if (ca != cb) {
+                    return ca < cb;
+                }
+                const double pa = bbox_perimeter(a.rings);
+                const double pb = bbox_perimeter(b.rings);
+                if (pa != pb) {
+                    return pa > pb;
+                }
+                return a.nombre < b.nombre;
+            });
+        } else if (i % 4 == 2) {
+            std::sort(pool_intento.begin(), pool_intento.end(), [](const PieceIn& a, const PieceIn& b) {
+                return a.area > b.area;
+            });
+        } else if (i % 4 == 3) {
+            std::sort(pool_intento.begin(), pool_intento.end(), [](const PieceIn& a, const PieceIn& b) {
+                const Bounds ba = bounds_of_rings(a.rings);
+                const Bounds bb = bounds_of_rings(b.rings);
+                const double wa = ba.maxx - ba.minx;
+                const double wb = bb.maxx - bb.minx;
+                if (wa != wb) {
+                    return wa > wb;
+                }
+                return a.area > b.area;
+            });
+        } else {
             std::unordered_map<std::string, double> mutaciones;
             for (const auto& p : pool_intento) {
                 if (!mutaciones.count(p.nombre)) {
@@ -629,9 +704,12 @@ PackResult empaquetar_una_hoja_mc(
             corner_override,
             limite_rings);
 
-        if (hoja.area_usada > mejor_hoja.area_usada) {
+        if (es_mejor(hoja, restos, mejor_hoja, mejor_restos)) {
             mejor_hoja = std::move(hoja);
             mejor_restos = std::move(restos);
+            if (mejor_restos.empty() && mejor_hoja.eficiencia > 88.0) {
+                break;
+            }
             if (mejor_hoja.eficiencia > 91.0) {
                 break;
             }

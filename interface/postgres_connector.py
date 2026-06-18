@@ -19,6 +19,46 @@ SHEET_METADATA_COLUMNS = {
 }
 
 
+def _aplicar_env_db_config(db_config: dict | None) -> None:
+    """Alinea NESTING_DB_* para que api_server/asegurar_tabla usen el mismo host que el export."""
+    if not db_config:
+        return
+    mapping = (
+        ("host", "NESTING_DB_HOST"),
+        ("port", "NESTING_DB_PORT"),
+        ("user", "NESTING_DB_USER"),
+        ("password", "NESTING_DB_PASSWORD"),
+    )
+    for src, env_key in mapping:
+        val = db_config.get(src)
+        if val is not None and str(val).strip() != "":
+            os.environ[env_key] = str(val)
+    dbname = db_config.get("database") or db_config.get("dbname")
+    if dbname:
+        os.environ["NESTING_DB_NAME"] = str(dbname)
+
+
+def _reportar_pedidos_material(logs: list | None, contexto: str) -> None:
+    if not logs:
+        print(
+            f"[BD][LISTA_LARGOS][ERROR] {contexto}: "
+            "no se propagó material_requerido_ldg (0 órdenes detectadas)."
+        )
+        return
+    fallos = [p for p in logs if not p.get("ok")]
+    for ped in logs:
+        print(
+            f"[BD][LISTA_LARGOS] Material requerido "
+            f"{ped.get('tipo_orden')} '{ped.get('orden_id')}': "
+            f"ok={ped.get('ok')} | {ped.get('mensaje')}"
+        )
+    if fallos:
+        print(
+            f"[BD][LISTA_LARGOS][ERROR] {contexto}: "
+            f"{len(fallos)} orden(es) sin pedido — revisar lista_largos_job/plan."
+        )
+
+
 def _slug_token(value: str) -> str:
     text = str(value or "").strip()
     text = re.sub(r"[^A-Za-z0-9]+", "_", text)
@@ -991,6 +1031,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         )
 
         if not es_swo and ruta_exportacion:
+            _aplicar_env_db_config(db_config)
             try:
                 print("[DEBUG][LISTA_LARGOS] Entrando a importar_lista_largos_job(...)")
                 resultado_largos = importar_lista_largos_job(
@@ -1001,21 +1042,77 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     propagar_material=True,
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
-                for ped in resultado_largos.get("pedidos_material") or []:
-                    print(
-                        f"[BD][LISTA_LARGOS] Material requerido "
-                        f"{ped.get('tipo_orden')} '{ped.get('orden_id')}': "
-                        f"ok={ped.get('ok')} | {ped.get('mensaje')}"
-                    )
+                _reportar_pedidos_material(
+                    resultado_largos.get("pedidos_material"),
+                    f"import job='{job_original}'",
+                )
             except Exception as e:
                 print(
                     f"[BD][LISTA_LARGOS][WARN] No se pudo importar la lista de largos "
                     f"del job '{job_original}': {e}"
                 )
+
+            # Fallback WO: incluso si el importador no encontró CSV o falló,
+            # intentamos regenerar material_requerido_ldg con lo que ya exista en BD.
+            try:
+                import api_server
+
+                wo_scope = str(nombre_wo or "").strip() or None
+                logs_fallback = api_server._propagar_material_requerido_por_job(
+                    db_config,
+                    job_original,
+                    solo_work_order=wo_scope,
+                )
+                _reportar_pedidos_material(
+                    logs_fallback,
+                    f"fallback job='{job_original}' wo='{wo_scope}'",
+                )
+            except Exception as e_fb:
+                print(
+                    f"[BD][LISTA_LARGOS][WARN] Fallback material requerido "
+                    f"job '{job_original}': {e_fb}"
+                )
+        elif es_swo and db_config:
+            _aplicar_env_db_config(db_config)
+            try:
+                import api_server
+
+                logs_swo = api_server._propagar_material_requerido_por_job(
+                    db_config,
+                    job_original,
+                    solo_work_order=None,
+                )
+                _reportar_pedidos_material(
+                    logs_swo,
+                    f"SWO job='{job_original}'",
+                )
+
+                conn_mat = psycopg2.connect(**db_config)
+                cur_mat = conn_mat.cursor()
+                ok_swo, msg_swo = api_server._asegurar_material_requerido_orden(
+                    cur_mat, nombre_job, "SWO"
+                )
+                conn_mat.commit()
+                conn_mat.close()
+                if ok_swo:
+                    print(
+                        f"[BD][LISTA_LARGOS][SWO] Directo '{nombre_job}': ok=True | {msg_swo}"
+                    )
+                else:
+                    print(
+                        f"[BD][LISTA_LARGOS][ERROR][SWO] Directo '{nombre_job}': "
+                        f"ok=False | {msg_swo}"
+                    )
+            except Exception as e_swo:
+                print(
+                    f"[BD][LISTA_LARGOS][ERROR] Propagación material SWO "
+                    f"'{nombre_job}': {e_swo}"
+                )
         else:
             print(
                 f"[DEBUG][LISTA_LARGOS] SKIP importación | "
-                f"es_swo={es_swo} | ruta_exportacion={ruta_exportacion!r}"
+                f"es_swo={es_swo} | ruta_exportacion={ruta_exportacion!r} | "
+                f"db_config={'set' if db_config else 'none'}"
             )
 
         return True, piezas_guardadas

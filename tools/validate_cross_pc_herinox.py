@@ -21,7 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-CORP = Path(
+CORP_UNC = Path(r"\\192.168.2.47\arga") / (
+    r"♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK"
+    r"\21. Desarrollo y Tecnologia\2.- Códigos Desarrollo y Tecnología"
+    r"\7.- Configuración para equipos de Computo\AutoDXF 2.0"
+)
+CORP = CORP_UNC if CORP_UNC.is_dir() else Path(
     r"Z:\♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\BIENVENIDO\Departamentos _antes TIK"
     r"\21. Desarrollo y Tecnologia\2.- Códigos Desarrollo y Tecnología"
     r"\7.- Configuración para equipos de Computo\AutoDXF 2.0"
@@ -145,12 +150,32 @@ def escenario_d_python() -> tuple[bool, str]:
     return True, f"Python {ver} en {exe}"
 
 
+def escenario_e_unc_sin_z() -> tuple[bool, str]:
+    """PC sin Z: — solo UNC al share arga."""
+    py = CORP_UNC / "Consulta_Herinox.py"
+    if not py.is_file():
+        return False, f"UNC no accesible: {py}"
+    with tempfile.TemporaryDirectory(prefix="arga_noz_") as tmp:
+        job_autodxf = Path(tmp) / "AutoDXF"
+        job_autodxf.mkdir()
+        found = _find_bridge_like_ilogic(corp=None, job_autodxf=job_autodxf, env_dir=str(CORP_UNC))
+        if not found:
+            return False, "sin Z: no resolvió script vía ARGA_AUTODXF20_DIR simulado"
+        out_json = job_autodxf / "herinox_sync.local.json"
+        ok, msg = _run_bridge(found, out_json)
+        if not ok:
+            return False, f"UNC sin Z falló: {msg}"
+        n, _ = _combo_count(out_json)
+        return True, f"UNC sin Z: OK ({n} largos)"
+
+
 def main() -> int:
     casos = [
-        ("A — Carpeta corporativa Z:\\...\\AutoDXF 2.0", escenario_a_corp),
+        ("A — Carpeta corporativa (UNC o Z:)", escenario_a_corp),
         ("B — Job local (PC sin Z:, script en AutoDXF\\)", escenario_b_job_sin_z),
         ("C — Variable ARGA_AUTODXF20_DIR", escenario_c_env_var),
         ("D — Python + psycopg2 en esta PC", escenario_d_python),
+        ("E — UNC \\\\192.168.2.47\\arga sin unidad Z:", escenario_e_unc_sin_z),
     ]
     print("=== Prueba multi-PC Lista de largos / Consulta_Herinox ===\n")
     fallos = 0
@@ -168,7 +193,7 @@ def main() -> int:
     if fallos:
         print(f"RESULTADO: {fallos} escenario(s) fallaron.")
         print("Requisitos por PC: Python 3, psycopg2, red a 192.168.2.80:5439,")
-        print("y Z: mapeada O Consulta_Herinox.py en job\\AutoDXF O ARGA_AUTODXF20_DIR.")
+        print("y acceso a \\\\192.168.2.47\\arga\\...\\AutoDXF 2.0 (o Z: o ARGA_AUTODXF20_DIR).")
         return 1
     print("RESULTADO: OK — los 4 escenarios simulados pasan en esta máquina.")
     return 0

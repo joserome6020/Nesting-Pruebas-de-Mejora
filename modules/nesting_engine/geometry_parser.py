@@ -395,6 +395,67 @@ def reconstruir_poly_seguro(lista_poligonos):
         return None
 
 
+def area_poligonos_colocados(lista_poligonos) -> float:
+    """Área neta en mm² de polígonos colocados (exterior + huecos o islas)."""
+    if not lista_poligonos:
+        return 0.0
+
+    poly = reconstruir_poly_seguro(lista_poligonos)
+    if poly is not None and not poly.is_empty:
+        area = float(poly.area)
+        if area > 0.0:
+            ring0 = lista_poligonos[0]
+            if ring0 and len(ring0) >= 3 and len(lista_poligonos) > 1:
+                xs = [float(pt[0]) for pt in ring0 if isinstance(pt, (list, tuple)) and len(pt) >= 2]
+                ys = [float(pt[1]) for pt in ring0 if isinstance(pt, (list, tuple)) and len(pt) >= 2]
+                if xs and ys:
+                    bbox_a = (max(xs) - min(xs)) * (max(ys) - min(ys))
+                    # Anillos extra como islas (no huecos): p. ej. MultiPolygon mal serializado.
+                    if bbox_a > 0 and area < bbox_a * 0.55:
+                        islas = []
+                        for ring in lista_poligonos:
+                            try:
+                                if not ring or len(ring) < 3:
+                                    continue
+                                g = Polygon(ring)
+                                if not g.is_valid:
+                                    g = g.buffer(0)
+                                if not g.is_empty:
+                                    islas.append(g)
+                            except Exception:
+                                continue
+                        if islas:
+                            try:
+                                from shapely.ops import unary_union
+
+                                area = float(unary_union(islas).area)
+                            except Exception:
+                                area = sum(float(g.area) for g in islas)
+            if area > 0.0:
+                return area
+
+    geoms = []
+    for ring in lista_poligonos:
+        try:
+            if not ring or len(ring) < 3:
+                continue
+            g = Polygon(ring)
+            if not g.is_valid:
+                g = g.buffer(0)
+            if not g.is_empty:
+                geoms.append(g)
+        except Exception:
+            continue
+    if not geoms:
+        return 0.0
+    try:
+        from shapely.ops import unary_union
+
+        return float(unary_union(geoms).area)
+    except Exception:
+        return sum(float(g.area) for g in geoms)
+
+
 def reconstruir_marks(lista_coords_marcas):
     if not lista_coords_marcas:
         return MultiLineString()

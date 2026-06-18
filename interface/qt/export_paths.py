@@ -14,6 +14,40 @@ def desktop_nesteos_locales() -> str:
     return os.path.join(os.path.expanduser("~"), "Desktop", NESTEOS_LOCALES_DIR)
 
 
+def es_ruta_servidor(ruta: str) -> bool:
+    """True si la ruta apunta al servidor de red (UNC / raíz corporativa)."""
+    texto = str(ruta or "")
+    if not texto.strip():
+        return False
+    p = _normalizar(texto)
+    raiz = _normalizar(config.RUTA_SERVIDOR_RAIZ)
+    if raiz and p.startswith(raiz):
+        return True
+    if "192.168.2.80" in texto.replace("/", "\\"):
+        return True
+    if texto.startswith("\\\\"):
+        return True
+    return False
+
+
+def asegurar_exportacion_local(ruta: str, *, etiqueta: str = "ruta") -> str:
+    """
+    Falla si en modo local la ruta apunta al servidor o queda fuera de Nesteos Locales.
+    """
+    if es_ruta_servidor(ruta):
+        raise RuntimeError(
+            f"Modo local bloqueado: {etiqueta} apunta al servidor ({ruta}). "
+            f"Los DXF deben guardarse en {desktop_nesteos_locales()}."
+        )
+    base = _normalizar(desktop_nesteos_locales())
+    p = _normalizar(ruta)
+    if not p.startswith(base):
+        raise RuntimeError(
+            f"Modo local bloqueado: {etiqueta} quedó fuera de Nesteos Locales ({ruta})."
+        )
+    return ruta
+
+
 def _normalizar(p: str) -> str:
     return os.path.normcase(os.path.normpath(str(p or "")))
 
@@ -91,10 +125,12 @@ def resolver_ruta_base_exportacion(app, *, modo_servidor: bool) -> str:
     if job_dir:
         rel = relativa_desde_cliente(job_dir)
         base_local = os.path.join(desktop_nesteos_locales(), rel)
-        return os.path.join(base_local, "MODEL CORE FILES")
+        ruta_local = os.path.join(base_local, "MODEL CORE FILES")
+        return asegurar_exportacion_local(ruta_local, etiqueta="r_base")
 
     rel = relativa_desde_cliente(ruta_ref)
-    return os.path.join(desktop_nesteos_locales(), os.path.dirname(rel), "MODEL CORE FILES")
+    ruta_local = os.path.join(desktop_nesteos_locales(), os.path.dirname(rel), "MODEL CORE FILES")
+    return asegurar_exportacion_local(ruta_local, etiqueta="r_base")
 
 
 def obtener_consecutivo_wo_local() -> int:

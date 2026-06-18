@@ -25,11 +25,119 @@ def _espesor_pulgadas_desde_clave(clave: str) -> float:
         return float("inf")
 
 
+def _es_clave_cobre(clave: str) -> bool:
+    """True si la clave de grupo corresponde a material cobre (largos CU)."""
+    s = str(clave or "").strip().upper()
+    if not s:
+        return False
+    if s.endswith("_CU"):
+        return True
+    if "_" in s:
+        mat = s.split("_", 1)[1].strip().upper()
+        if mat in ("CU", "COBRE", "COPPER"):
+            return True
+        if "COBRE" in mat or "COPPER" in mat:
+            return True
+    return False
+
+
 def clave_nesting_sort_key(clave: str) -> tuple:
-    """Orden: menor calibre/espesor → mayor; desempate por material."""
+    """Orden: acero por espesor; todo el cobre al final (también por espesor)."""
     esp = _espesor_pulgadas_desde_clave(clave)
     mat = str(clave or "").split("_", 1)[1].strip().upper() if "_" in str(clave) else ""
-    return (esp, mat, str(clave).upper())
+    tier = 1 if _es_clave_cobre(clave) else 0
+    return (tier, esp, mat, str(clave).upper())
+
+
+def grupo_nesting_sort_key(clave: str, grupo: dict | None = None) -> tuple:
+    """Como clave_nesting_sort_key, pero respeta modo_largos_cu en el dict del grupo."""
+    base = clave_nesting_sort_key(clave)
+    if isinstance(grupo, dict) and grupo.get("modo_largos_cu"):
+        return (1, base[1], base[2], base[3])
+    return base
+
+
+def _espesor_pulgadas_desde_texto(text: str) -> float | None:
+    base = str(text or "").strip().replace(",", ".")
+    if not base:
+        return None
+    if "/" in base:
+        try:
+            chunks = base.split()
+            if len(chunks) == 2:
+                whole, frac = chunks
+                num, den = frac.split("/", 1)
+                return float(whole) + float(num) / float(den)
+            num, den = base.split("/", 1)
+            return float(num) / float(den)
+        except Exception:
+            return None
+    try:
+        return float(base)
+    except Exception:
+        return None
+
+
+def _formatear_espesor_display(text: str) -> str:
+    """Limpia decimales redundantes: '2.0' -> '2', conserva fracciones '3/16'."""
+    s = str(text or "").strip()
+    if not s or "/" in s:
+        return s
+    try:
+        val = float(s.replace(",", "."))
+        return f"{val:.3f}".rstrip("0").rstrip(".")
+    except Exception:
+        return s
+
+
+def format_clave_calibre_display(clave: str) -> str:
+    """
+    Presentación legible de claves nesting tipo '0.188_A 36' -> '3/16 | 0.188 | A 36'.
+    Espesores enteros o decimales simples (1, 1.5, 2) se muestran una sola vez.
+    """
+    s = str(clave or "").strip()
+    if not s:
+        return ""
+    if "_" in s:
+        thk_raw, material = s.split("_", 1)
+        material = material.strip()
+    else:
+        thk_raw, material = s, ""
+
+    thk_raw = thk_raw.strip().replace(",", ".")
+    fraccion = _normalizar_espesor_a_calibre(thk_raw)
+
+    decimal_str = thk_raw
+    try:
+        if "/" not in thk_raw:
+            val = float(thk_raw)
+            decimal_str = f"{val:.3f}".rstrip("0").rstrip(".")
+    except Exception:
+        pass
+
+    fraccion_txt = _formatear_espesor_display(str(fraccion or "").strip())
+    decimal_str = _formatear_espesor_display(decimal_str)
+    parts: list[str] = []
+    if fraccion_txt:
+        parts.append(fraccion_txt)
+
+    mostrar_decimal = False
+    if decimal_str and decimal_str != fraccion_txt:
+        if "/" in fraccion_txt:
+            mostrar_decimal = True
+        else:
+            f_in = _espesor_pulgadas_desde_texto(fraccion_txt)
+            d_in = _espesor_pulgadas_desde_texto(decimal_str)
+            if f_in is None or d_in is None:
+                mostrar_decimal = True
+            else:
+                mostrar_decimal = abs(f_in - d_in) > 0.003
+
+    if mostrar_decimal and decimal_str not in parts:
+        parts.append(decimal_str)
+    if material:
+        parts.append(material)
+    return " | ".join(parts) if parts else s
 
 
 def _normalizar_espesor_a_calibre(valor_calibre):

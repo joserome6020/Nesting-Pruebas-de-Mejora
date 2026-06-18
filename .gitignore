@@ -8,9 +8,9 @@ TEMP_PROCESSED/
 __pycache__/
 *.pyc
 modules/nesting_engine/cpp/build/
+modules/nesting_engine/build/
 modules/nesting_engine/cpp/third_party/
 modules/nesting_engine/algorithm_cpp*.pyd
-modules/nesting_engine/algorithm.cp*.pyd
 
 # Archivos pesados o temporales
 *.rar

@@ -43,9 +43,10 @@ struct PackResult {
     std::vector<PieceIn> restos;
 };
 
-constexpr int kMonteCarloIterations = 3;
+constexpr int kMonteCarloIterationsDefault = 15;
 constexpr double kAreaEstructuralUmbralMm2 = 2'500'000.0;
-constexpr double kSlideStepMm = 4.0;
+constexpr double kSlideStepCoarseMm = 3.0;
+constexpr double kSlideStepFineMm = 0.5;
 
 PackResult empaquetar_una_hoja_mc(
     const std::vector<PieceIn>& piezas,
@@ -56,6 +57,7 @@ PackResult empaquetar_una_hoja_mc(
     const std::string& opt_override = "OPTIMIZAR LARGO Y ANCHO",
     const std::string& corner_override = "INFERIOR IZQUIERDA",
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings = std::nullopt,
-    std::mt19937* rng = nullptr);
+    std::mt19937* rng = nullptr,
+    int mc_iterations = kMonteCarloIterationsDefault);
 
 }  // namespace arga

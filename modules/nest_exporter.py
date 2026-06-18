@@ -52,6 +52,48 @@ def _add_lwpolyline(msp, points, layer, closed=True):
         return
     msp.add_lwpolyline(points, dxfattribs={"layer": layer, "closed": bool(closed)})
 
+
+def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool:
+    """
+    Exporta contorno/marcas en coordenadas de placa (mm), 1:1 con el visor de nesting.
+    Fuente de verdad: poligonos/marcas ya colocados por el motor.
+    """
+    outer = p.get("outer") or p.get("outer_poly")
+    has_outer = bool(outer and len(outer) >= 2)
+    marks = p.get("marks") or p.get("mark") or []
+    if not has_outer and not marks:
+        return False
+
+    if has_outer:
+        outer_t = _transform_poly(outer, tx=0.0, ty=0.0, rot_deg=0.0)
+        if outer_t:
+            layer_destino = str(p.get("layer_override") or "CUT_OUTER")
+            closed_destino = bool(p.get("closed", True))
+            _add_lwpolyline(msp, outer_t, layer=layer_destino, closed=closed_destino)
+
+        if draw_holes:
+            holes = p.get("holes") or p.get("inner") or []
+            for h in holes:
+                h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
+                if h_t:
+                    _add_lwpolyline(msp, h_t, layer="CUT_INNER", closed=True)
+
+    if draw_marks:
+        part_name = str(p.get("part_name") or p.get("name") or "")
+        marks_layer = str(
+            p.get("marks_layer")
+            or p.get("marks_layer_override")
+            or ("RTZ_LABEL" if part_name.startswith("TATUAJE") else "MARK")
+        )
+        for mk in marks:
+            if not mk:
+                continue
+            mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
+            if mk_t:
+                _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
+
+    return has_outer or bool(marks)
+
 def _setup_layers(doc):
     layers = doc.layers
     def ensure(name, color_index):
@@ -62,9 +104,11 @@ def _setup_layers(doc):
 
     ensure("Plate", 3)      # Verde
     ensure("Plate_Text", 7) # Blanco
-    ensure("CUT_OUTER", 1)  # Rojo
-    ensure("CUT_INNER", 2)  # Amarillo
-    ensure("MARK", 4)       # Cyan
+    ensure("CUT_OUTER", 1)  # Rojo — corte láser (rebanadas verticales en largos CU)
+    ensure("CUT_INNER", 2)  # Amarillo — huecos internos
+    ensure("CUT_CU", 1)     # Contorno pieza cobre — solo para generación STEP
+    ensure("MARK", 4)       # Cyan — marcaje láser en piezas reales
+    ensure("RTZ_LABEL", 4)  # Cyan — nombre RTZ (solo referencia; NO marcar en máquina)
     
 # =========================================================================
 # EXPORTACIÓN PRINCIPAL
@@ -118,6 +162,13 @@ def export_nest_to_dxf(
         part_name = str(p.get("part_name", p.get("name", f"PART_{i}")))
         inserted_block = False
 
+        # 1) Geometría colocada en placa (mm) — misma posición que el visor Qt.
+        if _export_placed_geometry(
+            msp, p, draw_holes=draw_holes, draw_marks=draw_marks
+        ):
+            continue
+
+        # 2) Fallback: clonar DXF fuente solo si no hay contorno colocado.
         if ruta_original and os.path.exists(ruta_original):
             if ruta_original not in cache_blocks:
                 safe_block_name = f"BLK_{uuid.uuid4().hex[:8]}"
@@ -163,33 +214,11 @@ def export_nest_to_dxf(
                 except Exception as e:
                     print(f"[ERROR] Transformación falló para {part_name}: {e}")
 
-        # =========================================================================
-        # FALLBACK PARA RETAZOS Y LÍNEAS PLANAS
-        # =========================================================================
         if not inserted_block:
-            outer = p.get("outer") or p.get("outer_poly")
-            if outer:
-                # 🚀 Los retazos YA vienen en coordenadas absolutas (tx=0, ty=0, rot=0)
-                outer_t = _transform_poly(outer, tx=0.0, ty=0.0, rot_deg=0.0)
-                if outer_t:
-                    layer_destino = str(p.get("layer_override") or "CUT_OUTER")
-                    closed_destino = bool(p.get("closed", True))
-                    _add_lwpolyline(msp, outer_t, layer=layer_destino, closed=closed_destino)
-
-                if draw_holes:
-                    holes = p.get("holes") or p.get("inner") or []
-                    for h in holes:
-                        h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
-                        if h_t:
-                            _add_lwpolyline(msp, h_t, layer="CUT_INNER", closed=True)
-
-                if draw_marks:
-                    marks = p.get("marks") or p.get("mark") or []
-                    for mk in marks:
-                        if not mk: continue
-                        mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
-                        if mk_t:
-                            _add_lwpolyline(msp, mk_t, layer="MARK", closed=True) 
+            print(
+                f"[WARN] Sin geometría exportable para {part_name} "
+                f"(sin outer colocado ni DXF fuente válido)"
+            )
 
     doc.saveas(out_path)
     return out_path

@@ -26,6 +26,7 @@ from interface.qt.theme import (
     apply_push_button,
     surface_dialog_stylesheet,
 )
+from utils_nesting import format_clave_calibre_display
 
 
 def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
@@ -46,15 +47,17 @@ def abrir_modal_configuracion(parent):
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
-    tit = QLabel("⚙️ CONFIGURACIÓN GLOBAL", alignment=Qt.AlignmentFlag.AlignCenter)
+    tit = QLabel("CONFIGURACIÓN GLOBAL", alignment=Qt.AlignmentFlag.AlignCenter)
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
 
-    kerf_actual = ""
+    kerf_actual = str(getattr(parent, "_kerf_efectivo", lambda: getattr(parent, "global_kerf_val", 0.3))())
     try:
-        kerf_actual = str(float(parent.ent_kerf.text()))
+        kf = float(kerf_actual)
+        if kf <= 0:
+            kerf_actual = "0.3"
     except Exception:
-        kerf_actual = str(getattr(parent, "global_kerf_val", 0.3))
+        kerf_actual = str(getattr(parent, "global_kerf_val", 0.3) or 0.3)
 
     row_k = QHBoxLayout()
     row_k.addWidget(QLabel("Kerf (in):"))
@@ -74,12 +77,17 @@ def abrir_modal_configuracion(parent):
         try:
             kerf_val = float(ent_kerf.text())
             margin_val = float(ent_margin.text())
+            if kerf_val <= 0:
+                kerf_val = 0.3
             parent.global_margin_val = margin_val
             parent.global_kerf_val = kerf_val
-            try:
-                parent.ent_kerf.setText(str(kerf_val))
-            except Exception:
-                pass
+            if hasattr(parent, "_sync_kerf_widget"):
+                parent._sync_kerf_widget()
+            else:
+                try:
+                    parent.ent_kerf.setText(str(kerf_val))
+                except Exception:
+                    pass
             dlg.accept()
             parent.ejecutar_nesting()
         except Exception:
@@ -102,7 +110,7 @@ def abrir_modal_costos(parent):
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
-    tit = QLabel("💲 RESUMEN DE INVERSIÓN", alignment=Qt.AlignmentFlag.AlignCenter)
+    tit = QLabel("RESUMEN DE INVERSIÓN", alignment=Qt.AlignmentFlag.AlignCenter)
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
 
@@ -137,18 +145,18 @@ def abrir_modal_costos(parent):
             total_mxn_proveedor += costo_mat_prov
             costo_total_mat = costo_mat_emp + costo_mat_prov
             if costo_mat_emp > 0 and costo_mat_prov == 0:
-                etiqueta = "🏢 [EMP]"
+                etiqueta = "[EMP]"
             elif costo_mat_prov > 0 and costo_mat_emp == 0:
-                etiqueta = "🚚 [PROV]"
+                etiqueta = "[PROV]"
             elif costo_mat_prov > 0 and costo_mat_emp > 0:
-                etiqueta = "🏢/🚚 [MIX]"
+                etiqueta = "[MIX]"
             else:
-                etiqueta = "📦 [RET]"
+                etiqueta = "[RET]"
             desglose_UI.append({"clave": clave, "etiqueta": etiqueta, "total": costo_total_mat})
 
-    lay.addWidget(QLabel(f"🏢 Stock Interno: ${total_mxn_empresa:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel(f"🚚 Gasto Proveedor: ${total_mxn_proveedor:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel("📦 DESGLOSE POR MATERIAL"))
+    lay.addWidget(QLabel(f"Stock Interno: ${total_mxn_empresa:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
+    lay.addWidget(QLabel(f"Gasto Proveedor: ${total_mxn_proveedor:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
+    lay.addWidget(QLabel("DESGLOSE POR MATERIAL"))
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -157,7 +165,7 @@ def abrir_modal_costos(parent):
     if desglose_UI:
         for item in desglose_UI:
             row = QHBoxLayout()
-            row.addWidget(QLabel(f"{item['etiqueta']} {item['clave']}"))
+            row.addWidget(QLabel(f"{item['etiqueta']} {format_clave_calibre_display(item['clave'])}"))
             total_mxn = float(item["total"] or 0.0)
             total_usd = (total_mxn / tc) if tc > 0 else 0.0
             row.addWidget(
@@ -191,7 +199,7 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
-    tit = QLabel("⚡ ANÁLISIS DE RENDIMIENTO - WORK ORDERS", alignment=Qt.AlignmentFlag.AlignCenter)
+    tit = QLabel("ANÁLISIS DE RENDIMIENTO - WORK ORDERS", alignment=Qt.AlignmentFlag.AlignCenter)
     tit.setStyleSheet(f"font-weight:700;font-size:15px;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
     sub = QLabel(
@@ -217,7 +225,7 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
         card_lay = QHBoxLayout(card)
         txt = QWidget()
         txt_lay = QVBoxLayout(txt)
-        title_prefix = "🏆 RECOMENDADO: " if idx == 0 else f"Opción {idx+1}: "
+        title_prefix = "RECOMENDADO: " if idx == 0 else f"Opción {idx+1}: "
         lbl_t = QLabel(f"{title_prefix}{lotes_str}")
         lbl_t.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
         txt_lay.addWidget(lbl_t)
@@ -302,7 +310,7 @@ def _build_transfer_dialog(parent, piezas_sel, hojas_disp, titulo, on_confirm):
         w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
         h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
         sufijo_dup = _sufijo_placa_duplicada(hojas_disp, hoja, i)
-        texto_principal = f"◼ {nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
+        texto_principal = f"{nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
         color_eficiencia = "#10B981" if efi_dir > 70 else ("#F59E0B" if efi_dir > 40 else "#EF4444")
 
         row = QHBoxLayout()
@@ -341,9 +349,9 @@ def abrir_modal_transferencia(parent):
 
     multi = len(piezas_sel) > 1
     titulo = (
-        f"🔄 MUDAR {len(piezas_sel)} PIEZAS A OTRA PLACA"
+        f"MUDAR {len(piezas_sel)} PIEZAS A OTRA PLACA"
         if multi
-        else "🔄 MUDAR PIEZA A OTRA PLACA"
+        else "MUDAR PIEZA A OTRA PLACA"
     )
     _build_transfer_dialog(parent, piezas_sel, hojas_disp, titulo, parent.ejecutar_transferencia)
 
@@ -370,7 +378,7 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
         return
 
     placa_origen = str(hoja_origen.get("placa_id", "Placa") or "Placa")
-    titulo = f"📦 CAMBIAR PIEZAS A OTRA PLACA\nOrigen: {placa_origen}  |  Piezas: {total_piezas}"
+    titulo = f"CAMBIAR PIEZAS A OTRA PLACA\nOrigen: {placa_origen}  |  Piezas: {total_piezas}"
 
     dlg = QDialog(parent)
     dlg.setWindowTitle("Cambiar piezas a otra placa")
@@ -409,7 +417,7 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
         w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
         h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
         sufijo_dup = _sufijo_placa_duplicada(hojas_disp, hoja, i)
-        texto_principal = f"◼ {nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
+        texto_principal = f"{nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
         color_eficiencia = "#10B981" if efi_dir > 70 else ("#F59E0B" if efi_dir > 40 else "#EF4444")
 
         row = QHBoxLayout()

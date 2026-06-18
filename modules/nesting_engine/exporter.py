@@ -1,5 +1,7 @@
+import glob
 import os
 import re
+import shutil
 from shapely.geometry import Polygon, MultiPolygon
 
 
@@ -13,6 +15,44 @@ def _hay_dxfs(ruta):
     return os.path.isdir(ruta) and any(
         nombre.lower().endswith(".dxf") for nombre in os.listdir(ruta)
     )
+
+
+def _es_export_swo(
+    base_name: str | None = None,
+    wo_label: str | None = None,
+    es_swo: bool = False,
+) -> bool:
+    if es_swo:
+        return True
+    bn = str(base_name or "").strip().upper()
+    wl = str(wo_label or "").strip().upper()
+    return bn.startswith("SWO") or "S.W.O" in wl
+
+
+def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
+    """Copia STEP generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
+    dest = os.path.join(out_dir, "3D NESTING")
+    os.makedirs(dest, exist_ok=True)
+    copiados = 0
+    step_dirs = [
+        rutas.get("cama_laser_step"),
+        rutas.get("cama_laser_12kw_step"),
+        rutas.get("robot_laser_step_A"),
+        rutas.get("robot_laser_step_B"),
+        rutas.get("robot_plasma_step_A"),
+        rutas.get("robot_plasma_step_B"),
+    ]
+    for step_dir in step_dirs:
+        if not step_dir or not os.path.isdir(step_dir):
+            continue
+        for step_path in glob.glob(os.path.join(step_dir, "*.step")):
+            dest_path = os.path.join(dest, os.path.basename(step_path))
+            try:
+                shutil.copy2(step_path, dest_path)
+                copiados += 1
+            except Exception as exc:
+                print(f"[STEP][WARN] No se pudo copiar {step_path} -> {dest_path}: {exc}")
+    return copiados
 
 
 def _safe_float(value, default=None):
@@ -86,6 +126,8 @@ def _has_big_component(hoja):
             continue
         if nom.startswith("RETAZO_GUILLOTINA"):
             continue
+        if nom.startswith("CU_CORTE__"):
+            continue
 
         w_in, l_in = _piece_dims_from_polys_in(pz)
         if w_in >= 80.0 and l_in >= 140.0:
@@ -95,6 +137,13 @@ def _has_big_component(hoja):
 
 
 def _resolver_carpeta_principal(clave, hoja):
+    if bool(hoja.get("modo_largos_cu")):
+        return RUTA_CAMA_LASER
+
+    partes = str(clave or "").split("_", 1)
+    if len(partes) > 1 and str(partes[1]).strip().upper() == "CU":
+        return RUTA_CAMA_LASER
+
     raw_thk, thk_val = _parse_thickness_from_clave(clave)
     w_in, l_in = _sheet_dims_in(hoja)
 
@@ -308,6 +357,29 @@ def _registrar_exportacion_pqart_hoja(
 def lanzar_freecad_robotica(rutas, thk, plasma_off):
     from freecad_runner import ejecutar_macro_freecad
 
+    # CAMA LASER (incluye largos de cobre CU)
+    if _hay_dxfs(rutas.get("cama_laser_dxf", "")):
+        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+        os.makedirs(rutas.get("cama_laser_step", ""), exist_ok=True)
+        ejecutar_macro_freecad(
+            rutas["cama_laser_dxf"],
+            rutas["cama_laser_step"],
+            thk,
+            "TR",
+            0.0, 0.0, 0.0,
+        )
+
+    if _hay_dxfs(rutas.get("cama_laser_12kw_dxf", "")):
+        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+        os.makedirs(rutas.get("cama_laser_12kw_step", ""), exist_ok=True)
+        ejecutar_macro_freecad(
+            rutas["cama_laser_12kw_dxf"],
+            rutas["cama_laser_12kw_step"],
+            thk,
+            "TR",
+            0.0, 0.0, 0.0,
+        )
+
     # ROBOT LASER
     if _hay_dxfs(rutas["robot_laser_dxf"]):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
@@ -350,7 +422,9 @@ def exportar_resultados_a_dxf(
     out_dir: str,
     base_name: str = "NEST",
     generar_step: bool = False,
-    wo_label: str | None = None
+    wo_label: str | None = None,
+    es_swo: bool = False,
+    swo_id: str | None = None,
 ):
     try:
         from modules.nest_exporter import export_nest_to_dxf
@@ -359,7 +433,10 @@ def exportar_resultados_a_dxf(
 
     import config
 
-    job_root_dir = os.path.join(out_dir, base_name)
+    nest_folder = "NESTING"
+    job_root_dir = os.path.join(out_dir, nest_folder)
+    es_swo_export = _es_export_swo(base_name, wo_label, es_swo=es_swo)
+    swo_ref = str(swo_id or base_name or "").strip()
 
     rutas = {
         "cama_laser_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER, "DXF"),
@@ -371,6 +448,8 @@ def exportar_resultados_a_dxf(
         "robot_laser_step_B": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"),
         "robot_plasma_step_A": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"),
         "robot_plasma_step_B": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"),
+        "cama_laser_step": os.path.join(job_root_dir, RUTA_CAMA_LASER, "STEP"),
+        "cama_laser_12kw_step": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "STEP"),
     }
 
     for r in rutas.values():
@@ -405,11 +484,10 @@ def exportar_resultados_a_dxf(
             h_mm = hoja.get("placa_h", 1219.2)
             es_retazo = hoja.get("es_retazo", False)
 
-            order_label = (
-                str(base_name).strip()
-                if str(base_name).startswith("SWO-")
-                else (str(wo_label or "").strip() or "W.O.")
-            )
+            if es_swo_export and swo_ref.upper().startswith("SWO"):
+                order_label = swo_ref
+            else:
+                order_label = str(wo_label or "").strip() or "W.O."
 
             display_name = _resolver_display_name_hoja(hoja, contador_placas)
 
@@ -419,7 +497,7 @@ def exportar_resultados_a_dxf(
                 thickness_name=thickness_name,
                 sheet_seq=global_sheet_counter,
                 display_name=display_name,
-                source_nest_name=str(base_name).strip() or "NEST",
+                source_nest_name=swo_ref if es_swo_export else (str(base_name).strip() or "NEST"),
             )
             hoja["pqart_exports"] = []
 
@@ -466,6 +544,7 @@ def exportar_resultados_a_dxf(
                         "outer": [],
                         "holes": [],
                         "marks": pz.get("marcas", []),
+                        "marks_layer": "RTZ_LABEL",
                         "ruta": "",
                         "orig_minx": 0.0,
                         "orig_miny": 0.0,
@@ -479,26 +558,49 @@ def exportar_resultados_a_dxf(
                 if not pols:
                     continue
 
+                es_cu_hoja = bool(hoja.get("modo_largos_cu"))
+                es_linea_corte = nom.startswith("RETAZO_GUILLOTINA") or nom.startswith("CU_CORTE__")
+
                 # DXF principal (sin compensación)
                 outer_main, holes_main = _clean_profile_for_production(
                     pols[0],
                     pols[1:] if len(pols) > 1 else [],
                 )
-                placements_principales.append({
+                # Posición 1:1 con visor: exportar polígonos colocados (mm), no clonar bloque DXF.
+                ruta_export = ""
+
+                layer_override = pz.get("layer_override")
+                closed_flag = pz.get("closed")
+                if es_cu_hoja and not layer_override:
+                    if es_linea_corte:
+                        # Cama láser: solo líneas separadoras (misma capa que nesteo normal).
+                        layer_override = "CUT_OUTER"
+                        closed_flag = False
+                    else:
+                        # Contorno completo para STEP interno (no programación láser).
+                        layer_override = "CUT_CU"
+                        closed_flag = True
+
+                placement = {
                     "part_name": nom,
                     "outer": outer_main,
                     "holes": holes_main,
                     "marks": pz.get("marcas", []),
-                    "ruta": pz.get("ruta"),
+                    "ruta": ruta_export,
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
                     "shift_x": pz.get("shift_x", 0.0),
                     "shift_y": pz.get("shift_y", 0.0),
                     "rot_deg": pz.get("rot_deg", 0.0),
-                })
+                }
+                if layer_override:
+                    placement["layer_override"] = str(layer_override)
+                if closed_flag is not None:
+                    placement["closed"] = bool(closed_flag)
+                placements_principales.append(placement)
 
-                # DXF plasma (solo cuando aplique)
-                if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA"):
+                # DXF plasma (solo cuando aplique; cobre no usa plasma)
+                if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA") and not nom.startswith("CU_CORTE__") and not es_cu_hoja:
                     try:
                         if compensada_manual:
                             plasma_outer = outer_main
@@ -526,7 +628,7 @@ def exportar_resultados_a_dxf(
                         "outer": plasma_outer,
                         "holes": plasma_holes,
                         "marks": pz.get("marcas", []),
-                        "ruta": pz.get("ruta"),
+                        "ruta": "",
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
                         "shift_x": pz.get("shift_x", 0.0),
@@ -535,7 +637,8 @@ def exportar_resultados_a_dxf(
                     })
 
             sheet_code = hoja.get("sheet_code") or f"{order_label}-H{global_sheet_counter}"
-            nombre_archivo = f"{base_name}_{thickness_name}_{sheet_code}.dxf"
+            nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
+            nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
             # Exportación principal
             if carpeta_principal == RUTA_CAMA_LASER:
@@ -577,9 +680,12 @@ def exportar_resultados_a_dxf(
 
     if generar_step:
         lanzar_freecad_robotica(rutas, thickness_para_step, plasma_offset_job)
+        if es_swo_export:
+            n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
+            print(f"[STEP][SWO] Publicados {n_step} STEP en 3D NESTING")
 
-    if str(base_name).startswith("SWO-"):
+    if es_swo_export and swo_ref.upper().startswith("SWO"):
         from .api_client import enviar_reporte_a_api
-        enviar_reporte_a_api(base_name, resultados)
+        enviar_reporte_a_api(swo_ref, resultados)
 
     return exportados_principales

@@ -28,10 +28,15 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QFileDialog,
+    QDialog,
     QMenu,
 )
 
 import config
+from interface.autodxf_metadata import (
+    extraer_metadata_carpetas_autodxf,
+    normalizar_material_autodxf,
+)
 from interface.qt.nesting_canvas import VisorNesting
 from interface.qt.ui_mixins import TimerHost, q_configure, scroll_clear, scroll_add_widget
 from interface.qt.dialogs.nesting_modals import (
@@ -46,6 +51,7 @@ from nesting_workspace import guardar_workspace, cargar_workspace_desde_archivo,
 from postgres_connector import guardar_nesting_en_postgresql
 from reporte_pdf_nesting import exportar_pdf_nesting
 from interface.qt.export_paths import (
+    asegurar_exportacion_local,
     desktop_nesteos_locales,
     guardar_consecutivo_wo_local,
     obtener_consecutivo_wo_local,
@@ -59,18 +65,26 @@ from utils_nesting import (
     ensamblar_escenario,
     generar_csv_compras,
     clave_nesting_sort_key,
+    grupo_nesting_sort_key,
+    format_clave_calibre_display,
 )
 from modules.processed_layers import ProcesadorDXF
 from modules.plasma_compensator import compute_plasma_offset_mm
 from modules.nesting_engine.efficiency_metrics import (
     actualizar_eficiencias_resultados,
+    contar_piezas_grupo,
+    contar_piezas_hoja,
     eficiencia_para_umbral_ignorar,
     formatear_eficiencias_placa,
     formatear_eficiencias_tanque,
     hoja_cuenta_para_deduccion,
     placa_debe_mostrar_opcion_ignorar,
 )
-from modules.nesting_engine.rtz_overlays import sincronizar_overlays_resultados
+from modules.nesting_engine.rtz_overlays import (
+    sincronizar_overlays_grupo,
+    sincronizar_overlays_resultados,
+)
+from modules.nesting_engine.sheet_integrity import deduplicar_resultados_nesting
 
 COLOR_TARJETA = "#FFFFFF"
 COLOR_BORDE = "#CBD5E1"
@@ -89,6 +103,7 @@ class TabNesting(QWidget, TimerHost):
         self.app.tiempo_calculo = 0
         self.cantidad_tanques = "N/A"
         self.lote_actual_idx = 0  # <--- NUEVO: Puntero de memoria para el Dropdown
+        self._syncing_edicion_libre_switch = False
 
         self.global_margin_val = DEFAULT_MARGIN_IN
         self.global_kerf_val = DEFAULT_KERF_IN
@@ -112,6 +127,23 @@ class TabNesting(QWidget, TimerHost):
         self._submenu_cambiar_busy = False
 
         self.setup_ui()
+        self._sync_kerf_widget()
+
+    def _kerf_efectivo(self) -> float:
+        """Kerf global de nesting (placa láser). Nunca 0: las placas CU guardan kerf_usado=0 aparte."""
+        try:
+            k = float(self.global_kerf_val)
+        except Exception:
+            k = DEFAULT_KERF_IN
+        if k <= 0:
+            k = DEFAULT_KERF_IN
+        return k
+
+    def _sync_kerf_widget(self) -> None:
+        k = self._kerf_efectivo()
+        self.global_kerf_val = k
+        if hasattr(self, "ent_kerf"):
+            self.ent_kerf.setText(str(k))
 
     def exportar_reporte_pdf_nesting(self):
         if not hasattr(self.app, 'resultados_nesting') or not self.app.resultados_nesting:
@@ -681,19 +713,7 @@ class TabNesting(QWidget, TimerHost):
         return ""
 
     def _normalizar_material_desde_texto(self, texto_material):
-        texto = str(texto_material or "").strip().upper()
-        if not texto:
-            return ""
-
-        # Normalización simple alineada a lo que hoy muestra la tabla
-        if "CARBON" in texto:
-            return "CARBONO"
-        if "INOX" in texto or "STAINLESS" in texto:
-            return "INOX"
-        if "ALUMIN" in texto:
-            return "ALUMINIO"
-
-        return texto
+        return normalizar_material_autodxf(texto_material, default="")
 
     def _extraer_material_desde_nombre_dxf(self, ruta_o_nombre):
         """
@@ -730,8 +750,15 @@ class TabNesting(QWidget, TimerHost):
         defaults = self._defaults_lote_activo()
 
         nombre_logico = self._nombre_logico_desde_dxf(ruta_o_nombre)
-        material_detectado = self._extraer_material_desde_nombre_dxf(ruta_o_nombre)
-        calibre_detectado = self._extraer_calibre_desde_nombre_dxf(ruta_o_nombre)
+        meta_carpeta = extraer_metadata_carpetas_autodxf(str(ruta_o_nombre or ""))
+        material_detectado = (
+            self._extraer_material_desde_nombre_dxf(ruta_o_nombre)
+            or meta_carpeta.get("material")
+        )
+        calibre_detectado = (
+            self._extraer_calibre_desde_nombre_dxf(ruta_o_nombre)
+            or meta_carpeta.get("calibre")
+        )
         qty_base = self._extraer_qty_desde_nombre_dxf(ruta_o_nombre)
 
         material_final = (
@@ -948,7 +975,7 @@ class TabNesting(QWidget, TimerHost):
                 wo_act = str(getattr(self.app, 'job_activo', 'PENDIENTE')).strip().upper() or "PENDIENTE"
 
                 try:
-                    kerf_ui = float(self.ent_kerf.text())
+                    kerf_ui = self._kerf_efectivo()
                 except Exception:
                     kerf_ui = DEFAULT_KERF_IN
                 nuevo_resultado = self.app.motor_nesting.ejecutar_nesting_visual(
@@ -1027,53 +1054,331 @@ class TabNesting(QWidget, TimerHost):
     def on_piece_selected(self, info_pieza=None):
         piezas = self.visor.piezas_seleccionadas
         n = len(piezas)
-        estado_transfer = "normal" if n >= 1 else "disabled"
-        estado_rot = "normal" if n == 1 else "disabled"
-        self.btn_transferir.setEnabled(estado_transfer == 'normal')
-        self.btn_rot_90.setEnabled(estado_rot == 'normal')
-        self.btn_rot_m1.setEnabled(estado_rot == 'normal')
-        self.btn_rot_p1.setEnabled(estado_rot == 'normal')
+        libre = bool(getattr(self.visor, "modo_edicion_libre_seleccion", False))
+        estado_transfer = n >= 1
+        estado_rot = n == 1 or (libre and n >= 1)
+        estado_switch = n >= 2 or libre
+        self.btn_transferir.setEnabled(estado_transfer)
+        self.btn_rot_90.setEnabled(estado_rot)
+        self.btn_rot_m1.setEnabled(estado_rot)
+        self.btn_rot_p1.setEnabled(estado_rot)
+        if hasattr(self, "switch_edicion_libre"):
+            self.switch_edicion_libre.setEnabled(estado_switch)
         if n > 1:
-            self.btn_transferir.setText(f"MUDAR PIEZAS ({n})")
+            self.btn_transferir.setText(f"MUDAR {n} PIEZAS")
         else:
-            self.btn_transferir.setText("MUDAR PIEZA")
+            self.btn_transferir.setText("MUDAR A OTRA PLACA")
+        self._actualizar_seccion_pieza_seleccionada(piezas)
+
+    def _set_switch_edicion_libre(self, activo: bool):
+        self._syncing_edicion_libre_switch = True
+        try:
+            if hasattr(self, "switch_edicion_libre"):
+                self.switch_edicion_libre.blockSignals(True)
+                self.switch_edicion_libre.setChecked(bool(activo))
+                self.switch_edicion_libre.blockSignals(False)
+        except Exception:
+            pass
+        self._syncing_edicion_libre_switch = False
+
+    def _on_toggle_edicion_libre(self, checked: bool):
+        if getattr(self, "_syncing_edicion_libre_switch", False):
+            return
+        if checked:
+            self._activar_edicion_libre_ui()
+        else:
+            self._desactivar_edicion_libre_ui()
+
+    def _activar_edicion_libre_ui(self):
+        ok, msg = self.visor.activar_modo_edicion_libre_seleccion()
+        if not ok:
+            self._set_switch_edicion_libre(False)
+            QMessageBox.warning(self, "Edición libre", msg)
+            return
+        self._set_switch_edicion_libre(True)
+        if hasattr(self, "lbl_edicion_libre"):
+            self.lbl_edicion_libre.setText(
+                f"Modo activo ({len(self.visor.indices_edicion_libre)} piezas en morado). "
+                "Solo chocan con placa y piezas no seleccionadas."
+            )
+            self.lbl_edicion_libre.setStyleSheet("color:#C084FC;font-size:10px;background:transparent;")
+        self.on_piece_selected()
+
+    def _desactivar_edicion_libre_ui(self):
+        _, msg = self.visor.desactivar_modo_edicion_libre_seleccion()
+        self._set_switch_edicion_libre(False)
+        self._replicar_lote_activo_a_gemelos()
+        self.procesar_lista_hojas(self.app.resultados_nesting)
+        if hasattr(self, "lbl_edicion_libre"):
+            self.lbl_edicion_libre.setText(
+                "Solo colisiona con placa y piezas fuera del grupo. En modo activo: morado."
+            )
+            self.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
+        if msg:
+            QMessageBox.warning(self, "Edición libre", msg)
+        self.on_piece_selected()
+
+    def _desactivar_edicion_libre_si_cambia_contexto(self):
+        if getattr(self.visor, "modo_edicion_libre_seleccion", False):
+            self.visor.cancelar_modo_edicion_libre_silencioso()
+            self._set_switch_edicion_libre(False)
+            if hasattr(self, "lbl_edicion_libre"):
+                self.lbl_edicion_libre.setText(
+                    "Solo colisiona con placa y piezas fuera del grupo. En modo activo: morado."
+                )
+                self.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
+
+    def _sufijo_placa_en_grupo(self, clave, hoja) -> str:
+        if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+            return ""
+        hojas = (self.app.resultados_nesting or {}).get(clave, {}).get("hojas") or []
+        nombre = str(hoja.get("placa_id", "") or "")
+        iguales = [
+            j for j, h in enumerate(hojas)
+            if str(h.get("placa_id", "") or "") == nombre and not h.get("es_retazo")
+        ]
+        if len(iguales) <= 1:
+            return ""
+        try:
+            idx = hojas.index(hoja)
+        except ValueError:
+            return ""
+        if idx not in iguales:
+            return ""
+        return f" · P{iguales.index(idx) + 1}"
+
+    def _actualizar_panel_placa(self, hoja=None, clave=None):
+        if not hasattr(self, "lbl_placa_resumen"):
+            return
+        hoja = hoja if hoja is not None else self.hoja_actual_data
+        clave = clave if clave is not None else self.clave_actual
+        if not isinstance(hoja, dict) or not clave:
+            self.lbl_placa_resumen.setText("Sin placa activa")
+            self.lbl_placa_stats.setText("-")
+            self.lbl_placa_dims.setText("-")
+            return
+
+        placa_id = str(hoja.get("placa_id", "-") or "-")
+        sufijo = self._sufijo_placa_en_grupo(clave, hoja)
+        es_retazo = bool(hoja.get("es_retazo", False))
+        titulo = f"{placa_id}{sufijo}"
+        if es_retazo:
+            titulo += " (Accesorios)"
+
+        n_pzas = contar_piezas_hoja(hoja)
+        d = float(
+            (hoja or {}).get("eficiencia_directa", (hoja or {}).get("eficiencia", 0.0)) or 0.0
+        )
+        r = float((hoja or {}).get("eficiencia_real", d) or 0.0)
+        efi_txt = f"Dir {d:.1f}% | Real {r:.1f}%"
+        origen = "Proveedor" if str(hoja.get("origen_placa", "")).upper() == "PROVEEDOR" else "Empresa"
+        try:
+            w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
+            h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
+            dims = f"{w_in:.1f} × {h_in:.1f} in"
+        except Exception:
+            dims = "-"
+
+        self.lbl_placa_resumen.setText(f"{titulo} · {n_pzas} pzas")
+        self.lbl_placa_stats.setText(efi_txt)
+        self.lbl_placa_dims.setText(
+            f"{format_clave_calibre_display(clave)} · {origen} · {dims}"
+        )
+
+        acciones_ok = not es_retazo
+        self.btn_panel_renest_placa.setEnabled(acciones_ok)
+        self.btn_panel_cambiar_placa.setEnabled(acciones_ok)
+        self.btn_panel_renest_calibre.setEnabled(bool(clave))
+
+    def _actualizar_seccion_pieza_seleccionada(self, piezas=None):
+        if not hasattr(self, "lbl_pieza_sel"):
+            return
+        piezas = piezas if piezas is not None else self.visor.piezas_seleccionadas
+        if not piezas:
+            self.lbl_pieza_sel.setText("Sin selección — clic en el canvas")
+            return
+        if len(piezas) == 1:
+            p = piezas[0]
+            nom = str(p.get("nombre", "Pieza") or "Pieza")
+            if len(nom) > 42:
+                nom = nom[:39] + "…"
+            self.lbl_pieza_sel.setText(nom)
+            return
+        self.lbl_pieza_sel.setText(f"{len(piezas)} piezas seleccionadas")
+
+    def panel_limpiar_seleccion(self):
+        self.visor.limpiar_seleccion_piezas()
+        self.on_piece_selected()
+
+    def panel_ajustar_vista(self):
+        if self.hoja_actual_data and self.clave_actual:
+            self.visor.dibujar_hoja_full(
+                self.hoja_actual_data,
+                self.clave_actual,
+                preserve_view=False,
+            )
+
+    def panel_renestear_placa(self):
+        if not self._ctx_tiene_resultados(self.clave_actual):
+            return
+        if not self._ctx_hoja_valida(self.hoja_actual_data, "Renestear placa"):
+            return
+        self.renestear_solo_placa(self.clave_actual, self.hoja_actual_data)
+
+    def panel_renestear_calibre(self):
+        if not self._ctx_tiene_resultados(self.clave_actual):
+            return
+        self.renestear_calibre_completo_ui(self.clave_actual)
+
+    def panel_mudar_todas_piezas(self):
+        if not self._ctx_tiene_resultados(self.clave_actual):
+            return
+        if not self._ctx_hoja_valida(self.hoja_actual_data, "Mudar piezas"):
+            return
+        abrir_modal_transferencia_masiva(self, self.clave_actual, self.hoja_actual_data)
+
+    def panel_cambiar_placa_madre(self):
+        clave = self.clave_actual
+        hoja = self.hoja_actual_data
+        if not self._ctx_tiene_resultados(clave):
+            return
+        if not self._ctx_hoja_valida(hoja, "Cambiar placa"):
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Cambiar placa madre")
+        dlg.setModal(True)
+        dlg.resize(500, 440)
+        dlg.setStyleSheet("background:#F8FAFC;")
+        lay = QVBoxLayout(dlg)
+        hdr = QLabel(f"Placa actual: {hoja.get('placa_id', '-')}")
+        hdr.setStyleSheet("font-weight:700;color:#0F172A;")
+        lay.addWidget(hdr)
+        sub = QLabel("Seleccione una placa del inventario que pueda recibir estas piezas:")
+        sub.setStyleSheet("color:#64748B;font-size:11px;")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(6)
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
+
+        loading = QLabel("Calculando placas disponibles…")
+        loading.setStyleSheet("color:#64748B;")
+        inner_lay.addWidget(loading)
+
+        btn_cerrar = QPushButton("CERRAR")
+        from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK
+        apply_push_button(btn_cerrar, "#FFFFFF", font_size=11)
+        btn_cerrar.clicked.connect(dlg.reject)
+        lay.addWidget(btn_cerrar)
+
+        def worker():
+            try:
+                candidatas = self._obtener_candidatas_placa_validas(clave, hoja, rapido=True)
+            except Exception:
+                candidatas = []
+
+            def apply():
+                while inner_lay.count():
+                    w = inner_lay.takeAt(0).widget()
+                    if w:
+                        w.deleteLater()
+                if not candidatas:
+                    inner_lay.addWidget(
+                        QLabel("Ninguna placa del inventario cabe estas piezas con la configuración actual.")
+                    )
+                else:
+                    for cand in candidatas[:20]:
+                        txt = (
+                            f"{cand['id']}  |  {cand['w_in']:.1f}\" × {cand['h_in']:.1f}\""
+                            f"  |  ${cand.get('precio', 0.0):,.2f} MXN"
+                        )
+                        b = QPushButton(txt)
+                        apply_push_button(b, COLOR_GRIS_DARK, font_size=10, padding="8px 10px")
+                        def _make_handler(cand_item):
+                            def _go():
+                                dlg.accept()
+                                self.cambiar_placa_y_renestear(clave, hoja, cand_item)
+                            return _go
+
+                        b.clicked.connect(_make_handler(cand))
+                        inner_lay.addWidget(b)
+                inner_lay.addStretch()
+
+            QTimer.singleShot(0, apply)
+
+        threading.Thread(target=worker, daemon=True).start()
+        dlg.exec()
 
     def _reposicionar_panel_ajuste(self):
+        from interface.qt.tabs.tab_nesting_ui import PANEL_TOOLS_MIN_WIDTH
+
         host = getattr(self, "visor_host", None)
         frame = getattr(self, "frame_ajuste_container", None)
         if not host or not frame or not frame.isVisible():
             return
         marg = 10
-        frame.setMaximumWidth(max(320, host.width() - marg * 2))
-        frame.adjustSize()
-        fw = frame.width()
-        fh = frame.height()
-        x = max(0, host.width() - fw - marg)
-        y = max(0, host.height() - fh - marg)
-        frame.setGeometry(x, y, fw, fh)
+        host_h = max(1, host.height())
+        host_w = max(1, host.width())
+        max_frame_h = max(340, host_h - marg * 2)
+        panel_w = min(max(PANEL_TOOLS_MIN_WIDTH, int(host_w * 0.21)), host_w - marg * 2)
+
+        frame.setFixedWidth(panel_w)
+        self.panel_ajuste_contenido.setFixedWidth(panel_w)
+        self.btn_toggle_ajuste.setFixedWidth(panel_w)
+
+        toggle_h = self.btn_toggle_ajuste.sizeHint().height() + 12
+        footer_h = self.btn_ajustar_vista.sizeHint().height() + 18 if hasattr(self, "btn_ajustar_vista") else 0
+        content_cap = max(300, max_frame_h - toggle_h)
+        if self.ajuste_desplegado:
+            self.panel_ajuste_contenido.setMinimumHeight(content_cap)
+            self.panel_ajuste_contenido.setMaximumHeight(content_cap)
+            scroll = getattr(self, "_panel_tools_scroll", None)
+            if scroll is not None:
+                scroll.setMinimumHeight(max(200, content_cap - footer_h))
+        else:
+            self.panel_ajuste_contenido.setMinimumHeight(0)
+            self.panel_ajuste_contenido.setMaximumHeight(content_cap)
+
+        frame.setMaximumHeight(max_frame_h)
+        fh = min(frame.sizeHint().height(), max_frame_h)
+        x = max(0, host_w - panel_w - marg)
+        y = max(0, host_h - fh - marg)
+        frame.setGeometry(x, y, panel_w, fh)
         frame.raise_()
 
     def toggle_ajuste_placa(self):
         if self.ajuste_desplegado:
             self.panel_ajuste_contenido.hide()
-            self.btn_toggle_ajuste.setText("⚙️ AJUSTE DE PLACA 🔼")
+            self.btn_toggle_ajuste.setText("HERRAMIENTAS DE PLACA")
             self.ajuste_desplegado = False
         else:
             self.panel_ajuste_contenido.show()
-            self.btn_toggle_ajuste.setText("⚙️ AJUSTE DE PLACA 🔽")
+            self.btn_toggle_ajuste.setText("OCULTAR PANEL")
             self.ajuste_desplegado = True
         self._reposicionar_panel_ajuste()
 
     def dibujar_hoja_full(self, hoja, clave):
+        if hoja and clave and not hoja.get("es_retazo"):
+            self.sincronizar_overlays_clave(clave)
         if hoja is not self.hoja_actual_data:
+            self._desactivar_edicion_libre_si_cambia_contexto()
             self.visor.limpiar_seleccion_piezas()
             self.on_piece_selected()
         self.visor.dibujar_hoja_full(hoja, clave)
         self.frame_ajuste_container.show()
+        if not self.ajuste_desplegado:
+            self.panel_ajuste_contenido.hide()
+            self.btn_toggle_ajuste.setText("HERRAMIENTAS DE PLACA")
         self._reposicionar_panel_ajuste()
-        self.lbl_id_hud.setText(f"[{clave}]\nID: {hoja.get('placa_id')}")
-        self.ent_kerf.clear()
-        self.ent_kerf.setText(str(hoja.get('kerf_usado', DEFAULT_KERF_IN)))
+        self._sync_kerf_widget()
+        self._actualizar_panel_placa(hoja, clave)
+        self._actualizar_seccion_pieza_seleccionada()
 
     # =========================================================
     # LÓGICA DEL MENÚ DESPLEGABLE (EL MES EN ACCIÓN)
@@ -1170,8 +1475,10 @@ class TabNesting(QWidget, TimerHost):
         )
 
         try:
-            kerf_ui = float(self.ent_kerf.text())
+            kerf_ui = self._kerf_efectivo()
         except Exception:
+            kerf_ui = DEFAULT_KERF_IN
+        if kerf_ui < DEFAULT_KERF_IN:
             kerf_ui = DEFAULT_KERF_IN
         opt_ui = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
 
@@ -1198,7 +1505,7 @@ class TabNesting(QWidget, TimerHost):
             if _abortar_si_cancelado():
                 return
             # =========================================================
-            # 📡 RECEPTOR DE TELEMETRÍA ASÍNCRONO
+            # RECEPTOR DE TELEMETRÍA ASÍNCRONO
             # =========================================================
             def receptor_en_vivo(msg, pct):
                 if hasattr(self.app, 'actualizar_progreso'):
@@ -1321,7 +1628,7 @@ class TabNesting(QWidget, TimerHost):
         self.actualizar_dropdown_lotes()
 
         # =========================================================
-        # ⏱️ FORMATO DE TIEMPO PARA EL POP-UP
+        # FORMATO DE TIEMPO PARA EL POP-UP
         # =========================================================
         t_total = getattr(self.app, 'tiempo_calculo', 0)
         t_int = max(0, int(round(float(t_total))))
@@ -1336,7 +1643,7 @@ class TabNesting(QWidget, TimerHost):
             tiempo_str = f"{segs} seg"
 
         mensaje = (
-            f"⏱️ Tiempo de procesamiento: {tiempo_str}\n\n"
+            f"Tiempo de procesamiento: {tiempo_str}\n\n"
             "Acomodo listo en BORRADOR. Modifica si es necesario y exporta cuando termines."
         )
 
@@ -1396,8 +1703,83 @@ class TabNesting(QWidget, TimerHost):
         self.tipo_cambio_usdmxn = float(tc)
         self.tipo_cambio_fuente = fuente
         self.tipo_cambio_actualizado = ts
+
+    def _actualizar_piezas_totales_label(self, resultados=None):
+        if not hasattr(self, "lbl_piezas_totales"):
+            return
+        res = resultados if resultados is not None else getattr(self.app, "resultados_nesting", None)
+        if not isinstance(res, dict) or not res:
+            self.lbl_piezas_totales.setText("PIEZAS TOTALES: -")
+            return
+        total = 0
+        for info in res.values():
+            if isinstance(info, dict) and "error" not in info:
+                total += contar_piezas_grupo(info)
+        self.lbl_piezas_totales.setText(f"PIEZAS TOTALES: {total}")
+
+    def sincronizar_overlays_clave(self, clave):
+        """Actualiza REF/guillotina/tatuajes del retazo en la placa madre."""
+        if not clave:
+            return
+        grp = (getattr(self.app, "resultados_nesting", None) or {}).get(clave)
+        if not isinstance(grp, dict):
+            return
+        if grp.get("modo_largos_cu"):
+            return
+        hojas = grp.get("hojas")
+        if not isinstance(hojas, list):
+            return
+        sincronizar_overlays_grupo(hojas)
+        actualizar_eficiencias_resultados({clave: grp})
+        self._recalcular_costos_grupo(clave)
+
+    def _madre_de_hoja_rtz(self, clave, rtz_hoja):
+        if not clave or not isinstance(rtz_hoja, dict) or not rtz_hoja.get("es_retazo"):
+            return None
+        hojas = (getattr(self.app, "resultados_nesting", None) or {}).get(clave, {}).get("hojas") or []
+        idx = -1
+        rtz_id = str(rtz_hoja.get("placa_id", "") or "")
+        for i, h in enumerate(hojas):
+            if h is rtz_hoja:
+                idx = i
+                break
+        if idx < 0 and rtz_id:
+            for i, h in enumerate(hojas):
+                if h.get("es_retazo") and str(h.get("placa_id", "") or "") == rtz_id:
+                    idx = i
+                    break
+        if idx <= 0:
+            return None
+        for i in range(idx - 1, -1, -1):
+            if not (hojas[i] or {}).get("es_retazo"):
+                return hojas[i]
+        return None
+
+    def sincronizar_overlays_rtz_en_vivo(self, clave, hoja_contexto=None):
+        """Sincroniza overlays madre↔RTZ y redibuja la madre si está visible."""
+        hoja = hoja_contexto
+        if hoja is None:
+            hoja = getattr(self.visor, "hoja_actual_data", None)
+        if not clave:
+            return None
+        self.sincronizar_overlays_clave(clave)
+        madre = None
+        if isinstance(hoja, dict) and hoja.get("es_retazo"):
+            madre = self._madre_de_hoja_rtz(clave, hoja)
+        elif isinstance(hoja, dict) and not hoja.get("es_retazo"):
+            madre = hoja
+        visor = getattr(self, "visor", None)
+        if madre and visor and getattr(visor, "hoja_actual_data", None) is madre:
+            visor.dibujar_hoja_full(
+                madre,
+                clave,
+                selected_indices=getattr(visor, "piezas_seleccionadas_indices", None),
+                preserve_view=True,
+            )
+        return madre
         
     def procesar_lista_hojas(self, resultados):
+        deduplicar_resultados_nesting(resultados, kerf_global=self._kerf_efectivo())
         sincronizar_overlays_resultados(resultados)
         actualizar_eficiencias_resultados(resultados)
         for clave in (resultados or {}):
@@ -1411,7 +1793,7 @@ class TabNesting(QWidget, TimerHost):
 
         claves_ordenadas = sorted(
             (k for k in resultados.keys() if isinstance(resultados.get(k), dict)),
-            key=clave_nesting_sort_key,
+            key=lambda k: grupo_nesting_sort_key(k, resultados.get(k)),
         )
         for clave in claves_ordenadas:
             info = resultados[clave]
@@ -1419,7 +1801,8 @@ class TabNesting(QWidget, TimerHost):
             hdr_lay = QHBoxLayout(header)
             hdr_lay.setContentsMargins(0, 10, 0, 0)
             efi_tanque = formatear_eficiencias_tanque(info)
-            lbl_header = QLabel(f"📋 {clave}" + (f" | {efi_tanque}" if efi_tanque else ""))
+            clave_txt = format_clave_calibre_display(clave)
+            lbl_header = QLabel(clave_txt + (f" | {efi_tanque}" if efi_tanque else ""))
             lbl_header.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
             hdr_lay.addWidget(lbl_header)
             self._bind_menu_compensar_calibre(header, lbl_header, clave)
@@ -1434,8 +1817,17 @@ class TabNesting(QWidget, TimerHost):
 
             hojas_del_material = info.get("hojas", [])
 
+            es_grupo_cu = bool(info.get("modo_largos_cu")) or str(clave).upper().endswith("_CU")
+            if es_grupo_cu and hojas_del_material:
+                info.setdefault("ignorar_deduccion_cu", True)
+                ign_cu = bool(info.get("ignorar_deduccion_cu", True))
+                for h_cu in hojas_del_material:
+                    if not h_cu.get("es_retazo"):
+                        h_cu["ignorar_deduccion"] = ign_cu
+                self._crear_switch_ignorar_cu_grupo(self.lista_hojas, clave, info)
+
             if len(hojas_del_material) == 0:
-                err_lbl = QLabel(f"⚠️ {info.get('error', 'NO HAY EN INVENTARIO')}")
+                err_lbl = QLabel(f"AVISO: {info.get('error', 'NO HAY EN INVENTARIO')}")
                 err_lbl.setStyleSheet("font-weight:700;color:#EF4444;")
                 err_lbl.setWordWrap(True)
                 scroll_add_widget(self.lista_hojas, err_lbl)
@@ -1455,11 +1847,11 @@ class TabNesting(QWidget, TimerHost):
                     else:
                         sufijo = ""
                     ignorada = bool(hoja.get("ignorar_deduccion", False))
-                    prefijo_ign = "⊘ " if ignorada else ""
+                    prefijo_ign = "[IGN] " if ignorada else ""
                     texto_btn = (
-                        f"   ↳ {nombre_placa} (Accesorios) | {efi_txt}"
+                        f"   {nombre_placa} (Accesorios) | {efi_txt}"
                         if es_retazo else
-                        f"{prefijo_ign}◼ {nombre_placa}{sufijo}{origen_str} | {efi_txt}"
+                        f"{prefijo_ign}{nombre_placa}{sufijo}{origen_str} | {efi_txt}"
                     )
                     color_fondo = "#0F172A" if es_retazo else ("#1F2937" if ignorada else "#323741")
                     color_texto = "#38BDF8" if es_retazo else ("#94A3B8" if ignorada else ("#FCA5A5" if origen_str else "white"))
@@ -1480,7 +1872,11 @@ class TabNesting(QWidget, TimerHost):
                     fila_lay.addWidget(btn)
                     self._bind_menu_renestear_placa(btn, clave, hoja)
 
-                    if not es_retazo and placa_debe_mostrar_opcion_ignorar(hoja, hojas_del_material):
+                    if (
+                        not es_retazo
+                        and not es_grupo_cu
+                        and placa_debe_mostrar_opcion_ignorar(hoja, hojas_del_material)
+                    ):
                         self._crear_switch_ignorar_placa(fila_placa, clave, hoja, hojas_del_material)
 
                     scroll_add_widget(self.lista_hojas, fila_placa)
@@ -1489,6 +1885,9 @@ class TabNesting(QWidget, TimerHost):
         self.costo_mxn_val = float(costo_proyecto)
         tc = float(self.tipo_cambio_usdmxn or 18.50)
         self.costo_usd_val = (self.costo_mxn_val / tc) if tc > 0 else 0.0
+        self._actualizar_piezas_totales_label(resultados)
+        if self.hoja_actual_data and self.clave_actual:
+            self._actualizar_panel_placa(self.hoja_actual_data, self.clave_actual)
 
     def _ctx_tiene_resultados(self, clave=None) -> bool:
         res = getattr(self.app, "resultados_nesting", None) or {}
@@ -1867,7 +2266,7 @@ class TabNesting(QWidget, TimerHost):
             return QMessageBox.warning(self, "Atención", "No se encontró el calibre/material en el resultado.")
 
         try:
-            k = float(self.ent_kerf.text())
+            k = self._kerf_efectivo()
         except Exception:
             return QMessageBox.critical(self, "Error", "Kerf inválido.")
         m = self.global_margin_val
@@ -2036,7 +2435,7 @@ class TabNesting(QWidget, TimerHost):
             return
 
         try:
-            k = float(self.ent_kerf.text())
+            k = self._kerf_efectivo()
         except Exception:
             return QMessageBox.critical(self, "Error", "Kerf inválido.")
 
@@ -2295,7 +2694,7 @@ class TabNesting(QWidget, TimerHost):
         corner = getattr(self, "_cached_corner_for_submenu", None)
         if k is None:
             try:
-                k = float(self.ent_kerf.text())
+                k = self._kerf_efectivo()
             except Exception:
                 k = DEFAULT_KERF_IN
         if m is None:
@@ -2340,7 +2739,7 @@ class TabNesting(QWidget, TimerHost):
         self._submenu_cambiar_busy = True
 
         try:
-            self._cached_k_for_submenu = float(self.ent_kerf.text())
+            self._cached_k_for_submenu = self._kerf_efectivo()
         except Exception:
             self._cached_k_for_submenu = DEFAULT_KERF_IN
         self._cached_m_for_submenu = self.global_margin_val
@@ -2408,6 +2807,46 @@ class TabNesting(QWidget, TimerHost):
                     self.app.editable_inputs_by_lote[j] = self._clonar_datos_partes_edicion(
                         self.app.editable_inputs_by_lote[idx]
                     )
+
+    def _toggle_ignorar_deduccion_cu_grupo(self, clave, info, ignorar: bool):
+        if not isinstance(info, dict):
+            return
+        info["ignorar_deduccion_cu"] = bool(ignorar)
+        for hoja in info.get("hojas", []) or []:
+            if not hoja.get("es_retazo"):
+                hoja["ignorar_deduccion"] = bool(ignorar)
+        self._recalcular_costos_grupo(clave)
+        self._replicar_lote_activo_a_gemelos()
+        QTimer.singleShot(
+            240,
+            lambda: self.procesar_lista_hojas(self.app.resultados_nesting),
+        )
+
+    def _crear_switch_ignorar_cu_grupo(self, parent, clave, info):
+        from interface.qt.widgets.herinox_switch import HerinoxSwitch
+
+        ignorada = bool(info.get("ignorar_deduccion_cu", True))
+
+        fila_ign = QFrame(parent)
+        fila_ign.setStyleSheet("background:#111827;border:1px solid #374151;border-radius:8px;")
+        ign_lay = QHBoxLayout(fila_ign)
+        ign_lay.setContentsMargins(10, 6, 10, 6)
+
+        lbl = QLabel("Cobre — ignorar deducción inventario")
+        lbl.setStyleSheet("color:#9CA3AF;font-size:12px;font-weight:700;")
+        ign_lay.addWidget(lbl)
+        ign_lay.addStretch()
+
+        sw = HerinoxSwitch(
+            label_on="ON · Sobrante",
+            label_off="OFF · Comprar",
+            checked=ignorada,
+        )
+        sw.toggled.connect(
+            lambda checked, c=clave, g=info: self._toggle_ignorar_deduccion_cu_grupo(c, g, checked)
+        )
+        ign_lay.addWidget(sw)
+        scroll_add_widget(parent, fila_ign)
 
     def _toggle_ignorar_deduccion_placa(self, clave, hoja, ignorar: bool):
         if not isinstance(hoja, dict) or hoja.get("es_retazo"):
@@ -2623,6 +3062,153 @@ class TabNesting(QWidget, TimerHost):
             "resumen_retazos": resumen_retazos,
         }
 
+    def _resumen_piezas_reales_hoja(self, hoja):
+        resumen = {}
+        for p in (hoja.get("piezas") or []):
+            nom = str(p.get("nombre", ""))
+            if self._es_pieza_virtual(nom):
+                continue
+            resumen[nom] = resumen.get(nom, 0) + 1
+        return resumen
+
+    def _firma_resumen_piezas_hoja(self, hoja):
+        return tuple(sorted((self._resumen_piezas_reales_hoja(hoja) or {}).items()))
+
+    def _inventario_piezas_grupo(self, clave, resultados=None):
+        datos = resultados if resultados is not None else getattr(self.app, "resultados_nesting", {})
+        grp = (datos or {}).get(clave, {})
+        inventario = {}
+        for hoja in (grp.get("hojas") or []):
+            for nom, cnt in self._resumen_piezas_reales_hoja(hoja).items():
+                inventario[nom] = inventario.get(nom, 0) + int(cnt)
+        return inventario
+
+    def _inventarios_equivalentes(self, inv_a, inv_b):
+        norm = lambda d: {str(k): int(v) for k, v in (d or {}).items()}
+        return norm(inv_a) == norm(inv_b)
+
+    def _texto_diff_inventario(self, inv_antes, inv_despues):
+        antes = {str(k): int(v) for k, v in (inv_antes or {}).items()}
+        despues = {str(k): int(v) for k, v in (inv_despues or {}).items()}
+        nombres = sorted(set(antes) | set(despues))
+        lineas = []
+        for nom in nombres:
+            a = int(antes.get(nom, 0))
+            d = int(despues.get(nom, 0))
+            if a != d:
+                lineas.append(f"  · {nom}: {a} → {d}")
+        if not lineas:
+            return ""
+        return "Cambios detectados:\n" + "\n".join(lineas[:12])
+
+    def _hoja_cumple_resumen_esperado(self, hoja, resumen_esperado):
+        if not resumen_esperado:
+            return True
+        actual = self._resumen_piezas_reales_hoja(hoja)
+        esperado = {str(k): int(v) for k, v in resumen_esperado.items()}
+        return actual == esperado
+
+    def _snapshot_grupo_nesting(self, clave):
+        grp = (getattr(self.app, "resultados_nesting", None) or {}).get(clave)
+        if not isinstance(grp, dict):
+            return None
+        return copy.deepcopy(grp)
+
+    def _restaurar_grupo_nesting(self, clave, snapshot):
+        if snapshot is None:
+            return False
+        if not isinstance(getattr(self.app, "resultados_nesting", None), dict):
+            self.app.resultados_nesting = {}
+        self.app.resultados_nesting[clave] = copy.deepcopy(snapshot)
+        return True
+
+    def _buscar_hoja_restaurada(self, clave, hoja_original=None, idx_objetivo=None):
+        grp = (getattr(self.app, "resultados_nesting", None) or {}).get(clave, {})
+        hojas = grp.get("hojas") or []
+        if isinstance(hoja_original, dict):
+            idx_vivo, h_viva = self._asegurar_indice_hoja_objetivo(clave, hoja_original)
+            if idx_vivo >= 0 and h_viva is not None:
+                return h_viva
+        if idx_objetivo is not None and 0 <= int(idx_objetivo) < len(hojas):
+            return hojas[int(idx_objetivo)]
+        return hojas[0] if hojas else None
+
+    def _abortar_y_restaurar_nesting(
+        self,
+        clave,
+        snapshot,
+        mensaje,
+        hoja_original=None,
+        idx_objetivo=None,
+    ):
+        if snapshot is not None:
+            self._restaurar_grupo_nesting(clave, snapshot)
+            self._replicar_lote_activo_a_gemelos()
+        self.procesar_lista_hojas(self.app.resultados_nesting)
+        hoja_vista = self._buscar_hoja_restaurada(
+            clave,
+            hoja_original=hoja_original,
+            idx_objetivo=idx_objetivo,
+        )
+        if hoja_vista is not None:
+            self.dibujar_hoja_full(hoja_vista, clave)
+        QMessageBox.critical(
+            self,
+            "Operación cancelada",
+            f"{mensaje}\n\nSe restauró el nesteo anterior. Ninguna pieza fue eliminada.",
+        )
+
+    def _asegurar_indice_hoja_objetivo(self, clave, hoja):
+        """Ubica de forma única la hoja dentro del grupo."""
+        grp = self.app.resultados_nesting.get(clave, {})
+        hojas = grp.get("hojas") or []
+        if not hojas or not isinstance(hoja, dict):
+            return -1, None
+        for i, h in enumerate(hojas):
+            if h is hoja:
+                return i, h
+        uid = str(hoja.get("sheet_uid") or "").strip()
+        if uid:
+            matches = [i for i, h in enumerate(hojas) if str(h.get("sheet_uid") or "").strip() == uid]
+            if len(matches) == 1:
+                return matches[0], hojas[matches[0]]
+        pid_ref = str(hoja.get("placa_id", "") or "")
+        es_ref = bool(hoja.get("es_retazo", False))
+        w_ref = float(hoja.get("placa_w", 0) or 0)
+        h_ref_dim = float(hoja.get("placa_h", 0) or 0)
+        nest_idx = hoja.get("_nest_list_idx")
+        if nest_idx is not None:
+            ni = int(nest_idx)
+            if 0 <= ni < len(hojas):
+                h_cand = hojas[ni]
+                if (
+                    str(h_cand.get("placa_id", "") or "") == pid_ref
+                    and bool(h_cand.get("es_retazo", False)) == es_ref
+                    and abs(float(h_cand.get("placa_w", 0) or 0) - w_ref) <= 0.5
+                    and abs(float(h_cand.get("placa_h", 0) or 0) - h_ref_dim) <= 0.5
+                    and self._firma_resumen_piezas_hoja(h_cand) == self._firma_resumen_piezas_hoja(hoja)
+                ):
+                    return ni, h_cand
+        candidatos = []
+        for i, h in enumerate(hojas):
+            if str(h.get("placa_id", "") or "") != pid_ref:
+                continue
+            if bool(h.get("es_retazo", False)) != es_ref:
+                continue
+            if abs(float(h.get("placa_w", 0) or 0) - w_ref) > 0.5:
+                continue
+            if abs(float(h.get("placa_h", 0) or 0) - h_ref_dim) > 0.5:
+                continue
+            candidatos.append(i)
+        if len(candidatos) == 1:
+            return candidatos[0], hojas[candidatos[0]]
+        if candidatos:
+            firma = self._firma_resumen_piezas_hoja(hoja)
+            por_firma = [i for i in candidatos if self._firma_resumen_piezas_hoja(hojas[i]) == firma]
+            if len(por_firma) == 1:
+                return por_firma[0], hojas[por_firma[0]]
+        return -1, None
+
     def cambiar_placa_y_renestear(self, clave, hoja, candidata):
         if not self._ctx_tiene_resultados(clave):
             return
@@ -2638,7 +3224,7 @@ class TabNesting(QWidget, TimerHost):
         piezas = self._piezas_pack_madre_para_empaque(clave, hoja)
         if piezas:
             try:
-                k = float(self.ent_kerf.text())
+                k = self._kerf_efectivo()
             except Exception:
                 k = DEFAULT_KERF_IN
             m = self.global_margin_val
@@ -2813,7 +3399,7 @@ class TabNesting(QWidget, TimerHost):
                 "Las placas reutilizadas (RTZ) o mini-nest no se pueden renestear desde el menú contextual.",
             )
         try:
-            k = float(self.ent_kerf.text())
+            k = self._kerf_efectivo()
         except Exception:
             return QMessageBox.critical(self, "Error", "Valores no válidos.")
         m = self.global_margin_val
@@ -2824,6 +3410,8 @@ class TabNesting(QWidget, TimerHost):
         bloque_objetivo = self._desglosar_bloque_placa_mini(clave, hoja)
         idx_objetivo = bloque_objetivo.get("idx_base", -1)
         hoja_ref = hoja
+        backup_grupo = self._snapshot_grupo_nesting(clave)
+        inventario_antes = self._inventario_piezas_grupo(clave)
 
         def worker():
             if hasattr(self.app, "actualizar_progreso"):
@@ -2858,6 +3446,8 @@ class TabNesting(QWidget, TimerHost):
                     tiene_minis=bool(idx_retazos_asociados),
                     idx_objetivo=idx_objetivo,
                     hoja_ref=hoja_ref,
+                    backup_grupo=backup_grupo,
+                    inventario_antes=inventario_antes,
                 )
             )
 
@@ -2867,12 +3457,15 @@ class TabNesting(QWidget, TimerHost):
         if not self.hoja_actual_data:
             return
         try:
-            k, m = float(self.ent_kerf.text()), self.global_margin_val
+            k, m = self._kerf_efectivo(), self.global_margin_val
         except Exception:
             return QMessageBox.critical(self, "Error", "Valores no válidos.")
 
         if hasattr(self.app, 'abrir_ventana_carga'):
             self.app.abrir_ventana_carga("Recalculando Placa...")
+
+        backup_grupo = self._snapshot_grupo_nesting(self.clave_actual)
+        inventario_antes = self._inventario_piezas_grupo(self.clave_actual)
 
         def worker():
             if hasattr(self.app, 'actualizar_progreso'):
@@ -2922,7 +3515,10 @@ class TabNesting(QWidget, TimerHost):
                     self.global_corner_val,
                     intentos=8,
                     debug_tag="recalc_local",
+                    solo_completo=True,
                 )
+                if nh and not self._hoja_cumple_resumen_esperado(nh, resumen_hoja):
+                    nh = None
                 if nh:
                     nh.update({
                         'placa_id': self.hoja_actual_data['placa_id'],
@@ -2954,6 +3550,9 @@ class TabNesting(QWidget, TimerHost):
                     post_fill=False,
                     idx_objetivo=idx_objetivo,
                     hoja_ref=hoja_ref,
+                    hoja_original=copy.deepcopy(self.hoja_actual_data),
+                    backup_grupo=backup_grupo,
+                    inventario_antes=inventario_antes,
                 ),
             )
 
@@ -2968,6 +3567,19 @@ class TabNesting(QWidget, TimerHost):
                 if h is hoja_ref:
                     return i
         if hoja_original is not None:
+            uid_ref = str(hoja_original.get("sheet_uid") or "").strip()
+            if uid_ref:
+                matches = [
+                    i for i, h in enumerate(hojas)
+                    if str(h.get("sheet_uid") or "").strip() == uid_ref
+                ]
+                if len(matches) == 1:
+                    return matches[0]
+            nest_idx = hoja_original.get("_nest_list_idx")
+            if nest_idx is not None:
+                ni = int(nest_idx)
+                if 0 <= ni < len(hojas):
+                    return ni
             pid_ref = str(hoja_original.get("placa_id", "") or "")
             es_ref = bool(hoja_original.get("es_retazo", False))
             w_ref = float(hoja_original.get("placa_w", 0) or 0)
@@ -2985,6 +3597,14 @@ class TabNesting(QWidget, TimerHost):
                 candidatos.append(i)
             if len(candidatos) == 1:
                 return candidatos[0]
+            if candidatos:
+                firma = self._firma_resumen_piezas_hoja(hoja_original)
+                por_firma = [
+                    i for i in candidatos
+                    if self._firma_resumen_piezas_hoja(hojas[i]) == firma
+                ]
+                if len(por_firma) == 1:
+                    return por_firma[0]
         pid_n = str((nueva or {}).get("placa_id", "") or "")
         for i, h in enumerate(hojas):
             if str(h.get("placa_id", "") or "") == pid_n:
@@ -3002,59 +3622,118 @@ class TabNesting(QWidget, TimerHost):
         tiene_minis=False,
         idx_objetivo=None,
         hoja_ref=None,
+        backup_grupo=None,
+        inventario_antes=None,
     ):
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
 
         clv = clave_renest if clave_renest is not None else self.clave_actual
+        snapshot = (
+            backup_grupo
+            if backup_grupo is not None
+            else self._snapshot_grupo_nesting(clv)
+        )
+        inv_antes = (
+            inventario_antes
+            if inventario_antes is not None
+            else self._inventario_piezas_grupo(clv)
+        )
 
-        if nueva:
-            grp = self.app.resultados_nesting.get(clv)
-            if not grp or "hojas" not in grp:
-                QMessageBox.warning(self, "Atención", "No se encontró el grupo de material en el resultado.")
+        if not nueva:
+            QMessageBox.warning(
+                self,
+                "Atención",
+                "No se logró un acomodo válido para esa placa (sobran piezas o Kerf/márgenes incompatibles).\n\n"
+                "El nesteo no fue modificado.",
+            )
+            return
+
+        grp = self.app.resultados_nesting.get(clv)
+        if not grp or "hojas" not in grp:
+            QMessageBox.warning(self, "Atención", "No se encontró el grupo de material en el resultado.")
+            return
+
+        if hoja_original:
+            resumen_req = self._resumen_piezas_reales_hoja(hoja_original)
+            if not self._hoja_cumple_resumen_esperado(nueva, resumen_req):
+                self._abortar_y_restaurar_nesting(
+                    clv,
+                    snapshot,
+                    "El motor no colocó todas las piezas de la placa objetivo.",
+                    hoja_original=hoja_original,
+                    idx_objetivo=idx_objetivo,
+                )
                 return
 
-            # Regla de seguridad: si es placa madre con mini-nests y el acomodo
-            # no cambió en esencia, conservar exactamente la placa original.
-            if tiene_minis and hoja_original and self._placa_equivalente_en_esencia(hoja_original, nueva):
-                nueva = copy.deepcopy(hoja_original)
-                idx_retazos_asociados = None
-                nuevas_retazos = None
+        if tiene_minis and hoja_original and self._placa_equivalente_en_esencia(hoja_original, nueva):
+            nueva = copy.deepcopy(hoja_original)
+            idx_retazos_asociados = None
+            nuevas_retazos = None
 
-            if idx_retazos_asociados and nuevas_retazos is not None:
-                for ridx in sorted(set(idx_retazos_asociados), reverse=True):
-                    if 0 <= ridx < len(grp["hojas"]) and grp["hojas"][ridx].get("es_retazo", False):
-                        grp["hojas"].pop(ridx)
-            hoja_actualizada = nueva
-            idx_match = self._resolver_indice_hoja_objetivo(
-                grp,
-                nueva,
-                idx_objetivo=idx_objetivo,
-                hoja_ref=hoja_ref,
+        if idx_retazos_asociados and nuevas_retazos is not None:
+            for ridx in sorted(set(idx_retazos_asociados), reverse=True):
+                if 0 <= ridx < len(grp["hojas"]) and grp["hojas"][ridx].get("es_retazo", False):
+                    grp["hojas"].pop(ridx)
+
+        idx_match = self._resolver_indice_hoja_objetivo(
+            grp,
+            nueva,
+            idx_objetivo=idx_objetivo,
+            hoja_ref=hoja_ref,
+            hoja_original=hoja_original,
+        )
+        if idx_match < 0:
+            self._abortar_y_restaurar_nesting(
+                clv,
+                snapshot,
+                "No se pudo ubicar la placa correcta en el listado.",
                 hoja_original=hoja_original,
+                idx_objetivo=idx_objetivo,
             )
-            if idx_match >= 0:
-                self.app.resultados_nesting[clv]["hojas"][idx_match] = nueva
-                hoja_ref = self.app.resultados_nesting[clv]["hojas"][idx_match]
-                if post_fill:
-                    self._llenar_placa_desde_otras_hojas(clv, hoja_ref)
-                hoja_actualizada = self.app.resultados_nesting[clv]["hojas"][idx_match]
-                if nuevas_retazos:
-                    pos = idx_match + 1
-                    for hret in nuevas_retazos:
-                        self.app.resultados_nesting[clv]["hojas"].insert(pos, hret)
-                        pos += 1
-            self._recalcular_costos_grupo(clv)
-            self._replicar_lote_activo_a_gemelos()
-            if idx_match == -1 and grp["hojas"]:
-                hoja_actualizada = grp["hojas"][0]
-            self.dibujar_hoja_full(hoja_actualizada, clv)
-            self.procesar_lista_hojas(self.app.resultados_nesting)
-        else:
-            QMessageBox.warning(self, 
-                "Atención",
-                "No se logró un acomodo válido para esa placa (sobran piezas o Kerf/márgenes incompatibles).",
+            return
+
+        anterior = grp["hojas"][idx_match]
+        for mk in (
+            "sheet_uid",
+            "sheet_code",
+            "sheet_seq",
+            "sheet_display_name",
+            "plate_group_key",
+            "_nest_list_idx",
+        ):
+            if anterior.get(mk) is not None:
+                nueva[mk] = anterior[mk]
+
+        self.app.resultados_nesting[clv]["hojas"][idx_match] = nueva
+        hoja_ref = self.app.resultados_nesting[clv]["hojas"][idx_match]
+        if post_fill:
+            self._llenar_placa_desde_otras_hojas(clv, hoja_ref)
+        hoja_actualizada = self.app.resultados_nesting[clv]["hojas"][idx_match]
+        if nuevas_retazos:
+            pos = idx_match + 1
+            for hret in nuevas_retazos:
+                self.app.resultados_nesting[clv]["hojas"].insert(pos, hret)
+                pos += 1
+
+        inv_despues = self._inventario_piezas_grupo(clv)
+        if not self._inventarios_equivalentes(inv_antes, inv_despues):
+            diff = self._texto_diff_inventario(inv_antes, inv_despues)
+            self._abortar_y_restaurar_nesting(
+                clv,
+                snapshot,
+                "La operación alteró el inventario total de piezas del calibre.\n"
+                f"{diff}".strip(),
+                hoja_original=hoja_original,
+                idx_objetivo=idx_objetivo,
             )
+            return
+
+        self._recalcular_costos_grupo(clv)
+        self.sincronizar_overlays_clave(clv)
+        self._replicar_lote_activo_a_gemelos()
+        self.dibujar_hoja_full(hoja_actualizada, clv)
+        self.procesar_lista_hojas(self.app.resultados_nesting)
 
     def cargar_workspace_swo(self):
         ruta_archivo = self._ask_open_file(
@@ -3096,6 +3775,9 @@ class TabNesting(QWidget, TimerHost):
         if hasattr(self.app, "abrir_ventana_carga"):
             self.app.abrir_ventana_carga("Moviendo piezas a otra placa...")
 
+        backup_grupo = self._snapshot_grupo_nesting(clave)
+        inventario_antes = self._inventario_piezas_grupo(clave)
+
         def worker():
             resultado = self.app.motor_nesting.transferir_piezas_a_placa(
                 self.app.resultados_nesting,
@@ -3104,14 +3786,45 @@ class TabNesting(QWidget, TimerHost):
             )
             self.app.after(
                 0,
-                lambda r=resultado: self.finalizar_transferencia_masiva(r, hoja_destino, clave),
+                lambda r=resultado: self.finalizar_transferencia_masiva(
+                    r,
+                    hoja_destino,
+                    clave,
+                    backup_grupo=backup_grupo,
+                    inventario_antes=inventario_antes,
+                ),
             )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def finalizar_transferencia_masiva(self, resultado, hoja_destino, clave):
+    def finalizar_transferencia_masiva(
+        self,
+        resultado,
+        hoja_destino,
+        clave,
+        backup_grupo=None,
+        inventario_antes=None,
+    ):
         if hasattr(self.app, "cerrar_ventana_carga"):
             self.app.cerrar_ventana_carga()
+
+        snapshot = backup_grupo if backup_grupo is not None else self._snapshot_grupo_nesting(clave)
+        inv_antes = (
+            inventario_antes
+            if inventario_antes is not None
+            else self._inventario_piezas_grupo(clave)
+        )
+        inv_despues = self._inventario_piezas_grupo(clave)
+        if not self._inventarios_equivalentes(inv_antes, inv_despues):
+            diff = self._texto_diff_inventario(inv_antes, inv_despues)
+            self._abortar_y_restaurar_nesting(
+                clave,
+                snapshot,
+                "La transferencia alteró el inventario total de piezas.\n"
+                f"{diff}".strip(),
+                hoja_original=hoja_destino,
+            )
+            return
 
         movidas = int((resultado or {}).get("movidas", 0) or 0)
         restantes = int((resultado or {}).get("restantes", 0) or 0)
@@ -3124,6 +3837,7 @@ class TabNesting(QWidget, TimerHost):
             self.btn_rot_m1.setEnabled(False)
             self.btn_rot_p1.setEnabled(False)
             self._recalcular_costos_grupo(clave)
+            self.sincronizar_overlays_clave(clave)
             self._replicar_lote_activo_a_gemelos()
             self.procesar_lista_hojas(self.app.resultados_nesting)
             self.dibujar_hoja_full(hoja_destino, clave)
@@ -3187,21 +3901,60 @@ class TabNesting(QWidget, TimerHost):
             )
             self.app.abrir_ventana_carga(msg_carga)
 
+        backup_grupo = self._snapshot_grupo_nesting(self.clave_actual)
+        inventario_antes = self._inventario_piezas_grupo(self.clave_actual)
+        hoja_origen_snap = self.hoja_actual_data
+
         def worker():
             resultado = self.app.motor_nesting.transferir_piezas_a_placa(
                 self.app.resultados_nesting,
-                self.hoja_actual_data,
+                hoja_origen_snap,
                 hoja_destino,
                 piezas_especificas=piezas_sel,
                 piezas_indices=indices_sel,
             )
-            self.app.after(0, lambda r=resultado: self.finalizar_transferencia(r, hoja_destino))
+            self.app.after(
+                0,
+                lambda r=resultado: self.finalizar_transferencia(
+                    r,
+                    hoja_destino,
+                    backup_grupo=backup_grupo,
+                    inventario_antes=inventario_antes,
+                    clave=self.clave_actual,
+                ),
+            )
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def finalizar_transferencia(self, exito, hoja_destino=None):
+    def finalizar_transferencia(
+        self,
+        exito,
+        hoja_destino=None,
+        backup_grupo=None,
+        inventario_antes=None,
+        clave=None,
+    ):
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
+
+        clv = clave if clave is not None else self.clave_actual
+        snapshot = backup_grupo if backup_grupo is not None else self._snapshot_grupo_nesting(clv)
+        inv_antes = (
+            inventario_antes
+            if inventario_antes is not None
+            else self._inventario_piezas_grupo(clv)
+        )
+        inv_despues = self._inventario_piezas_grupo(clv)
+        if not self._inventarios_equivalentes(inv_antes, inv_despues):
+            diff = self._texto_diff_inventario(inv_antes, inv_despues)
+            self._abortar_y_restaurar_nesting(
+                clv,
+                snapshot,
+                "La transferencia alteró el inventario total de piezas.\n"
+                f"{diff}".strip(),
+                hoja_original=hoja_destino,
+            )
+            return
 
         resultado = None
         if isinstance(exito, dict):
@@ -3211,16 +3964,17 @@ class TabNesting(QWidget, TimerHost):
         if exito:
             self.visor.limpiar_seleccion_piezas()
             self.on_piece_selected()
-            if self.clave_actual:
-                self._recalcular_costos_grupo(self.clave_actual)
+
+            self.sincronizar_overlays_clave(clv)
+            self._recalcular_costos_grupo(clv)
             self._replicar_lote_activo_a_gemelos()
             self.procesar_lista_hojas(self.app.resultados_nesting)
             if hoja_destino is not None:
-                self.dibujar_hoja_full(hoja_destino, self.clave_actual)
+                self.dibujar_hoja_full(hoja_destino, clv)
             else:
-                hojas = self.app.resultados_nesting.get(self.clave_actual, {}).get("hojas", [])
+                hojas = self.app.resultados_nesting.get(clv, {}).get("hojas", [])
                 if hojas:
-                    self.dibujar_hoja_full(hojas[0], self.clave_actual)
+                    self.dibujar_hoja_full(hojas[0], clv)
 
             if resultado and int(resultado.get("solicitadas", 0) or 0) > 1:
                 movidas = int(resultado.get("movidas", 0) or 0)
@@ -3274,7 +4028,7 @@ class TabNesting(QWidget, TimerHost):
         # === RADAR DE RUTAS DE IMPORTACIÓN (DIAGNÓSTICO) ===
         # =====================================================
         print("\n" + "=" * 50)
-        print("🔍 VERIFICACIÓN DE ORIGEN DE DXFs (S.W.O.)")
+        print("VERIFICACIÓN DE ORIGEN DE DXFs (S.W.O.)")
         print("=" * 50)
 
         rutas_vistas = set()
@@ -3365,6 +4119,9 @@ class TabNesting(QWidget, TimerHost):
                         es_swo=es_swo_flag,
                         modo_local=not modo_servidor,
                     )
+                    if not modo_servidor:
+                        asegurar_exportacion_local(r_base, etiqueta="r_base")
+                        asegurar_exportacion_local(ruta_absoluta_wo, etiqueta="carpeta WO")
                     print(f"[EXPORT] WO={n_wo} -> {ruta_absoluta_wo}")
 
                     # === INICIO DE RADIOGRAFÍA DE DATOS ===
@@ -3409,7 +4166,9 @@ class TabNesting(QWidget, TimerHost):
                         ruta_export,
                         "NESTING",
                         respuesta_3d,
-                        wo_label=n_wo
+                        wo_label=n_wo,
+                        es_swo=es_swo_flag,
+                        swo_id=job_activo if es_swo_flag else None,
                     )
 
                     if modo_servidor:
@@ -3495,7 +4254,7 @@ class TabNesting(QWidget, TimerHost):
                 if modo_servidor:
                     mensaje_final = f"Se exportaron {total_carpetas} Órdenes de Trabajo separadas."
                     if usando_offline:
-                        mensaje_final += "\n\n⚠️ (AVISO: Se usó el contador Offline porque el Servidor está desconectado)."
+                        mensaje_final += "\n\n(AVISO: Se usó el contador Offline porque el Servidor está desconectado)."
                 else:
                     mensaje_final = (
                         f"Se exportaron {total_carpetas} lotes en modo local.\n"

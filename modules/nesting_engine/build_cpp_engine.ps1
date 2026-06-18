@@ -1,11 +1,15 @@
 # Compila el motor de nesting C++ (pybind11 + Clipper2) para Python activo.
 param(
-    [string[]]$Python = @("py", "-3.14")
+    [string]$PythonExe = ""
 )
 
 function Invoke-Python {
     param([string[]]$Args)
-    & @Python @Args
+    if ($PythonExe) {
+        & $PythonExe @Args
+    } else {
+        & py -3.14 @Args
+    }
     if ($LASTEXITCODE -ne 0) { throw "Python falló: $Args" }
 }
 

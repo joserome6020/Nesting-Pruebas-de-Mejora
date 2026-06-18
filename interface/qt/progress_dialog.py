@@ -134,8 +134,9 @@ class ProgressDialog(QDialog):
 
     def actualizar(self, mensaje: str, porcentaje: float) -> None:
         self.lbl_mensaje.setText(mensaje)
-        self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
-        self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
+        if not self._usar_animacion:
+            self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
+            self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
 
     def force_close(self) -> None:
         self._force_close = True

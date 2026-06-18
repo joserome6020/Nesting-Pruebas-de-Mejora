@@ -1,11 +1,18 @@
-"""Puente Python → motor de nesting nativo (C++ / Cython fallback)."""
+"""Puente Python → motor de nesting nativo C++ (Clipper2 + pybind11)."""
 from __future__ import annotations
 
 import copy
 import os
+from collections import Counter
 
 _ENGINE_NAME = "unknown"
 _empaquetar_native = None
+
+_CPP_REQUIRED_MSG = (
+    "Motor C++ no disponible. Compila con:\n"
+    "  modules\\nesting_engine\\build_cpp_engine.ps1\n"
+    "Requiere: Python activo, cmake, pybind11 y MSVC Build Tools."
+)
 
 
 def _rings_from_shapely_polygon(poly):
@@ -23,7 +30,6 @@ def _marks_ring_coords(coords):
     ring = [(float(x), float(y)) for x, y in coords]
     if len(ring) < 2:
         return None
-    # Compat: bindings C++ antiguos descartaban anillos con < 3 puntos.
     if len(ring) == 2:
         ring.append(ring[-1])
     return ring
@@ -68,13 +74,24 @@ def _piece_to_native(piece):
     }
 
 
-def _piece_from_native_rest(piece_native, original_lookup):
+def _build_piece_lookup_lists(piezas):
+    lookup: dict[str, list] = {}
+    for p in piezas or []:
+        key = str(p.get("nombre") or "")
+        lookup.setdefault(key, []).append(p)
+    return lookup
+
+
+def _piece_from_native_rest(piece_native, lookup_lists):
     key = str(piece_native.get("nombre") or "")
-    src = original_lookup.get(key)
-    if src is None:
+    bucket = lookup_lists.get(key)
+    if not bucket:
         return None
-    restored = copy.deepcopy(src)
-    return restored
+    return copy.deepcopy(bucket.pop(0))
+
+
+class NestingEngineUnavailableError(RuntimeError):
+    """El módulo algorithm_cpp.pyd no está compilado o no carga."""
 
 
 def _resolve_engine():
@@ -84,26 +101,19 @@ def _resolve_engine():
 
     force = str(os.environ.get("ARGA_NESTING_ENGINE", "")).strip().lower()
     if force in {"cython", "python"}:
-        from .algorithm import empaquetar_una_hoja_mc as fn
-
-        _empaquetar_native = fn
-        _ENGINE_NAME = "cython"
-        return fn, _ENGINE_NAME
+        raise NestingEngineUnavailableError(
+            "ARGA_NESTING_ENGINE=cython/python ya no está soportado. "
+            "Todo el empaquetado matemático corre en C++ (algorithm_cpp.pyd)."
+        )
 
     try:
         from . import algorithm_cpp
 
         _empaquetar_native = algorithm_cpp.empaquetar_una_hoja_mc
-        _ENGINE_NAME = getattr(algorithm_cpp, "ENGINE_NAME", "cpp")
+        _ENGINE_NAME = getattr(algorithm_cpp, "ENGINE_NAME", "cpp_clipper2")
         return _empaquetar_native, _ENGINE_NAME
-    except ImportError:
-        pass
-
-    from .algorithm import empaquetar_una_hoja_mc as fn
-
-    _empaquetar_native = fn
-    _ENGINE_NAME = "cython"
-    return fn, _ENGINE_NAME
+    except ImportError as exc:
+        raise NestingEngineUnavailableError(_CPP_REQUIRED_MSG) from exc
 
 
 def engine_name() -> str:
@@ -115,41 +125,43 @@ def empaquetar_una_hoja_mc(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.2,
+    kerf_override=0.3,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
+    mc_iterations=None,
 ):
-    fn, engine = _resolve_engine()
+    from .nest_optimization import get_nest_profile
 
-    if engine == "cython":
-        return fn(
-            piezas,
-            w_placa,
-            h_placa,
-            kerf_override,
-            margin_override,
-            opt_override,
-            corner_override,
-            limite_poly=limite_poly,
-        )
+    if mc_iterations is None:
+        mc_iterations = int(get_nest_profile().get("mc_iterations", 15))
+    mc_iterations = max(1, min(int(mc_iterations), 50))
+
+    fn, _engine = _resolve_engine()
 
     native_piezas = [_piece_to_native(p) for p in (piezas or [])]
     limite_rings = None
     if limite_poly is not None:
         limite_rings = _rings_from_shapely_polygon(limite_poly)
 
-    hoja_native, restos_native = fn(
-        native_piezas,
-        w_placa,
-        h_placa,
-        kerf_override,
-        margin_override,
-        opt_override,
-        corner_override,
-        limite_rings,
-    )
+    try:
+        hoja_native, restos_native = fn(
+            native_piezas,
+            w_placa,
+            h_placa,
+            kerf_override,
+            margin_override,
+            opt_override,
+            corner_override,
+            limite_rings,
+            mc_iterations,
+        )
+    except TypeError as exc:
+        raise NestingEngineUnavailableError(
+            "algorithm_cpp.pyd desactualizado (falta mc_iterations). "
+            "Recompila con build_cpp_engine.ps1."
+        ) from exc
 
     hoja = {
         "piezas": list(hoja_native.get("piezas", [])),
@@ -157,20 +169,21 @@ def empaquetar_una_hoja_mc(
         "eficiencia": float(hoja_native.get("eficiencia", 0.0) or 0.0),
     }
 
-    lookup = {}
-    for p in piezas or []:
-        lookup[str(p.get("nombre") or "")] = p
+    lookup_lists = _build_piece_lookup_lists(piezas)
 
     restos = []
     for rn in restos_native or []:
-        restored = _piece_from_native_rest(rn, lookup)
+        restored = _piece_from_native_rest(rn, lookup_lists)
         if restored is not None:
             restos.append(restored)
 
     if not restos:
-        placed = {str(x.get("nombre") or "") for x in hoja["piezas"]}
+        placed_ctr = Counter(str(x.get("nombre") or "") for x in hoja.get("piezas") or [])
         for p in piezas or []:
-            if str(p.get("nombre") or "") not in placed:
+            nom = str(p.get("nombre") or "")
+            if placed_ctr.get(nom, 0) > 0:
+                placed_ctr[nom] -= 1
+            else:
                 restos.append(copy.deepcopy(p))
 
     return hoja, restos

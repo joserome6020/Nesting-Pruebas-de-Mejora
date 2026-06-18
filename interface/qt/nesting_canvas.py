@@ -5,7 +5,7 @@ import time
 import copy
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QTimer, Qt
-from PySide6.QtGui import QBrush, QCursor, QKeyEvent, QMouseEvent, QPen, QTransform, QWheelEvent
+from PySide6.QtGui import QBrush, QColor, QCursor, QKeyEvent, QMouseEvent, QPen, QTransform, QWheelEvent
 from PySide6.QtWidgets import (
     QGraphicsPathItem,
     QGraphicsScene,
@@ -21,12 +21,19 @@ from shapely.affinity import translate
 from shapely.geometry import Polygon, box, Point, LineString
 
 from interface.qt.nesting_graphics import (
+    COLOR_CU_EDGE,
+    COLOR_CU_FILL,
+    COLOR_CU_SEL,
+    COLOR_CU_SEL_EDGE,
     COLOR_PIECE_EDGE,
     COLOR_PIECE_FILL,
     COLOR_PIECE_SEL,
     COLOR_PIECE_SEL_EDGE,
+    COLOR_REF_EDGE,
+    COLOR_REF_FILL,
     NestingDrawParams,
     NestingGraphicsView,
+    _is_copper_context,
     compute_fit_rect,
     populate_nesting_scene,
 )
@@ -114,6 +121,7 @@ class _NestingView(NestingGraphicsView):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._visor._position_coord_hud()
+        self._visor._position_dim_labels()
 
 
 class VisorNesting(QWidget):
@@ -146,6 +154,11 @@ class VisorNesting(QWidget):
         self._manual_piece_indices = []
         self._manual_piece_bounds = {}
         self._obstacle_bounds = {}
+        self._rtz_sync_after_id = None
+        self._rtz_sync_pending = False
+        self.modo_edicion_libre_seleccion = False
+        self.indices_edicion_libre = set()
+        self.snapshot_edicion_libre = {}
         self._view_box = (0.0, 1000.0, -200.0, 1000.0)
         self._scene_meta = {}
         self._piece_gfx: dict[int, list] = {}
@@ -198,6 +211,8 @@ class VisorNesting(QWidget):
             "color:rgba(255,255,255,0.88);font-family:Consolas,monospace;font-size:11px;"
             "background:rgba(15,23,42,0.72);padding:4px 8px;border-radius:6px;"
         )
+        self._dim_label_widgets: list[QLabel] = []
+        self._dim_label_specs: list[dict] = []
         self._position_coord_hud()
 
     def _position_coord_hud(self):
@@ -209,10 +224,58 @@ class VisorNesting(QWidget):
         x = max(margin, vp.width() - self._coord_label.width() - margin)
         self._coord_label.move(x, margin)
         self._coord_label.raise_()
+        self._position_dim_labels()
+
+    def _clear_dim_labels(self):
+        for lb in getattr(self, "_dim_label_widgets", []):
+            lb.deleteLater()
+        self._dim_label_widgets = []
+        self._dim_label_specs = []
+
+    def _setup_dim_labels(self, specs: list[dict]):
+        self._clear_dim_labels()
+        self._dim_label_specs = list(specs or [])
+        vp = self._view.viewport()
+        for spec in self._dim_label_specs:
+            lb = QLabel(str(spec.get("text", "")), vp)
+            lb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            lb.setStyleSheet(
+                "color:rgba(255,255,255,0.92);font-family:Segoe UI,sans-serif;"
+                "font-size:11px;font-weight:600;background:transparent;"
+            )
+            lb.show()
+            self._dim_label_widgets.append(lb)
+        self._position_dim_labels()
+
+    def _position_dim_labels(self):
+        specs = getattr(self, "_dim_label_specs", [])
+        widgets = getattr(self, "_dim_label_widgets", [])
+        if not specs or len(specs) != len(widgets):
+            return
+        gap_px = 14.0
+        for lb, spec in zip(widgets, specs):
+            line_x = float(spec.get("line_x", 0.0))
+            line_y = float(spec.get("line_y", 0.0))
+            out_x = float(spec.get("out_x", 0.0))
+            out_y = float(spec.get("out_y", 0.0))
+            vp_line = self._view.mapFromScene(QPointF(line_x, line_y))
+            vp_out = self._view.mapFromScene(QPointF(line_x + out_x, line_y + out_y))
+            dx = float(vp_out.x() - vp_line.x())
+            dy = float(vp_out.y() - vp_line.y())
+            length = (dx * dx + dy * dy) ** 0.5
+            if length > 0.5:
+                dx = dx / length * gap_px
+                dy = dy / length * gap_px
+            lb.adjustSize()
+            x = int(round(vp_line.x() - lb.width() * 0.5 + dx))
+            y = int(round(vp_line.y() - lb.height() * 0.5 + dy))
+            lb.move(x, y)
+            lb.raise_()
 
     def clear_scene(self):
         self._scene.clear()
         self.hoja_actual_data = None
+        self._clear_dim_labels()
 
     def _apply_view_box(self):
         x0, x1, yb, yt = self._view_box
@@ -221,6 +284,7 @@ class VisorNesting(QWidget):
         self._view.resetTransform()
         self._view.scale(1.0, -1.0)
         self._view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._position_dim_labels()
 
     def _pan_translate_pixels(self, dx_px: float, dy_px: float):
         """Pan fluido vía transform (estándar CAD/Qt), sin rebuild ni fitInView."""
@@ -255,6 +319,7 @@ class VisorNesting(QWidget):
             log_error("zoom_wheel", exc)
         finally:
             log_slow("zoom_wheel", (time.perf_counter() - t0) * 1000.0)
+        self._position_dim_labels()
 
     def _scene_point(self, event: QMouseEvent):
         sp = self._view.mapToScene(event.position().toPoint())
@@ -378,6 +443,16 @@ class VisorNesting(QWidget):
         ):
             self._scene_rebuilding = True
             try:
+                if (
+                    hoja
+                    and clave
+                    and not drag_preview
+                    and not hoja.get("es_retazo")
+                    and not hoja.get("modo_largos_cu")
+                ):
+                    vista = getattr(self.app, "vista_nesting", None)
+                    if vista and hasattr(vista, "sincronizar_overlays_clave"):
+                        vista.sincronizar_overlays_clave(clave)
                 if self._dragging_piece or self._is_panning:
                     self._recover_stuck_interaction()
                 self._manual_piece_indices = []
@@ -418,6 +493,8 @@ class VisorNesting(QWidget):
                     x_lo, x_hi, ymin, ymax = compute_fit_rect(hoja, self._scene_meta, vw, vh)
                     self._view_box = (x_lo, x_hi, ymin, ymax)
                     self._apply_view_box()
+                self._setup_dim_labels(self._scene_meta.get("dim_labels") or [])
+                self._apply_selection_gfx()
             finally:
                 self._scene_rebuilding = False
 
@@ -460,55 +537,65 @@ class VisorNesting(QWidget):
                 self._set_canvas_cursor("normal")
             
     def rotar_pieza_seleccionada(self, grados):
-        if self.idx_pieza_seleccionada == -1 or not self.hoja_actual_data:
+        if not self.hoja_actual_data:
             return
-            
+
         hoja = self.hoja_actual_data
-        idx = self.idx_pieza_seleccionada
-        pieza_data = self._pieza_at(idx)
-        if pieza_data is None:
+        grupo_libre = set(self.indices_edicion_libre) if self.modo_edicion_libre_seleccion else set()
+
+        if self.modo_edicion_libre_seleccion:
+            indices = [i for i in self._indices_para_arrastre() if i in grupo_libre]
+        elif self.idx_pieza_seleccionada >= 0:
+            indices = [self.idx_pieza_seleccionada]
+        else:
+            indices = self._indices_para_arrastre()
+        if not indices:
             return
-        w_placa, h_placa = hoja['placa_w'], hoja['placa_h']
-        
-        poly_actual = self._poly_from_pieza(pieza_data)
-        centro = poly_actual.centroid
-        
+
         from shapely.affinity import rotate
-        poly_nuevo = rotate(poly_actual, grados, origin=centro)
 
-        clearance = self._clearance_mm(hoja)
+        w_placa, h_placa = hoja["placa_w"], hoja["placa_h"]
+        distancia_seguridad = self._clearance_mm(hoja)
         plate_inset = self._plate_inset_mm(hoja)
-        caja_util = box(
-            plate_inset,
-            plate_inset,
-            w_placa - plate_inset,
-            h_placa - plate_inset,
-        )
-        if not caja_util.contains(poly_nuevo):
-            return
+        caja_util = box(plate_inset, plate_inset, w_placa - plate_inset, h_placa - plate_inset)
 
-        for i in self._candidate_indices_for_poly(poly_nuevo, clearance, exclude_idx=idx):
-            p_otra = self._pieza_at(i)
-            if p_otra is None or not self._es_pieza_obstaculo_colision(p_otra.get("nombre")):
+        cambios = []
+        for idx in indices:
+            pieza_data = self._pieza_at(idx)
+            if pieza_data is None:
                 continue
-            poly_otro = self._poly_from_pieza(p_otra)
-            if not self._collision_allows_move(
-                poly_actual,
-                poly_nuevo,
-                poly_otro,
-                clearance,
-                nom_otro=str(p_otra.get("nombre", "")),
+            poly_actual = self._poly_fresco_desde_pieza(pieza_data)
+            if poly_actual is None or poly_actual.is_empty:
+                continue
+            centro = poly_actual.centroid
+            poly_nuevo = rotate(poly_actual, grados, origin=centro)
+            if not caja_util.contains(poly_nuevo):
+                return
+            if self._colision_final_con_otras(
+                poly_nuevo, idx, hoja, distancia_seguridad, grupo_libre=grupo_libre
             ):
-                return 
+                return
+            cambios.append((idx, pieza_data, poly_nuevo, centro))
 
-        hoja['piezas'][idx]['poligonos'] = [list(poly_nuevo.exterior.coords)] + [list(hole.coords) for hole in poly_nuevo.interiors]
-        hoja['piezas'][idx]['_poly_cache'] = poly_nuevo
-        hoja['piezas'][idx]['_bounds_cache'] = poly_nuevo.bounds
-        self._manual_piece_bounds[idx] = poly_nuevo.bounds
-        self._obstacle_bounds[idx] = poly_nuevo.bounds
-
-        if 'marcas' in pieza_data and pieza_data['marcas']:
-            hoja['piezas'][idx]['marcas'] = [list(rotate(LineString(m), grados, origin=centro).coords) for m in pieza_data['marcas']]
+        for idx, pieza_data, poly_nuevo, centro in cambios:
+            hoja["piezas"][idx]["poligonos"] = [
+                list(poly_nuevo.exterior.coords)
+            ] + [list(hole.coords) for hole in poly_nuevo.interiors]
+            hoja["piezas"][idx]["_poly_cache"] = poly_nuevo
+            hoja["piezas"][idx]["_bounds_cache"] = poly_nuevo.bounds
+            self._manual_piece_bounds[idx] = poly_nuevo.bounds
+            self._obstacle_bounds[idx] = poly_nuevo.bounds
+            if pieza_data.get("marcas"):
+                hoja["piezas"][idx]["marcas"] = [
+                    list(rotate(LineString(m), grados, origin=centro).coords)
+                    for m in pieza_data["marcas"]
+                ]
+            try:
+                hoja["piezas"][idx]["rot_deg"] = (
+                    float(hoja["piezas"][idx].get("rot_deg", 0.0) or 0.0) + float(grados)
+                ) % 360.0
+            except Exception:
+                pass
 
         self.dibujar_hoja_full(
             hoja,
@@ -517,6 +604,8 @@ class VisorNesting(QWidget):
             preserve_view=True,
         )
         self._notificar_cambio_manual()
+        if hoja.get("es_retazo"):
+            self._sincronizar_rtz_overlays_en_vivo()
 
     @staticmethod
     def _bounds_offset(bounds, dx: float, dy: float):
@@ -533,7 +622,7 @@ class VisorNesting(QWidget):
 
     def _es_obstaculo_deslizable_rtz(self, nombre) -> bool:
         n = str(nombre or "")
-        return n.startswith("REF__") or n.startswith("RETAZO_GUILLOTINA__")
+        return n.startswith("REF__") or n.startswith("RETAZO_GUILLOTINA__") or n.startswith("CU_CORTE__")
 
     def _collision_allows_move(
         self, poly_current, poly_target, poly_otro, clearance: float, *, nom_otro: str = ""
@@ -569,6 +658,7 @@ class VisorNesting(QWidget):
         cur_ox, cur_oy = self._drag_visual_offset
         polys_target = {}
         polys_current = {}
+        grupo_libre = set(self.indices_edicion_libre) if self.modo_edicion_libre_seleccion else set()
 
         for idx in indices:
             if not self._index_valido(idx):
@@ -596,6 +686,14 @@ class VisorNesting(QWidget):
             poly_current = polys_current[idx]
             for other_idx, p_otra in enumerate(piezas):
                 if other_idx in indices_set or other_idx == idx:
+                    if (
+                        self.modo_edicion_libre_seleccion
+                        and other_idx in grupo_libre
+                        and idx in grupo_libre
+                    ):
+                        continue
+                    continue
+                if self.modo_edicion_libre_seleccion and other_idx in grupo_libre:
                     continue
                 if p_otra is None or not self._es_pieza_obstaculo_colision(p_otra.get("nombre")):
                     continue
@@ -659,13 +757,42 @@ class VisorNesting(QWidget):
         selected = set(self.piezas_seleccionadas_indices or [])
         if self.idx_pieza_seleccionada >= 0:
             selected.add(self.idx_pieza_seleccionada)
+        libre = (
+            set(self.indices_edicion_libre)
+            if self.modo_edicion_libre_seleccion
+            else set()
+        )
+        hoja = self.hoja_actual_data or {}
+        clave = str(self.clave_actual or "")
+        piezas = hoja.get("piezas") or []
         for idx, items in self._piece_gfx.items():
             main = self._main_path_item(items)
             if main is None:
                 continue
-            if idx in selected:
-                main.setBrush(QBrush(COLOR_PIECE_SEL))
-                main.setPen(QPen(COLOR_PIECE_SEL_EDGE, 1.6))
+            pieza = piezas[idx] if 0 <= idx < len(piezas) else {}
+            nom = str(pieza.get("nombre") or "")
+            if nom.startswith("REF__"):
+                main.setBrush(QBrush(COLOR_REF_FILL))
+                main.setPen(QPen(COLOR_REF_EDGE, 1.4 if idx in selected else 1.2))
+                continue
+            if nom.startswith(
+                ("TATUAJE__", "RETAZO_GUILLOTINA__", "CU_CORTE__", "REMANENTE__")
+            ):
+                continue
+            is_cu = _is_copper_context(pieza, hoja, clave)
+            if idx in libre:
+                main.setBrush(QBrush(QColor("#A855F7")))
+                main.setPen(QPen(QColor("#581C87"), 1.6))
+            elif idx in selected:
+                if is_cu:
+                    main.setBrush(QBrush(COLOR_CU_SEL))
+                    main.setPen(QPen(COLOR_CU_SEL_EDGE, 1.6))
+                else:
+                    main.setBrush(QBrush(COLOR_PIECE_SEL))
+                    main.setPen(QPen(COLOR_PIECE_SEL_EDGE, 1.6))
+            elif is_cu:
+                main.setBrush(QBrush(COLOR_CU_FILL))
+                main.setPen(QPen(COLOR_CU_EDGE, 0.75))
             else:
                 main.setBrush(QBrush(COLOR_PIECE_FILL))
                 main.setPen(QPen(COLOR_PIECE_EDGE, 0.65))
@@ -846,7 +973,10 @@ class VisorNesting(QWidget):
 
     def _clearance_mm(self, hoja):
         # Entre piezas: kerf completo (2 × kerf_radio del motor C++).
-        return float(hoja.get("kerf_usado", 0.3) or 0.3) * 25.4
+        from modules.nesting_engine.sheet_integrity import kerf_efectivo_hoja
+
+        clave = getattr(self, "clave_actual", "") or ""
+        return kerf_efectivo_hoja(hoja, clave=clave) * 25.4
 
     def _plate_margin_mm(self, hoja):
         return float(hoja.get("margin_usado", 0.15) or 0.15) * 25.4
@@ -874,6 +1004,12 @@ class VisorNesting(QWidget):
             vista = getattr(self.app, "vista_nesting", None)
             if vista and hasattr(vista, "_replicar_lote_activo_a_gemelos"):
                 vista._replicar_lote_activo_a_gemelos()
+            if (
+                self.hoja_actual_data
+                and self.hoja_actual_data.get("es_retazo")
+                and self.clave_actual
+            ):
+                self._sincronizar_rtz_overlays_en_vivo(force=True)
         except Exception:
             pass
 
@@ -1051,6 +1187,8 @@ class VisorNesting(QWidget):
                     self._apply_selection_gfx()
                     self._view.viewport().update()
                     self._notificar_cambio_manual()
+                    if self.hoja_actual_data.get("es_retazo"):
+                        self._sincronizar_rtz_overlays_en_vivo()
                 elif self.hoja_actual_data:
                     self._apply_selection_gfx()
             elif (
@@ -1125,6 +1263,7 @@ class VisorNesting(QWidget):
                 self._pan_translate_pixels(dx_px, dy_px)
                 self._pan_last = (px, py)
                 self._view.viewport().update()
+                self._position_dim_labels()
             self._set_canvas_cursor("panning")
         elif self.hoja_actual_data:
             now = time.perf_counter()
@@ -1144,3 +1283,239 @@ class VisorNesting(QWidget):
             self._hover_idx = -1
             if not self._btn1_down:
                 self._set_canvas_cursor("normal")
+
+    def _poly_fresco_desde_pieza(self, pieza):
+        if isinstance(pieza, dict):
+            pieza.pop("_poly_cache", None)
+            pieza.pop("_bounds_cache", None)
+        return self._poly_from_pieza(pieza)
+
+    def _colisiona_con_piezas_externas(self, poly_nuevo, idx, grupo_libre, clearance, hoja):
+        for i, p_otra in enumerate(hoja.get("piezas") or []):
+            if i == idx or i in grupo_libre:
+                continue
+            if not self._es_pieza_manual(p_otra.get("nombre", "")):
+                continue
+            poly_otro = self._poly_from_pieza(p_otra)
+            if poly_otro is None or poly_otro.is_empty:
+                continue
+            if float(poly_nuevo.distance(poly_otro)) < clearance:
+                return True
+        return False
+
+    def _colision_final_con_otras(self, poly_nuevo, idx, hoja, clearance, grupo_libre=None):
+        grupo_libre = grupo_libre or set()
+        if self.modo_edicion_libre_seleccion:
+            return self._colisiona_con_piezas_externas(
+                poly_nuevo, idx, grupo_libre, clearance, hoja
+            )
+        for i, p_otra in enumerate(hoja.get("piezas") or []):
+            if i == idx or i in grupo_libre:
+                continue
+            if not self._es_pieza_manual(p_otra.get("nombre", "")):
+                continue
+            poly_otro = self._poly_from_pieza(p_otra)
+            if poly_otro is None or poly_otro.is_empty:
+                continue
+            if float(poly_nuevo.distance(poly_otro)) < clearance:
+                return True
+        return False
+
+    def _bounds_separados(self, ba, bb, gap_mm=0.05):
+        return (
+            float(ba[2]) + gap_mm < float(bb[0])
+            or float(bb[2]) + gap_mm < float(ba[0])
+            or float(ba[3]) + gap_mm < float(bb[1])
+            or float(bb[3]) + gap_mm < float(ba[1])
+        )
+
+    def _exterior_desde_pieza(self, pieza):
+        if not isinstance(pieza, dict):
+            return None
+        pols = pieza.get("poligonos") or []
+        if not pols or not pols[0]:
+            return None
+        outer = self._normalizar_anillo_para_poly(pols[0])
+        if len(outer) < 3:
+            return None
+        try:
+            poly = Polygon(outer)
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if poly is None or poly.is_empty:
+                return None
+            return poly
+        except Exception:
+            return None
+
+    def _piezas_empalmadas(self, poly_a, poly_b, area_tol_mm2=1.0):
+        if poly_a is None or poly_b is None or poly_a.is_empty or poly_b.is_empty:
+            return False
+        try:
+            if float(poly_a.distance(poly_b)) > 0.1:
+                return False
+            inter = poly_a.intersection(poly_b)
+            if inter is None or inter.is_empty:
+                return False
+            return float(inter.area) > area_tol_mm2
+        except Exception:
+            return False
+
+    def _piezas_empalmadas_pieza(self, pieza_a, pieza_b, area_tol_mm2=1.0):
+        pa = self._exterior_desde_pieza(pieza_a)
+        pb = self._exterior_desde_pieza(pieza_b)
+        if pa is None or pb is None:
+            return False
+        if self._bounds_separados(pa.bounds, pb.bounds):
+            return False
+        return self._piezas_empalmadas(pa, pb, area_tol_mm2=area_tol_mm2)
+
+    def _validar_salida_edicion_libre(self, indices):
+        hoja = self.hoja_actual_data
+        if not hoja:
+            return True, ""
+        grupo = set(indices or [])
+        idx_list = sorted(grupo)
+        if len(idx_list) < 2:
+            return True, ""
+
+        piezas_grupo = []
+        for idx in idx_list:
+            if 0 <= idx < len(hoja.get("piezas") or []):
+                p = hoja["piezas"][idx]
+                if self._es_pieza_manual(p.get("nombre", "")):
+                    piezas_grupo.append(p)
+
+        for i, pa in enumerate(piezas_grupo):
+            for pb in piezas_grupo[i + 1 :]:
+                if self._piezas_empalmadas_pieza(pa, pb):
+                    return False, (
+                        "Las piezas del grupo aún se solapan entre sí.\n\n"
+                        "Sepáralas hasta que no compartan área."
+                    )
+
+        for idx in idx_list:
+            if not (0 <= idx < len(hoja.get("piezas") or [])):
+                continue
+            pieza_g = hoja["piezas"][idx]
+            if not self._es_pieza_manual(pieza_g.get("nombre", "")):
+                continue
+            for i, p_otra in enumerate(hoja.get("piezas") or []):
+                if i in grupo:
+                    continue
+                if not self._es_pieza_manual(p_otra.get("nombre", "")):
+                    continue
+                if self._piezas_empalmadas_pieza(pieza_g, p_otra):
+                    nom = str(p_otra.get("nombre", "") or "pieza")
+                    return False, (
+                        f"Una pieza del grupo se solapa con «{nom}».\n\n"
+                        "Aléjala de las demás piezas reales."
+                    )
+        return True, ""
+
+    def _snapshot_piezas_indices(self, indices):
+        snap = {}
+        hoja = self.hoja_actual_data
+        if not hoja:
+            return snap
+        for idx in indices:
+            if 0 <= idx < len(hoja.get("piezas") or []):
+                p = hoja["piezas"][idx]
+                snap[idx] = {
+                    "poligonos": copy.deepcopy(p.get("poligonos") or []),
+                    "marcas": copy.deepcopy(p.get("marcas") or []),
+                    "rot_deg": p.get("rot_deg", 0.0),
+                }
+        return snap
+
+    def _aplicar_snapshot_piezas(self, snap):
+        hoja = self.hoja_actual_data
+        if not hoja:
+            return
+        for idx, data in (snap or {}).items():
+            if 0 <= idx < len(hoja.get("piezas") or []):
+                p = hoja["piezas"][idx]
+                p["poligonos"] = copy.deepcopy(data.get("poligonos") or [])
+                p["marcas"] = copy.deepcopy(data.get("marcas") or [])
+                p["rot_deg"] = data.get("rot_deg", 0.0)
+                p.pop("_poly_cache", None)
+                p.pop("_bounds_cache", None)
+                self._manual_piece_bounds.pop(idx, None)
+                self._obstacle_bounds.pop(idx, None)
+
+    def activar_modo_edicion_libre_seleccion(self):
+        indices = self._indices_para_arrastre()
+        if len(indices) < 2:
+            return False, "Selecciona al menos 2 piezas para activar edición libre entre selección."
+        nuevo_grupo = set(indices)
+        if (
+            self.modo_edicion_libre_seleccion
+            and nuevo_grupo == set(self.indices_edicion_libre)
+        ):
+            return True, ""
+        self.indices_edicion_libre = nuevo_grupo
+        self.snapshot_edicion_libre = self._snapshot_piezas_indices(indices)
+        self.modo_edicion_libre_seleccion = True
+        if self.hoja_actual_data:
+            self.dibujar_hoja_full(
+                self.hoja_actual_data,
+                self.clave_actual,
+                selected_indices=self.piezas_seleccionadas_indices,
+                preserve_view=True,
+            )
+        return True, ""
+
+    def desactivar_modo_edicion_libre_seleccion(self):
+        if not self.modo_edicion_libre_seleccion:
+            return True, ""
+        indices = set(self.indices_edicion_libre)
+        _, aviso = self._validar_salida_edicion_libre(indices)
+        self.modo_edicion_libre_seleccion = False
+        self.indices_edicion_libre = set()
+        self.snapshot_edicion_libre = {}
+        if self.hoja_actual_data:
+            self.dibujar_hoja_full(
+                self.hoja_actual_data,
+                self.clave_actual,
+                selected_indices=self.piezas_seleccionadas_indices,
+                preserve_view=True,
+            )
+        return True, aviso if aviso else ""
+
+    def cancelar_modo_edicion_libre_silencioso(self):
+        if not self.modo_edicion_libre_seleccion:
+            return
+        if self.snapshot_edicion_libre:
+            self._aplicar_snapshot_piezas(self.snapshot_edicion_libre)
+        self.modo_edicion_libre_seleccion = False
+        self.indices_edicion_libre = set()
+        self.snapshot_edicion_libre = {}
+        if self.hoja_actual_data:
+            self.dibujar_hoja_full(
+                self.hoja_actual_data,
+                self.clave_actual,
+                selected_indices=self.piezas_seleccionadas_indices,
+                preserve_view=True,
+            )
+
+    def _flush_rtz_sync(self):
+        self._rtz_sync_after_id = None
+        if self._rtz_sync_pending:
+            self._rtz_sync_pending = False
+            self._sincronizar_rtz_overlays_en_vivo(force=True)
+
+    def _sincronizar_rtz_overlays_en_vivo(self, force=False):
+        hoja = self.hoja_actual_data
+        if not hoja or not hoja.get("es_retazo") or not self.clave_actual:
+            return
+        vista = getattr(self.app, "vista_nesting", None)
+        if not vista or not hasattr(vista, "sincronizar_overlays_rtz_en_vivo"):
+            return
+        if force:
+            vista.sincronizar_overlays_rtz_en_vivo(self.clave_actual, hoja)
+            return
+        if self._rtz_sync_after_id is not None:
+            self._rtz_sync_pending = True
+            return
+        vista.sincronizar_overlays_rtz_en_vivo(self.clave_actual, hoja)
+        self._rtz_sync_after_id = self.after(100, self._flush_rtz_sync)

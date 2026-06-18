@@ -30,11 +30,19 @@ from PIL import Image
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor, QImage, QPixmap
-from PySide6.QtWidgets import QFrame, QGridLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from interface.qt.mpl_utils import bind_figure_resize
+from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK
 
 from modules.plasma_compensator import _arc_points_from_bulge
+
+# Paleta alineada con interface/qt/nesting_graphics.py
+CAD_VIEW_BG = "#0B1220"
+CAD_PIECE_FILL = "#DDE4EC"
+CAD_PIECE_EDGE = "#475569"
+CAD_HOLE_FILL = "#0B1220"
+CAD_MARK = "#0047AB"
 
 
 class VisorDXF:
@@ -56,15 +64,44 @@ class VisorDXF:
 
         self.frame_seccion_3 = QFrame()
         self.frame_seccion_3.setObjectName("VisorInfoPanel")
-        self.frame_seccion_3.setFixedHeight(250)
+        self.frame_seccion_3.setFixedHeight(76)
         master_lay.addWidget(self.frame_seccion_3)
 
         sec2_lay = QVBoxLayout(self.frame_seccion_2)
         sec2_lay.setContentsMargins(0, 0, 0, 0)
+        sec2_lay.setSpacing(0)
+
+        toolbar = QFrame()
+        toolbar.setStyleSheet("background:#0F172A;border-bottom:1px solid #334155;")
+        tb_lay = QHBoxLayout(toolbar)
+        tb_lay.setContentsMargins(10, 6, 10, 6)
+        tb_lay.setSpacing(8)
+
+        btn_fit = QPushButton("AJUSTAR VISTA")
+        btn_fit.setFixedHeight(28)
+        apply_push_button(btn_fit, COLOR_GRIS_DARK, font_size=10, padding="4px 12px")
+        btn_fit.clicked.connect(self.ajustar_vista)
+        tb_lay.addWidget(btn_fit)
+
+        btn_rot = QPushButton("ROTAR 90°")
+        btn_rot.setFixedHeight(28)
+        apply_push_button(btn_rot, "#334155", font_size=10, padding="4px 12px")
+        btn_rot.clicked.connect(self.rotar_vista_90)
+        tb_lay.addWidget(btn_rot)
+
+        lbl_hint = QLabel(
+            "Clic: cota  ·  Rueda: zoom  ·  Central: pan  ·  Der: rotar  ·  Esc: cancelar"
+        )
+        lbl_hint.setStyleSheet("color:#64748B;font-size:10px;background:transparent;")
+        lbl_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        tb_lay.addStretch()
+        tb_lay.addWidget(lbl_hint, 1)
+
+        sec2_lay.addWidget(toolbar)
 
         self.figure = Figure(figsize=(4, 4), dpi=100)
 
-        self.figure.patch.set_facecolor(config.COLOR_BG)
+        self.figure.patch.set_facecolor(CAD_VIEW_BG)
 
         self.ax = self.figure.add_subplot(111)
 
@@ -74,7 +111,7 @@ class VisorDXF:
 
         self.widget = self.canvas
 
-        sec2_lay.addWidget(self.canvas)
+        sec2_lay.addWidget(self.canvas, 1)
 
         try:
             bind_figure_resize(
@@ -104,7 +141,10 @@ class VisorDXF:
         self._cursor_mode = "normal"
         self._ruta_actual = None
         self._rotacion_vista_deg = 0
+        self._material = ""
         self._render_all_layers = False
+        self._fit_xlim = None
+        self._fit_ylim = None
         
         self.factor_conversion = 25.4
 
@@ -1173,39 +1213,34 @@ class VisorDXF:
         return best, best_d
 
     def construir_tabla_3_columnas(self):
-        """
-        Tabla técnica única (sin duplicado UNIQUE/TOTAL) integrada al bloque azul.
-        """
-        font_label = ("Arial", 11, "bold")
-        font_value = ("Roboto", 14, "bold")
-        col_label = "#38BDF8"
-        col_value = "#38BDF8"
+        self.frame_seccion_3.setStyleSheet(
+            "QFrame#VisorInfoPanel{background:#0F172A;border:none;}"
+        )
+        row = QHBoxLayout(self.frame_seccion_3)
+        row.setContentsMargins(14, 10, 14, 10)
+        row.setSpacing(18)
 
-        filas = [
-            ("Width (X):", "lbl_width"),
-            ("Height (Y):", "lbl_height"),
-            ("Area Neta:", "lbl_area"),
-            ("Perimeter:", "lbl_perim"),
-            ("Ref:", "lbl_ref"),
-        ]
+        def _metric(caption: str, attr_name: str, stretch: int = 0):
+            wrap = QWidget()
+            wrap.setStyleSheet("background:transparent;")
+            wl = QVBoxLayout(wrap)
+            wl.setContentsMargins(0, 0, 0, 0)
+            wl.setSpacing(1)
+            cap = QLabel(caption)
+            cap.setStyleSheet("color:#64748B;font-size:10px;font-weight:700;background:transparent;")
+            val = QLabel("-")
+            val.setStyleSheet("color:#E2E8F0;font-size:13px;font-weight:700;background:transparent;")
+            val.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            wl.addWidget(cap)
+            wl.addWidget(val)
+            setattr(self, attr_name, val)
+            row.addWidget(wrap, stretch)
 
-        grid = QGridLayout(self.frame_seccion_3)
-        grid.setContentsMargins(16, 10, 16, 12)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(6)
-        for r, (texto, attr_name) in enumerate(filas):
-            lbl_t = QLabel(texto)
-            lbl_t.setStyleSheet("color:#38BDF8;font-weight:700;font-size:12px;background:transparent;")
-            grid.addWidget(lbl_t, r, 0, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-            lbl = QLabel("-")
-            lbl.setStyleSheet(
-                "color:#38BDF8;font-weight:700;font-size:14px;"
-                "background:#0F172A;border:1px solid #334155;border-radius:8px;padding:6px 10px;"
-            )
-            lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            grid.addWidget(lbl, r, 1, alignment=Qt.AlignmentFlag.AlignRight)
-            setattr(self, attr_name, lbl)
+        _metric("LARGO (X)", "lbl_width")
+        _metric("ANCHO (Y)", "lbl_height")
+        _metric("AREA NETA", "lbl_area", stretch=1)
+        _metric("PERIMETRO", "lbl_perim")
+        _metric("REFERENCIA", "lbl_ref", stretch=2)
 
 
 
@@ -1236,7 +1271,7 @@ class VisorDXF:
 
         self.ax.clear()
 
-        self.ax.set_facecolor(config.COLOR_BG)
+        self.ax.set_facecolor(CAD_VIEW_BG)
 
         self.ax.set_xticks([]); self.ax.set_yticks([])
 
@@ -1262,7 +1297,16 @@ class VisorDXF:
 
         self.limpiar_lienzo()
 
-        self.ax.text(0.5, 0.5, "VISUALIZADOR LISTO", ha='center', color='#333333', fontsize=10)
+        self.ax.text(
+            0.5,
+            0.5,
+            "Seleccione una pieza de la lista",
+            ha="center",
+            va="center",
+            transform=self.ax.transAxes,
+            color="#64748B",
+            fontsize=11,
+        )
         self.lbl_width.setText('-')
         self.lbl_height.setText('-')
         self.lbl_area.setText('-')
@@ -1270,6 +1314,119 @@ class VisorDXF:
         self.lbl_ref.setText('-')
 
         self.canvas.draw()
+
+    def _snapshot_metricas_ui(self):
+        return (
+            self.lbl_width.text(),
+            self.lbl_height.text(),
+            self.lbl_area.text(),
+            self.lbl_perim.text(),
+            self.lbl_ref.text(),
+        )
+
+    def _restaurar_metricas_ui(self, snap):
+        self.lbl_width.setText(snap[0])
+        self.lbl_height.setText(snap[1])
+        self.lbl_area.setText(snap[2])
+        self.lbl_perim.setText(snap[3])
+        self.lbl_ref.setText(snap[4])
+
+    def ajustar_vista(self):
+        if self._fit_xlim and self._fit_ylim:
+            self.ax.set_xlim(self._fit_xlim)
+            self.ax.set_ylim(self._fit_ylim)
+            self.canvas.draw_idle()
+
+    def set_material(self, material: str | None = None):
+        self._material = str(material or "").strip()
+
+    def _paleta_render(self):
+        mat_u = str(getattr(self, "_material", "") or "").strip().upper()
+        is_cu = mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u or "COPPER" in mat_u
+        if is_cu:
+            return "#B87333", CAD_VIEW_BG, "#4A2F1A"
+        return CAD_PIECE_FILL, CAD_VIEW_BG, CAD_PIECE_EDGE
+
+    @staticmethod
+    def _centroid_2d(pts):
+        if not pts:
+            return 0.0, 0.0
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        return sum(xs) / len(xs), sum(ys) / len(ys)
+
+    @staticmethod
+    def _punto_en_poligono(x, y, poly):
+        inside = False
+        n = len(poly)
+        if n < 3:
+            return False
+        j = n - 1
+        for i in range(n):
+            xi, yi = poly[i][0], poly[i][1]
+            xj, yj = poly[j][0], poly[j][1]
+            if ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / max(yj - yi, 1e-18) + xi
+            ):
+                inside = not inside
+            j = i
+        return inside
+
+    def _rol_capa_pieza(self, layer_upper: str) -> str:
+        if self._es_inner_layer(layer_upper):
+            return "inner"
+        if self._es_outer_layer(layer_upper):
+            return "outer"
+        if self._es_mark_layer(layer_upper):
+            return "mark"
+        return "auto"
+
+    def _clasificar_contornos_cerrados(self, shapes: list) -> tuple[list, list]:
+        outers: list = []
+        inners: list = []
+        pendientes: list = []
+        for sh in shapes:
+            rol = sh.get("rol", "auto")
+            if rol == "inner":
+                inners.append(sh)
+            elif rol == "outer":
+                outers.append(sh)
+            elif rol == "mark":
+                continue
+            else:
+                pendientes.append(sh)
+
+        if not outers and pendientes:
+            pendientes.sort(key=lambda s: float(s.get("area", 0.0) or 0.0), reverse=True)
+            outers.append(pendientes.pop(0))
+            for sh in pendientes:
+                cx, cy = sh.get("centroid", (0.0, 0.0))
+                if any(
+                    self._punto_en_poligono(cx, cy, o.get("pts") or [])
+                    for o in outers
+                ):
+                    inners.append(sh)
+                else:
+                    outers.append(sh)
+            return outers, inners
+
+        for sh in pendientes:
+            cx, cy = sh.get("centroid", (0.0, 0.0))
+            if outers and any(
+                self._punto_en_poligono(cx, cy, o.get("pts") or []) for o in outers
+            ):
+                inners.append(sh)
+            else:
+                outers.append(sh)
+        return outers, inners
+
+    def rotar_vista_90(self):
+        if not self._ruta_actual:
+            return
+        snap = self._snapshot_metricas_ui()
+        self._rotacion_vista_deg = (self._rotacion_vista_deg + 90) % 360
+        self.renderizar_dxf(self._ruta_actual)
+        self._restaurar_metricas_ui(snap)
 
 
 
@@ -1402,6 +1559,7 @@ class VisorDXF:
             all_points = []
             min_x, min_y, max_x, max_y = float("inf"), float("inf"), float("-inf"), float("-inf")
             rot = int(self._rotacion_vista_deg) % 360
+            piece_fill, hole_fill, piece_edge = self._paleta_render()
             xs_raw = [pt[0] for pt in all_points_raw] if all_points_raw else []
             ys_raw = [pt[1] for pt in all_points_raw] if all_points_raw else []
             self._circulos_snap = []
@@ -1415,6 +1573,59 @@ class VisorDXF:
                 if entity.dxftype() in ("LWPOLYLINE", "POLYLINE"):
                     self._registrar_arcos_bulge(entity, layer_e, cx, cy, rot)
 
+            shapes_cerrados: list = []
+
+            def _dibujar_cerrado(shape, *, es_hueco: bool):
+                nonlocal area_neta, min_x, max_x, min_y, max_y
+                lw = 0.85 if es_hueco else 1.0
+                z = 12 if es_hueco else 1
+                fc = hole_fill if es_hueco else piece_fill
+                if shape.get("kind") == "circle":
+                    rcx = float(shape["rcx"])
+                    rcy = float(shape["rcy"])
+                    rr = float(shape["rr"])
+                    self.ax.add_patch(
+                        Circle(
+                            (rcx, rcy),
+                            rr,
+                            facecolor=fc,
+                            edgecolor=piece_edge,
+                            linewidth=lw,
+                            zorder=z,
+                        )
+                    )
+                    min_x = min(min_x, rcx - rr, rcx + rr)
+                    max_x = max(max_x, rcx - rr, rcx + rr)
+                    min_y = min(min_y, rcy - rr, rcy + rr)
+                    max_y = max(max_y, rcy - rr, rcy + rr)
+                    if es_hueco:
+                        area_neta -= math.pi * rr * rr
+                    else:
+                        area_neta += math.pi * rr * rr
+                    return
+                pts = shape.get("pts") or []
+                if len(pts) < 3:
+                    return
+                self.ax.add_patch(
+                    PathPatch(
+                        MPLPath(pts, closed=True),
+                        facecolor=fc,
+                        edgecolor=piece_edge,
+                        linewidth=lw,
+                        zorder=z,
+                    )
+                )
+                xs_p = [p[0] for p in pts]
+                ys_p = [p[1] for p in pts]
+                min_x = min(min_x, min(xs_p))
+                max_x = max(max_x, max(xs_p))
+                min_y = min(min_y, min(ys_p))
+                max_y = max(max_y, max(ys_p))
+                if es_hueco:
+                    area_neta -= self._poly_area_2d(pts)
+                else:
+                    area_neta += self._poly_area_2d(pts)
+
             for layer_c, rcx0, rcy0, rr in circulos_raw:
                 rcx, rcy = rcx0, rcy0
                 if rot:
@@ -1422,71 +1633,42 @@ class VisorDXF:
                 tag = "inner" if self._es_inner_layer(layer_c) else ("mark" if self._es_mark_layer(layer_c) else "outer")
                 self._circulos_snap.append((rcx, rcy, rr, tag))
                 nang = 48
+                poly_circ = []
                 for k in range(nang):
                     ang = 2 * math.pi * k / nang
                     px = rcx + rr * math.cos(ang)
                     py = rcy + rr * math.sin(ang)
+                    poly_circ.append((px, py))
                     all_points.append((px, py))
-
-                if self._es_outer_layer(layer_c):
-                    self.ax.add_patch(
-                        Circle(
-                            (rcx, rcy),
-                            rr,
-                            facecolor=config.COLOR_ACCENT,
-                            edgecolor="#FFFFFF",
-                            linewidth=1.0,
-                            zorder=1,
-                        )
-                    )
-                elif self._es_inner_layer(layer_c):
-                    self.ax.add_patch(
-                        Circle(
-                            (rcx, rcy),
-                            rr,
-                            facecolor=config.COLOR_BG,
-                            edgecolor="#FFFFFF",
-                            linewidth=0.8,
-                            zorder=2,
-                        )
-                    )
-                elif self._es_mark_layer(layer_c):
+                if self._es_mark_layer(layer_c):
                     self.ax.add_patch(
                         Circle(
                             (rcx, rcy),
                             rr,
                             facecolor="none",
-                            edgecolor="cyan",
+                            edgecolor=CAD_MARK,
                             linewidth=1.0,
                             zorder=3,
                         )
                     )
-                elif self._es_cut_layer(layer_c):
-                    self.ax.add_patch(
-                        Circle(
-                            (rcx, rcy),
-                            rr,
-                            facecolor=config.COLOR_ACCENT,
-                            edgecolor="#FFFFFF",
-                            linewidth=1.0,
-                            zorder=1,
-                        )
+                    min_x = min(min_x, rcx - rr, rcx + rr)
+                    max_x = max(max_x, rcx - rr, rcx + rr)
+                    min_y = min(min_y, rcy - rr, rcy + rr)
+                    max_y = max(max_y, rcy - rr, rcy + rr)
+                elif self._es_cut_layer(layer_c) or self._render_all_layers or self._es_outer_layer(layer_c) or self._es_inner_layer(layer_c):
+                    shapes_cerrados.append(
+                        {
+                            "kind": "circle",
+                            "rcx": rcx,
+                            "rcy": rcy,
+                            "rr": rr,
+                            "pts": poly_circ,
+                            "centroid": (rcx, rcy),
+                            "area": math.pi * rr * rr,
+                            "rol": self._rol_capa_pieza(layer_c),
+                            "layer": layer_c,
+                        }
                     )
-                elif self._render_all_layers:
-                    self.ax.add_patch(
-                        Circle(
-                            (rcx, rcy),
-                            rr,
-                            facecolor=config.COLOR_ACCENT,
-                            edgecolor="#FFFFFF",
-                            linewidth=1.0,
-                            zorder=1,
-                        )
-                    )
-                min_x = min(min_x, rcx - rr, rcx + rr)
-                max_x = max(max_x, rcx - rr, rcx + rr)
-                min_y = min(min_y, rcy - rr, rcy + rr)
-                max_y = max(max_y, rcy - rr, rcy + rr)
 
             for item in contornos:
                 if item[0] == "ARC":
@@ -1522,7 +1704,7 @@ class VisorDXF:
                             PathPatch(
                                 mpl_path,
                                 facecolor="none",
-                                edgecolor="#FFFFFF",
+                                edgecolor=piece_edge,
                                 linewidth=1.0,
                                 zorder=1,
                             )
@@ -1532,7 +1714,7 @@ class VisorDXF:
                             PathPatch(
                                 mpl_path,
                                 facecolor="none",
-                                edgecolor="#FFFFFF",
+                                edgecolor=piece_edge,
                                 linewidth=0.8,
                                 zorder=2,
                             )
@@ -1542,7 +1724,7 @@ class VisorDXF:
                             PathPatch(
                                 mpl_path,
                                 facecolor="none",
-                                edgecolor="cyan",
+                                edgecolor=CAD_MARK,
                                 linewidth=1.0,
                                 zorder=3,
                             )
@@ -1552,7 +1734,7 @@ class VisorDXF:
                             PathPatch(
                                 mpl_path,
                                 facecolor="none",
-                                edgecolor="#FFFFFF",
+                                edgecolor=piece_edge,
                                 linewidth=1.0,
                                 zorder=1,
                             )
@@ -1562,7 +1744,7 @@ class VisorDXF:
                             PathPatch(
                                 mpl_path,
                                 facecolor="none",
-                                edgecolor="#FFFFFF",
+                                edgecolor=piece_edge,
                                 linewidth=1.0,
                                 zorder=1,
                             )
@@ -1592,51 +1774,50 @@ class VisorDXF:
                 if is_closed and len(pts) >= 2:
                     a, b = pts[-1], pts[0]
                     self._geom_segmentos.append((a[0], a[1], b[0], b[1], None))
+                if is_closed and len(pts) >= 3 and (
+                    self._es_cut_layer(layer_p)
+                    or self._render_all_layers
+                    or self._es_outer_layer(layer_p)
+                    or self._es_inner_layer(layer_p)
+                ):
+                    shapes_cerrados.append(
+                        {
+                            "kind": "poly",
+                            "pts": pts,
+                            "centroid": self._centroid_2d(pts),
+                            "area": abs(self._poly_area_2d(pts)),
+                            "rol": self._rol_capa_pieza(layer_p),
+                            "layer": layer_p,
+                        }
+                    )
+                    continue
                 mpl_path = MPLPath(pts, closed=is_closed)
-                if self._es_outer_layer(layer_p):
-                    self.ax.add_patch(
-                        PathPatch(
-                            mpl_path,
-                            facecolor=config.COLOR_ACCENT,
-                            edgecolor="#FFFFFF",
-                            linewidth=1,
-                            zorder=1,
-                        )
-                    )
-                    area_neta += self._poly_area_2d(pts)
-                elif self._es_inner_layer(layer_p):
-                    self.ax.add_patch(
-                        PathPatch(
-                            mpl_path,
-                            facecolor=config.COLOR_BG,
-                            edgecolor="#FFFFFF",
-                            linewidth=0.8,
-                            zorder=2,
-                        )
-                    )
-                    area_neta -= self._poly_area_2d(pts)
-                elif self._es_mark_layer(layer_p):
+                if self._es_mark_layer(layer_p):
                     self.ax.add_patch(
                         PathPatch(
                             mpl_path,
                             facecolor="none",
-                            edgecolor="cyan",
+                            edgecolor=CAD_MARK,
                             linewidth=1,
                             zorder=3,
                         )
                     )
-                elif self._render_all_layers:
+                elif not is_closed or self._es_cut_layer(layer_p) or self._render_all_layers:
                     self.ax.add_patch(
                         PathPatch(
                             mpl_path,
-                            facecolor=config.COLOR_ACCENT,
-                            edgecolor="#FFFFFF",
+                            facecolor="none",
+                            edgecolor=piece_edge,
                             linewidth=1.0,
                             zorder=1,
                         )
                     )
-                    if is_closed:
-                        area_neta += self._poly_area_2d(pts)
+
+            outers_cls, inners_cls = self._clasificar_contornos_cerrados(shapes_cerrados)
+            for sh in outers_cls:
+                _dibujar_cerrado(sh, es_hueco=False)
+            for sh in inners_cls:
+                _dibujar_cerrado(sh, es_hueco=True)
 
             if all_points:
                 uniq = {}
@@ -1658,6 +1839,8 @@ class VisorDXF:
                 my_m = mh * 0.10
                 self.ax.set_xlim(vx0 - mx_m, vx1 + mx_m)
                 self.ax.set_ylim(vy0 - my_m, vy1 + my_m)
+                self._fit_xlim = (vx0 - mx_m, vx1 + mx_m)
+                self._fit_ylim = (vy0 - my_m, vy1 + my_m)
                 self.ax.set_aspect("equal", adjustable="datalim")
                 min_x_d = min(xs_raw) if xs_raw else min_x
                 max_x_d = max(xs_raw) if xs_raw else max_x
@@ -1887,20 +2070,7 @@ class VisorDXF:
             return
         # Click derecho: rotar vista 90° (como referencia visual de nesting).
         if event.button == 3:
-            # Rotación solo visual: preservar métricas actuales.
-            width_txt = self.lbl_width.text()
-            height_txt = self.lbl_height.text()
-            area_txt = self.lbl_area.text()
-            perim_txt = self.lbl_perim.text()
-            ref_txt = self.lbl_ref.text()
-            self._rotacion_vista_deg = (self._rotacion_vista_deg + 90) % 360
-            if self._ruta_actual:
-                self.renderizar_dxf(self._ruta_actual)
-                self.lbl_width.setText(width_txt)
-                self.lbl_height.setText(height_txt)
-                self.lbl_area.setText(area_txt)
-                self.lbl_perim.setText(perim_txt)
-                self.lbl_ref.setText(ref_txt)
+            self.rotar_vista_90()
             return
         if event.button != 1:
             return
@@ -2233,13 +2403,18 @@ class VisorDXF:
 
 
 
-def generar_thumbnail(ruta_dxf, size=(50, 50)):
+def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
 
     try:
+        mat_u = str(material or "").strip().upper()
+        is_cu = mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u or "COPPER" in mat_u
+        piece_fill = "#B87333" if is_cu else CAD_PIECE_FILL
+        hole_fill = CAD_VIEW_BG
+        piece_edge = "#4A2F1A" if is_cu else CAD_PIECE_EDGE
 
         fig = Figure(figsize=(2, 2), dpi=50); FigureCanvasAgg(fig)
 
-        fig.patch.set_facecolor(config.COLOR_BG); ax = fig.add_subplot(111); ax.axis('off')
+        fig.patch.set_facecolor(CAD_VIEW_BG); ax = fig.add_subplot(111); ax.axis('off')
 
         msp = ezdxf.readfile(ruta_dxf).modelspace()
 
@@ -2250,9 +2425,14 @@ def generar_thumbnail(ruta_dxf, size=(50, 50)):
                 if e.dxftype() == "CIRCLE" and "CUT" in layer_u:
                     c = e.dxf.center
                     r = float(e.dxf.radius)
-                    color = config.COLOR_ACCENT if "OUTER" in layer_u else config.COLOR_BG
+                    if "OUTER" in layer_u:
+                        color = piece_fill
+                    elif "INNER" in layer_u or "INTERIOR" in layer_u:
+                        color = CAD_VIEW_BG
+                    else:
+                        color = piece_fill
                     ax.add_patch(
-                        Circle((float(c.x), float(c.y)), r, facecolor=color, edgecolor="white", linewidth=0.5)
+                        Circle((float(c.x), float(c.y)), r, facecolor=color, edgecolor=piece_edge, linewidth=0.5)
                     )
                     continue
                 # --- AJUSTE PARA EL THUMBNAIL ---
@@ -2263,20 +2443,19 @@ def generar_thumbnail(ruta_dxf, size=(50, 50)):
                     from matplotlib.patches import Polygon
 
                     if "OUTER" in layer_u:
-                        color = config.COLOR_ACCENT
-                    elif "INNER" in layer_u:
-                        color = config.COLOR_BG
+                        color = piece_fill
+                    elif "INNER" in layer_u or "INTERIOR" in layer_u:
+                        color = CAD_VIEW_BG
                     else:
-                        # Fallback para DXF sin capas estándar CUT/OUTER/INNER.
-                        color = config.COLOR_ACCENT
+                        color = piece_fill
 
-                    ax.add_patch(Polygon(pts, closed=True, facecolor=color, edgecolor='white', linewidth=0.5))
+                    ax.add_patch(Polygon(pts, closed=True, facecolor=color, edgecolor=piece_edge, linewidth=0.5))
 
             except: pass
 
         ax.autoscale(enable=True); ax.set_aspect('equal')
 
-        buf = io.BytesIO(); fig.savefig(buf, format='png', facecolor=config.COLOR_BG); buf.seek(0)
+        buf = io.BytesIO(); fig.savefig(buf, format='png', facecolor=CAD_VIEW_BG); buf.seek(0)
 
         img = Image.open(buf).convert("RGBA")
         data = img.tobytes("raw", "RGBA")

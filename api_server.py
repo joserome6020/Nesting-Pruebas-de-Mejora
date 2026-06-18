@@ -2637,7 +2637,13 @@ def _propagar_material_requerido_por_job(
     conexion = None
     cursor = None
     try:
-        conexion = db_connect()
+        if db_config:
+            conexion = psycopg2.connect(**db_config)
+            tz_cur = conexion.cursor()
+            tz_cur.execute(f"SET TIME ZONE '{DB_TIMEZONE}';")
+            tz_cur.close()
+        else:
+            conexion = db_connect()
         cursor = conexion.cursor(cursor_factory=RealDictCursor)
         cursor.execute(
             """

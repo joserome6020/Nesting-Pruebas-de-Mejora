@@ -7,6 +7,7 @@ Se genera una sola vez por orden; no se recalcula si ya existe registro.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,12 +24,29 @@ DB_CONFIG = {
     "port": os.getenv("NESTING_DB_PORT", "5433"),
 }
 
+_MRL_SCHEMA_READY = False
 
-def asegurar_tabla_material_requerido_ldg():
+
+def _resolver_db_config(db_config: dict | None = None) -> dict:
+    if db_config:
+        cfg = dict(db_config)
+        if "database" not in cfg and cfg.get("dbname"):
+            cfg["database"] = cfg["dbname"]
+        return cfg
+    return dict(DB_CONFIG)
+
+
+def asegurar_tabla_material_requerido_ldg(db_config: dict | None = None):
+    """DDL idempotente; corre una sola vez por proceso para no bloquear export."""
+    global _MRL_SCHEMA_READY
+    if _MRL_SCHEMA_READY:
+        return
+
     conexion = None
     cursor = None
+    cfg = _resolver_db_config(db_config)
     try:
-        conexion = psycopg2.connect(**DB_CONFIG)
+        conexion = psycopg2.connect(**cfg)
         cursor = conexion.cursor()
 
         cursor.execute("""
@@ -54,11 +72,39 @@ def asegurar_tabla_material_requerido_ldg():
         """)
 
         cursor.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_mrl_orden_material_largo
+            CREATE INDEX IF NOT EXISTS idx_mrl_orden_material_largo
             ON material_requerido_ldg (orden_id, tipo_orden, material, largo);
         """)
+        # Índice único legado: impedía split por barra (cantidad>1). Se elimina si existe.
+        cursor.execute("""
+            DROP INDEX IF EXISTS uq_mrl_orden_material_largo;
+        """)
+
+        cursor.execute("""
+            ALTER TABLE material_requerido_ldg
+            ADD COLUMN IF NOT EXISTS kit_recibido BOOLEAN NOT NULL DEFAULT FALSE;
+        """)
+        cursor.execute("""
+            ALTER TABLE material_requerido_ldg
+            ADD COLUMN IF NOT EXISTS kit_recibido_por VARCHAR(120) NULL;
+        """)
+        cursor.execute("""
+            ALTER TABLE material_requerido_ldg
+            ADD COLUMN IF NOT EXISTS kit_recibido_fecha TIMESTAMP NULL;
+        """)
+        for col_sql in (
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS provider_handshake_at TIMESTAMP NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS provider_handshake_by VARCHAR(120) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS almacen_received_at TIMESTAMP NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS almacen_received_by VARCHAR(120) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS incoming_handshake_at TIMESTAMP NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS incoming_handshake_by VARCHAR(120) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS rechazado_incoming BOOLEAN NOT NULL DEFAULT FALSE",
+        ):
+            cursor.execute(col_sql)
 
         conexion.commit()
+        _MRL_SCHEMA_READY = True
     except Exception as e:
         if conexion:
             conexion.rollback()
@@ -102,6 +148,17 @@ def _iter_barras_por_material(plan: Dict[str, Any]):
         yield str(material or "").strip() or "SIN CLASIFICACION", barras or []
 
 
+def _cantidad_barras_catalogo(total_pulgadas_plan: float, largo_catalogo_in: float) -> int:
+    """Convierte pulgadas consumidas en el plan a barras estándar del catálogo Herinox."""
+    total = max(0.0, float(total_pulgadas_plan or 0))
+    largo_cat = max(0.0, float(largo_catalogo_in or 0))
+    if total <= 0:
+        return 1
+    if largo_cat <= 0:
+        return 1
+    return max(1, math.ceil(total / largo_cat))
+
+
 def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
     try:
         from catalogo_largos import (
@@ -112,6 +169,7 @@ def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+    # Consumo total del plan por material (suma largo_stock de cada barra STOCK).
     acumulado: Dict[str, Dict[str, Any]] = {}
 
     for material, barras in _iter_barras_por_material(plan):
@@ -119,25 +177,34 @@ def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
             source = str(barra.get("source") or "STOCK").strip().upper()
             if source == "REMANENTE":
                 continue
+            largo_stock = float(barra.get("largo_stock") or 0)
+            if largo_stock <= 0:
+                continue
             if material not in acumulado:
-                acumulado[material] = {"material": material, "cantidad": 0}
-            acumulado[material]["cantidad"] += 1
+                acumulado[material] = {"material": material, "total_in": 0.0}
+            acumulado[material]["total_in"] += largo_stock
 
     filas: List[Dict[str, Any]] = []
     for item in acumulado.values():
+        # Largo comercial = catálogo Herinox (20 ft / 40 ft del código).
+        datos_base = datos_material_requerido_pedido(
+            item["material"], 1, catalogo=catalogo
+        )
+        largo_cat = float(datos_base.get("largo") or 0)
+        cantidad = _cantidad_barras_catalogo(item["total_in"], largo_cat)
         datos = datos_material_requerido_pedido(
-            item["material"], item["cantidad"], catalogo=catalogo
+            item["material"], cantidad, catalogo=catalogo
         )
         filas.append(
             {
                 "material": item["material"],
-                "cantidad": item["cantidad"],
+                "cantidad": cantidad,
                 "codigo": datos.get("codigo") or "",
-                "largo": float(datos.get("largo") or 0),
+                "largo": float(datos.get("largo") or largo_cat),
                 "costo": datos.get("costo"),
             }
         )
-    filas.sort(key=lambda r: (r["material"], r.get("codigo") or ""))
+    filas.sort(key=lambda r: (r["material"], r.get("largo") or 0, r.get("codigo") or ""))
     return filas
 
 
@@ -200,13 +267,14 @@ def enriquecer_pedido_herinox_cursor(
         tiene_costo = costo_actual is not None and float(costo_actual or 0) > 0
 
         datos = datos_material_requerido_pedido(
-            material_txt, cantidad, catalogo=catalogo
+            material_txt,
+            cantidad,
+            catalogo=catalogo,
         )
         nuevo_codigo = str(datos.get("codigo") or codigo_esperado or "").strip()
-        nuevo_largo = float(datos.get("largo") or 0)
         nuevo_costo = datos.get("costo")
 
-        if not nuevo_codigo and nuevo_costo is None and nuevo_largo <= 0:
+        if not nuevo_codigo and nuevo_costo is None:
             continue
 
         if (
@@ -215,7 +283,6 @@ def enriquecer_pedido_herinox_cursor(
             and codigo_actual == nuevo_codigo
             and codigo_actual == codigo_esperado
             and nuevo_costo is not None
-            and (nuevo_largo <= 0 or abs(largo_actual - nuevo_largo) < 0.01)
         ):
             continue
 
@@ -223,15 +290,12 @@ def enriquecer_pedido_herinox_cursor(
             """
             UPDATE material_requerido_ldg
             SET codigo = %s,
-                largo = CASE WHEN %s > 0 THEN %s ELSE largo END,
                 costo = %s,
                 updated_at = NOW()
             WHERE id = %s;
             """,
             (
                 nuevo_codigo,
-                nuevo_largo,
-                nuevo_largo,
                 nuevo_costo,
                 fila["id"],
             ),

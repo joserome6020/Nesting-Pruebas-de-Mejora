@@ -126,7 +126,8 @@ PYBIND11_MODULE(algorithm_cpp, m) {
            double margin_override,
            const std::string& opt_override,
            const std::string& corner_override,
-           py::object limite_rings_obj) {
+           py::object limite_rings_obj,
+           int mc_iterations) {
             std::vector<arga::PieceIn> piezas;
             piezas.reserve(piezas_in.size());
             for (const auto& item : piezas_in) {
@@ -149,7 +150,9 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 margin_override,
                 opt_override,
                 corner_override,
-                limite);
+                limite,
+                nullptr,
+                mc_iterations);
 
             py::list restos;
             for (const auto& p : result.restos) {
@@ -164,7 +167,8 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("margin_override") = 0.0,
         py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
         py::arg("corner_override") = "INFERIOR IZQUIERDA",
-        py::arg("limite_rings") = py::none());
+        py::arg("limite_rings") = py::none(),
+        py::arg("mc_iterations") = arga::kMonteCarloIterationsDefault);
 
     m.attr("ENGINE_NAME") = "cpp_clipper2";
     m.attr("ENGINE_VERSION") = "1.0.0";

@@ -163,8 +163,6 @@ def build_exe(name: str, onefile: bool = True):
         "--hidden-import",
         "modules.nesting_engine.algorithm_cpp",
         "--hidden-import",
-        "modules.nesting_engine.algorithm",
-        "--hidden-import",
         "modules.consulta_herinox_bridge",
         "--hidden-import",
         "modules.nesting_engine.efficiency_metrics",
