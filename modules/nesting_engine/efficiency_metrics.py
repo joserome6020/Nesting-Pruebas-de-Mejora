@@ -244,7 +244,7 @@ def formatear_eficiencias_placa(hoja) -> str:
     d = float((hoja or {}).get("eficiencia_directa", (hoja or {}).get("eficiencia", 0.0)) or 0.0)
     r = float((hoja or {}).get("eficiencia_real", d) or 0.0)
     n = contar_piezas_hoja(hoja)
-    return f"Dir {d:.1f}% | Real {r:.1f}% · {n} pzas"
+    return f"DIR {d:.1f}% | REAL {r:.1f}% · {n} PZAS"
 
 
 def formatear_eficiencias_tanque(info_grupo) -> str:
@@ -253,7 +253,7 @@ def formatear_eficiencias_tanque(info_grupo) -> str:
     d = float(info_grupo.get("eficiencia_tanque_directa", 0.0) or 0.0)
     r = float(info_grupo.get("eficiencia_tanque_real", 0.0) or 0.0)
     n = contar_piezas_grupo(info_grupo)
-    return f"Tanque Dir {d:.1f}% | Real {r:.1f}% · {n} pzas"
+    return f"TANQUE DIR {d:.1f}% | REAL {r:.1f}% · {n} PZAS"
 
 
 def eficiencia_para_umbral_ignorar(hoja, hojas_grupo=None) -> float:

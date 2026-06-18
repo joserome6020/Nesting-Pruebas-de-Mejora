@@ -68,13 +68,13 @@ class TabFiles(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
 
-        self.btn_nest_scan = QPushButton("IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        self.btn_nest_scan = QPushButton("IMPORTAR JOB INDIVIDUAL\n(INGENIERÍA)")
         self.btn_nest_scan.setFixedSize(450, 80)
         apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
         self.btn_nest_scan.clicked.connect(self.ejecutar_escaneo_servidor)
         lay.addWidget(self.btn_nest_scan, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.btn_swo_web = QPushButton("IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        self.btn_swo_web = QPushButton("IMPORTAR S.W.O.\n(FUSIÓN DESDE TABLERO WEB)")
         self.btn_swo_web.setFixedSize(450, 80)
         apply_push_button(self.btn_swo_web, "#455E75", hover="#334659", font_size=16, padding="12px 20px")
         self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
@@ -133,6 +133,149 @@ class TabFiles(QWidget):
         usados.add(candidato.lower())
         return candidato
 
+    def _infer_job_desde_autodxf(self, carpeta_autodxf: str) -> str:
+        try:
+            actual = os.path.normpath(str(carpeta_autodxf))
+            while actual and actual not in (actual[:1], os.path.dirname(actual)):
+                if os.path.basename(actual).strip().lower() == "model core files":
+                    return os.path.basename(os.path.dirname(actual))
+                actual = os.path.dirname(actual)
+        except Exception:
+            pass
+        return str(getattr(self.app, "job_activo", "") or "").strip()
+
+    def _leer_multiplicador_desde_job_data(self, carpeta_autodxf: str, job_name: str) -> int:
+        mult = max(1, int(getattr(self.app, "multiplicador_tanques", 1) or 1))
+        try:
+            autodxf = os.path.normpath(str(carpeta_autodxf))
+            ruta_root = os.path.dirname(os.path.dirname(autodxf))
+            ruta_csv = os.path.join(ruta_root, f"job_data_{job_name}.csv")
+            if os.path.exists(ruta_csv):
+                with open(ruta_csv, newline="", encoding="utf-8", errors="ignore") as f:
+                    reader = list(csv.reader(f))
+                    if len(reader) > 1 and len(reader[1]) > 3 and str(reader[1][3]).strip().isdigit():
+                        mult = max(1, int(str(reader[1][3]).strip()))
+        except Exception:
+            pass
+        return mult
+
+    def _resolver_autodxf_desde_datos_actuales(self) -> str | None:
+        rutas = [
+            str(r[5])
+            for r in (getattr(self.app, "datos_partes_actuales", []) or [])
+            if len(r) > 5 and r[5]
+        ]
+        for ruta in rutas:
+            try:
+                actual = os.path.normpath(str(ruta))
+            except Exception:
+                continue
+            while actual and actual not in (actual[:1], os.path.dirname(actual)):
+                base = os.path.basename(actual).strip().lower()
+                if base == "autodxf":
+                    return actual
+                if base == "processed files" and os.path.basename(os.path.dirname(actual)).strip().lower() == "autodxf":
+                    return os.path.dirname(actual)
+                actual = os.path.dirname(actual)
+
+        job = str(getattr(self.app, "job_activo", "") or "").strip()
+        if job:
+            ruta_job = self.obtener_ruta_real_job(config.RUTA_SERVIDOR_RAIZ, job)
+            if ruta_job:
+                autodxf = os.path.join(ruta_job, "MODEL CORE FILES", "AutoDXF")
+                if os.path.isdir(autodxf):
+                    return autodxf
+        return None
+
+    def _procesar_autodxf_a_items(
+        self,
+        carpeta_autodxf: str,
+        job_name: str,
+        multiplicador: int,
+        *,
+        progress_cb=None,
+    ):
+        rutas_dxf = sorted(set(self._listar_dxfs_recursivo(carpeta_autodxf)), key=self._normalizar_ruta)
+        carpeta_procesados = os.path.join(carpeta_autodxf, "Processed Files")
+        os.makedirs(carpeta_procesados, exist_ok=True)
+        items_procesados, nombres_usados = [], set()
+        meta_pdf = {}
+        total = len(rutas_dxf)
+        for idx, ruta_in in enumerate(rutas_dxf, start=1):
+            if callable(progress_cb):
+                progress_cb(f"Validando DXF {idx}/{total}…", idx / max(1, total))
+            arch = os.path.basename(ruta_in)
+            ruta_out_real = os.path.join(carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados))
+            try:
+                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
+                if (not ok_proc) or (not os.path.exists(ruta_out_real)):
+                    shutil.copy2(ruta_in, ruta_out_real)
+                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
+                try:
+                    qty_final = str(int(qty_str) * multiplicador)
+                except Exception:
+                    qty_final = qty_str
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                meta_pdf[ruta_norm] = {"job": job_name, "item": pieza}
+                items_procesados.append((pieza, mat, qty_final, cal, "LISTO", ruta_out_real))
+            except Exception:
+                try:
+                    if not os.path.exists(ruta_out_real):
+                        shutil.copy2(ruta_in, ruta_out_real)
+                except Exception:
+                    pass
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                meta_pdf[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
+                items_procesados.append((arch, "?", str(multiplicador), "?", "LISTO", ruta_out_real))
+        return items_procesados, meta_pdf
+
+    def escanear_partes_desde_ruta(self, *, progress_cb=None) -> dict | None:
+        """Solo disco/parseo — seguro en hilo de fondo (sin tocar Qt)."""
+        autodxf = self._resolver_autodxf_desde_datos_actuales()
+        if not autodxf:
+            return None
+        job_name = self._infer_job_desde_autodxf(autodxf) or str(getattr(self.app, "job_activo", "") or "").strip()
+        multiplicador = self._leer_multiplicador_desde_job_data(autodxf, job_name)
+        items, meta_pdf = self._procesar_autodxf_a_items(
+            autodxf,
+            job_name,
+            multiplicador,
+            progress_cb=progress_cb,
+        )
+        return {
+            "items": items,
+            "meta_pdf": meta_pdf,
+            "job_name": job_name,
+            "multiplicador": multiplicador,
+        }
+
+    def aplicar_partes_resincronizadas(self, payload: dict, *, thumbnails_async: bool = False) -> int:
+        """Aplica el resultado del escaneo en el hilo principal de Qt."""
+        items = list(payload.get("items") or [])
+        meta_pdf = dict(payload.get("meta_pdf") or {})
+        job_name = str(payload.get("job_name") or "").strip()
+        multiplicador = max(1, int(payload.get("multiplicador") or 1))
+        if job_name:
+            self.app.job_activo = job_name
+        self.app.multiplicador_tanques = multiplicador
+        self.app.meta_pdf_por_ruta = meta_pdf
+        self.app.cargar_datos_parts(items, thumbnails_async=thumbnails_async)
+        if hasattr(self.app, "editable_inputs_actuales"):
+            self.app.editable_inputs_actuales = [list(x) for x in items]
+        by_lote = getattr(self.app, "editable_inputs_by_lote", None)
+        idx_lote = int(getattr(getattr(self.app, "vista_nesting", None), "lote_actual_idx", 0) or 0)
+        if isinstance(by_lote, list) and 0 <= idx_lote < len(by_lote):
+            by_lote[idx_lote] = [list(x) for x in items]
+        return len(items)
+
+    def resincronizar_partes_desde_ruta(self, *, thumbnails_async: bool = False, progress_cb=None) -> tuple[bool, int]:
+        """Re-escanea AutoDXF y reconcilia PARTS con el disco (altas/bajas)."""
+        payload = self.escanear_partes_desde_ruta(progress_cb=progress_cb)
+        if not payload:
+            return False, 0
+        total = self.aplicar_partes_resincronizadas(payload, thumbnails_async=thumbnails_async)
+        return True, total
+
     def _buscar_dxf_item_en_autodxf(self, ruta_autodxf, item):
         item_limpio = str(item or "").strip().lower()
         if not item_limpio:
@@ -181,7 +324,7 @@ class TabFiles(QWidget):
 
     def after_escaneo(self, jobs, err=None):
         self.btn_nest_scan.setEnabled(True)
-        self.btn_nest_scan.setText("IMPORTAR JOB INDIVIDUAL\n(Ingeniería)")
+        self.btn_nest_scan.setText("IMPORTAR JOB INDIVIDUAL\n(INGENIERÍA)")
         apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
         try:
             if err:
@@ -423,53 +566,21 @@ class TabFiles(QWidget):
         carpeta_origen = job_info["ruta_full"]
         job_name = job_info["job_name"]
         ruta_root = os.path.dirname(os.path.dirname(carpeta_origen))
-        ruta_csv = os.path.join(ruta_root, f"job_data_{job_name}.csv")
-        multiplicador = 1
-        if os.path.exists(ruta_csv):
-            try:
-                with open(ruta_csv, newline="", encoding="utf-8", errors="ignore") as f:
-                    reader = list(csv.reader(f))
-                    if len(reader) > 1 and len(reader[1]) > 3 and str(reader[1][3]).strip().isdigit():
-                        multiplicador = int(str(reader[1][3]).strip())
-            except Exception:
-                pass
+        multiplicador = self._leer_multiplicador_desde_job_data(carpeta_origen, job_name)
         rutas_dxf = sorted(set(self._listar_dxfs_recursivo(carpeta_origen)), key=self._normalizar_ruta)
         if not rutas_dxf:
             raise RuntimeError("No se encontraron DXF en AutoDXF (ni en subcarpetas).")
-        carpeta_procesados = os.path.join(carpeta_origen, "Processed Files")
-        os.makedirs(carpeta_procesados, exist_ok=True)
-        items_procesados, nombres_usados = [], set()
-        meta_pdf = {}
-        total = len(rutas_dxf)
-        for idx, ruta_in in enumerate(rutas_dxf, start=1):
+
+        def _progress(msg, pct):
             if hasattr(self.app, "actualizar_progreso"):
-                self.app.actualizar_progreso(
-                    f"Procesando DXF {idx}/{total}…",
-                    idx / max(1, total),
-                )
-            arch = os.path.basename(ruta_in)
-            ruta_out_real = os.path.join(carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados))
-            try:
-                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
-                if (not ok_proc) or (not os.path.exists(ruta_out_real)):
-                    shutil.copy2(ruta_in, ruta_out_real)
-                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
-                try:
-                    qty_final = str(int(qty_str) * multiplicador)
-                except Exception:
-                    qty_final = qty_str
-                ruta_norm = self._normalizar_ruta(ruta_out_real)
-                meta_pdf[ruta_norm] = {"job": job_name, "item": pieza}
-                items_procesados.append((pieza, mat, qty_final, cal, "LISTO", ruta_out_real))
-            except Exception:
-                try:
-                    if not os.path.exists(ruta_out_real):
-                        shutil.copy2(ruta_in, ruta_out_real)
-                except Exception:
-                    pass
-                ruta_norm = self._normalizar_ruta(ruta_out_real)
-                meta_pdf[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
-                items_procesados.append((arch, "?", str(multiplicador), "?", "LISTO", ruta_out_real))
+                self.app.actualizar_progreso(msg, pct)
+
+        items_procesados, meta_pdf = self._procesar_autodxf_a_items(
+            carpeta_origen,
+            job_name,
+            multiplicador,
+            progress_cb=_progress,
+        )
         return {
             "job_info": job_info,
             "job_name": job_name,
@@ -517,7 +628,7 @@ class TabFiles(QWidget):
 
     def restaurar_boton_swo(self, err=None):
         self.btn_swo_web.setEnabled(True)
-        self.btn_swo_web.setText("IMPORTAR S.W.O.\n(Fusión desde Tablero Web)")
+        self.btn_swo_web.setText("IMPORTAR S.W.O.\n(FUSIÓN DESDE TABLERO WEB)")
         if err:
             QMessageBox.critical(self, "Error BD", f"No se pudo conectar a PostgreSQL:\n{err}")
 

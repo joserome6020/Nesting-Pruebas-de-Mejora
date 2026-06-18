@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from interface.material_colors import paleta_material
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
 from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content
 from interface.qt.theme import (
@@ -71,6 +72,39 @@ class TabSheets(QWidget, TimerHost):
         # Carga automática de placas al abrir la pestaña SHEETS.
         QTimer.singleShot(80, self.actualizar_inventario)
         self._last_qt_viewer_error = ""
+
+    _SHEET_GRID_MARGIN_H = 10
+    _SHEET_SWATCH_PX = 14
+    _SHEET_SWATCH_GAP = 6
+
+    def _apply_sheet_grid_columns(self, grid: QGridLayout) -> None:
+        grid.setHorizontalSpacing(4)
+        for i, conf in enumerate(self.local_col_config):
+            grid.setColumnStretch(i, conf["weight"])
+            grid.setColumnMinimumWidth(i, conf["min"])
+
+    def _celda_calibre_nominal(self, texto: str, color_material: str | None = None) -> QWidget:
+        """Misma estructura en encabezado (spacer) y filas (swatch de color)."""
+        cell = QWidget()
+        lay = QHBoxLayout(cell)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(self._SHEET_SWATCH_GAP)
+        if color_material:
+            swatch = QFrame()
+            swatch.setFixedSize(self._SHEET_SWATCH_PX, self._SHEET_SWATCH_PX)
+            swatch.setStyleSheet(
+                f"background:{color_material};border:1px solid #94A3B8;border-radius:3px;"
+            )
+            lay.addWidget(swatch, 0, Qt.AlignmentFlag.AlignVCenter)
+        else:
+            spacer = QWidget()
+            spacer.setFixedSize(self._SHEET_SWATCH_PX, self._SHEET_SWATCH_PX)
+            lay.addWidget(spacer, 0, Qt.AlignmentFlag.AlignVCenter)
+        lbl = QLabel(str(texto))
+        lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(lbl, 1)
+        return cell
 
     def setup_ui(self):
         outer = QVBoxLayout(self)
@@ -133,7 +167,7 @@ class TabSheets(QWidget, TimerHost):
             scroll = make_scroll()
             inner, inner_lay = make_scroll_content()
             inner_lay.setSpacing(8)
-            inner_lay.setContentsMargins(6, 6, 12, 10)
+            inner_lay.setContentsMargins(0, 6, 0, 10)
             scroll.setWidget(inner)
             setattr(self, lista_attr, scroll)
             tl.addWidget(scroll, 1)
@@ -161,12 +195,16 @@ class TabSheets(QWidget, TimerHost):
         h_sheet.setFrameShape(QFrame.Shape.NoFrame)
         h_sheet.setFixedHeight(38)
         grid = QGridLayout(h_sheet)
-        grid.setContentsMargins(10, 0, 10, 0)
+        grid.setContentsMargins(self._SHEET_GRID_MARGIN_H, 0, self._SHEET_GRID_MARGIN_H, 0)
+        self._apply_sheet_grid_columns(grid)
         titles = ["CALIBRE NOMINAL", "THICKNESS", "MATERIAL", "ARGA CODE", "LENGTH", "WIDTH", "LB", "$$/LB", "PRECIO TOTAL", "STOCK"]
         for i, t in enumerate(titles):
-            lbl = QLabel(t)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            grid.addWidget(lbl, 0, i)
+            if i == 0:
+                grid.addWidget(self._celda_calibre_nominal(t), 0, i)
+            else:
+                lbl = QLabel(t)
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                grid.addWidget(lbl, 0, i)
         lay.insertWidget(0, h_sheet)
 
     def _nominal_from_row(self, row):
@@ -421,11 +459,9 @@ class TabSheets(QWidget, TimerHost):
             row.setObjectName("SheetRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
             row.setFixedHeight(54)
-            mat_row = str(fila[1] if str(fila[1]) != "nan" else "").strip().upper()
-            if mat_row in ("CU", "COBRE", "COPPER") or "COBRE" in mat_row:
-                row.setStyleSheet("background:#F3E2CF;border-radius:6px;")
             row_lay = QGridLayout(row)
-            row_lay.setContentsMargins(12, 8, 12, 8)
+            row_lay.setContentsMargins(self._SHEET_GRID_MARGIN_H, 8, self._SHEET_GRID_MARGIN_H, 8)
+            self._apply_sheet_grid_columns(row_lay)
             try:
                 precio_por_libra = self.app._extractor_numerico(fila[7])
                 mxn_placa = self.app._extractor_numerico(fila[6])
@@ -451,20 +487,32 @@ class TabSheets(QWidget, TimerHost):
                 str_precio_libra, str_costo_placa,
                 str(fila[8] if str(fila[8]) != "nan" else "-"),
             ]
+            mat_txt = str(fila[1] if str(fila[1]) != "nan" else "").strip()
+            color_mat = paleta_material(mat_txt).fill
             for i in range(10):
-                if i == 8:
+                if i == 0:
+                    row_lay.addWidget(
+                        self._celda_calibre_nominal(valores_mostrar[i], color_mat),
+                        0,
+                        i,
+                    )
+                elif i == 8:
                     lbl = QLabel(valores_mostrar[i])
                     lbl.setStyleSheet("color:#2563EB;font-weight:700;")
+                    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    row_lay.addWidget(lbl, 0, i)
                 elif i == 9:
                     estado = self._stock_estado(valores_mostrar[i])
                     c = "#16A34A" if estado == "DISPONIBLE" else ("#CA8A04" if estado == "NO DISPONIBLE" else "#DC2626")
                     lbl = QLabel(estado)
                     lbl.setStyleSheet(f"color:{c};font-weight:700;")
+                    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    row_lay.addWidget(lbl, 0, i)
                 else:
                     lbl = QLabel(valores_mostrar[i])
                     lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                row_lay.addWidget(lbl, 0, i)
+                    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    row_lay.addWidget(lbl, 0, i)
             scroll_add_widget(lista_activa, row)
 
     def actualizar_inventario(self):
@@ -771,7 +819,9 @@ class TabSheets(QWidget, TimerHost):
         scroll.setWidgetResizable(True)
         inner = QWidget()
         inner_lay = QVBoxLayout(inner)
-        ruta_csv = "inventario_remanentes.csv"
+        import config as app_config
+
+        ruta_csv = app_config.asegurar_archivo_persistente("inventario_remanentes.csv")
         if not os.path.exists(ruta_csv):
             inner_lay.addWidget(QLabel("No hay remanentes registrados todavía."))
         else:

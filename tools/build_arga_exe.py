@@ -1,10 +1,14 @@
 import argparse
+import importlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+
 from PIL import Image
 
 
@@ -13,6 +17,114 @@ MAIN_PY = ROOT / "main.py"
 ICON_PNG = ROOT / "assets" / "branding" / "logo_icon1.png"
 SPLASH_JPEG = ROOT / "grupo_arga_cover.jpeg"
 MACRO = ROOT / "generador_verde.FCMacro"
+CPP_ENGINE_PS1 = ROOT / "modules" / "nesting_engine" / "build_cpp_engine.ps1"
+CPP_ENGINE_PYD = ROOT / "modules" / "nesting_engine" / "algorithm_cpp.pyd"
+
+# Módulos que PyInstaller no siempre detecta (imports dinámicos / rutas legacy).
+HIDDEN_IMPORTS = (
+    # Legacy path (interface/ en sys.path)
+    "config",
+    "postgres_connector",
+    "utils_nesting",
+    "nesting_workspace",
+    "nesting_modals",
+    "nesting_canvas",
+    "responsive_layout",
+    "reporte_pdf_nesting",
+    # Largos + material requerido (NESTEO DE LARGOS / MRL)
+    "catalogo_largos",
+    "lista_largos_material_requerido",
+    "interface.largos_nesting_service",
+    "modules.lista_largos_importer",
+    # Qt — ventana principal
+    "interface.qt.main_window",
+    "interface.qt.theme",
+    "interface.qt.thread_bridge",
+    "interface.qt.progress_dialog",
+    "interface.qt.layout_helpers",
+    "interface.qt.ui_mixins",
+    "interface.qt.export_paths",
+    "interface.qt.nesting_canvas",
+    "interface.qt.nesting_graphics",
+    "interface.qt.visualizer",
+    "interface.qt.curve_refine",
+    "interface.qt.dxf_hifi_path",
+    "interface.qt.mpl_utils",
+    "interface.qt.visor_diag",
+    # Qt — tabs
+    "interface.qt.tabs.tab_files",
+    "interface.qt.tabs.tab_parts",
+    "interface.qt.tabs.tab_sheets",
+    "interface.qt.tabs.tab_nesting",
+    "interface.qt.tabs.tab_nesting_ui",
+    # Qt — diálogos y widgets (largos + nesting)
+    "interface.qt.dialogs.nesting_modals",
+    "interface.qt.dialogs.lote_editor",
+    "interface.qt.dialogs.largos_nesting_modal",
+    "interface.qt.widgets.herinox_switch",
+    "interface.qt.widgets.largos_tira_canvas",
+    "interface.qt.widgets.largos_perfil_draw",
+  # Soporte UI / metadatos
+    "interface.autodxf_metadata",
+    "interface.material_colors",
+    # Motor nesting + placas
+    "modules.nesting_engine",
+    "modules.nesting_engine.manager",
+    "modules.nesting_engine.algorithm_bridge",
+    "modules.nesting_engine.algorithm_cpp",
+    "modules.nesting_engine.nest_optimization",
+    "modules.nesting_engine.cu_largos_nesting",
+    "modules.nesting_engine.sheet_integrity",
+    "modules.nesting_engine.efficiency_metrics",
+    "modules.nesting_engine.rtz_overlays",
+    "modules.nesting_engine.geometry_parser",
+    "modules.nesting_engine.exporter",
+    "modules.nesting_engine.api_client",
+    "modules.consulta_herinox_bridge",
+    "modules.sheets_manager",
+    "modules.processed_layers",
+    "modules.scanner",
+    "modules.nest_exporter",
+    "modules.plates_inventory",
+    "modules.plasma_compensator",
+    "modules.herinox_sync",
+    "pandas",
+    "openpyxl",
+)
+
+COLLECT_SUBMODULES = (
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "shapely",
+    "matplotlib.backends.backend_qtagg",
+)
+
+# Archivos que deben existir antes de empaquetar (ARGA NESTING SUITE actual).
+CRITICAL_SUITE_FILES = (
+    MAIN_PY,
+    ROOT / "catalogo_largos.py",
+    ROOT / "lista_largos_material_requerido.py",
+    ROOT / "interface" / "largos_nesting_service.py",
+    ROOT / "interface" / "qt" / "dialogs" / "largos_nesting_modal.py",
+    ROOT / "interface" / "qt" / "widgets" / "largos_tira_canvas.py",
+    ROOT / "interface" / "qt" / "widgets" / "largos_perfil_draw.py",
+    ROOT / "interface" / "qt" / "widgets" / "herinox_switch.py",
+    ROOT / "modules" / "nesting_engine" / "algorithm_bridge.py",
+    ROOT / "modules" / "nesting_engine" / "nest_optimization.py",
+    ROOT / "modules" / "nesting_engine" / "cu_largos_nesting.py",
+    ROOT / "modules" / "Plates.xlsx",
+)
+
+SMOKE_IMPORT_MODULES = (
+    "catalogo_largos",
+    "lista_largos_material_requerido",
+    "interface.largos_nesting_service",
+    "interface.qt.dialogs.largos_nesting_modal",
+    "interface.qt.widgets.largos_perfil_draw",
+    "modules.nesting_engine.algorithm_bridge",
+    "modules.nesting_engine.manager",
+)
 
 
 def _run(cmd, cwd=None):
@@ -82,16 +194,126 @@ def ensure_build_dependencies():
         "wheel",
         "pyinstaller",
         "pillow",
-        "customtkinter",
+        "PySide6",
         "matplotlib",
         "ezdxf",
         "shapely",
         "psycopg2-binary",
+        "openpyxl",
+        "pandas",
+        "pybind11",
+        "cmake",
     ):
         _pip_install(pkg)
 
 
-def build_exe(name: str, onefile: bool = True):
+def _ensure_build_import_path():
+    for p in (ROOT, ROOT / "interface"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+
+
+def validate_suite_manifest():
+    """Falla temprano si faltan piezas del ARGA NESTING SUITE actual."""
+    missing = [str(p.relative_to(ROOT)) for p in CRITICAL_SUITE_FILES if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Faltan archivos críticos del suite antes de empaquetar:\n  - "
+            + "\n  - ".join(missing)
+        )
+    print(f"[OK] Manifiesto del suite: {len(CRITICAL_SUITE_FILES)} archivos críticos presentes.")
+
+
+def smoke_test_imports():
+    """Importa módulos clave (largos, Qt, motor) en el intérprete de build."""
+    _ensure_build_import_path()
+    for mod in SMOKE_IMPORT_MODULES:
+        importlib.import_module(mod)
+        print(f"[OK] import {mod}")
+    try:
+        from modules.nesting_engine.algorithm_bridge import engine_name
+
+        print(f"[OK] motor nesting: {engine_name()}")
+    except Exception as exc:
+        print(f"[WARN] motor C++ no disponible en smoke test: {exc}")
+
+
+def ensure_cpp_engine(skip: bool = False, allow_missing: bool = False) -> Path | None:
+    """Compila algorithm_cpp.pyd si hace falta (requerido para nesting en el EXE)."""
+    if CPP_ENGINE_PYD.exists() and skip:
+        print(f"[OK] Motor C++ existente: {CPP_ENGINE_PYD}")
+        return CPP_ENGINE_PYD
+
+    if skip:
+        if CPP_ENGINE_PYD.exists():
+            return CPP_ENGINE_PYD
+        msg = (
+            f"[ERROR] --skip-cpp y no existe {CPP_ENGINE_PYD.name}. "
+            "El nesting no funcionará en otras PCs sin el motor C++."
+        )
+        if allow_missing:
+            print(f"[WARN] {msg}")
+            return None
+        raise FileNotFoundError(msg)
+
+    if not CPP_ENGINE_PS1.exists():
+        raise FileNotFoundError(f"No se encontró script de build C++: {CPP_ENGINE_PS1}")
+
+    _run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(CPP_ENGINE_PS1),
+            "-PythonExe",
+            sys.executable,
+        ],
+        cwd=ROOT,
+    )
+    if not CPP_ENGINE_PYD.exists():
+        raise FileNotFoundError(
+            f"No se generó {CPP_ENGINE_PYD} tras build_cpp_engine.ps1"
+        )
+    print(f"[OK] Motor C++ listo: {CPP_ENGINE_PYD}")
+    return CPP_ENGINE_PYD
+
+
+def _pyinstaller_collect_args() -> list[str]:
+    args: list[str] = []
+    for mod in HIDDEN_IMPORTS:
+        args += ["--hidden-import", mod]
+    for pkg in COLLECT_SUBMODULES:
+        args += ["--collect-submodules", pkg]
+    return args
+
+
+def _pyinstaller_data_args() -> list[str]:
+    args: list[str] = []
+    data_pairs = [
+        (SPLASH_JPEG, "."),
+        (MACRO, "."),
+        (ROOT / "modules", "modules"),
+        (ROOT / "interface", "interface"),
+        (ROOT / "assets", "assets"),
+        (ROOT / "inventario_remanentes.csv", "."),
+    ]
+    for src, dest in data_pairs:
+        if src.exists():
+            args += ["--add-data", f"{src};{dest}"]
+        elif src.name == "inventario_remanentes.csv":
+            print("[WARN] inventario_remanentes.csv no encontrado; se omite del bundle.")
+    return args
+
+
+def _pyinstaller_binary_args(cpp_pyd: Path | None) -> list[str]:
+    if cpp_pyd is None or not cpp_pyd.exists():
+        return []
+    return ["--add-binary", f"{cpp_pyd};modules/nesting_engine"]
+
+
+def build_exe(name: str, onefile: bool = True, cpp_pyd: Path | None = None):
     if not MAIN_PY.exists():
         raise FileNotFoundError(f"No existe main.py: {MAIN_PY}")
 
@@ -105,20 +327,7 @@ def build_exe(name: str, onefile: bool = True):
         if (ROOT / "dist" / name).exists():
             shutil.rmtree(ROOT / "dist" / name, ignore_errors=True)
 
-    # Generar icono DESPUÉS de limpiar build, para que no se elimine antes del --icon.
     icon_ico = _build_ico_file()
-
-    add_datas = []
-    if SPLASH_JPEG.exists():
-        add_datas += ["--add-data", f"{SPLASH_JPEG};."]
-    if MACRO.exists():
-        add_datas += ["--add-data", f"{MACRO};."]
-    if (ROOT / "modules").exists():
-        add_datas += ["--add-data", f"{ROOT / 'modules'};modules"]
-    if (ROOT / "interface").exists():
-        add_datas += ["--add-data", f"{ROOT / 'interface'};interface"]
-    if (ROOT / "assets").exists():
-        add_datas += ["--add-data", f"{ROOT / 'assets'};assets"]
 
     cmd = [
         sys.executable,
@@ -136,56 +345,12 @@ def build_exe(name: str, onefile: bool = True):
         str(ROOT / "interface"),
         "--paths",
         str(ROOT / "modules"),
-        "--hidden-import",
-        "config",
-        "--hidden-import",
-        "tab_files",
-        "--hidden-import",
-        "tab_parts",
-        "--hidden-import",
-        "tab_sheets",
-        "--hidden-import",
-        "tab_nesting",
-        "--hidden-import",
-        "nesting_canvas",
-        "--hidden-import",
-        "responsive_layout",
-        "--hidden-import",
-        "postgres_connector",
-        "--hidden-import",
-        "utils_nesting",
-        "--hidden-import",
-        "nesting_modals",
-        "--hidden-import",
-        "modules.nesting_engine.manager",
-        "--hidden-import",
-        "modules.nesting_engine.algorithm_bridge",
-        "--hidden-import",
-        "modules.nesting_engine.algorithm_cpp",
-        "--hidden-import",
-        "modules.consulta_herinox_bridge",
-        "--hidden-import",
-        "modules.nesting_engine.efficiency_metrics",
-        "--hidden-import",
-        "modules.nesting_engine.rtz_overlays",
-        "--hidden-import",
-        "modules.nesting_engine.geometry_parser",
-        "--hidden-import",
-        "modules.nesting_engine.exporter",
-        "--hidden-import",
-        "reporte_pdf_nesting",
-        "--hidden-import",
-        "modules.sheets_manager",
-        "--hidden-import",
-        "modules.processed_layers",
-        "--hidden-import",
-        "modules.scanner",
-        "--hidden-import",
-        "modules.nest_exporter",
     ]
+    cmd += _pyinstaller_collect_args()
+    cmd += _pyinstaller_data_args()
+    cmd += _pyinstaller_binary_args(cpp_pyd)
     if icon_ico and icon_ico.exists():
         cmd += ["--icon", str(icon_ico)]
-    cmd += add_datas
     cmd += [str(MAIN_PY)]
 
     _run(cmd, cwd=ROOT)
@@ -194,11 +359,6 @@ def build_exe(name: str, onefile: bool = True):
     if not onefile:
         print("[WARN] Modo onedir: no mover solo el .exe; debe mantenerse junto a su carpeta completa.")
     return exe_path
-
-
-def _ensure_build_import_path():
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
 
 
 def sync_repo_plates_from_herinox(phase: str) -> bool:
@@ -260,13 +420,84 @@ def align_plates_inventory_after_build(exe_path: Path):
         )
 
 
+def seed_persistent_sidecars(exe_path: Path):
+    """
+    Deja junto al .exe los archivos editables que otras PCs necesitan en primer arranque.
+    No sobrescribe si el usuario ya los tiene.
+    """
+    dist_root = exe_path.parent
+    seeds = (
+        (ROOT / "modules" / "Plates.xlsx", dist_root / "modules" / "Plates.xlsx"),
+        (ROOT / "inventario_remanentes.csv", dist_root / "inventario_remanentes.csv"),
+    )
+    for src, dst in seeds:
+        if not src.is_file():
+            print(f"[WARN] Sin semilla: {src.name}")
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if dst.is_file():
+            print(f"[OK] Sidecar existente (sin tocar): {dst}")
+        else:
+            shutil.copy2(src, dst)
+            print(f"[OK] Sidecar sembrado: {dst}")
+
+
+def write_build_manifest(exe_path: Path, cpp_pyd: Path | None) -> Path:
+    manifest = {
+        "app": "ARGA NESTING SUITE",
+        "built_at_utc": datetime.now(timezone.utc).isoformat(),
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "exe": str(exe_path.resolve()),
+        "cpp_engine": bool(cpp_pyd and cpp_pyd.is_file()),
+        "hidden_imports": len(HIDDEN_IMPORTS),
+        "collect_submodules": list(COLLECT_SUBMODULES),
+        "features": [
+            "nesting_placas_cpp",
+            "nesting_largos_mrl",
+            "nesteo_largos_switches",
+            "export_material_requerido_ldg",
+            "herinox_catalogo_largos",
+        ],
+        "deploy_notes": [
+            "Copiar ArgaNestingSuite.exe + carpeta modules/ (Plates.xlsx) al mismo directorio.",
+            "Opcional: inventario_remanentes.csv junto al exe.",
+            "Requiere red a PostgreSQL nesting (5433) y Herinox (5439) en modo servidor.",
+            "FreeCAD en C:\\Program Files\\FreeCAD 1.0\\ para STEP (si aplica).",
+        ],
+    }
+    out = exe_path.parent / "arga_build_manifest.json"
+    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[OK] Manifiesto de build: {out}")
+    return out
+
+
+def print_deploy_checklist(exe_path: Path):
+    dist = exe_path.parent
+    checks = [
+        ("Ejecutable", exe_path.is_file()),
+        ("modules/Plates.xlsx", (dist / "modules" / "Plates.xlsx").is_file()),
+        ("arga_build_manifest.json", (dist / "arga_build_manifest.json").is_file()),
+    ]
+    print("\n=== CHECKLIST DESPLIEGUE (copiar esta carpeta dist/ a otras PCs) ===")
+    ok_all = True
+    for label, ok in checks:
+        print(f"  [{'OK' if ok else 'FALTA'}] {label}")
+        ok_all = ok_all and ok
+    print(f"  Carpeta: {dist.resolve()}")
+    if ok_all:
+        print("[OK] Paquete listo para probar en otras PCs.")
+    else:
+        print("[WARN] Faltan archivos sidecar; revisa el build.")
+    print("=" * 72)
+
+
 def associate_extensions(exe_path: Path):
     if os.name != "nt":
         print("[WARN] Asociación automática solo soportada en Windows.")
         return
     exe = str(exe_path.resolve())
     cmd = f"\"{exe}\" \"%1\""
-    # Requiere permisos del usuario para HKCU (no admin).
     _run(["reg", "add", r"HKCU\Software\Classes\.arganest", "/ve", "/d", "ArgaNesting.Workspace", "/f"])
     _run(["reg", "add", r"HKCU\Software\Classes\.navanest", "/ve", "/d", "ArgaNesting.Workspace", "/f"])
     _run(["reg", "add", r"HKCU\Software\Classes\ArgaNesting.Workspace", "/ve", "/d", "Arga Nest Workspace", "/f"])
@@ -278,7 +509,6 @@ def associate_extensions(exe_path: Path):
 def refresh_windows_icon_cache():
     if os.name != "nt":
         return
-    # Refresco no destructivo de íconos para que Windows aplique el nuevo icono/progid.
     try:
         _run(["ie4uinit.exe", "-show"])
     except Exception:
@@ -304,8 +534,6 @@ def refresh_windows_icon_cache():
 def create_shortcuts(exe_path: Path, app_name: str = "ArgaNestingSuite"):
     if os.name != "nt":
         return
-    # En muchas PCs corporativas el "Desktop" real está redirigido (OneDrive/idioma del SO).
-    # Usamos la carpeta especial de Windows y además cubrimos rutas comunes como fallback.
     desktop_candidates = []
     try:
         ps_get_desktop = (
@@ -377,7 +605,6 @@ def cleanup_previous_builds(name: str):
             spec_path.unlink()
         except Exception:
             pass
-    # Limpieza de compilados previos del nombre objetivo.
     if dist_dir.exists():
         p_onefile = dist_dir / f"{name}.exe"
         p_onedir = dist_dir / name
@@ -385,8 +612,6 @@ def cleanup_previous_builds(name: str):
         p_runtime_temp = dist_dir / "TEMP_PROCESSED"
         if p_onedir.exists():
             shutil.rmtree(p_onedir, ignore_errors=True)
-        # No borrar dist/modules: el inventario persistente del EXE vive ahí.
-        # Tras el build se realinea con Herinox y se espeja desde modules/Plates.xlsx.
         if p_runtime_temp.exists():
             shutil.rmtree(p_runtime_temp, ignore_errors=True)
         if p_runtime_historial.exists():
@@ -400,13 +625,28 @@ def cleanup_previous_builds(name: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Construye ARGA NESTING SUITE (.exe) y opcionalmente asocia .arganest."
+        description="Construye ARGA NESTING SUITE (.exe) con nesting de largos, MRL y motor C++."
     )
     parser.add_argument("--name", default="ArgaNestingSuite", help="Nombre del ejecutable.")
     parser.add_argument(
         "--skip-deps",
         action="store_true",
         help="No actualiza/instala dependencias de Python.",
+    )
+    parser.add_argument(
+        "--skip-cpp",
+        action="store_true",
+        help="No recompila algorithm_cpp.pyd (usa el existente si hay).",
+    )
+    parser.add_argument(
+        "--allow-no-cpp",
+        action="store_true",
+        help="Permite terminar sin motor C++ (nesting de placas no funcionará).",
+    )
+    parser.add_argument(
+        "--skip-smoke",
+        action="store_true",
+        help="Omite smoke test de imports antes de PyInstaller.",
     )
     parser.add_argument(
         "--associate-arganest",
@@ -442,12 +682,22 @@ def main():
         print("[OK] Limpieza completada.")
         return
 
+    validate_suite_manifest()
+
     if not args.skip_deps:
         ensure_build_dependencies()
+
+    if not args.skip_smoke:
+        smoke_test_imports()
+
+    cpp_pyd = ensure_cpp_engine(skip=args.skip_cpp, allow_missing=args.allow_no_cpp)
     sync_repo_plates_from_herinox("pre-build")
-    exe_path = build_exe(args.name, onefile=not args.onedir)
+    exe_path = build_exe(args.name, onefile=not args.onedir, cpp_pyd=cpp_pyd)
     sync_repo_plates_from_herinox("post-build")
     align_plates_inventory_after_build(exe_path)
+    seed_persistent_sidecars(exe_path)
+    write_build_manifest(exe_path, cpp_pyd)
+    print_deploy_checklist(exe_path)
     if args.associate_arganest:
         associate_extensions(exe_path)
     if args.create_shortcuts:

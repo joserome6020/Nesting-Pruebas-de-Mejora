@@ -159,7 +159,10 @@ def _cantidad_barras_catalogo(total_pulgadas_plan: float, largo_catalogo_in: flo
     return max(1, math.ceil(total / largo_cat))
 
 
-def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+def agregar_filas_desde_plan(
+    plan: Dict[str, Any],
+    barras_excluidas_pedido: set[str] | None = None,
+) -> List[Dict[str, Any]]:
     try:
         from catalogo_largos import (
             _cargar_placas_largos_desde_herinox,
@@ -169,11 +172,15 @@ def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+    excluir = barras_excluidas_pedido or set()
     # Consumo total del plan por material (suma largo_stock de cada barra STOCK).
     acumulado: Dict[str, Dict[str, Any]] = {}
 
     for material, barras in _iter_barras_por_material(plan):
-        for barra in barras:
+        for bar_idx, barra in enumerate(barras):
+            bar_key = f"{material}::{bar_idx}"
+            if bar_key in excluir:
+                continue
             source = str(barra.get("source") or "STOCK").strip().upper()
             if source == "REMANENTE":
                 continue
@@ -206,6 +213,91 @@ def agregar_filas_desde_plan(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
         )
     filas.sort(key=lambda r: (r["material"], r.get("largo") or 0, r.get("codigo") or ""))
     return filas
+
+
+def mrl_unit_key(material: str, largo: float, unit_idx: int) -> str:
+    mat = str(material or "").strip()
+    return f"{mat}::{round(float(largo or 0), 4)}::{int(unit_idx)}"
+
+
+def expandir_pedido_mrl_unidades(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Desglosa el pedido MRL en unidades comerciales (1 fila = 1 barra a comprar)."""
+    unidades: List[Dict[str, Any]] = []
+    for fila in agregar_filas_desde_plan(plan):
+        mat = str(fila.get("material") or "").strip()
+        try:
+            largo = float(fila.get("largo") or 0)
+        except Exception:
+            largo = 0.0
+        cant = max(0, int(fila.get("cantidad") or 0))
+        codigo = str(fila.get("codigo") or "").strip()
+        costo_linea = fila.get("costo")
+        for i in range(cant):
+            unidades.append(
+                {
+                    "key": mrl_unit_key(mat, largo, i),
+                    "material": mat,
+                    "codigo": codigo,
+                    "largo": largo,
+                    "unit_idx": i + 1,
+                    "cant_grupo": cant,
+                    "costo": (
+                        float(costo_linea) / cant
+                        if costo_linea is not None and cant > 0
+                        else None
+                    ),
+                    "nesting_key": None,
+                }
+            )
+    return unidades
+
+
+def agregar_filas_desde_unidades_mrl(unidades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reagrupa unidades MRL supervivientes para INSERT en material_requerido_ldg."""
+    if not unidades:
+        return []
+    try:
+        from catalogo_largos import (
+            _cargar_placas_largos_desde_herinox,
+            datos_material_requerido_pedido,
+        )
+    except ImportError:
+        return []
+
+    catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+    conteo: Dict[tuple[str, float, str], int] = {}
+    for u in unidades:
+        mat = str(u.get("material") or "").strip()
+        try:
+            largo = float(u.get("largo") or 0)
+        except Exception:
+            largo = 0.0
+        cod = str(u.get("codigo") or "").strip()
+        k = (mat, largo, cod)
+        conteo[k] = conteo.get(k, 0) + 1
+
+    filas: List[Dict[str, Any]] = []
+    for (mat, largo, cod), cant in sorted(conteo.items(), key=lambda x: (x[0][0], x[0][1], x[0][2])):
+        datos = datos_material_requerido_pedido(mat, cant, catalogo=catalogo)
+        filas.append(
+            {
+                "material": mat,
+                "cantidad": cant,
+                "codigo": datos.get("codigo") or cod,
+                "largo": float(datos.get("largo") or largo),
+                "costo": datos.get("costo"),
+            }
+        )
+    return filas
+
+
+def previsualizar_pedido_mrl_unidades(
+    plan: Dict[str, Any],
+    unidades_excluidas: set[str] | None = None,
+) -> List[Dict[str, Any]]:
+    excl = unidades_excluidas or set()
+    todas = expandir_pedido_mrl_unidades(plan)
+    return [u for u in todas if u["key"] not in excl]
 
 
 def obtener_filas_pedido(cursor, orden_id: str, tipo_orden: str) -> List[dict]:
@@ -392,6 +484,8 @@ def reconstruir_pedido_desde_plan(
     orden_id: str,
     tipo_orden: str,
     plan: Dict[str, Any],
+    barras_excluidas_pedido: set[str] | None = None,
+    unidades_excluidas_mrl: set[str] | None = None,
 ) -> Tuple[bool, str]:
     cursor.execute(
         """
@@ -400,7 +494,13 @@ def reconstruir_pedido_desde_plan(
         """,
         (str(orden_id or "").strip(), tipo_orden),
     )
-    nuevas = agregar_filas_desde_plan(plan)
+    if unidades_excluidas_mrl is not None:
+        todas = expandir_pedido_mrl_unidades(plan)
+        excl = unidades_excluidas_mrl or set()
+        kept = [u for u in todas if u["key"] not in excl]
+        nuevas = agregar_filas_desde_unidades_mrl(kept)
+    else:
+        nuevas = agregar_filas_desde_plan(plan, barras_excluidas_pedido=barras_excluidas_pedido)
     if not nuevas:
         return False, "No hay barras de stock en el plan para generar el pedido."
 

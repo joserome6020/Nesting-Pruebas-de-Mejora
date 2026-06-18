@@ -113,6 +113,10 @@ class SistemaNestingPro(ctk.CTk):
         self.ultimos_escenarios = []
         # NUEVO: WO oficial asignada por lote después de exportar DXF
         self.wo_reales_por_lote = {}
+        self.plan_largos_por_lote = {}
+        self.exclusiones_largos_pedido_por_lote = {}
+        self.exclusiones_mrl_unidades_por_lote = {}
+        self.plan_largos_job = ""
 
         # ===== NUEVO: estado para edición de lotes ya nestados =====
         self.editable_inputs_by_lote = []

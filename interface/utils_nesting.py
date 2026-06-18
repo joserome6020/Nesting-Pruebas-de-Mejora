@@ -25,6 +25,18 @@ def _espesor_pulgadas_desde_clave(clave: str) -> float:
         return float("inf")
 
 
+def es_material_cobre(material) -> bool:
+    """True si el material de pieza/placa es cobre."""
+    m = str(material or "").strip().upper()
+    if m in ("CU", "COBRE", "COPPER"):
+        return True
+    return "COBRE" in m or "COPPER" in m
+
+
+def clave_orientacion_cobre_ruta(ruta) -> str:
+    return os.path.normcase(os.path.normpath(str(ruta or "")))
+
+
 def _es_clave_cobre(clave: str) -> bool:
     """True si la clave de grupo corresponde a material cobre (largos CU)."""
     s = str(clave or "").strip().upper()

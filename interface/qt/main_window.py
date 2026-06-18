@@ -90,12 +90,18 @@ class SistemaNestingPro(QMainWindow):
         self.motor_nesting = MotorNesting()
         self.datos_placas_empresa, self.datos_placas_proveedor = self.plates_manager.obtener_datos_placas_divididos()
         self.datos_partes_actuales = []
+        self.orientacion_cobre_por_ruta = {}
+        self._parts_ui_pendiente = None
         self.resultados_nesting = {}
         self.resultados_multilote = []
         self.meta_pdf_por_ruta = {}
         self.job_activo = "NESTING"
         self.ultimos_escenarios = []
         self.wo_reales_por_lote = {}
+        self.plan_largos_por_lote = {}
+        self.exclusiones_largos_pedido_por_lote = {}
+        self.exclusiones_mrl_unidades_por_lote = {}
+        self.plan_largos_job = ""
         self.editable_inputs_by_lote = []
         self.editable_inputs_actuales = []
         self.lote_editado_dirty = False
@@ -179,8 +185,8 @@ class SistemaNestingPro(QMainWindow):
         footer.setContentsMargins(4, 0, 4, 0)
         footer.addStretch()
         self.switch_exportar_servidor = HerinoxSwitch(
-            label_on="Exportar a servidor y BD",
-            label_off="Solo nesteos locales",
+            label_on="EXPORTAR A SERVIDOR Y BD",
+            label_off="SOLO NESTEOS LOCALES",
             checked=True,
         )
         self.switch_exportar_servidor.toggled.connect(self._on_toggle_exportar_servidor)
@@ -207,6 +213,8 @@ class SistemaNestingPro(QMainWindow):
         idx = tabs.get(str(nombre).upper())
         if idx is not None:
             self.tabview.setCurrentIndex(idx)
+        if str(nombre).upper() == "PARTS":
+            self._refrescar_parts_ui_pendiente(thumbnails_async=True)
 
     def after(self, ms: int, callback):
         call_on_main_later(ms, callback)
@@ -280,18 +288,27 @@ class SistemaNestingPro(QMainWindow):
         else:
             print(f"[HERINOX SYNC] OMITIDA | {resultado.message}")
 
-    def cargar_datos_parts(self, datos):
+    def cargar_datos_parts(self, datos, *, thumbnails_async: bool = False):
         self.datos_partes_actuales = datos
         if hasattr(self.vista_parts, "refrescar_tabla"):
-            self.vista_parts.refrescar_tabla(datos)
+            self.vista_parts.refrescar_tabla(datos, thumbnails_async=thumbnails_async)
+
+    def _refrescar_parts_ui_pendiente(self, *, thumbnails_async: bool = True):
+        datos = getattr(self, "_parts_ui_pendiente", None)
+        if datos is None:
+            return
+        self._parts_ui_pendiente = None
+        self.cargar_datos_parts(datos, thumbnails_async=thumbnails_async)
 
     def abrir_workspace_arganest_en_arranque(self, ruta_workspace: str):
+        self.ir_a_tab("NESTING")
+        if hasattr(self.vista_nesting, "cargar_workspace_async"):
+            self.vista_nesting.cargar_workspace_async(ruta_workspace, mostrar_exito=False)
+            return
         try:
             from nesting_workspace import cargar_workspace_desde_archivo, aplicar_workspace
-            self.ir_a_tab("NESTING")
             payload = cargar_workspace_desde_archivo(ruta_workspace)
-            if hasattr(self.vista_nesting, "aplicar_workspace"):
-                aplicar_workspace(self.vista_nesting, payload)
+            aplicar_workspace(self.vista_nesting, payload)
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "No se pudo abrir workspace", f"Archivo: {ruta_workspace}\n\n{e}")

@@ -49,7 +49,8 @@ def make_horizontal_splitter(initial_left: int = 680) -> QSplitter:
     splitter.setOpaqueResize(True)
     splitter.setStretchFactor(0, 0)
     splitter.setStretchFactor(1, 1)
-    splitter.setSizes([initial_left, max(480, initial_left)])
+    # Izquierda = ancho fijo; derecha absorbe el resto (evita 50/50 si initial_left >= 480).
+    splitter.setSizes([initial_left, 10_000])
     return splitter
 
 

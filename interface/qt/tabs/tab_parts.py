@@ -5,6 +5,7 @@ import os
 import csv
 import json
 import re
+import threading
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -26,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from interface.material_colors import fila_fondo_material
+from interface.qt.thread_bridge import call_on_main
 from interface.qt.visualizer import VisorDXF, generar_thumbnail
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
 from interface.qt.layout_helpers import (
@@ -108,6 +111,8 @@ class TabParts(QWidget, TimerHost):
 
         self.rutas_dxf_actuales = []
 
+        self._PARTS_GRID_MARGIN_H = 10
+
         self.setup_ui()
 
     def setup_ui(self):
@@ -128,38 +133,53 @@ class TabParts(QWidget, TimerHost):
         self.ent_tanques.setFixedWidth(70)
         self.ent_tanques.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hdr.addWidget(self.ent_tanques)
-        self.btn_aplicar_tanques = QPushButton("Aplicar")
+        self.btn_aplicar_tanques = QPushButton("APLICAR")
         apply_push_button(self.btn_aplicar_tanques, ARGB_BTN_2, font_size=11)
         self.btn_aplicar_tanques.clicked.connect(self.aplicar_cantidad_tanques)
         hdr.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
         hdr.addStretch()
-        self.btn_lista_largos = QPushButton("Lista de largos")
+        self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
         hdr.addWidget(self.btn_lista_largos)
         tabla_lay.addWidget(frame_header)
 
-        head = QFrame()
-        head.setObjectName("TableHeader")
-        head.setFrameShape(QFrame.Shape.NoFrame)
-        head.setFixedHeight(42)
-        head_grid = QGridLayout(head)
-        head_grid.setContentsMargins(10, 0, 10, 0)
+        header_wrap = QWidget()
+        header_wrap_lay = QHBoxLayout(header_wrap)
+        header_wrap_lay.setContentsMargins(0, 0, 0, 0)
+        header_wrap_lay.setSpacing(0)
+
+        self._parts_head = QFrame()
+        self._parts_head.setObjectName("TableHeader")
+        self._parts_head.setFrameShape(QFrame.Shape.NoFrame)
+        self._parts_head.setFixedHeight(42)
+        self._parts_head_grid = QGridLayout(self._parts_head)
+        self._parts_head_grid.setContentsMargins(self._PARTS_GRID_MARGIN_H, 0, self._PARTS_GRID_MARGIN_H, 0)
+        self._apply_parts_grid_columns(self._parts_head_grid)
         titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "VISTA"]
         for i, txt in enumerate(titulos):
             lbl = QLabel(txt)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            head_grid.addWidget(lbl, 0, i)
-        for i, conf in enumerate(self.local_col_config):
-            head_grid.setColumnStretch(i, conf["weight"])
-            head_grid.setColumnMinimumWidth(i, conf["min"])
-        tabla_lay.addWidget(head)
+            if i == 0:
+                lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            else:
+                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._parts_head_grid.addWidget(lbl, 0, i)
+        header_wrap_lay.addWidget(self._parts_head, 1)
+
+        self._parts_scroll_spacer = QWidget()
+        self._parts_scroll_spacer.setFixedWidth(0)
+        header_wrap_lay.addWidget(self._parts_scroll_spacer)
+        tabla_lay.addWidget(header_wrap)
 
         self.lista_scroll = make_scroll()
         self._lista_inner, self._lista_layout = make_scroll_content()
         self._lista_layout.setSpacing(2)
+        self._lista_layout.setContentsMargins(0, 4, 0, 8)
         self.lista_scroll.setWidget(self._lista_inner)
+        sb = self.lista_scroll.verticalScrollBar()
+        sb.rangeChanged.connect(lambda *_: self._sync_parts_header_scrollbar())
+        sb.valueChanged.connect(lambda *_: self._sync_parts_header_scrollbar())
         tabla_lay.addWidget(self.lista_scroll, 1)
         splitter.addWidget(frame_tabla)
 
@@ -173,7 +193,7 @@ class TabParts(QWidget, TimerHost):
         tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:14px;")
         hdr_row.addWidget(tit)
         hdr_row.addStretch()
-        lbl_sub = QLabel("Vista CAD con cotas interactivas")
+        lbl_sub = QLabel("VISTA CAD CON COTAS INTERACTIVAS")
         lbl_sub.setStyleSheet(f"color:{COLOR_GRIS_MED};font-size:11px;")
         hdr_row.addWidget(lbl_sub)
         vis_lay.addLayout(hdr_row)
@@ -186,6 +206,8 @@ class TabParts(QWidget, TimerHost):
         fbl.setContentsMargins(0, 0, 0, 0)
         fbl.setSpacing(0)
         self.visor = VisorDXF(self.frame_black_visor)
+        self._material_fila_actual = None
+        self.visor.set_persist_rotation_hook(self._persistir_orientacion_cobre)
         vis_lay.addWidget(self.frame_black_visor, 1)
         splitter.addWidget(frame_visor_bg)
         splitter.setStretchFactor(0, 2)
@@ -193,7 +215,31 @@ class TabParts(QWidget, TimerHost):
         finalize_splitter(splitter, min_left=420, min_right=340)
         root.addWidget(splitter)
 
-    def refrescar_tabla(self, datos):
+    def _apply_parts_grid_columns(self, grid: QGridLayout) -> None:
+        grid.setHorizontalSpacing(4)
+        for i, conf in enumerate(self.local_col_config):
+            grid.setColumnStretch(i, conf["weight"])
+            grid.setColumnMinimumWidth(i, conf["min"])
+
+    def _sync_parts_header_scrollbar(self) -> None:
+        sb = self.lista_scroll.verticalScrollBar()
+        ancho = sb.width() if sb.isVisible() else 0
+        self._parts_scroll_spacer.setFixedWidth(ancho)
+        self._parts_head_grid.setContentsMargins(
+            self._PARTS_GRID_MARGIN_H,
+            0,
+            self._PARTS_GRID_MARGIN_H,
+            0,
+        )
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._al_mostrar_pestana)
+
+    def _al_mostrar_pestana(self):
+        self._sync_parts_header_scrollbar()
+
+    def refrescar_tabla(self, datos, *, thumbnails_async: bool = False):
         multiplicador = getattr(self.app, "multiplicador_tanques", 1)
         self.lbl_tanques.setText("TANQUES DEL PROYECTO:")
         try:
@@ -204,6 +250,7 @@ class TabParts(QWidget, TimerHost):
         self.rutas_dxf_actuales = []
         scroll_clear(self.lista_scroll)
         self._row_widgets = {}
+        thumb_queue: list[tuple] = []
 
         for idx, item in enumerate(datos):
             pieza, mat, qty_total, cal, st, ruta = item
@@ -215,10 +262,7 @@ class TabParts(QWidget, TimerHost):
             except Exception:
                 tot_val, qty_unidad = qty_total, qty_total
 
-            color_fondo = "#FFFFFF" if idx % 2 == 0 else "#F8FAFC"
-            mat_u = str(mat or "").strip().upper()
-            if mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u:
-                color_fondo = "#F3E2CF" if idx % 2 == 0 else "#E8D4BC"
+            color_fondo = fila_fondo_material(mat, idx)
             row = QFrame()
             row.setObjectName("PartsRowAlt" if idx % 2 else "PartsRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
@@ -226,10 +270,8 @@ class TabParts(QWidget, TimerHost):
             row.orig_name = row.objectName()
             row.orig_color = color_fondo
             row_lay = QGridLayout(row)
-            row_lay.setContentsMargins(4, 2, 4, 2)
-            for i, conf in enumerate(self.local_col_config):
-                row_lay.setColumnStretch(i, conf["weight"])
-                row_lay.setColumnMinimumWidth(i, conf["min"])
+            row_lay.setContentsMargins(self._PARTS_GRID_MARGIN_H, 2, self._PARTS_GRID_MARGIN_H, 2)
+            self._apply_parts_grid_columns(row_lay)
 
             valores = [pieza, mat, str(qty_unidad), str(tot_val), cal, st]
             for i, conf in enumerate(self.local_col_config):
@@ -247,19 +289,79 @@ class TabParts(QWidget, TimerHost):
                         lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                     row_lay.addWidget(lbl, 0, i)
                 elif i == 6:
-                    try:
-                        thumb = generar_thumbnail(ruta, size=(32, 32), material=mat)
-                        if thumb:
-                            l_t = QLabel()
-                            l_t.setPixmap(thumb)
-                            l_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                            l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
-                            row_lay.addWidget(l_t, 0, i)
-                    except Exception:
-                        pass
+                    if thumbnails_async:
+                        ph = QLabel("…")
+                        ph.setFixedSize(32, 32)
+                        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        ph.setStyleSheet("color:#94A3B8;font-size:9px;background:transparent;")
+                        ph.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
+                        row_lay.addWidget(ph, 0, i)
+                        if ruta:
+                            thumb_queue.append((ph, str(ruta), mat))
+                    else:
+                        try:
+                            thumb = generar_thumbnail(ruta, size=(32, 32), material=mat)
+                            if thumb:
+                                l_t = QLabel()
+                                l_t.setPixmap(thumb)
+                                l_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                                l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
+                                row_lay.addWidget(l_t, 0, i)
+                        except Exception:
+                            pass
 
             row.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
             scroll_add_widget(self.lista_scroll, row)
+
+        if thumbnails_async and thumb_queue:
+            self._iniciar_thumbnails_async(thumb_queue)
+        QTimer.singleShot(0, self._sync_parts_header_scrollbar)
+
+    def _iniciar_thumbnails_async(self, thumb_queue: list[tuple]):
+        self._thumb_gen_token = int(getattr(self, "_thumb_gen_token", 0)) + 1
+        token = self._thumb_gen_token
+        threading.Thread(
+            target=self._thread_generar_thumbnails,
+            args=(token, list(thumb_queue)),
+            daemon=True,
+        ).start()
+
+    def _thread_generar_thumbnails(self, token: int, thumb_queue: list[tuple]):
+        resultados = []
+        total = len(thumb_queue)
+        for i, (ph, ruta, mat) in enumerate(thumb_queue, start=1):
+            pix = None
+            if ruta and os.path.exists(ruta):
+                try:
+                    pix = generar_thumbnail(ruta, size=(32, 32), material=mat)
+                except Exception:
+                    pix = None
+            resultados.append((ph, pix))
+            app = getattr(self, "app", None)
+            if app is not None and hasattr(app, "actualizar_progreso") and total > 8:
+                try:
+                    app.actualizar_progreso(
+                        f"Miniaturas PARTS {i}/{total}…",
+                        0.05 + 0.15 * (i / max(1, total)),
+                    )
+                except Exception:
+                    pass
+        call_on_main(self._aplicar_thumbnails_async, token, resultados)
+
+    def _aplicar_thumbnails_async(self, token: int, resultados: list[tuple]):
+        if token != getattr(self, "_thumb_gen_token", 0):
+            return
+        for ph, pix in resultados:
+            try:
+                if ph is None or not hasattr(ph, "setPixmap"):
+                    continue
+                if pix is not None:
+                    ph.setPixmap(pix)
+                    ph.setText("")
+                else:
+                    ph.setText("-")
+            except RuntimeError:
+                pass
 
     def _resolver_job_data_csv_actual(self):
         rutas = [str(r[5]) for r in (getattr(self.app, "datos_partes_actuales", []) or []) if len(r) > 5 and r[5]]
@@ -373,6 +475,25 @@ class TabParts(QWidget, TimerHost):
         self.app.cargar_datos_parts(nuevos_datos)
         QMessageBox.information(self, "Actualizado", f"Cantidad de tanques actualizada a X{nuevo_mult}.")
 
+    def _es_material_cobre(self, material) -> bool:
+        from interface.utils_nesting import es_material_cobre
+        return es_material_cobre(material)
+
+    def _orientacion_cobre_guardada(self, ruta_dxf) -> int:
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
+        return int(orientaciones.get(clave_orientacion_cobre_ruta(ruta_dxf), 0)) % 360
+
+    def _persistir_orientacion_cobre(self, grados, ruta_dxf):
+        if not self._es_material_cobre(self._material_fila_actual):
+            return
+        if not ruta_dxf:
+            return
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        if not hasattr(self.app, "orientacion_cobre_por_ruta") or self.app.orientacion_cobre_por_ruta is None:
+            self.app.orientacion_cobre_por_ruta = {}
+        self.app.orientacion_cobre_por_ruta[clave_orientacion_cobre_ruta(ruta_dxf)] = int(grados) % 360
+
     def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
         inner = self.lista_scroll.widget()
         if inner:
@@ -385,8 +506,10 @@ class TabParts(QWidget, TimerHost):
         frame_fila.setStyleSheet("background:#DBEAFE;border-radius:6px;")
 
         if os.path.exists(ruta_dxf):
+            self._material_fila_actual = material
             self.visor.set_material(material)
-            self.visor.renderizar_dxf(ruta_dxf)
+            rot_vista = self._orientacion_cobre_guardada(ruta_dxf) if self._es_material_cobre(material) else 0
+            self.visor.renderizar_dxf(ruta_dxf, rotacion_vista_deg=rot_vista)
             # Mantener una sola fuente de verdad para medidas: el propio render del visor (con detección de unidades).
             self.visor.actualizar_info_extra(referencia=nombre_pieza)
 
@@ -593,9 +716,9 @@ class TabParts(QWidget, TimerHost):
     def _crear_bloque_job(self, contenedor, grupo, columnas, encabezados, anchos):
         status = grupo.get("status", "sin_csv")
         if status == "ok":
-            color_titulo, texto_status, color_status, color_fondo = "#2563EB", "CON LISTA DE LARGOS", "#16A34A", "#F8FAFC"
+            color_titulo, texto_status, color_status, color_fondo = "#2563EB", "CON DEMANDA DE LARGOS", "#16A34A", "#F8FAFC"
         elif status == "sin_csv":
-            color_titulo, texto_status, color_status, color_fondo = "#DC2626", "SIN LISTA DE LARGOS", "#DC2626", "#FEF2F2"
+            color_titulo, texto_status, color_status, color_fondo = "#DC2626", "SIN DEMANDA DE LARGOS", "#DC2626", "#FEF2F2"
         else:
             color_titulo, texto_status, color_status, color_fondo = "#D97706", "ERROR AL LEER CSV", "#D97706", "#FFFBEB"
 
@@ -626,19 +749,23 @@ class TabParts(QWidget, TimerHost):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            "QTableWidget{background:#FFFFFF;color:#0F172A;alternate-background-color:#F8FAFC;"
+            "gridline-color:#E2E8F0;border:1px solid #E2E8F0;border-radius:8px;}"
+            "QTableWidget::item{color:#0F172A;}"
+            "QHeaderView::section{background:#F1F5F9;color:#475569;font-weight:700;border:none;"
+            "border-bottom:1px solid #E2E8F0;padding:6px;}"
+        )
         table.setWordWrap(False)
         hdr = table.horizontalHeader()
         for ci, col in enumerate(columnas):
             hdr.resizeSection(ci, anchos.get(col, 120))
         row_px = 30
         header_px = max(32, hdr.height())
-        max_view = 480
         content_h = n_rows * row_px + header_px + 6
-        view_h = min(content_h, max_view)
-        table.setMinimumHeight(view_h)
-        table.setMaximumHeight(view_h)
-        if content_h > max_view:
-            table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        table.setMinimumHeight(content_h)
+        table.setMaximumHeight(content_h)
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for ri, row in enumerate(grupo["rows"]):
             table.setItem(ri, 0, QTableWidgetItem(str(row.get("nombre", ""))))
             table.setItem(ri, 1, QTableWidgetItem(str(row.get("clasificacion", ""))))
@@ -651,17 +778,23 @@ class TabParts(QWidget, TimerHost):
     def abrir_ventana_lista_largos(self):
         grupos = self._cargar_listas_largos_desde_rutas()
         if not grupos:
-            QMessageBox.information(self, "Lista de largos", "No se encontraron rutas AutoDXF válidas en el contexto actual.")
+            QMessageBox.information(
+                self,
+                "Demanda de largos",
+                "No se encontraron rutas AutoDXF válidas en el contexto actual.",
+            )
             return
+        self._mostrar_dialogo_lista_largos(grupos)
 
+    def _mostrar_dialogo_lista_largos(self, grupos):
         dlg = QDialog(self)
-        dlg.setWindowTitle("Lista de largos")
+        dlg.setWindowTitle("Demanda de largos")
         dlg.resize(1260, 680)
         dlg.setModal(True)
         lay = QVBoxLayout(dlg)
         card = make_herinox_card()
         card_lay = QVBoxLayout(card)
-        tit_lbl = QLabel("LISTA DE LARGOS")
+        tit_lbl = QLabel("DEMANDA DE LARGOS")
         tit_lbl.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:16px;")
         card_lay.addWidget(tit_lbl)
         total_grupos = len(grupos)
@@ -670,8 +803,8 @@ class TabParts(QWidget, TimerHost):
         total_error = sum(1 for g in grupos if g.get("status") == "error_csv")
         total_rows = sum(len(g["rows"]) for g in grupos if g.get("status") == "ok")
         card_lay.addWidget(QLabel(
-            f"Jobs detectados: {total_grupos}   |   Con lista: {total_ok}   |   "
-            f"Sin lista: {total_sin_csv}   |   Error lectura: {total_error}   |   Registros totales: {total_rows}"
+            f"JOBS DETECTADOS: {total_grupos}   |   CON DEMANDA: {total_ok}   |   "
+            f"SIN DEMANDA: {total_sin_csv}   |   ERROR LECTURA: {total_error}   |   REGISTROS TOTALES: {total_rows}"
         ))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)

@@ -11,6 +11,9 @@ for _p in (_ROOT, _IFACE):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    if getattr(sys, "frozen", False):
+        # CWD estable junto al .exe (otras PCs, accesos directos, doble clic).
+        os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
     from PySide6.QtWidgets import QApplication
     from interface.qt.theme import apply_theme
     from interface.qt.main_window import SistemaNestingPro

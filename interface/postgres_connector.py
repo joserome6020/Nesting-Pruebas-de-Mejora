@@ -1039,7 +1039,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     ruta_exportacion=ruta_exportacion,
                     db_config=db_config,
                     work_order_alcance=str(nombre_wo or "").strip() or None,
-                    propagar_material=True,
+                    propagar_material=False,
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
                 _reportar_pedidos_material(
@@ -1052,62 +1052,17 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     f"del job '{job_original}': {e}"
                 )
 
-            # Fallback WO: incluso si el importador no encontró CSV o falló,
-            # intentamos regenerar material_requerido_ldg con lo que ya exista en BD.
-            try:
-                import api_server
-
-                wo_scope = str(nombre_wo or "").strip() or None
-                logs_fallback = api_server._propagar_material_requerido_por_job(
-                    db_config,
-                    job_original,
-                    solo_work_order=wo_scope,
-                )
-                _reportar_pedidos_material(
-                    logs_fallback,
-                    f"fallback job='{job_original}' wo='{wo_scope}'",
-                )
-            except Exception as e_fb:
-                print(
-                    f"[BD][LISTA_LARGOS][WARN] Fallback material requerido "
-                    f"job '{job_original}': {e_fb}"
-                )
+            # material_requerido_ldg se aplica desde NESTEO DE LARGOS al exportar
+            # (plan calculado con el nesting + exclusiones elegidas por el usuario).
+            print(
+                f"[BD][LISTA_LARGOS] Sin propagación automática a material_requerido_ldg "
+                f"(job='{job_original}' wo='{nombre_wo}')."
+            )
         elif es_swo and db_config:
-            _aplicar_env_db_config(db_config)
-            try:
-                import api_server
-
-                logs_swo = api_server._propagar_material_requerido_por_job(
-                    db_config,
-                    job_original,
-                    solo_work_order=None,
-                )
-                _reportar_pedidos_material(
-                    logs_swo,
-                    f"SWO job='{job_original}'",
-                )
-
-                conn_mat = psycopg2.connect(**db_config)
-                cur_mat = conn_mat.cursor()
-                ok_swo, msg_swo = api_server._asegurar_material_requerido_orden(
-                    cur_mat, nombre_job, "SWO"
-                )
-                conn_mat.commit()
-                conn_mat.close()
-                if ok_swo:
-                    print(
-                        f"[BD][LISTA_LARGOS][SWO] Directo '{nombre_job}': ok=True | {msg_swo}"
-                    )
-                else:
-                    print(
-                        f"[BD][LISTA_LARGOS][ERROR][SWO] Directo '{nombre_job}': "
-                        f"ok=False | {msg_swo}"
-                    )
-            except Exception as e_swo:
-                print(
-                    f"[BD][LISTA_LARGOS][ERROR] Propagación material SWO "
-                    f"'{nombre_job}': {e_swo}"
-                )
+            print(
+                f"[BD][LISTA_LARGOS] SWO '{nombre_job}': material_requerido_ldg "
+                "se aplica al exportar desde el plan de NESTEO DE LARGOS."
+            )
         else:
             print(
                 f"[DEBUG][LISTA_LARGOS] SKIP importación | "

@@ -39,6 +39,7 @@ from interface.autodxf_metadata import (
 )
 from interface.qt.nesting_canvas import VisorNesting
 from interface.qt.ui_mixins import TimerHost, q_configure, scroll_clear, scroll_add_widget
+from interface.qt.thread_bridge import call_on_main
 from interface.qt.dialogs.nesting_modals import (
     abrir_modal_configuracion,
     abrir_modal_costos,
@@ -255,16 +256,102 @@ class TabNesting(QWidget, TimerHost):
         )
         if not ruta_archivo:
             return
+        self.cargar_workspace_async(ruta_archivo)
 
+    def abrir_nesting_largos(self):
+        from interface.qt.dialogs.largos_nesting_modal import abrir_nesting_largos
+
+        abrir_nesting_largos(self)
+
+    def _ui(self, fn, *args):
+        call_on_main(fn, *args)
+
+    def cargar_workspace_async(self, ruta_archivo, mostrar_exito=True):
+        nombre = os.path.basename(str(ruta_archivo or "workspace"))
+        if hasattr(self.app, "abrir_ventana_carga"):
+            self.app.abrir_ventana_carga(f"Cargando {nombre}…")
+        threading.Thread(
+            target=self._thread_cargar_workspace,
+            args=(ruta_archivo, mostrar_exito),
+            daemon=True,
+        ).start()
+
+    def _thread_cargar_workspace(self, ruta_archivo, mostrar_exito):
+        err = None
+        payload = None
         try:
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso("Leyendo archivo…", 0.2)
             payload = cargar_workspace_desde_archivo(ruta_archivo)
-            aplicar_workspace(self, payload)
-            QMessageBox.information(self, 
-                "Workspace cargado",
-                f"Workspace restaurado correctamente:\n{ruta_archivo}"
-            )
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso("Preparando restauración…", 0.55)
         except Exception as e:
+            err = str(e)
+        self._ui(self._finalizar_carga_workspace, ruta_archivo, payload, err, mostrar_exito)
+
+    def _finalizar_carga_workspace(self, ruta_archivo, payload, err=None, mostrar_exito=True):
+        if err:
+            if hasattr(self.app, "cerrar_ventana_carga"):
+                self.app.cerrar_ventana_carga()
+            QMessageBox.critical(self, "Error", f"No se pudo abrir el workspace:\n{err}")
+            return
+        if not payload:
+            if hasattr(self.app, "cerrar_ventana_carga"):
+                self.app.cerrar_ventana_carga()
+            QMessageBox.critical(self, "Error", "No se pudo completar la carga del workspace.")
+            return
+        try:
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso("Restaurando nesting…", 0.78)
+            aplicar_workspace(self, payload, carga_rapida=True)
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso("Listo", 1.0)
+            if hasattr(self.app, "cerrar_ventana_carga"):
+                self.app.cerrar_ventana_carga()
+            QTimer.singleShot(0, lambda: self._completar_vista_workspace_post_carga())
+            if mostrar_exito:
+                QTimer.singleShot(
+                    50,
+                    lambda: QMessageBox.information(
+                        self,
+                        "Workspace cargado",
+                        f"Workspace restaurado correctamente:\n{ruta_archivo}",
+                    ),
+                )
+        except Exception as e:
+            if hasattr(self.app, "cerrar_ventana_carga"):
+                self.app.cerrar_ventana_carga()
             QMessageBox.critical(self, "Error", f"No se pudo abrir el workspace:\n{e}")
+
+    def _completar_vista_workspace_post_carga(self):
+        lote = getattr(self, "_workspace_lote_pendiente", None)
+        if lote:
+            try:
+                self.on_lote_selected(lote, sync_parts=False)
+            except Exception:
+                pass
+            self._workspace_lote_pendiente = None
+        QTimer.singleShot(0, self._dibujar_workspace_pendiente)
+
+    def _dibujar_workspace_pendiente(self):
+        pend = getattr(self, "_workspace_vista_pendiente", None) or {}
+        hoja = pend.get("hoja")
+        clave = pend.get("clave")
+        if hoja is not None and clave is not None:
+            try:
+                self.dibujar_hoja_full(hoja, clave)
+            except Exception:
+                pass
+            if pend.get("ajuste_desplegado") and hasattr(self, "ajuste_desplegado") and not self.ajuste_desplegado:
+                try:
+                    self.toggle_ajuste_placa()
+                except Exception:
+                    pass
+        self._workspace_vista_pendiente = None
+        QTimer.singleShot(
+            300,
+            lambda: getattr(self.app, "_refrescar_parts_ui_pendiente", lambda **_: None)(thumbnails_async=True),
+        )
 
     @property
     def hoja_actual_data(self):
@@ -971,6 +1058,7 @@ class TabNesting(QWidget, TimerHost):
 
         def worker():
             try:
+                self._sync_orientacion_cobre_al_motor()
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
                 wo_act = str(getattr(self.app, 'job_activo', 'PENDIENTE')).strip().upper() or "PENDIENTE"
 
@@ -1051,6 +1139,15 @@ class TabNesting(QWidget, TimerHost):
         from interface.qt.tabs.tab_nesting_ui import build_tab_nesting_ui
         build_tab_nesting_ui(self)
         return
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_nest_sidebar_user_resized", False):
+            return
+        from interface.qt.tabs.tab_nesting_ui import apply_nest_sidebar_width, schedule_nest_sidebar_sync
+        apply_nest_sidebar_width(self)
+        schedule_nest_sidebar_sync(self)
+
     def on_piece_selected(self, info_pieza=None):
         piezas = self.visor.piezas_seleccionadas
         n = len(piezas)
@@ -1098,8 +1195,8 @@ class TabNesting(QWidget, TimerHost):
         self._set_switch_edicion_libre(True)
         if hasattr(self, "lbl_edicion_libre"):
             self.lbl_edicion_libre.setText(
-                f"Modo activo ({len(self.visor.indices_edicion_libre)} piezas en morado). "
-                "Solo chocan con placa y piezas no seleccionadas."
+                f"MODO ACTIVO ({len(self.visor.indices_edicion_libre)} PIEZAS EN MORADO). "
+                "SOLO CHOCAN CON PLACA Y PIEZAS NO SELECCIONADAS."
             )
             self.lbl_edicion_libre.setStyleSheet("color:#C084FC;font-size:10px;background:transparent;")
         self.on_piece_selected()
@@ -1111,7 +1208,7 @@ class TabNesting(QWidget, TimerHost):
         self.procesar_lista_hojas(self.app.resultados_nesting)
         if hasattr(self, "lbl_edicion_libre"):
             self.lbl_edicion_libre.setText(
-                "Solo colisiona con placa y piezas fuera del grupo. En modo activo: morado."
+                "SOLO COLISIONA CON PLACA Y PIEZAS FUERA DEL GRUPO. EN MODO ACTIVO: MORADO."
             )
             self.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
         if msg:
@@ -1124,7 +1221,7 @@ class TabNesting(QWidget, TimerHost):
             self._set_switch_edicion_libre(False)
             if hasattr(self, "lbl_edicion_libre"):
                 self.lbl_edicion_libre.setText(
-                    "Solo colisiona con placa y piezas fuera del grupo. En modo activo: morado."
+                    "SOLO COLISIONA CON PLACA Y PIEZAS FUERA DEL GRUPO. EN MODO ACTIVO: MORADO."
                 )
                 self.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
 
@@ -1153,7 +1250,7 @@ class TabNesting(QWidget, TimerHost):
         hoja = hoja if hoja is not None else self.hoja_actual_data
         clave = clave if clave is not None else self.clave_actual
         if not isinstance(hoja, dict) or not clave:
-            self.lbl_placa_resumen.setText("Sin placa activa")
+            self.lbl_placa_resumen.setText("SIN PLACA ACTIVA")
             self.lbl_placa_stats.setText("-")
             self.lbl_placa_dims.setText("-")
             return
@@ -1163,15 +1260,15 @@ class TabNesting(QWidget, TimerHost):
         es_retazo = bool(hoja.get("es_retazo", False))
         titulo = f"{placa_id}{sufijo}"
         if es_retazo:
-            titulo += " (Accesorios)"
+            titulo += " (ACCESORIOS)"
 
         n_pzas = contar_piezas_hoja(hoja)
         d = float(
             (hoja or {}).get("eficiencia_directa", (hoja or {}).get("eficiencia", 0.0)) or 0.0
         )
         r = float((hoja or {}).get("eficiencia_real", d) or 0.0)
-        efi_txt = f"Dir {d:.1f}% | Real {r:.1f}%"
-        origen = "Proveedor" if str(hoja.get("origen_placa", "")).upper() == "PROVEEDOR" else "Empresa"
+        efi_txt = f"DIR {d:.1f}% | REAL {r:.1f}%"
+        origen = "PROVEEDOR" if str(hoja.get("origen_placa", "")).upper() == "PROVEEDOR" else "EMPRESA"
         try:
             w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
             h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
@@ -1179,7 +1276,7 @@ class TabNesting(QWidget, TimerHost):
         except Exception:
             dims = "-"
 
-        self.lbl_placa_resumen.setText(f"{titulo} · {n_pzas} pzas")
+        self.lbl_placa_resumen.setText(f"{titulo} · {n_pzas} PZAS")
         self.lbl_placa_stats.setText(efi_txt)
         self.lbl_placa_dims.setText(
             f"{format_clave_calibre_display(clave)} · {origen} · {dims}"
@@ -1195,7 +1292,7 @@ class TabNesting(QWidget, TimerHost):
             return
         piezas = piezas if piezas is not None else self.visor.piezas_seleccionadas
         if not piezas:
-            self.lbl_pieza_sel.setText("Sin selección — clic en el canvas")
+            self.lbl_pieza_sel.setText("SIN SELECCIÓN — CLIC EN EL CANVAS")
             return
         if len(piezas) == 1:
             p = piezas[0]
@@ -1204,7 +1301,7 @@ class TabNesting(QWidget, TimerHost):
                 nom = nom[:39] + "…"
             self.lbl_pieza_sel.setText(nom)
             return
-        self.lbl_pieza_sel.setText(f"{len(piezas)} piezas seleccionadas")
+        self.lbl_pieza_sel.setText(f"{len(piezas)} PIEZAS SELECCIONADAS")
 
     def panel_limpiar_seleccion(self):
         self.visor.limpiar_seleccion_piezas()
@@ -1246,15 +1343,15 @@ class TabNesting(QWidget, TimerHost):
             return
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("Cambiar placa madre")
+        dlg.setWindowTitle("CAMBIAR PLACA MADRE")
         dlg.setModal(True)
         dlg.resize(500, 440)
         dlg.setStyleSheet("background:#F8FAFC;")
         lay = QVBoxLayout(dlg)
-        hdr = QLabel(f"Placa actual: {hoja.get('placa_id', '-')}")
+        hdr = QLabel(f"PLACA ACTUAL: {hoja.get('placa_id', '-')}")
         hdr.setStyleSheet("font-weight:700;color:#0F172A;")
         lay.addWidget(hdr)
-        sub = QLabel("Seleccione una placa del inventario que pueda recibir estas piezas:")
+        sub = QLabel("SELECCIONE UNA PLACA DEL INVENTARIO QUE PUEDA RECIBIR ESTAS PIEZAS:")
         sub.setStyleSheet("color:#64748B;font-size:11px;")
         sub.setWordWrap(True)
         lay.addWidget(sub)
@@ -1267,7 +1364,7 @@ class TabNesting(QWidget, TimerHost):
         scroll.setWidget(inner)
         lay.addWidget(scroll, 1)
 
-        loading = QLabel("Calculando placas disponibles…")
+        loading = QLabel("CALCULANDO PLACAS DISPONIBLES…")
         loading.setStyleSheet("color:#64748B;")
         inner_lay.addWidget(loading)
 
@@ -1290,7 +1387,7 @@ class TabNesting(QWidget, TimerHost):
                         w.deleteLater()
                 if not candidatas:
                     inner_lay.addWidget(
-                        QLabel("Ninguna placa del inventario cabe estas piezas con la configuración actual.")
+                        QLabel("NINGUNA PLACA DEL INVENTARIO CABE ESTAS PIEZAS CON LA CONFIGURACIÓN ACTUAL.")
                     )
                 else:
                     for cand in candidatas[:20]:
@@ -1383,7 +1480,7 @@ class TabNesting(QWidget, TimerHost):
     # =========================================================
     # LÓGICA DEL MENÚ DESPLEGABLE (EL MES EN ACCIÓN)
     # =========================================================
-    def actualizar_dropdown_lotes(self):
+    def actualizar_dropdown_lotes(self, *, activar_primero: bool = True):
         if not hasattr(self.app, 'resultados_multilote') or not self.app.resultados_multilote:
             self.cmb_lotes.blockSignals(True)
             self.cmb_lotes.clear()
@@ -1403,11 +1500,13 @@ class TabNesting(QWidget, TimerHost):
         self.cmb_lotes.addItems(opciones)
         self.cmb_lotes.setEnabled(True)
         apply_herinox_combo(self.cmb_lotes)
-        self.cmb_lotes.setCurrentIndex(0)
+        idx_sel = min(max(getattr(self, "lote_actual_idx", 0), 0), len(opciones) - 1)
+        self.cmb_lotes.setCurrentIndex(idx_sel)
         self.cmb_lotes.blockSignals(False)
-        self.on_lote_selected(opciones[0])
+        if activar_primero:
+            self.on_lote_selected(opciones[idx_sel])
 
-    def on_lote_selected(self, val):
+    def on_lote_selected(self, val, *, sync_parts: bool = True):
         try:
             idx = [self.cmb_lotes.itemText(i) for i in range(self.cmb_lotes.count())].index(val)
             self.lote_actual_idx = idx
@@ -1430,7 +1529,8 @@ class TabNesting(QWidget, TimerHost):
                 )
 
             # NUEVO: refrescar PARTS con el lote activo
-            self._sincronizar_parts_con_lote_activo()
+            if sync_parts:
+                self._sincronizar_parts_con_lote_activo()
 
             self.procesar_lista_hojas(self.app.resultados_nesting)
 
@@ -1459,16 +1559,21 @@ class TabNesting(QWidget, TimerHost):
         except Exception:
             pass
 
+    def _sync_orientacion_cobre_al_motor(self):
+        orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
+        self.app.motor_nesting.orientacion_cobre_por_ruta = dict(orientaciones)
+
     def ejecutar_nesting(self):
         if not self.app.datos_partes_actuales:
             return QMessageBox.warning(self, "Atención", "No hay piezas importadas.")
 
+        self._sync_orientacion_cobre_al_motor()
         self.btn_run_nest.setEnabled(False)
         self.btn_ver_lotes.setEnabled(False)
 
         T = getattr(self.app, "multiplicador_tanques", 1)
         self.cantidad_tanques = str(T)
-        self.lbl_cantidad.setText(f"Cantidad: {self.cantidad_tanques}")
+        self.lbl_cantidad.setText(f"CANTIDAD: {self.cantidad_tanques}")
 
         self.app.abrir_ventana_carga(
             "Optimizando Lotes..." if T >= 4 else "Ejecutando Nesting"
@@ -1504,6 +1609,7 @@ class TabNesting(QWidget, TimerHost):
         try:
             if _abortar_si_cancelado():
                 return
+            self._sync_orientacion_cobre_al_motor()
             # =========================================================
             # RECEPTOR DE TELEMETRÍA ASÍNCRONO
             # =========================================================
@@ -1616,6 +1722,14 @@ class TabNesting(QWidget, TimerHost):
         # Guardamos la lista completa de Work Orders
         self.app.resultados_multilote = resultados_list
 
+        # Nesteo de largos: mismo cálculo que placas (revisión/pedido en NESTEO DE LARGOS)
+        try:
+            from interface.largos_nesting_service import calcular_planes_largos_nesting
+
+            calcular_planes_largos_nesting(self.app, resultados_list)
+        except Exception as e_largos:
+            print(f"[LARGOS_NESTING][WARN] No se pudo calcular plan de largos: {e_largos}")
+
         # NUEVO: construir inputs editables por lote
         self._reconstruir_editables_por_resultado(resultados_list)
 
@@ -1644,7 +1758,9 @@ class TabNesting(QWidget, TimerHost):
 
         mensaje = (
             f"Tiempo de procesamiento: {tiempo_str}\n\n"
-            "Acomodo listo en BORRADOR. Modifica si es necesario y exporta cuando termines."
+            "Acomodo listo en BORRADOR. Modifica si es necesario y exporta cuando termines.\n\n"
+            "El nesteo de largos también quedó calculado: revísalo en NESTEO DE LARGOS "
+            "y elige qué barras van al pedido."
         )
 
         QMessageBox.information(self, "Cálculo Terminado", mensaje)
@@ -1797,6 +1913,7 @@ class TabNesting(QWidget, TimerHost):
         )
         for clave in claves_ordenadas:
             info = resultados[clave]
+            es_grupo_cu = self._es_grupo_cobre(clave, info)
             header = QWidget()
             hdr_lay = QHBoxLayout(header)
             hdr_lay.setContentsMargins(0, 10, 0, 0)
@@ -1805,7 +1922,10 @@ class TabNesting(QWidget, TimerHost):
             lbl_header = QLabel(clave_txt + (f" | {efi_tanque}" if efi_tanque else ""))
             lbl_header.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
             hdr_lay.addWidget(lbl_header)
-            self._bind_menu_compensar_calibre(header, lbl_header, clave)
+            if es_grupo_cu:
+                self._bind_menu_renestear_calibre_cobre(header, lbl_header, clave)
+            else:
+                self._bind_menu_compensar_calibre(header, lbl_header, clave)
             scroll_add_widget(self.lista_hojas, header)
 
             if "costo_total" in info:
@@ -1817,7 +1937,6 @@ class TabNesting(QWidget, TimerHost):
 
             hojas_del_material = info.get("hojas", [])
 
-            es_grupo_cu = bool(info.get("modo_largos_cu")) or str(clave).upper().endswith("_CU")
             if es_grupo_cu and hojas_del_material:
                 info.setdefault("ignorar_deduccion_cu", True)
                 ign_cu = bool(info.get("ignorar_deduccion_cu", True))
@@ -1849,7 +1968,7 @@ class TabNesting(QWidget, TimerHost):
                     ignorada = bool(hoja.get("ignorar_deduccion", False))
                     prefijo_ign = "[IGN] " if ignorada else ""
                     texto_btn = (
-                        f"   {nombre_placa} (Accesorios) | {efi_txt}"
+                        f"   {nombre_placa} (ACCESORIOS) | {efi_txt}"
                         if es_retazo else
                         f"{prefijo_ign}{nombre_placa}{sufijo}{origen_str} | {efi_txt}"
                     )
@@ -1870,7 +1989,8 @@ class TabNesting(QWidget, TimerHost):
                     )
                     btn.clicked.connect(lambda checked=False, h=hoja, c=clave: self.dibujar_hoja_full(h, c))
                     fila_lay.addWidget(btn)
-                    self._bind_menu_renestear_placa(btn, clave, hoja)
+                    if not es_grupo_cu:
+                        self._bind_menu_renestear_placa(btn, clave, hoja)
 
                     if (
                         not es_retazo
@@ -1920,6 +2040,36 @@ class TabNesting(QWidget, TimerHost):
                 QMessageBox.critical(self, titulo, f"Error inesperado:\n{e}")
         return run
 
+    def _es_grupo_cobre(self, clave, info=None) -> bool:
+        if isinstance(info, dict) and info.get("modo_largos_cu"):
+            return True
+        s = str(clave or "").strip().upper()
+        if s.endswith("_CU"):
+            return True
+        if "_" in s:
+            mat = s.split("_", 1)[1].strip().upper()
+            if mat in ("CU", "COBRE", "COPPER") or "COBRE" in mat or "COPPER" in mat:
+                return True
+        return False
+
+    def _bind_menu_renestear_calibre_cobre(self, header, lbl_header, clave):
+        def show_menu(pos, widget):
+            if not self._ctx_tiene_resultados(clave):
+                return
+            menu = QMenu(self)
+            menu.addAction(
+                "RENESTEAR CALIBRE DE COBRE COMPLETO",
+                self._safe_ctx(
+                    "Renestear cobre",
+                    lambda c=clave: self.renestear_calibre_completo_ui(c),
+                ),
+            )
+            menu.exec(widget.mapToGlobal(pos))
+
+        for w in (header, lbl_header):
+            w.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            w.customContextMenuRequested.connect(lambda pos, ww=w: show_menu(pos, ww))
+
     def _bind_menu_renestear_placa(self, btn, clave, hoja):
         if hoja.get("es_retazo", False):
             return
@@ -1931,34 +2081,34 @@ class TabNesting(QWidget, TimerHost):
                 return
             menu = QMenu(self)
             menu.addAction(
-                "Renestear esta placa",
+                "RENESTEAR ESTA PLACA",
                 self._safe_ctx(
                     "Renestear placa",
                     lambda c=clave, h=hoja: self.renestear_solo_placa(c, h),
                 ),
             )
             menu.addAction(
-                "Cambiar piezas a otra placa",
+                "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
                     "Transferencia",
                     lambda c=clave, h=hoja: abrir_modal_transferencia_masiva(self, c, h),
                 ),
             )
             menu.addAction(
-                "Renestear calibre completo",
+                "RENESTEAR CALIBRE COMPLETO",
                 self._safe_ctx(
                     "Renestear calibre",
                     lambda c=clave: self.renestear_calibre_completo_ui(c),
                 ),
             )
             menu.addAction(
-                "Compensar esta placa (Plasma)",
+                "COMPENSAR ESTA PLACA (PLASMA)",
                 self._safe_ctx(
                     "Compensación",
                     lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
                 ),
             )
-            sub_cambiar = QMenu("Cambiar de placa", menu)
+            sub_cambiar = QMenu("CAMBIAR DE PLACA", menu)
             sub_cambiar.aboutToShow.connect(
                 lambda sm=sub_cambiar, c=clave, h=hoja: self._rellenar_submenu_cambiar_placa(sm, c, h)
             )
@@ -2832,7 +2982,7 @@ class TabNesting(QWidget, TimerHost):
         ign_lay = QHBoxLayout(fila_ign)
         ign_lay.setContentsMargins(10, 6, 10, 6)
 
-        lbl = QLabel("Cobre — ignorar deducción inventario")
+        lbl = QLabel("COBRE — IGNORAR DEDUCCIÓN INVENTARIO")
         lbl.setStyleSheet("color:#9CA3AF;font-size:12px;font-weight:700;")
         ign_lay.addWidget(lbl)
         ign_lay.addStretch()
@@ -2871,7 +3021,7 @@ class TabNesting(QWidget, TimerHost):
         ign_lay = QHBoxLayout(fila_ign)
         ign_lay.setContentsMargins(10, 6, 10, 6)
 
-        lbl = QLabel(f"Ignorar deducción  |  Real {efi_real:.1f}%")
+        lbl = QLabel(f"IGNORAR DEDUCCIÓN  |  REAL {efi_real:.1f}%")
         lbl.setStyleSheet("color:#64748B;font-size:12px;")
         ign_lay.addWidget(lbl)
         ign_lay.addStretch()
@@ -4187,8 +4337,27 @@ class TabNesting(QWidget, TimerHost):
 
                     # NUEVO: guardar la WO oficial del lote exportado
                     self.app.wo_reales_por_lote[i] = str(n_wo)
-                    
 
+                    if modo_servidor:
+                        try:
+                            from interface.largos_nesting_service import aplicar_pedido_largos_tras_export
+
+                            orden_largos = job_activo if es_swo_flag else str(n_wo)
+                            tipo_largos = "SWO" if es_swo_flag else "WO"
+                            ok_ldg, msg_ldg = aplicar_pedido_largos_tras_export(
+                                self.app, i, orden_largos, tipo_largos
+                            )
+                            if ok_ldg:
+                                print(
+                                    f"[LARGOS_NESTING][EXPORT] {tipo_largos} {orden_largos} lote={i}: {msg_ldg}"
+                                )
+                            else:
+                                print(
+                                    f"[LARGOS_NESTING][EXPORT][WARN] {tipo_largos} {orden_largos} "
+                                    f"lote={i}: {msg_ldg}"
+                                )
+                        except Exception as e_ldg:
+                            print(f"[LARGOS_NESTING][EXPORT][ERROR] lote={i}: {e_ldg}")
 
                     rutas_generadas.append(ruta_absoluta_wo)
 

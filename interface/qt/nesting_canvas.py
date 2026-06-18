@@ -20,20 +20,12 @@ from shapely import wkt as shapely_wkt
 from shapely.affinity import translate
 from shapely.geometry import Polygon, box, Point, LineString
 
+from interface.material_colors import paleta_pieza_nesting
 from interface.qt.nesting_graphics import (
-    COLOR_CU_EDGE,
-    COLOR_CU_FILL,
-    COLOR_CU_SEL,
-    COLOR_CU_SEL_EDGE,
-    COLOR_PIECE_EDGE,
-    COLOR_PIECE_FILL,
-    COLOR_PIECE_SEL,
-    COLOR_PIECE_SEL_EDGE,
     COLOR_REF_EDGE,
     COLOR_REF_FILL,
     NestingDrawParams,
     NestingGraphicsView,
-    _is_copper_context,
     compute_fit_rect,
     populate_nesting_scene,
 )
@@ -779,23 +771,16 @@ class VisorNesting(QWidget):
                 ("TATUAJE__", "RETAZO_GUILLOTINA__", "CU_CORTE__", "REMANENTE__")
             ):
                 continue
-            is_cu = _is_copper_context(pieza, hoja, clave)
+            pal = paleta_pieza_nesting(pieza, hoja, clave)
             if idx in libre:
                 main.setBrush(QBrush(QColor("#A855F7")))
                 main.setPen(QPen(QColor("#581C87"), 1.6))
             elif idx in selected:
-                if is_cu:
-                    main.setBrush(QBrush(COLOR_CU_SEL))
-                    main.setPen(QPen(COLOR_CU_SEL_EDGE, 1.6))
-                else:
-                    main.setBrush(QBrush(COLOR_PIECE_SEL))
-                    main.setPen(QPen(COLOR_PIECE_SEL_EDGE, 1.6))
-            elif is_cu:
-                main.setBrush(QBrush(COLOR_CU_FILL))
-                main.setPen(QPen(COLOR_CU_EDGE, 0.75))
+                main.setBrush(QBrush(QColor(pal.sel_fill)))
+                main.setPen(QPen(QColor(pal.sel_edge), 1.6))
             else:
-                main.setBrush(QBrush(COLOR_PIECE_FILL))
-                main.setPen(QPen(COLOR_PIECE_EDGE, 0.65))
+                main.setBrush(QBrush(QColor(pal.fill)))
+                main.setPen(QPen(QColor(pal.edge), 0.75))
 
     def _commit_piece_drag(self) -> bool:
         tdx, tdy = self._drag_visual_offset

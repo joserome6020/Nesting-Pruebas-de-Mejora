@@ -90,7 +90,7 @@ class VisorDXF:
         tb_lay.addWidget(btn_rot)
 
         lbl_hint = QLabel(
-            "Clic: cota  ·  Rueda: zoom  ·  Central: pan  ·  Der: rotar  ·  Esc: cancelar"
+            "CLIC: COTA  ·  RUEDA: ZOOM  ·  CENTRAL: PAN  ·  DER: ROTAR  ·  ESC: CANCELAR"
         )
         lbl_hint.setStyleSheet("color:#64748B;font-size:10px;background:transparent;")
         lbl_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -141,6 +141,7 @@ class VisorDXF:
         self._cursor_mode = "normal"
         self._ruta_actual = None
         self._rotacion_vista_deg = 0
+        self._persist_rotation_hook = None
         self._material = ""
         self._render_all_layers = False
         self._fit_xlim = None
@@ -1300,7 +1301,7 @@ class VisorDXF:
         self.ax.text(
             0.5,
             0.5,
-            "Seleccione una pieza de la lista",
+            "SELECCIONE UNA PIEZA DE LA LISTA",
             ha="center",
             va="center",
             transform=self.ax.transAxes,
@@ -1341,11 +1342,8 @@ class VisorDXF:
         self._material = str(material or "").strip()
 
     def _paleta_render(self):
-        mat_u = str(getattr(self, "_material", "") or "").strip().upper()
-        is_cu = mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u or "COPPER" in mat_u
-        if is_cu:
-            return "#B87333", CAD_VIEW_BG, "#4A2F1A"
-        return CAD_PIECE_FILL, CAD_VIEW_BG, CAD_PIECE_EDGE
+        from interface.material_colors import paleta_cad_hex
+        return paleta_cad_hex(getattr(self, "_material", ""))
 
     @staticmethod
     def _centroid_2d(pts):
@@ -1420,24 +1418,36 @@ class VisorDXF:
                 outers.append(sh)
         return outers, inners
 
+    def set_persist_rotation_hook(self, hook):
+        self._persist_rotation_hook = hook
+
     def rotar_vista_90(self):
         if not self._ruta_actual:
             return
         snap = self._snapshot_metricas_ui()
         self._rotacion_vista_deg = (self._rotacion_vista_deg + 90) % 360
+        if callable(self._persist_rotation_hook):
+            try:
+                self._persist_rotation_hook(self._rotacion_vista_deg, self._ruta_actual)
+            except Exception:
+                pass
         self.renderizar_dxf(self._ruta_actual)
         self._restaurar_metricas_ui(snap)
 
 
 
-    def renderizar_dxf(self, ruta_dxf):
+    def renderizar_dxf(self, ruta_dxf, rotacion_vista_deg=None):
 
         self.limpiar_lienzo()
 
         try:
             if self._ruta_actual and str(self._ruta_actual) != str(ruta_dxf):
-                # La rotación es solo de visualización de la pieza actual.
-                self._rotacion_vista_deg = 0
+                if rotacion_vista_deg is not None:
+                    self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
+                else:
+                    self._rotacion_vista_deg = 0
+            elif rotacion_vista_deg is not None:
+                self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
             self._ruta_actual = ruta_dxf
 
             doc = ezdxf.readfile(ruta_dxf)
@@ -2406,11 +2416,8 @@ class VisorDXF:
 def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
 
     try:
-        mat_u = str(material or "").strip().upper()
-        is_cu = mat_u in ("CU", "COBRE", "COPPER") or "COBRE" in mat_u or "COPPER" in mat_u
-        piece_fill = "#B87333" if is_cu else CAD_PIECE_FILL
-        hole_fill = CAD_VIEW_BG
-        piece_edge = "#4A2F1A" if is_cu else CAD_PIECE_EDGE
+        from interface.material_colors import paleta_cad_hex
+        piece_fill, hole_fill, piece_edge = paleta_cad_hex(material)
 
         fig = Figure(figsize=(2, 2), dpi=50); FigureCanvasAgg(fig)
 

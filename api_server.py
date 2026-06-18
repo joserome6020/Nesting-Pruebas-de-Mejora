@@ -3032,7 +3032,14 @@ def _ll_resolver_pendientes_con_stock(piezas_pendientes: list[dict]) -> list[dic
 
     return barras
 
-def _ll_generar_plan_desde_payload(cursor, orden_id: str, tipo_orden: str, payload: dict) -> tuple[dict, list[int]]:
+def _ll_generar_plan_desde_payload(
+    cursor,
+    orden_id: str,
+    tipo_orden: str,
+    payload: dict,
+    *,
+    usar_remanentes: bool = True,
+) -> tuple[dict, list[int]]:
     rows = (payload or {}).get("rows") or []
     piezas = _ll_expandir_rows_a_piezas(rows)
 
@@ -3057,12 +3064,15 @@ def _ll_generar_plan_desde_payload(cursor, orden_id: str, tipo_orden: str, paylo
         piezas_material = list(materiales[material])
         piezas_material.sort(key=lambda p: safe_float(p.get("largo"), 0.0), reverse=True)
 
-        rems_rows = _ll_listar_remanentes_para_material(cursor, material, orden_id, tipo_orden)
-
-        barras_rem, pendientes, rems_usados_mat = _ll_consumir_remanentes_material(
-            rems_rows,
-            piezas_material
-        )
+        barras_rem: list[dict] = []
+        pendientes = piezas_material
+        rems_usados_mat: set[int] = set()
+        if usar_remanentes:
+            rems_rows = _ll_listar_remanentes_para_material(cursor, material, orden_id, tipo_orden)
+            barras_rem, pendientes, rems_usados_mat = _ll_consumir_remanentes_material(
+                rems_rows,
+                piezas_material,
+            )
 
         barras_stock = _ll_resolver_pendientes_con_stock(pendientes)
 

@@ -379,6 +379,7 @@ def _cargar_placas_largos_desde_herinox(
                 p."codigo",
                 p."material",
                 p."perfilEstructural",
+                p."descripcion",
                 p."width",
                 p."length",
                 p."thickness",
@@ -432,6 +433,7 @@ def _cargar_placas_largos_desde_herinox(
                 "perfil_estructural": normalizar_perfil(
                     row.get("perfilEstructural") or thk_raw or ""
                 ),
+                "descripcion": str(row.get("descripcion") or "").strip(),
                 "ancho_in": float(row.get("width") or 0),
                 "largo_ft": float(row.get("length") or 0),
                 "thickness_raw": thickness_raw,
@@ -609,6 +611,86 @@ def enriquecer_fila_pedido(
         "largo_stock_in": round(largo_ft * 12.0, 2) if largo_ft > 0 else None,
         "lb_calculadas": placa.get("lb_calculadas"),
     }
+
+
+ETIQUETA_TIPO_PERFIL_MRL = {
+    "ANGULO": "Ángulo",
+    "CANAL": "Canal",
+    "PTR": "PTR",
+    "SOLERA": "Solera",
+    "TUBO": "Tubo",
+    "TUBULAR": "Tubular",
+    "REDONDO": "Redondo",
+    "VARILLA": "Varilla",
+    "VIGA": "Viga",
+    "VIGA IPR": "Viga IPR",
+}
+
+_PREFIJO_CODIGO_TIPO_MRL = (
+    ("SCO", "Solera"),
+    ("SLC", "Solera"),
+    ("ANG", "Ángulo"),
+    ("CAN", "Canal"),
+    ("PTR", "PTR"),
+    ("RED", "Redondo"),
+    ("TUB", "Tubo"),
+    ("TYA", "Tubular"),
+    ("HR", "Tubo"),
+    ("VAR", "Varilla"),
+    ("VIG", "Viga"),
+)
+
+
+def etiqueta_tipo_perfil_mrl(
+    material: str,
+    codigo: str = "",
+    catalogo: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Etiqueta corta de familia (Ángulo, PTR, Solera…) para tablas MRL."""
+    parsed = parse_clasificacion_largo(material)
+    perfil = parsed.get("perfil_estructural")
+    cod = (
+        str(codigo or "").strip().upper()
+        or str(parsed.get("codigo_herinox") or "").strip().upper()
+        or extraer_codigo_herinox_combo(material)
+    )
+
+    if not perfil and cod:
+        placa = buscar_placa_herinox(material, 0.0, catalogo=catalogo, codigo_hint=cod)
+        if placa:
+            perfil = placa.get("perfil_estructural")
+
+    if perfil:
+        key = str(perfil).upper()
+        return ETIQUETA_TIPO_PERFIL_MRL.get(key, str(perfil).title())
+
+    if cod:
+        for pref, etiqueta in _PREFIJO_CODIGO_TIPO_MRL:
+            if cod.startswith(pref):
+                return etiqueta
+
+    return "Largo"
+
+
+def descripcion_herinox_mrl(
+    codigo: str,
+    material: str = "",
+    catalogo: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Descripción del tarjetón Herinox (columna descripcion), con fallback a clasificación."""
+    cod = (
+        str(codigo or "").strip().upper()
+        or extraer_codigo_herinox_combo(material)
+    )
+    if not cod:
+        return ""
+    placa = buscar_placa_herinox(material, 0.0, catalogo=catalogo, codigo_hint=cod)
+    if not placa:
+        return ""
+    desc = str(placa.get("descripcion") or "").strip()
+    if desc:
+        return desc
+    return str(placa.get("clasificacion") or "").strip()
 
 
 def datos_material_requerido_pedido(

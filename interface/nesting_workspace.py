@@ -255,12 +255,22 @@ def _inferir_multiplicador_desde_multilote(resultados_multilote, lote_idx=0):
     return 1
 
 
-def _refrescar_tab_partes(app, datos_partes):
+def _refrescar_tab_partes(app, datos_partes, *, thumbnails_async: bool = False, omitir_ui: bool = False):
     """
     Mantiene el comportamiento actual de PARTS.
+    omitir_ui=True: solo deja datos en memoria (carga rápida de .arganest).
     """
+    if omitir_ui:
+        app.datos_partes_actuales = datos_partes
+        app._parts_ui_pendiente = list(datos_partes or [])
+        return
+
     try:
         if hasattr(app, "cargar_datos_parts"):
+            if hasattr(app, "vista_parts") and hasattr(app.vista_parts, "refrescar_tabla"):
+                app.datos_partes_actuales = datos_partes
+                app.vista_parts.refrescar_tabla(datos_partes, thumbnails_async=thumbnails_async)
+                return
             app.cargar_datos_parts(datos_partes)
             return
     except Exception:
@@ -270,7 +280,7 @@ def _refrescar_tab_partes(app, datos_partes):
 
     try:
         if hasattr(app, "vista_parts") and hasattr(app.vista_parts, "refrescar_tabla"):
-            app.vista_parts.refrescar_tabla(datos_partes)
+            app.vista_parts.refrescar_tabla(datos_partes, thumbnails_async=thumbnails_async)
     except Exception:
         pass
 
@@ -444,14 +454,28 @@ def cargar_workspace_desde_archivo(ruta_archivo):
     return payload
 
 
-def aplicar_workspace(tab, payload):
+def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     if not isinstance(payload, dict):
         raise ValueError("Payload inválido para aplicar workspace.")
+
+    def _avanzar(msg, pct):
+        app = getattr(tab, "app", None)
+        if app is not None and hasattr(app, "actualizar_progreso"):
+            try:
+                app.actualizar_progreso(msg, pct)
+            except Exception:
+                pass
+        if app is not None and hasattr(app, "update_idletasks"):
+            try:
+                app.update_idletasks()
+            except Exception:
+                pass
 
     schema = payload.get("schema")
     if schema not in {"arga_nesting_workspace_v1", "arga_nesting_workspace_v2"}:
         raise ValueError("El workspace no corresponde a un schema compatible.")
 
+    _avanzar("Restaurando piezas…", 0.62)
     # =========================================================
     # 1) Datos generales de PARTS
     # =========================================================
@@ -498,11 +522,16 @@ def aplicar_workspace(tab, payload):
     tab.app.source_dxf_paths_workspace = payload.get("source_dxf_paths", []) or _extraer_rutas_dxf(datos_partes)
     tab.app.source_dxf_paths_by_lote = payload.get("source_dxf_paths_by_lote", []) or _extraer_rutas_por_lote(editable_inputs_by_lote)
 
+    _avanzar("Actualizando PARTS…", 0.72)
     # =========================================================
     # 4) Mantener comportamiento actual de PARTS
     # =========================================================
-    _refrescar_tab_partes(tab.app, datos_partes)
+    if carga_rapida:
+        _refrescar_tab_partes(tab.app, datos_partes, omitir_ui=True)
+    else:
+        _refrescar_tab_partes(tab.app, datos_partes)
 
+    _avanzar("Restaurando NESTING…", 0.82)
     # =========================================================
     # 5) Restaurar estado UI tab NESTING
     # =========================================================
@@ -533,7 +562,7 @@ def aplicar_workspace(tab, payload):
     tab.costo_mxn_val = float(ui.get("costo_mxn_val", 0.0) or 0.0)
     tab.lote_actual_idx = lote_idx
 
-    _label_set_text(getattr(tab, "lbl_cantidad", None), f"Cantidad: {tab.cantidad_tanques}")
+    _label_set_text(getattr(tab, "lbl_cantidad", None), f"CANTIDAD: {tab.cantidad_tanques}")
     try:
         _combo_set_text(getattr(tab, "cmb_opt", None), ui.get("cmb_opt_val", "OPTIMIZAR LARGO"))
     except Exception:
@@ -542,7 +571,7 @@ def aplicar_workspace(tab, payload):
     # =========================================================
     # 6) Reconstruir dropdown y lote actual
     # =========================================================
-    tab.actualizar_dropdown_lotes()
+    tab.actualizar_dropdown_lotes(activar_primero=not carga_rapida)
 
     valores = _combo_values(getattr(tab, "cmb_lotes", None))
     if valores and valores[0] != "SIN ÓRDENES":
@@ -553,7 +582,10 @@ def aplicar_workspace(tab, payload):
 
         opcion = valores[idx]
         _combo_set_text(getattr(tab, "cmb_lotes", None), opcion)
-        tab.on_lote_selected(opcion)
+        if carga_rapida:
+            tab._workspace_lote_pendiente = opcion
+        else:
+            tab.on_lote_selected(opcion, sync_parts=True)
 
     try:
         from modules.nesting_engine.sheet_integrity import deduplicar_resultados_nesting
@@ -567,6 +599,7 @@ def aplicar_workspace(tab, payload):
     except Exception:
         pass
 
+    _avanzar("Dibujando vista…", 0.92)
     # =========================================================
     # 7) Restaurar vista exacta
     # =========================================================
@@ -585,16 +618,24 @@ def aplicar_workspace(tab, payload):
     )
 
     if hoja is not None and clave is not None:
-        tab.dibujar_hoja_full(hoja, clave)
+        if carga_rapida:
+            tab._workspace_vista_pendiente = {
+                "hoja": hoja,
+                "clave": clave,
+                "ajuste_desplegado": bool(ui.get("ajuste_desplegado", False)),
+            }
+        else:
+            tab.dibujar_hoja_full(hoja, clave)
 
     # =========================================================
     # 8) Reabrir panel de ajuste si estaba abierto
     # =========================================================
     ajuste_desplegado = bool(ui.get("ajuste_desplegado", False))
-    if ajuste_desplegado and hasattr(tab, "ajuste_desplegado") and not tab.ajuste_desplegado:
+    if not carga_rapida and ajuste_desplegado and hasattr(tab, "ajuste_desplegado") and not tab.ajuste_desplegado:
         try:
             tab.toggle_ajuste_placa()
         except Exception:
             pass
 
+    _avanzar("Listo", 1.0)
     return True

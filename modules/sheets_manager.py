@@ -1,6 +1,5 @@
 import pandas as pd
 import os
-import shutil
 import sys
 from tkinter import messagebox
 import config  # <--- NUEVO: Importamos nuestro gestor de rutas
@@ -16,20 +15,10 @@ class PlatesManager:
         # =========================================================
         # NUEVO: Ruta persistente a prueba de .exe
         # =========================================================
-        self.file_path = config.ruta_persistente(os.path.join("modules", "Plates.xlsx"))
+        self.file_path = config.asegurar_archivo_persistente(os.path.join("modules", "Plates.xlsx"))
         
         # Aseguramos que la carpeta "modules" exista al lado del .exe
         os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
-
-        # Si no existe el Excel persistente, intentamos sembrarlo desde el recurso empaquetado.
-        # Esto evita que el .exe cree un Plates.xlsx vacío en primer arranque.
-        if not os.path.exists(self.file_path):
-            try:
-                plantilla = config.ruta_recurso(os.path.join("modules", "Plates.xlsx"))
-                if os.path.exists(plantilla):
-                    shutil.copy2(plantilla, self.file_path)
-            except Exception:
-                pass
         
         # --- CONFIGURACIÓN DE MAPEO (Actualizado para leer MXN) ---
         self.MAPA_COLUMNAS = {

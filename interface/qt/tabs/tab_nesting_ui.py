@@ -1,5 +1,5 @@
 """Construcción UI Qt para TabNesting."""
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -77,11 +77,54 @@ class _VisorOverlayHost(QWidget):
             repos()
 
 
+# Fallback si aún no hay geometría del QTabBar (p. ej. primer frame).
+NEST_SIDEBAR_WIDTH_FALLBACK_PX = 520
+NEST_TAB_INDEX = 3  # FILES=0, PARTS=1, SHEETS=2, NESTING=3
+
+
+def _nest_sidebar_width_from_tabbar(tab) -> int:
+    """Ancho del panel lista = borde derecho de la pestaña NESTING."""
+    tabview = getattr(getattr(tab, "app", None), "tabview", None)
+    if tabview is None:
+        return NEST_SIDEBAR_WIDTH_FALLBACK_PX
+    bar = tabview.tabBar()
+    if bar.count() <= NEST_TAB_INDEX:
+        return NEST_SIDEBAR_WIDTH_FALLBACK_PX
+    rect = bar.tabRect(NEST_TAB_INDEX)
+    if rect.width() <= 0:
+        return NEST_SIDEBAR_WIDTH_FALLBACK_PX
+    return max(280, int(rect.right()))
+
+
+def apply_nest_sidebar_width(tab) -> None:
+    splitter = getattr(tab, "_nest_splitter", None)
+    if splitter is None:
+        return
+    w = _nest_sidebar_width_from_tabbar(tab)
+    splitter.blockSignals(True)
+    try:
+        splitter.setSizes([w, 10_000])
+    finally:
+        splitter.blockSignals(False)
+
+
+def schedule_nest_sidebar_sync(tab) -> None:
+    for delay_ms in (0, 80, 300):
+        QTimer.singleShot(delay_ms, lambda t=tab: apply_nest_sidebar_width(t))
+
+
 def build_tab_nesting_ui(tab) -> None:
     root = QVBoxLayout(tab)
     root.setContentsMargins(0, 0, 0, 0)
 
-    splitter = make_horizontal_splitter(520)
+    splitter = make_horizontal_splitter(NEST_SIDEBAR_WIDTH_FALLBACK_PX)
+    tab._nest_splitter = splitter
+    tab._nest_sidebar_user_resized = False
+
+    def _on_splitter_moved(_pos, _index):
+        tab._nest_sidebar_user_resized = True
+
+    splitter.splitterMoved.connect(_on_splitter_moved)
 
     panel_izq = make_card()
     izq_lay = QVBoxLayout(panel_izq)
@@ -89,7 +132,7 @@ def build_tab_nesting_ui(tab) -> None:
 
     fila_cantidad = QHBoxLayout()
     fila_cantidad.setContentsMargins(0, 0, 0, 0)
-    tab.lbl_cantidad = QLabel("Cantidad: -")
+    tab.lbl_cantidad = QLabel("CANTIDAD: -")
     tab.lbl_cantidad.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     fila_cantidad.addWidget(tab.lbl_cantidad)
     fila_cantidad.addStretch()
@@ -143,6 +186,7 @@ def build_tab_nesting_ui(tab) -> None:
     tab.btn_exportar = _btn("EXPORTAR DXF/STEP", tab.exportar_resultados_dxf)
     tab.btn_ver_lotes = _btn("HISTORIAL DE W.O.", tab.reabrir_modal_escenarios)
     tab.btn_costos = _btn("COSTOS DE ORDEN", lambda: __import__("interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]).abrir_modal_costos(tab))
+    tab.btn_nesting_largos = _btn("NESTEO DE LARGOS", tab.abrir_nesting_largos, bg="#455E75")
     tab.btn_config = _btn("CONFIGURACIÓN", lambda: abrir_modal_configuracion(tab))
     tab.btn_pdf_nesting = _btn("PDF NESTING", tab.exportar_reporte_pdf_nesting)
     tab.btn_editar_lote = _btn("EDITAR LOTE", tab.editar_lote_activo)
@@ -227,7 +271,7 @@ def build_tab_nesting_ui(tab) -> None:
     fps_lay = QVBoxLayout(tab.frame_pieza_sel)
     fps_lay.setContentsMargins(0, 0, 0, 0)
     fps_lay.setSpacing(6)
-    tab.lbl_pieza_sel = QLabel("Sin selección — clic en el canvas")
+    tab.lbl_pieza_sel = QLabel("SIN SELECCIÓN — CLIC EN EL CANVAS")
     tab.lbl_pieza_sel.setStyleSheet(_STYLE_MUTED)
     tab.lbl_pieza_sel.setWordWrap(True)
     fps_lay.addWidget(tab.lbl_pieza_sel)
@@ -261,15 +305,15 @@ def build_tab_nesting_ui(tab) -> None:
     fps_lay.addLayout(rot_row)
 
     tab.switch_edicion_libre = HerinoxSwitch(
-        label_on="Edición libre entre selección",
-        label_off="Edición libre (off)",
+        label_on="EDICIÓN LIBRE ENTRE SELECCIÓN",
+        label_off="EDICIÓN LIBRE (OFF)",
         checked=False,
     )
     tab.switch_edicion_libre.setEnabled(False)
     tab.switch_edicion_libre.toggled.connect(tab._on_toggle_edicion_libre)
     fps_lay.addWidget(tab.switch_edicion_libre)
     tab.lbl_edicion_libre = QLabel(
-        "Solo colisiona con placa y piezas fuera del grupo. En modo activo: morado."
+        "SOLO COLISIONA CON PLACA Y PIEZAS FUERA DEL GRUPO. EN MODO ACTIVO: MORADO."
     )
     tab.lbl_edicion_libre.setWordWrap(True)
     tab.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
@@ -327,6 +371,7 @@ def build_tab_nesting_ui(tab) -> None:
     splitter.addWidget(panel_der_wrap)
     splitter.setStretchFactor(0, 0)
     splitter.setStretchFactor(1, 1)
-    finalize_splitter(splitter, min_left=380, min_right=520)
-    splitter.setSizes([520, 880])
+    finalize_splitter(splitter, min_left=280, min_right=480)
+    apply_nest_sidebar_width(tab)
+    schedule_nest_sidebar_sync(tab)
     root.addWidget(splitter)

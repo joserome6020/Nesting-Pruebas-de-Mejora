@@ -14,10 +14,21 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 
 try:
-    from interface.utils_nesting import clave_nesting_sort_key as _orden_clave_nesting
+    from interface.utils_nesting import (
+        clave_nesting_sort_key as _orden_clave_nesting,
+        clave_orientacion_cobre_ruta,
+        es_material_cobre,
+    )
 except ImportError:
     def _orden_clave_nesting(clave: str) -> tuple:
         return (str(clave or "").upper(),)
+
+    def es_material_cobre(material) -> bool:
+        m = str(material or "").strip().upper()
+        return m in ("CU", "COBRE", "COPPER") or "COBRE" in m or "COPPER" in m
+
+    def clave_orientacion_cobre_ruta(ruta) -> str:
+        return os.path.normcase(os.path.normpath(str(ruta or "")))
 
 from .geometry_parser import (
     recuperar_geometria_robusta,
@@ -769,6 +780,7 @@ class MotorNesting:
         self.margen_corte = 0.2 * 25.4
         self.escala_dxf = 25.4
         self._cancel_checker = None
+        self.orientacion_cobre_por_ruta = {}
         try:
             profile = get_nest_profile()
             print(
@@ -1075,6 +1087,26 @@ class MotorNesting:
             )
 
             poly, marks = recuperar_geometria_robusta(ruta)
+
+            if es_material_cobre(mat):
+                rot_deg = int(
+                    (getattr(self, "orientacion_cobre_por_ruta", {}) or {}).get(
+                        clave_orientacion_cobre_ruta(ruta), 0
+                    )
+                ) % 360
+                if rot_deg:
+                    try:
+                        cx, cy = poly.centroid.x, poly.centroid.y
+                        poly = affinity.rotate(poly, rot_deg, origin=(cx, cy), use_radians=False)
+                        if marks is not None and not marks.is_empty:
+                            marks = affinity.rotate(marks, rot_deg, origin=(cx, cy), use_radians=False)
+                        _dbg_nesting(
+                            f"[COBRE-ROT-PARTS] clave={clave} | pieza={pieza} | ruta={ruta} | rot={rot_deg}°"
+                        )
+                    except Exception as exc:
+                        _dbg_nesting(
+                            f"[COBRE-ROT-FAIL] clave={clave} | pieza={pieza} | ruta={ruta} | err={exc}"
+                        )
 
             if poly is None:
                 _dbg_nesting(

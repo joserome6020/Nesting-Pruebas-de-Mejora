@@ -17,6 +17,7 @@ from PySide6.QtGui import (
     QTransform,
 )
 from interface.qt.curve_refine import refine_enabled, refine_ring
+from interface.material_colors import CAD_VIEW_BG, es_contexto_cobre, paleta_pieza_nesting
 
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -296,9 +297,7 @@ class OutlinedUprightTextItem(UprightTextItem):
 
 
 class SceneFixedLabel(OutlinedUprightTextItem):
-    """Etiqueta en escena: ItemIgnoresTransformations, NUNCA agrupar con geometría."""
-
-    pass
+    """Etiqueta ID en pieza: tamaño fijo al zoom, agrupada en piece_gfx para arrastre."""
 
 
 class RtzBadgeLabel(QGraphicsItem):
@@ -422,16 +421,7 @@ class NestingDrawParams:
 
 
 def _is_copper_context(pieza: dict | None, hoja: dict | None, clave: str = "") -> bool:
-    if bool((hoja or {}).get("modo_largos_cu")):
-        return True
-    clv = str(clave or "").strip().upper()
-    partes = [p for p in clv.replace("|", "_").split("_") if p]
-    if "CU" in partes or clv.endswith("_CU"):
-        return True
-    mat = str((pieza or {}).get("material") or "").strip().upper()
-    if mat in ("CU", "COBRE", "COPPER") or "COBRE" in mat or "COPPER" in mat:
-        return True
-    return False
+    return es_contexto_cobre(pieza, hoja, clave)
 
 
 def _translate_poligonos_mm(poligonos, gx: float, gy: float) -> list:
@@ -537,24 +527,18 @@ def _piece_style(
     if es_tat:
         return None, QPen(Qt.PenStyle.NoPen), Qt.BrushStyle.NoBrush
 
-    is_cu = _is_copper_context(pieza, hoja, clave)
+    pal = paleta_pieza_nesting(pieza, hoja, clave)
+    edge_color = QColor("#FF2222") if compensada else QColor(pal.edge)
 
     if selected:
-        if is_cu:
-            fill = QBrush(COLOR_CU_SEL)
-            edge = QPen(COLOR_CU_SEL_EDGE, 1.6)
-        else:
-            fill = QBrush(COLOR_PIECE_SEL)
-            edge = QPen(COLOR_PIECE_SEL_EDGE, 1.6)
-    elif is_cu:
-        fill = QBrush(COLOR_CU_FILL if ring_i == 0 else COLOR_CU_HOLE)
-        edge = QPen(
-            QColor("#FF2222") if compensada else COLOR_CU_EDGE,
-            1.5 if compensada and ring_i == 0 else 0.75,
-        )
+        fill = QBrush(QColor(pal.sel_fill))
+        edge = QPen(QColor(pal.sel_edge), 1.6)
+    elif ring_i == 0:
+        fill = QBrush(QColor(pal.fill))
+        edge = QPen(edge_color, 1.5 if compensada else 0.75)
     else:
-        fill = QBrush(COLOR_PIECE_FILL if ring_i == 0 else COLOR_PIECE_HOLE)
-        edge = QPen(QColor("#FF2222") if compensada else COLOR_PIECE_EDGE, 1.5 if compensada and ring_i == 0 else 0.65)
+        fill = QBrush(QColor(CAD_VIEW_BG))
+        edge = QPen(edge_color, 0.65)
     return fill, edge, Qt.BrushStyle.SolidPattern
 
 
@@ -858,14 +842,14 @@ def populate_nesting_scene(
                     t.center_at(cx, cy)
                     t.setZValue(Z_LABEL)
                     scene.addItem(t)
-                    scene_fixed_labels.append(t)
+                    gfx_items.append(t)
                 elif not es_ref and not es_guill and not es_tat and nom in resumen:
                     t = SceneFixedLabel(str(resumen[nom]["id"]))
                     t.set_font(PIECE_ID_FONT_PT, bold=True)
                     t.center_at(cx, cy)
                     t.setZValue(Z_LABEL)
                     scene.addItem(t)
-                    scene_fixed_labels.append(t)
+                    gfx_items.append(t)
 
         if gfx_items:
             if len(gfx_items) == 1:

@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 
 try:
@@ -25,12 +26,31 @@ def ruta_persistente(ruta_relativa):
         ruta_base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(ruta_base, ruta_relativa)
 
+
+def asegurar_archivo_persistente(ruta_relativa: str) -> str:
+    """
+    Ruta persistente junto al .exe; si no existe, copia la plantilla empaquetada (_MEIPASS).
+    Útil para Plates.xlsx, inventario_remanentes.csv, etc. en otras PCs.
+    """
+    destino = ruta_persistente(ruta_relativa)
+    if os.path.exists(destino):
+        return destino
+    try:
+        plantilla = ruta_recurso(ruta_relativa)
+        if os.path.isfile(plantilla):
+            os.makedirs(os.path.dirname(destino) or ".", exist_ok=True)
+            shutil.copy2(plantilla, destino)
+    except Exception:
+        pass
+    return destino
+
 # --- RUTAS ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Archivos locales (Usamos ruta_persistente para no perder datos al cerrar el .exe)
 DB_HISTORIAL = ruta_persistente("historial_jobs.json")
 TEMP_DIR = ruta_persistente("TEMP_PROCESSED")
+INVENTARIO_REMANENTES_CSV = ruta_persistente("inventario_remanentes.csv")
 
 
 # --- RUTA DEL SERVIDOR (AJUSTAR AQUÍ) ---
