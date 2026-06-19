@@ -4,13 +4,13 @@ param(
 )
 
 function Invoke-Python {
-    param([string[]]$Args)
+    param([string[]]$PythonArgs)
     if ($PythonExe) {
-        & $PythonExe @Args
+        & $PythonExe @PythonArgs
     } else {
-        & py -3.14 @Args
+        & py -3.14 @PythonArgs
     }
-    if ($LASTEXITCODE -ne 0) { throw "Python falló: $Args" }
+    if ($LASTEXITCODE -ne 0) { throw "Python falló: $PythonArgs" }
 }
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +23,8 @@ Write-Host "Directorio: $Root"
 
 Invoke-Python @("-m", "pip", "install", "--upgrade", "pip", "pybind11", "cmake")
 
-$pyScripts = Split-Path -Parent (Invoke-Python @("-c", "import sys; print(sys.executable)")).Trim()
+$pyExePath = (Invoke-Python @("-c", "import sys; print(sys.executable)")).Trim()
+$pyScripts = Join-Path (Split-Path -Parent $pyExePath) "Scripts"
 $cmakeExe = Join-Path $pyScripts "cmake.exe"
 if (-not (Test-Path $cmakeExe)) {
     $cmakeExe = (Get-Command cmake -ErrorAction SilentlyContinue).Source
@@ -57,7 +58,8 @@ try {
 
     Copy-Item $pyd.FullName -Destination (Join-Path $Root "algorithm_cpp.pyd") -Force
     Write-Host "OK: $($pyd.Name) -> $Root" -ForegroundColor Green
-    Push-Location (Split-Path -Parent $Root)
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $Root)
+    Push-Location $ProjectRoot
     try {
         Invoke-Python @("-c", "from modules.nesting_engine.algorithm_bridge import engine_name; print('Motor activo:', engine_name())")
     } finally {

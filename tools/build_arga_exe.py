@@ -692,10 +692,10 @@ def main():
     if not args.skip_deps:
         ensure_build_dependencies()
 
+    cpp_pyd = ensure_cpp_engine(skip=args.skip_cpp, allow_missing=args.allow_no_cpp)
+
     if not args.skip_smoke:
         smoke_test_imports()
-
-    cpp_pyd = ensure_cpp_engine(skip=args.skip_cpp, allow_missing=args.allow_no_cpp)
     sync_repo_plates_from_herinox("pre-build")
     exe_path = build_exe(args.name, onefile=not args.onedir, cpp_pyd=cpp_pyd)
     sync_repo_plates_from_herinox("post-build")
