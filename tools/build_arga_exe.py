@@ -31,6 +31,7 @@ HIDDEN_IMPORTS = (
     "nesting_canvas",
     "responsive_layout",
     "reporte_pdf_nesting",
+    "reporte_pdf_nesteo_largos_piso",
     # Largos + material requerido (NESTEO DE LARGOS / MRL)
     "catalogo_largos",
     "lista_largos_material_requerido",

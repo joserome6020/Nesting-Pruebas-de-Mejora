@@ -84,6 +84,32 @@ KERF_LARGOS_IN = 0.25
 RECORTE_EXTREMO_LARGOS_IN = 0.5
 
 
+def nombre_pieza_largo_display(nombre: str) -> str:
+    """Quita extensión Inventor (.ipt) y sufijos de exportación para mostrar al usuario."""
+    s = str(nombre or "").strip()
+    if not s:
+        return s
+    for ext in (".ipt", ".IPT", ".iam", ".IAM", ".idw", ".IDW"):
+        if s.endswith(ext):
+            s = s[: -len(ext)]
+            break
+    for marker in (
+        "_Default_As Machined_",
+        "_Default_As_Machined_",
+        "_Default As Machined",
+        "_Default_As Machined",
+        "_Predeterminado",
+        "_Predeterminado_",
+        "_PREDETERMINADO",
+    ):
+        idx = s.find(marker)
+        if idx >= 0:
+            s = s[:idx]
+            break
+    s = s.rstrip("_ .")
+    return s or str(nombre or "").strip()
+
+
 def _etiquetar_cortes_individuales(cortes: list[dict]) -> list[dict]:
     """Cada pieza es un tramo propio; si hay repetidas (mismo nombre/largo), numerar #1 #2…"""
     import copy
@@ -104,7 +130,8 @@ def _etiquetar_cortes_individuales(cortes: list[dict]) -> list[dict]:
     serial: dict[tuple[str, float], int] = {}
 
     for corte, clave in zip(expandidos, claves):
-        nom = str(corte.get("nombre") or "Pieza").strip()
+        nom = nombre_pieza_largo_display(str(corte.get("nombre") or "Pieza"))
+        corte["nombre"] = nom
         if totales[clave] > 1:
             serial[clave] = serial.get(clave, 0) + 1
             corte["_etiqueta_pieza"] = f"{nom}  #{serial[clave]}"
@@ -791,3 +818,102 @@ def iter_barras_plan(plan: dict[str, Any]):
         barras = list(data.get(material) or [])
         for bar_idx, barra in enumerate(barras):
             yield material, bar_idx, barra
+
+
+def obtener_filas_demanda_contexto(app, tab) -> list[dict]:
+    """Demanda de largos del CSV (o BD) para el job/lote activo — cantidad_base por unidad."""
+    contexto = resolver_contexto_largos(app, tab)
+    job = str(contexto.get("job") or "").strip()
+    factor = int(contexto.get("factor_lote") or 1)
+    conexion = None
+    cursor = None
+    try:
+        conexion = psycopg2.connect(**_db_config())
+        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        rows, _origen = _obtener_filas_demanda_lote(app, cursor, job, factor)
+        return list(rows or [])
+    except Exception:
+        return _filas_desde_csv_para_job(app, job, factor)
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
+def construir_snapshot_pdf_piso(
+    plan: dict[str, Any],
+    contexto: dict[str, Any],
+    unidades_excluidas: set[str],
+    app,
+    tab,
+) -> dict[str, Any]:
+    """
+    Snapshot para PDF piso: tabla accesorios (CSV, qty/unidad) + barras MRL activas.
+    """
+    from catalogo_largos import _cargar_placas_largos_desde_herinox, descripcion_herinox_mrl, etiqueta_tipo_perfil_mrl
+    from reporte_pdf_nesteo_largos_piso import filas_csv_a_accesorios
+
+    filas_demanda = obtener_filas_demanda_contexto(app, tab)
+    job = str(contexto.get("job") or getattr(app, "job_activo", "") or "").strip()
+    catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+
+    barras_piso: list[dict[str, Any]] = []
+    barra_lookup: dict[str, tuple[str, dict]] = {}
+    for material, bar_idx, barra in iter_barras_plan(plan):
+        barra_lookup[bar_key(material, bar_idx)] = (material, barra)
+
+    for u in listar_unidades_mrl_plan(plan):
+        key = str(u.get("key") or "")
+        if key in unidades_excluidas:
+            continue
+        nesting_key = str(u.get("nesting_key") or "")
+        if not nesting_key or nesting_key not in barra_lookup:
+            continue
+        material, barra = barra_lookup[nesting_key]
+
+        cod = str(u.get("codigo") or "")
+        mat_raw = str(u.get("material") or "")
+        tipo_lbl = etiqueta_tipo_perfil_mrl(mat_raw, cod, catalogo=catalogo)
+        try:
+            largo_com = float(u.get("largo") or 0)
+        except Exception:
+            largo_com = 0.0
+        unit_idx = int(u.get("unit_idx") or 1)
+        cant_grupo = int(u.get("cant_grupo") or 1)
+        desc = descripcion_herinox_mrl(cod, mat_raw, catalogo=catalogo)
+        etiqueta = f"#{unit_idx}/{cant_grupo} · {tipo_lbl} · {cod} · {largo_com:.0f}\" comercial"
+        if desc:
+            etiqueta += f" · {desc}"
+
+        vista = vista_barra_para_unidad_mrl(
+            barra,
+            largo_com,
+            unit_idx,
+            reparto_greedy=bool(u.get("reparto_greedy")),
+            n_unidades_tira=int(u.get("n_unidades_tira") or 1),
+            cant_grupo=cant_grupo,
+        )
+        if cod:
+            vista["_vista_codigo"] = cod
+
+        barras_piso.append(
+            {
+                "etiqueta": etiqueta,
+                "material": material,
+                "codigo": cod,
+                "barra": preparar_barra_para_canvas(vista, codigo=cod),
+            }
+        )
+
+    titulo = f"ACCESORIOS LARGOS TANK ({job})" if job else "ACCESORIOS LARGOS"
+    return {
+        "job": job,
+        "titulo": titulo,
+        "titulo_job": job,
+        "etiqueta_orden": str(contexto.get("etiqueta") or ""),
+        "filas_demanda": filas_demanda,
+        "filas_accesorios": filas_csv_a_accesorios(filas_demanda),
+        "barras_piso": barras_piso,
+    }
+

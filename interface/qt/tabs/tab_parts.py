@@ -767,7 +767,11 @@ class TabParts(QWidget, TimerHost):
         table.setMaximumHeight(content_h)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for ri, row in enumerate(grupo["rows"]):
-            table.setItem(ri, 0, QTableWidgetItem(str(row.get("nombre", ""))))
+            from interface.largos_nesting_service import nombre_pieza_largo_display
+
+            table.setItem(
+                ri, 0, QTableWidgetItem(nombre_pieza_largo_display(str(row.get("nombre", ""))))
+            )
             table.setItem(ri, 1, QTableWidgetItem(str(row.get("clasificacion", ""))))
             table.setItem(ri, 2, QTableWidgetItem(f"{float(row.get('largo_in', 0) or 0):.3f}"))
             table.setItem(ri, 3, QTableWidgetItem(str(row.get("cantidad", 0))))

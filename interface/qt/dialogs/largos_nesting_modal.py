@@ -10,16 +10,19 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QFileDialog,
 )
 
 from interface.largos_nesting_service import (
     bar_key,
     cargar_plan_largos_contexto,
+    construir_snapshot_pdf_piso,
     guardar_exclusiones_mrl_unidades,
     iter_barras_plan,
     listar_unidades_mrl_plan,
@@ -31,7 +34,7 @@ from interface.largos_nesting_service import (
 )
 from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content
 from interface.qt.thread_bridge import call_on_main
-from interface.qt.theme import COLOR_TEXTO_TITULO, surface_dialog_stylesheet
+from interface.qt.theme import COLOR_ACENTO, COLOR_TEXTO_TITULO, apply_push_button, surface_dialog_stylesheet
 from interface.qt.widgets.herinox_switch import HerinoxSwitch
 from interface.qt.widgets.largos_tira_canvas import LargosTiraCanvas
 
@@ -214,6 +217,13 @@ class LargosNestingDialog(QDialog):
         self.tbl_mrl.setColumnWidth(2, 62)
         self.tbl_mrl.setColumnWidth(3, 46)
         der_lay.addWidget(self.tbl_mrl, 1)
+
+        self.btn_pdf_piso = QPushButton("Descargar PDF consumo en piso")
+        apply_push_button(self.btn_pdf_piso, COLOR_ACENTO, font_size=11)
+        self.btn_pdf_piso.setMinimumHeight(36)
+        self.btn_pdf_piso.clicked.connect(self._exportar_pdf_piso)
+        der_lay.addWidget(self.btn_pdf_piso)
+
         bottom.addWidget(der)
 
         bottom.setStretchFactor(0, 3)
@@ -448,3 +458,62 @@ class LargosNestingDialog(QDialog):
         self._barra_vista_actual = vista
         self._material_vista_actual = material
         self.canvas.mostrar_barra(material, vista)
+
+    def _exportar_pdf_piso(self):
+        if not (self.plan.get("data") or {}):
+            QMessageBox.warning(
+                self,
+                "PDF consumo en piso",
+                "No hay plan de nesteo de largos para exportar.",
+            )
+            return
+
+        job = str(self._contexto.get("job") or getattr(self.app, "job_activo", "") or "JOB").strip()
+        job_arch = job.replace("/", "-").replace("\\", "-") or "JOB"
+        sugerido = f"Nesteo_Largos_Piso_{job_arch}.pdf"
+        ruta, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar PDF consumo en piso",
+            sugerido,
+            "PDF (*.pdf)",
+        )
+        if not ruta:
+            return
+        if not str(ruta).lower().endswith(".pdf"):
+            ruta = f"{ruta}.pdf"
+
+        self.btn_pdf_piso.setEnabled(False)
+        self.btn_pdf_piso.setText("Generando PDF…")
+        plan = self.plan
+        contexto = dict(self._contexto)
+        excl = set(self._unidades_excluidas_mrl())
+        app = self.app
+        tab = self.tab
+
+        def worker():
+            err = None
+            try:
+                from reporte_pdf_nesteo_largos_piso import generar_pdf_nesteo_largos_piso
+
+                snapshot = construir_snapshot_pdf_piso(plan, contexto, excl, app, tab)
+                if not snapshot.get("filas_accesorios") and not snapshot.get("barras_piso"):
+                    raise ValueError("No hay demanda CSV ni barras en pedido para el PDF.")
+                generar_pdf_nesteo_largos_piso(snapshot, ruta)
+            except Exception as exc:
+                err = str(exc)
+
+            def finish():
+                self.btn_pdf_piso.setEnabled(True)
+                self.btn_pdf_piso.setText("Descargar PDF consumo en piso")
+                if err:
+                    QMessageBox.critical(self, "PDF consumo en piso", err)
+                else:
+                    QMessageBox.information(
+                        self,
+                        "PDF consumo en piso",
+                        f"Reporte guardado:\n{ruta}",
+                    )
+
+            call_on_main(finish)
+
+        threading.Thread(target=worker, daemon=True).start()
