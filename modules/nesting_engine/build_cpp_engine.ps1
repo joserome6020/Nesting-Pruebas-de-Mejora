@@ -25,11 +25,17 @@ function Resolve-PythonExePath {
 
 function Resolve-CmakeExe {
     param([string]$PyExePath)
-    $pyScripts = Join-Path (Split-Path -Parent $PyExePath) "Scripts"
-    $cmake = Join-Path $pyScripts "cmake.exe"
-    if (Test-Path $cmake) { return $cmake }
+    # En Windows el venv coloca python.exe y cmake.exe en el mismo directorio (Scripts).
+    $pyBinDir = Split-Path -Parent $PyExePath
+    $candidates = @(
+        (Join-Path $pyBinDir "cmake.exe"),
+        (Join-Path (Join-Path (Split-Path -Parent $pyBinDir) "Scripts") "cmake.exe")
+    )
+    foreach ($cmake in $candidates) {
+        if ($cmake -and (Test-Path -LiteralPath $cmake)) { return $cmake }
+    }
     $cmd = Get-Command cmake -ErrorAction SilentlyContinue
-    if ($cmd -and (Test-Path $cmd.Source)) { return $cmd.Source }
+    if ($cmd -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
     throw "cmake no encontrado. Ejecuta: python -m pip install cmake"
 }
 
@@ -186,7 +192,13 @@ if (-not (Test-Path $clipperDir)) {
 }
 
 if (Test-Path $BuildDir) {
-    Remove-Item -Recurse -Force $BuildDir
+    try {
+        Remove-Item -Recurse -Force $BuildDir -ErrorAction Stop
+    } catch {
+        $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+        $BuildDir = Join-Path $CppDir "build_$stamp"
+        Write-Host "[WARN] cpp/build en uso por otro proceso; usando $BuildDir" -ForegroundColor Yellow
+    }
 }
 New-Item -ItemType Directory -Path $BuildDir | Out-Null
 

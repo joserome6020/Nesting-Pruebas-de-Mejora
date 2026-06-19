@@ -243,6 +243,8 @@ def install_missing(packages: list[str], dry_run: bool) -> int:
             probe_name = "fitz"
         elif package == "PySide6":
             probe_name = "PySide6"
+        elif package == "pyinstaller":
+            probe_name = "PyInstaller"
 
         if not _is_installed(probe_name):
             missing.append(package)
