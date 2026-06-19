@@ -18,10 +18,20 @@ Implementación nativa del empaquetado por hoja (`empaquetar_una_hoja_mc`) con *
 
 ## Compilar
 
+Desde la raíz del repositorio:
+
 ```powershell
-cd "c:\Proyectos\ANS Pruebas de mejora\modules\nesting_engine"
-.\build_cpp_engine.ps1
+.\.venv\Scripts\Activate.ps1
+powershell -ExecutionPolicy Bypass -File modules\nesting_engine\build_cpp_engine.ps1 -PythonExe ".\.venv\Scripts\python.exe"
 ```
+
+Si no hay MSVC instalado:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File modules\nesting_engine\build_cpp_engine.ps1 -PythonExe ".\.venv\Scripts\python.exe" -InstallMsvc
+```
+
+El script detecta Visual Studio (vswhere), usa generador `Visual Studio 17 2022` / `18 2026` con `-A x64`, o NMake si `cl` ya está en PATH.
 
 Sin `algorithm_cpp.pyd` la aplicación no puede ejecutar nesting.
 

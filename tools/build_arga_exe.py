@@ -188,11 +188,14 @@ def _build_ico_file() -> Path | None:
         return None
 
 
-def _pip_install(package):
-    _run([sys.executable, "-m", "pip", "install", "--upgrade", package])
+AUTO_SETUP_SCRIPT = ROOT / "tools" / "auto_setup_dependencies.py"
 
 
 def ensure_build_dependencies():
+    """Instala dependencias pip del suite + herramientas de build (PyInstaller, cmake, etc.)."""
+    if AUTO_SETUP_SCRIPT.is_file():
+        _run([sys.executable, str(AUTO_SETUP_SCRIPT), "--include-optional"])
+        return
     for pkg in (
         "pip",
         "setuptools",
@@ -209,7 +212,7 @@ def ensure_build_dependencies():
         "pybind11",
         "cmake",
     ):
-        _pip_install(pkg)
+        _run([sys.executable, "-m", "pip", "install", "--upgrade", pkg])
 
 
 def _ensure_build_import_path():
@@ -243,15 +246,19 @@ def smoke_test_imports():
         print(f"[WARN] motor C++ no disponible en smoke test: {exc}")
 
 
-def ensure_cpp_engine(skip: bool = False, allow_missing: bool = False) -> Path | None:
+def ensure_cpp_engine(
+    skip: bool = False,
+    allow_missing: bool = False,
+    force_cpp: bool = False,
+    install_msvc: bool = False,
+) -> Path | None:
     """Compila algorithm_cpp.pyd si hace falta (requerido para nesting en el EXE)."""
-    if CPP_ENGINE_PYD.exists() and skip:
-        print(f"[OK] Motor C++ existente: {CPP_ENGINE_PYD}")
+    if CPP_ENGINE_PYD.exists() and (skip or not force_cpp):
+        note = " (--force-cpp para recompilar)" if not skip else ""
+        print(f"[OK] Motor C++ existente{note}: {CPP_ENGINE_PYD}")
         return CPP_ENGINE_PYD
 
     if skip:
-        if CPP_ENGINE_PYD.exists():
-            return CPP_ENGINE_PYD
         msg = (
             f"[ERROR] --skip-cpp y no existe {CPP_ENGINE_PYD.name}. "
             "El nesting no funcionará en otras PCs sin el motor C++."
@@ -264,19 +271,29 @@ def ensure_cpp_engine(skip: bool = False, allow_missing: bool = False) -> Path |
     if not CPP_ENGINE_PS1.exists():
         raise FileNotFoundError(f"No se encontró script de build C++: {CPP_ENGINE_PS1}")
 
-    _run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(CPP_ENGINE_PS1),
-            "-PythonExe",
-            sys.executable,
-        ],
-        cwd=ROOT,
-    )
+    ps_cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(CPP_ENGINE_PS1),
+        "-PythonExe",
+        sys.executable,
+    ]
+    if install_msvc:
+        ps_cmd.append("-InstallMsvc")
+
+    try:
+        _run(ps_cmd, cwd=ROOT)
+    except subprocess.CalledProcessError as exc:
+        hint = (
+            " Instala Visual Studio 2022 Build Tools (C++) o reintenta con --install-msvc."
+        )
+        raise RuntimeError(
+            f"Falló la compilación del motor C++ (algorithm_cpp.pyd).{hint}"
+        ) from exc
+
     if not CPP_ENGINE_PYD.exists():
         raise FileNotFoundError(
             f"No se generó {CPP_ENGINE_PYD} tras build_cpp_engine.ps1"
@@ -641,7 +658,17 @@ def main():
     parser.add_argument(
         "--skip-cpp",
         action="store_true",
-        help="No recompila algorithm_cpp.pyd (usa el existente si hay).",
+        help="No compila algorithm_cpp.pyd (requiere que ya exista).",
+    )
+    parser.add_argument(
+        "--force-cpp",
+        action="store_true",
+        help="Recompila algorithm_cpp.pyd aunque ya exista.",
+    )
+    parser.add_argument(
+        "--install-msvc",
+        action="store_true",
+        help="Si falta MSVC, intenta instalar Visual Studio 2022 Build Tools vía winget.",
     )
     parser.add_argument(
         "--allow-no-cpp",
@@ -692,7 +719,12 @@ def main():
     if not args.skip_deps:
         ensure_build_dependencies()
 
-    cpp_pyd = ensure_cpp_engine(skip=args.skip_cpp, allow_missing=args.allow_no_cpp)
+    cpp_pyd = ensure_cpp_engine(
+        skip=args.skip_cpp,
+        allow_missing=args.allow_no_cpp,
+        force_cpp=args.force_cpp,
+        install_msvc=args.install_msvc,
+    )
 
     if not args.skip_smoke:
         smoke_test_imports()
