@@ -110,13 +110,12 @@ Descarga: https://visualstudio.microsoft.com/visual-cpp-build-tools/
 "@
     }
 
-    $installed = & winget list --id Microsoft.VisualStudio.2022.BuildTools -e 2>$null
-    if ($LASTEXITCODE -eq 0 -and $installed -match "BuildTools") {
-        Write-Host "[INFO] Visual Studio 2022 Build Tools ya instalado; verificando componente C++..." -ForegroundColor Cyan
-        if (Get-VisualStudioInstall) { return }
+    if (Get-VisualStudioInstall) {
+        Write-Host "[INFO] Visual Studio Build Tools con C++ ya detectado." -ForegroundColor Cyan
+        return
     }
 
-    Write-Host "[INFO] Instalando Visual Studio 2022 Build Tools (10-20 min, requiere internet)..." -ForegroundColor Yellow
+    Write-Host "[INFO] Instalando Visual Studio 2022 Build Tools (10-20 min, requiere internet y admin)..." -ForegroundColor Yellow
     & winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
         --accept-package-agreements --accept-source-agreements `
         --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
@@ -124,10 +123,11 @@ Descarga: https://visualstudio.microsoft.com/visual-cpp-build-tools/
         throw "winget falló instalando Build Tools (código $LASTEXITCODE)."
     }
 
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 5
     if (-not (Get-VisualStudioInstall)) {
         throw "Build Tools instalado pero no se detectó el componente C++. Reinicia la PC y vuelve a ejecutar el build."
     }
+    Write-Host "[OK] Visual Studio Build Tools con C++ listo." -ForegroundColor Green
 }
 
 function Invoke-CmakeConfigure {
@@ -210,6 +210,7 @@ try {
     $configKind = Invoke-CmakeConfigure -CmakeExe $cmakeExe -PyExe $pyExe -SourceDir ".."
     if (-not $configKind) {
         if ($InstallMsvc) {
+            Write-Host "[INFO] Sin MSVC: iniciando instalacion de Build Tools..." -ForegroundColor Yellow
             Install-MsvcBuildTools
             $configKind = Invoke-CmakeConfigure -CmakeExe $cmakeExe -PyExe $pyExe -SourceDir ".."
         }
