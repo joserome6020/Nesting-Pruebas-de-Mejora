@@ -151,27 +151,36 @@ def _find_vswhere() -> Path | None:
 def _msvc_available() -> bool:
     if shutil.which("cl"):
         return True
+    for base in (
+        Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+        / "Microsoft Visual Studio"
+        / "2022"
+        / "BuildTools",
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "Microsoft Visual Studio"
+        / "2022"
+        / "BuildTools",
+    ):
+        if (base / "VC" / "Auxiliary" / "Build" / "vcvars64.bat").is_file():
+            return True
     vswhere = _find_vswhere()
     if not vswhere:
         return False
     try:
         out = subprocess.check_output(
-            [
-                str(vswhere),
-                "-latest",
-                "-products",
-                "*",
-                "-requires",
-                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                "-property",
-                "installationPath",
-            ],
+            [str(vswhere), "-latest", "-products", "*", "-format", "json"],
             text=True,
             stderr=subprocess.DEVNULL,
-        ).strip()
-        return bool(out)
+        )
+        data = json.loads(out) if out.strip() else []
+        items = data if isinstance(data, list) else [data]
+        for inst in items:
+            path = Path(str(inst.get("installationPath", "")))
+            if (path / "VC" / "Auxiliary" / "Build" / "vcvars64.bat").is_file():
+                return True
     except Exception:
-        return False
+        pass
+    return False
 
 
 def _release_dist_exe(exe_path: Path) -> bool:

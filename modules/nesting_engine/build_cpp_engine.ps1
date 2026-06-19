@@ -50,22 +50,47 @@ function Find-VsWherePath {
     return $null
 }
 
-function Get-VisualStudioInstall {
+function Find-VcToolchain {
     $vswhere = Find-VsWherePath
-    if (-not $vswhere) { return $null }
-
-    $lines = & $vswhere `
-        -latest `
-        -products * `
-        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        -property installationPath,installationVersion `
-        -format value 2>$null
-    if (-not $lines -or $lines.Count -lt 2) { return $null }
-
-    return [PSCustomObject]@{
-        Path    = [string]$lines[0]
-        Version = [string]$lines[1]
+    if ($vswhere) {
+        try {
+            $raw = & $vswhere -latest -products * -format json 2>$null
+            if ($raw) {
+                foreach ($inst in @((ConvertFrom-Json $raw))) {
+                    $path = [string]$inst.installationPath
+                    if (-not $path) { continue }
+                    $vcvars = Join-Path $path "VC\Auxiliary\Build\vcvars64.bat"
+                    if (Test-Path -LiteralPath $vcvars) {
+                        return [PSCustomObject]@{
+                            Path    = $path
+                            Version = [string]$inst.installationVersion
+                        }
+                    }
+                }
+            }
+        } catch { }
     }
+
+    $roots = @(
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\BuildTools",
+        "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community",
+        "${env:ProgramFiles}\Microsoft Visual Studio\2022\Community"
+    )
+    foreach ($root in $roots) {
+        $vcvars = Join-Path $root "VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path -LiteralPath $vcvars) {
+            return [PSCustomObject]@{
+                Path    = $root
+                Version = "17.0"
+            }
+        }
+    }
+    return $null
+}
+
+function Get-VisualStudioInstall {
+    return Find-VcToolchain
 }
 
 function Get-CmakeGeneratorForVs {
@@ -100,34 +125,116 @@ function Import-VcVarsEnvironment {
     return Test-CommandInPath "cl"
 }
 
-function Install-MsvcBuildTools {
-    if (-not (Test-CommandInPath "winget")) {
-        throw @"
-winget no está disponible. Instala manualmente:
-  Visual Studio 2022 Build Tools
-  Workload: 'Desarrollo para el escritorio con C++' / 'Desktop development with C++'
-Descarga: https://visualstudio.microsoft.com/visual-cpp-build-tools/
-"@
+function Get-VsSetupExe {
+    $setup = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+    if (Test-Path -LiteralPath $setup) { return $setup }
+    return $null
+}
+
+function Get-VsBuildToolsBootstrapper {
+    $cached = Join-Path $env:TEMP "vs_BuildTools_arga.exe"
+    if (Test-Path -LiteralPath $cached) { return $cached }
+    $url = "https://download.visualstudio.microsoft.com/download/pr/2ae938ff-cbb6-4e4d-990c-7794a7a03745/650517f804f6b1fc7d1e274202ee43e2d027cbdbf9376a8e94c7c5bb32abfd99/vs_BuildTools.exe"
+    Write-Host "[INFO] Descargando instalador de Visual Studio Build Tools..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $url -OutFile $cached -UseBasicParsing
+    return $cached
+}
+
+function Invoke-VcWorkloadInstall {
+    $installPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
+    $setup = Get-VsSetupExe
+    $args = @(
+        "install",
+        "--installPath", $installPath,
+        "--productId", "Microsoft.VisualStudio.Product.BuildTools",
+        "--channelId", "VisualStudio.17.Release",
+        "--add", "Microsoft.VisualStudio.Workload.VCTools",
+        "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
+        "--includeRecommended",
+        "--passive", "--norestart", "--wait"
+    )
+
+    if ($setup) {
+        Write-Host "[INFO] Instalando workload C++ con setup.exe (puede tardar 10-30 min)..." -ForegroundColor Yellow
+        & $setup @args
+        return $LASTEXITCODE
     }
 
-    if (Get-VisualStudioInstall) {
-        Write-Host "[INFO] Visual Studio Build Tools con C++ ya detectado." -ForegroundColor Cyan
+    $bootstrapper = Get-VsBuildToolsBootstrapper
+    Write-Host "[INFO] Instalando workload C++ con vs_BuildTools.exe (puede tardar 10-30 min)..." -ForegroundColor Yellow
+    & $bootstrapper --wait --passive --norestart `
+        --add Microsoft.VisualStudio.Workload.VCTools `
+        --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        --add Microsoft.VisualStudio.Component.Windows11SDK.22621 `
+        --includeRecommended
+    return $LASTEXITCODE
+}
+
+function Wait-ForVcToolchain {
+    param([int]$TimeoutMinutes = 45)
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $dots = 0
+    while ((Get-Date) -lt $deadline) {
+        $toolchain = Find-VcToolchain
+        if ($toolchain) { return $toolchain }
+
+        $installerRunning = Get-Process -Name "setup","vs_BuildTools","vs_installer","vs_installershell" -ErrorAction SilentlyContinue
+        $dots = ($dots + 1) % 4
+        $suffix = "." * $dots
+        if ($installerRunning) {
+            Write-Host "[INFO] Instalador de Visual Studio en ejecucion$($suffix.PadRight(3))" -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 20
+            continue
+        }
+
+        Write-Host "[INFO] Esperando componentes MSVC$($suffix.PadRight(3))" -ForegroundColor DarkYellow
+        Start-Sleep -Seconds 10
+    }
+    return $null
+}
+
+function Install-MsvcBuildTools {
+    $existing = Find-VcToolchain
+    if ($existing) {
+        Write-Host "[INFO] Toolchain MSVC ya disponible: $($existing.Path)" -ForegroundColor Cyan
         return
     }
 
-    Write-Host "[INFO] Instalando Visual Studio 2022 Build Tools (10-20 min, requiere internet y admin)..." -ForegroundColor Yellow
-    & winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
-        --accept-package-agreements --accept-source-agreements `
-        --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-    if ($LASTEXITCODE -ne 0) {
-        throw "winget falló instalando Build Tools (código $LASTEXITCODE)."
+    if (-not (Test-CommandInPath "winget") -and -not (Get-VsSetupExe)) {
+        throw @"
+No hay MSVC ni instalador de Visual Studio. Instala manualmente:
+  Visual Studio 2022 Build Tools + workload 'Desktop development with C++'
+  https://visualstudio.microsoft.com/visual-cpp-build-tools/
+"@
     }
 
-    Start-Sleep -Seconds 5
-    if (-not (Get-VisualStudioInstall)) {
-        throw "Build Tools instalado pero no se detectó el componente C++. Reinicia la PC y vuelve a ejecutar el build."
+    # winget a veces solo registra el paquete sin instalar el workload C++.
+    # Siempre ejecutamos el instalador real con los componentes necesarios.
+    if (Test-CommandInPath "winget") {
+        Write-Host "[INFO] Registrando Visual Studio Build Tools con winget..." -ForegroundColor Cyan
+        & winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
+            --accept-package-agreements --accept-source-agreements `
+            --disable-interactivity 2>$null | Out-Null
     }
-    Write-Host "[OK] Visual Studio Build Tools con C++ listo." -ForegroundColor Green
+
+    $exitCode = Invoke-VcWorkloadInstall
+    if ($exitCode -ne 0 -and $exitCode -ne 3010) {
+        Write-Host "[WARN] Instalador retorno codigo $exitCode (3010=reboot pendiente, se continua)." -ForegroundColor Yellow
+    }
+
+    $toolchain = Wait-ForVcToolchain -TimeoutMinutes 45
+    if (-not $toolchain) {
+        throw @"
+No se detecto el compilador C++ tras instalar Build Tools.
+
+Prueba:
+  1) Reinicia la PC
+  2) Ejecuta de nuevo: python tools\build_arga_exe.py
+  3) O abre 'Visual Studio Installer' y agrega 'Desarrollo para el escritorio con C++'
+"@
+    }
+    Write-Host "[OK] Toolchain MSVC listo: $($toolchain.Path)" -ForegroundColor Green
 }
 
 function Invoke-CmakeConfigure {
