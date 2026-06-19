@@ -205,8 +205,20 @@ def vista_barra_para_unidad_mrl(
         nota_nesteo = ""
     else:
         cortes_vista = _etiquetar_cortes_individuales(cortes_origen)
-        largo_vista = stock_origen if stock_origen > 0 else largo_com
+        # Vista MRL = barra comercial a comprar, no la tira física del nesteo.
+        largo_vista = largo_com if largo_com > 0 else stock_origen
         nota_nesteo = ""
+        if (
+            stock_origen > 0
+            and largo_com > 0
+            and abs(stock_origen - largo_com) > 0.5
+            and stock_origen < largo_com
+        ):
+            nota_nesteo = (
+                f"Nesteo sobre tira de {stock_origen:.0f}\" "
+                f"→ barra comercial {int(unit_idx)}/{int(cant_grupo or 1)} "
+                f"de {largo_com:.0f}\""
+            )
 
     rem = _remanente_barra_vista(largo_vista, cortes_vista)
     vista = copy.deepcopy(barra)

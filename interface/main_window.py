@@ -376,6 +376,9 @@ class SistemaNestingPro(ctk.CTk):
             )
 
     def cargar_datos_parts(self, datos):
+        from interface.utils_nesting import ordenar_filas_partes
+
+        datos = ordenar_filas_partes(datos)
         self.datos_partes_actuales = datos 
         self.vista_parts.refrescar_tabla(datos)
 

@@ -289,6 +289,9 @@ class SistemaNestingPro(QMainWindow):
             print(f"[HERINOX SYNC] OMITIDA | {resultado.message}")
 
     def cargar_datos_parts(self, datos, *, thumbnails_async: bool = False):
+        from interface.utils_nesting import ordenar_filas_partes
+
+        datos = ordenar_filas_partes(datos)
         self.datos_partes_actuales = datos
         if hasattr(self.vista_parts, "refrescar_tabla"):
             self.vista_parts.refrescar_tabla(datos, thumbnails_async=thumbnails_async)

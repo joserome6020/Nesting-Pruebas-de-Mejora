@@ -69,6 +69,24 @@ def grupo_nesting_sort_key(clave: str, grupo: dict | None = None) -> tuple:
     return base
 
 
+def ordenar_filas_partes(datos) -> list:
+    """
+    Orden estándar PARTS: calibre (menor→mayor) → material → nombre de pieza (A→Z).
+    Cada fila: (pieza, material, qty, calibre, estado, ruta_dxf).
+    """
+
+    def _key(fila):
+        pieza = str(fila[0] if len(fila) > 0 else "").strip().lower()
+        material = str(fila[1] if len(fila) > 1 else "").strip().lower()
+        calibre_txt = str(fila[3] if len(fila) > 3 else "").strip()
+        esp = _espesor_pulgadas_desde_texto(calibre_txt)
+        esp_ord = esp if esp is not None else float("inf")
+        tier = 1 if es_material_cobre(material) else 0
+        return (tier, esp_ord, material, pieza)
+
+    return sorted(list(datos or []), key=_key)
+
+
 def _espesor_pulgadas_desde_texto(text: str) -> float | None:
     base = str(text or "").strip().replace(",", ".")
     if not base:

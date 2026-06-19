@@ -41,10 +41,15 @@ call %VENV_DIR%\Scripts\activate.bat
 echo [OK] Entorno virtual activado.
 
 REM -----------------------------------------------
-REM 3. Instalar dependencias (solo si faltan)
+REM 3. Instalar dependencias (analiza imports + paquetes base del proyecto)
 REM -----------------------------------------------
 echo [INFO] Verificando dependencias...
-pip install fastapi uvicorn psycopg2-binary pydantic ezdxf matplotlib reportlab pandas openpyxl shapely numpy customtkinter >nul 2>&1
+python tools\auto_setup_dependencies.py
+if errorlevel 1 (
+    echo [ERROR] No se pudieron instalar las dependencias.
+    pause
+    exit /b 1
+)
 echo [OK] Dependencias listas.
 
 REM -----------------------------------------------

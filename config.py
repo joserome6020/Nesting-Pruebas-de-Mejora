@@ -2,11 +2,6 @@ import os
 import shutil
 import sys
 
-try:
-    import customtkinter as ctk
-except ImportError:
-    ctk = None
-
 def ruta_recurso(ruta_relativa):
     """Para archivos estáticos empaquetados dentro del .exe (imágenes, scripts, macros)"""
     try:
@@ -63,10 +58,10 @@ COLOR_ACCENT = "#3A7EBF"
 COLOR_SUCCESS = "#2EA043"
 COLOR_TEXT = "#E0E0E0"
 
+
 def setup_theme():
-    if ctk is not None:
-        ctk.set_appearance_mode("Dark")
-        ctk.set_default_color_theme("dark-blue")
+    """Legacy Tk — la app Qt usa interface.qt.theme.apply_theme."""
+    pass
 
 # =========================================================
 # --- INTEGRACIÓN FREECAD (DXF -> STEP) ---
