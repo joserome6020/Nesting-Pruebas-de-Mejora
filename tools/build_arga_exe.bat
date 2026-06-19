@@ -13,13 +13,14 @@ if not exist ".venv\Scripts\python.exe" (
     )
 )
 
-echo [INFO] Instalando dependencias y compilando EXE...
+echo [INFO] Instalando dependencias y compilando EXE (MSVC se instala solo si falta)...
 ".venv\Scripts\python.exe" tools\build_arga_exe.py %*
 set "RC=%ERRORLEVEL%"
 if %RC% neq 0 (
     echo.
-    echo [ERROR] Build fallo. Si falta MSVC prueba:
-    echo   .venv\Scripts\python.exe tools\build_arga_exe.py --install-msvc
+    echo [ERROR] Build fallo. Revisa el log arriba.
+    echo Si winget no pudo instalar MSVC, instala manualmente:
+    echo   https://visualstudio.microsoft.com/visual-cpp-build-tools/
     pause
     exit /b %RC%
 )

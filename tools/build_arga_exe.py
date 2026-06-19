@@ -137,6 +137,43 @@ def _run(cmd, cwd=None):
     subprocess.check_call(cmd, cwd=str(cwd or ROOT))
 
 
+def _find_vswhere() -> Path | None:
+    for base in (
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+    ):
+        candidate = Path(base) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _msvc_available() -> bool:
+    if shutil.which("cl"):
+        return True
+    vswhere = _find_vswhere()
+    if not vswhere:
+        return False
+    try:
+        out = subprocess.check_output(
+            [
+                str(vswhere),
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property",
+                "installationPath",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        return bool(out)
+    except Exception:
+        return False
+
+
 def _release_dist_exe(exe_path: Path) -> bool:
     """
     Libera la ruta destino del .exe para que PyInstaller pueda sobrescribirla.
@@ -287,9 +324,11 @@ def ensure_cpp_engine(
     try:
         _run(ps_cmd, cwd=ROOT)
     except subprocess.CalledProcessError as exc:
-        hint = (
-            " Instala Visual Studio 2022 Build Tools (C++) o reintenta con --install-msvc."
-        )
+        hint = ""
+        if not install_msvc:
+            hint = (
+                " Reintenta con --install-msvc o instala Visual Studio 2022 Build Tools (C++)."
+            )
         raise RuntimeError(
             f"Falló la compilación del motor C++ (algorithm_cpp.pyd).{hint}"
         ) from exc
@@ -667,8 +706,9 @@ def main():
     )
     parser.add_argument(
         "--install-msvc",
-        action="store_true",
-        help="Si falta MSVC, intenta instalar Visual Studio 2022 Build Tools vía winget.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Si falta MSVC, instala Visual Studio 2022 Build Tools vía winget (por defecto: sí).",
     )
     parser.add_argument(
         "--allow-no-cpp",
@@ -719,11 +759,25 @@ def main():
     if not args.skip_deps:
         ensure_build_dependencies()
 
+    needs_cpp = not args.skip_cpp and (args.force_cpp or not CPP_ENGINE_PYD.exists())
+    install_msvc = args.install_msvc
+    if needs_cpp and not _msvc_available():
+        if install_msvc:
+            print(
+                "[INFO] No se detectó compilador C++ (MSVC). "
+                "Se instalarán Visual Studio 2022 Build Tools automáticamente..."
+            )
+        else:
+            raise RuntimeError(
+                "No hay compilador C++ (MSVC) y --no-install-msvc está activo. "
+                "Instala Build Tools manualmente o quita --no-install-msvc."
+            )
+
     cpp_pyd = ensure_cpp_engine(
         skip=args.skip_cpp,
         allow_missing=args.allow_no_cpp,
         force_cpp=args.force_cpp,
-        install_msvc=args.install_msvc,
+        install_msvc=install_msvc,
     )
 
     if not args.skip_smoke:

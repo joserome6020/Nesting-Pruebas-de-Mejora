@@ -14,6 +14,25 @@ function Invoke-Python {
     if ($LASTEXITCODE -ne 0) { throw "Python falló: $PythonArgs" }
 }
 
+function Resolve-PythonExePath {
+    if ($PythonExe) {
+        return (Resolve-Path -LiteralPath $PythonExe).Path
+    }
+    $out = & py -3.14 -c "import sys; print(sys.executable)"
+    if ($LASTEXITCODE -ne 0) { throw "No se pudo resolver Python con py -3.14" }
+    return ($out | Select-Object -Last 1).ToString().Trim()
+}
+
+function Resolve-CmakeExe {
+    param([string]$PyExePath)
+    $pyScripts = Join-Path (Split-Path -Parent $PyExePath) "Scripts"
+    $cmake = Join-Path $pyScripts "cmake.exe"
+    if (Test-Path $cmake) { return $cmake }
+    $cmd = Get-Command cmake -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-Path $cmd.Source)) { return $cmd.Source }
+    throw "cmake no encontrado. Ejecuta: python -m pip install cmake"
+}
+
 function Find-VsWherePath {
     $candidates = @(
         "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe",
@@ -85,12 +104,23 @@ Descarga: https://visualstudio.microsoft.com/visual-cpp-build-tools/
 "@
     }
 
-    Write-Host "[INFO] Instalando Visual Studio 2022 Build Tools (puede tardar 10-20 min)..." -ForegroundColor Yellow
+    $installed = & winget list --id Microsoft.VisualStudio.2022.BuildTools -e 2>$null
+    if ($LASTEXITCODE -eq 0 -and $installed -match "BuildTools") {
+        Write-Host "[INFO] Visual Studio 2022 Build Tools ya instalado; verificando componente C++..." -ForegroundColor Cyan
+        if (Get-VisualStudioInstall) { return }
+    }
+
+    Write-Host "[INFO] Instalando Visual Studio 2022 Build Tools (10-20 min, requiere internet)..." -ForegroundColor Yellow
     & winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
         --accept-package-agreements --accept-source-agreements `
         --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
     if ($LASTEXITCODE -ne 0) {
         throw "winget falló instalando Build Tools (código $LASTEXITCODE)."
+    }
+
+    Start-Sleep -Seconds 3
+    if (-not (Get-VisualStudioInstall)) {
+        throw "Build Tools instalado pero no se detectó el componente C++. Reinicia la PC y vuelve a ejecutar el build."
     }
 }
 
@@ -144,15 +174,8 @@ Write-Host "Directorio: $Root"
 
 Invoke-Python @("-m", "pip", "install", "--upgrade", "pip", "pybind11", "cmake")
 
-$pyExePath = (Invoke-Python @("-c", "import sys; print(sys.executable)")).Trim()
-$pyScripts = Join-Path (Split-Path -Parent $pyExePath) "Scripts"
-$cmakeExe = Join-Path $pyScripts "cmake.exe"
-if (-not (Test-Path $cmakeExe)) {
-    $cmakeExe = (Get-Command cmake -ErrorAction SilentlyContinue).Source
-}
-if (-not $cmakeExe -or -not (Test-Path $cmakeExe)) {
-    throw "cmake no encontrado. Ejecuta: python -m pip install cmake"
-}
+$pyExePath = Resolve-PythonExePath
+$cmakeExe = Resolve-CmakeExe -PyExePath $pyExePath
 
 $clipperDir = Join-Path $CppDir "third_party\Clipper2"
 if (-not (Test-Path $clipperDir)) {
@@ -169,7 +192,7 @@ New-Item -ItemType Directory -Path $BuildDir | Out-Null
 
 Push-Location $BuildDir
 try {
-    $pyExe = (Invoke-Python @("-c", "import sys; print(sys.executable)")).Trim()
+    $pyExe = $pyExePath
     if (-not $pyExe) { throw "No se pudo resolver el ejecutable de Python." }
 
     $configKind = Invoke-CmakeConfigure -CmakeExe $cmakeExe -PyExe $pyExe -SourceDir ".."
