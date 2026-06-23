@@ -14,6 +14,8 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 echo [INFO] Instalando dependencias y compilando EXE (MSVC se instala solo si falta)...
+echo [INFO] La primera vez puede tardar 10-30 min si instala Build Tools C++.
+echo [INFO] Si winget/setup fallan, ejecuta este .bat como Administrador.
 ".venv\Scripts\python.exe" tools\build_arga_exe.py %*
 set "RC=%ERRORLEVEL%"
 if %RC% neq 0 (

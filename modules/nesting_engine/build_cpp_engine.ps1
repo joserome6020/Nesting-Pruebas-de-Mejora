@@ -131,6 +131,54 @@ function Get-VsSetupExe {
     return $null
 }
 
+function Test-VsVcToolchainAtPath {
+    param([string]$InstallPath)
+    if (-not $InstallPath) { return $false }
+    return Test-Path -LiteralPath (Join-Path $InstallPath "VC\Auxiliary\Build\vcvars64.bat")
+}
+
+function Get-VsBuildToolsInstallPath {
+    $defaultPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
+    if (Test-VsVcToolchainAtPath $defaultPath) {
+        return $defaultPath
+    }
+
+    $vswhere = Find-VsWherePath
+    if (-not $vswhere) { return $null }
+    try {
+        $raw = & $vswhere -latest -products * -format json 2>$null
+        if (-not $raw) { return $null }
+        foreach ($inst in @((ConvertFrom-Json $raw))) {
+            $path = [string]$inst.installationPath
+            if (-not $path) { continue }
+            if (Test-VsVcToolchainAtPath $path) {
+                return $path
+            }
+        }
+    } catch { }
+    return $null
+}
+
+function Get-VsBuildToolsTargetPath {
+    $defaultPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
+    if (Test-Path -LiteralPath (Join-Path $defaultPath "Common7")) {
+        return $defaultPath
+    }
+    return $defaultPath
+}
+
+function Test-VsInstallerRunning {
+    return [bool](
+        Get-Process -Name "setup", "vs_BuildTools", "vs_installer", "vs_installershell" -ErrorAction SilentlyContinue
+    )
+}
+
+function Test-VcInstallExitOk {
+    param([int]$ExitCode)
+    # 0=ok, 3010=reboot pendiente, 1641=reboot iniciado
+    return ($ExitCode -eq 0 -or $ExitCode -eq 3010 -or $ExitCode -eq 1641)
+}
+
 function Get-VsBuildToolsBootstrapper {
     $cached = Join-Path $env:TEMP "vs_BuildTools_arga.exe"
     if (Test-Path -LiteralPath $cached) { return $cached }
@@ -140,14 +188,29 @@ function Get-VsBuildToolsBootstrapper {
     return $cached
 }
 
+function Invoke-BootstrapperWorkload {
+    $bootstrapper = Get-VsBuildToolsBootstrapper
+    Write-Host "[INFO] Instalando workload C++ con vs_BuildTools.exe (puede tardar 10-30 min)..." -ForegroundColor Yellow
+    $proc = Start-Process -FilePath $bootstrapper -ArgumentList @(
+        "--wait", "--passive", "--norestart",
+        "--add", "Microsoft.VisualStudio.Workload.VCTools",
+        "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
+        "--includeRecommended"
+    ) -Wait -PassThru
+    return [int]$proc.ExitCode
+}
+
 function Invoke-VcWorkloadInstall {
-    $installPath = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools"
-    $setup = Get-VsSetupExe
-    $args = @(
-        "install",
-        "--installPath", $installPath,
-        "--productId", "Microsoft.VisualStudio.Product.BuildTools",
-        "--channelId", "VisualStudio.17.Release",
+    param(
+        [ValidateSet("auto", "install", "modify")]
+        [string]$Mode = "auto"
+    )
+
+    $installPath = Get-VsBuildToolsTargetPath
+    $toolchainReady = [bool](Get-VsBuildToolsInstallPath)
+
+    $workloadArgs = @(
         "--add", "Microsoft.VisualStudio.Workload.VCTools",
         "--add", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
         "--add", "Microsoft.VisualStudio.Component.Windows11SDK.22621",
@@ -155,43 +218,109 @@ function Invoke-VcWorkloadInstall {
         "--passive", "--norestart", "--wait"
     )
 
-    if ($setup) {
-        Write-Host "[INFO] Instalando workload C++ con setup.exe (puede tardar 10-30 min)..." -ForegroundColor Yellow
-        & $setup @args
-        return $LASTEXITCODE
+    if ($Mode -eq "auto") {
+        $Mode = if ($toolchainReady) { "modify" } else { "install" }
     }
 
-    $bootstrapper = Get-VsBuildToolsBootstrapper
-    Write-Host "[INFO] Instalando workload C++ con vs_BuildTools.exe (puede tardar 10-30 min)..." -ForegroundColor Yellow
-    & $bootstrapper --wait --passive --norestart `
-        --add Microsoft.VisualStudio.Workload.VCTools `
-        --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-        --add Microsoft.VisualStudio.Component.Windows11SDK.22621 `
-        --includeRecommended
-    return $LASTEXITCODE
+    $setup = Get-VsSetupExe
+    if ($setup) {
+        function Invoke-SetupWorkload {
+            param([string]$SetupMode)
+            if ($SetupMode -eq "modify") {
+                Write-Host "[INFO] Agregando workload C++ con setup.exe modify (puede tardar 10-30 min)..." -ForegroundColor Yellow
+                $setupArgs = @("modify", "--installPath", $installPath) + $workloadArgs
+            } else {
+                Write-Host "[INFO] Instalando Build Tools + workload C++ con setup.exe install (puede tardar 10-30 min)..." -ForegroundColor Yellow
+                $setupArgs = @(
+                    "install",
+                    "--installPath", $installPath,
+                    "--productId", "Microsoft.VisualStudio.Product.BuildTools",
+                    "--channelId", "VisualStudio.17.Release"
+                ) + $workloadArgs
+            }
+            $proc = Start-Process -FilePath $setup -ArgumentList $setupArgs -Wait -PassThru
+            return [int]$proc.ExitCode
+        }
+
+        $exitCode = Invoke-SetupWorkload -SetupMode $Mode
+        if ($exitCode -eq 87 -and $Mode -eq "modify") {
+            Write-Host "[WARN] setup.exe modify retorno 87; reintentando con install..." -ForegroundColor Yellow
+            $exitCode = Invoke-SetupWorkload -SetupMode "install"
+        }
+        if ($exitCode -eq 87) {
+            Write-Host "[WARN] setup.exe retorno 87; usando vs_BuildTools.exe..." -ForegroundColor Yellow
+            $exitCode = Invoke-BootstrapperWorkload
+        }
+        return $exitCode
+    }
+
+    return Invoke-BootstrapperWorkload
 }
 
 function Wait-ForVcToolchain {
-    param([int]$TimeoutMinutes = 45)
+    param(
+        [int]$TimeoutMinutes = 45,
+        [int]$IdleFailMinutes = 20
+    )
     $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $idleSince = $null
     $dots = 0
     while ((Get-Date) -lt $deadline) {
         $toolchain = Find-VcToolchain
         if ($toolchain) { return $toolchain }
 
-        $installerRunning = Get-Process -Name "setup","vs_BuildTools","vs_installer","vs_installershell" -ErrorAction SilentlyContinue
+        $installerRunning = Test-VsInstallerRunning
         $dots = ($dots + 1) % 4
         $suffix = "." * $dots
         if ($installerRunning) {
+            $idleSince = $null
             Write-Host "[INFO] Instalador de Visual Studio en ejecucion$($suffix.PadRight(3))" -ForegroundColor DarkYellow
             Start-Sleep -Seconds 20
             continue
+        }
+
+        if (-not $idleSince) { $idleSince = Get-Date }
+        $idleMinutes = ((Get-Date) - $idleSince).TotalMinutes
+        if ($idleMinutes -ge $IdleFailMinutes) {
+            Write-Host "[ERROR] Sin instalador activo y MSVC no detectado tras $IdleFailMinutes min." -ForegroundColor Red
+            return $null
         }
 
         Write-Host "[INFO] Esperando componentes MSVC$($suffix.PadRight(3))" -ForegroundColor DarkYellow
         Start-Sleep -Seconds 10
     }
     return $null
+}
+
+function Throw-VcInstallFailed {
+    param([int]$ExitCode)
+    if ($ExitCode -eq 87) {
+        throw @"
+setup.exe rechazo los parametros de instalacion (codigo 87).
+
+Prueba:
+  1) Abre 'Visual Studio Installer' -> Instalar/Modificar Build Tools 2022 -> 'Desarrollo para el escritorio con C++'
+  2) Ejecuta PowerShell como administrador y corre: python tools\build_arga_exe.py
+"@
+    }
+    if ($ExitCode -eq 740) {
+        throw @"
+La instalacion de MSVC requiere permisos de administrador (codigo 740).
+
+Ejecuta PowerShell como administrador y corre:
+  python tools\build_arga_exe.py
+
+O abre 'Visual Studio Installer' y agrega 'Desarrollo para el escritorio con C++'.
+"@
+    }
+    throw @"
+No se pudo instalar el workload C++ de Visual Studio (codigo $ExitCode).
+
+Prueba:
+  1) Abre 'Visual Studio Installer' -> Modificar Build Tools 2022 -> 'Desarrollo para el escritorio con C++'
+  2) Ejecuta PowerShell como administrador y corre: python tools\build_arga_exe.py
+  3) Reinicia la PC si el instalador lo solicita
+"@
 }
 
 function Install-MsvcBuildTools {
@@ -210,20 +339,33 @@ No hay MSVC ni instalador de Visual Studio. Instala manualmente:
     }
 
     # winget a veces solo registra el paquete sin instalar el workload C++.
-    # Siempre ejecutamos el instalador real con los componentes necesarios.
-    if (Test-CommandInPath "winget") {
+    # Si no hay shell de Build Tools, lo registramos; el workload lo agrega setup.exe.
+    if ((Test-CommandInPath "winget") -and -not (Test-VsVcToolchainAtPath (Get-VsBuildToolsTargetPath))) {
         Write-Host "[INFO] Registrando Visual Studio Build Tools con winget..." -ForegroundColor Cyan
         & winget install --id Microsoft.VisualStudio.2022.BuildTools -e `
             --accept-package-agreements --accept-source-agreements `
             --disable-interactivity 2>$null | Out-Null
     }
 
-    $exitCode = Invoke-VcWorkloadInstall
-    if ($exitCode -ne 0 -and $exitCode -ne 3010) {
-        Write-Host "[WARN] Instalador retorno codigo $exitCode (3010=reboot pendiente, se continua)." -ForegroundColor Yellow
+    $exitCode = Invoke-VcWorkloadInstall -Mode auto
+    if (-not (Test-VcInstallExitOk $exitCode)) {
+        if ((Test-VsVcToolchainAtPath (Get-VsBuildToolsTargetPath)) -and $exitCode -ne 0) {
+            Write-Host "[WARN] setup.exe retorno $exitCode; reintentando con modify..." -ForegroundColor Yellow
+            $exitCode = Invoke-VcWorkloadInstall -Mode modify
+        }
     }
 
-    $toolchain = Wait-ForVcToolchain -TimeoutMinutes 45
+    if (Test-VcInstallExitOk $exitCode) {
+        if ($exitCode -eq 3010 -or $exitCode -eq 1641) {
+            Write-Host "[WARN] Instalador solicita reinicio (codigo $exitCode); se esperara MSVC..." -ForegroundColor Yellow
+        }
+    } elseif (-not (Test-VsInstallerRunning)) {
+        Throw-VcInstallFailed -ExitCode $exitCode
+    } else {
+        Write-Host "[WARN] Instalador retorno codigo $exitCode; se esperara a que termine..." -ForegroundColor Yellow
+    }
+
+    $toolchain = Wait-ForVcToolchain -TimeoutMinutes 45 -IdleFailMinutes 20
     if (-not $toolchain) {
         throw @"
 No se detecto el compilador C++ tras instalar Build Tools.

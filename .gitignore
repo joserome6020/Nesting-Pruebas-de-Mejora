@@ -12,6 +12,11 @@ modules/nesting_engine/build/
 modules/nesting_engine/cpp/third_party/
 modules/nesting_engine/algorithm_cpp*.pyd
 
+# PyInstaller / artefactos de build local
+build/
+dist/
+*.spec
+
 # Archivos pesados o temporales
 *.rar
 *.zip

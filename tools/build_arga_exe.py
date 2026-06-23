@@ -19,6 +19,7 @@ SPLASH_JPEG = ROOT / "grupo_arga_cover.jpeg"
 MACRO = ROOT / "generador_verde.FCMacro"
 CPP_ENGINE_PS1 = ROOT / "modules" / "nesting_engine" / "build_cpp_engine.ps1"
 CPP_ENGINE_PYD = ROOT / "modules" / "nesting_engine" / "algorithm_cpp.pyd"
+CPP_ENGINE_CPP_DIR = ROOT / "modules" / "nesting_engine" / "cpp"
 
 # Módulos que PyInstaller no siempre detecta (imports dinámicos / rutas legacy).
 HIDDEN_IMPORTS = (
@@ -268,6 +269,48 @@ def _ensure_build_import_path():
             sys.path.insert(0, str(p))
 
 
+def _cpp_engine_usable() -> bool:
+    """True si algorithm_cpp.pyd existe y carga con el Python del build."""
+    if not CPP_ENGINE_PYD.is_file():
+        return False
+    _ensure_build_import_path()
+    try:
+        from modules.nesting_engine.algorithm_bridge import engine_name
+
+        engine_name()
+        return True
+    except Exception:
+        return False
+
+
+def _cpp_sources_newer_than_pyd() -> bool:
+    """True si cambió código C++/CMake desde la última compilación local."""
+    if not CPP_ENGINE_PYD.is_file():
+        return True
+    pyd_mtime = CPP_ENGINE_PYD.stat().st_mtime
+    for pattern in ("*.cpp", "*.hpp", "*.h", "CMakeLists.txt"):
+        for path in CPP_ENGINE_CPP_DIR.rglob(pattern):
+            if path.is_file() and path.stat().st_mtime > pyd_mtime:
+                return True
+    return False
+
+
+def _needs_cpp_rebuild(*, force_cpp: bool, skip_cpp: bool) -> bool:
+    if skip_cpp:
+        return False
+    if force_cpp:
+        return True
+    if not CPP_ENGINE_PYD.is_file():
+        return True
+    if not _cpp_engine_usable():
+        print("[INFO] algorithm_cpp.pyd no carga con este Python; se recompilará.")
+        return True
+    if _cpp_sources_newer_than_pyd():
+        print("[INFO] Fuentes C++ más recientes que algorithm_cpp.pyd; se recompilará.")
+        return True
+    return False
+
+
 def validate_suite_manifest():
     """Falla temprano si faltan piezas del ARGA NESTING SUITE actual."""
     missing = [str(p.relative_to(ROOT)) for p in CRITICAL_SUITE_FILES if not p.exists()]
@@ -290,7 +333,9 @@ def smoke_test_imports():
 
         print(f"[OK] motor nesting: {engine_name()}")
     except Exception as exc:
-        print(f"[WARN] motor C++ no disponible en smoke test: {exc}")
+        raise RuntimeError(
+            "El motor C++ no está disponible. Compila algorithm_cpp.pyd antes de empaquetar."
+        ) from exc
 
 
 def ensure_cpp_engine(
@@ -300,7 +345,12 @@ def ensure_cpp_engine(
     install_msvc: bool = False,
 ) -> Path | None:
     """Compila algorithm_cpp.pyd si hace falta (requerido para nesting en el EXE)."""
-    if CPP_ENGINE_PYD.exists() and (skip or not force_cpp):
+    if (
+        CPP_ENGINE_PYD.exists()
+        and _cpp_engine_usable()
+        and not _cpp_sources_newer_than_pyd()
+        and (skip or not force_cpp)
+    ):
         note = " (--force-cpp para recompilar)" if not skip else ""
         print(f"[OK] Motor C++ existente{note}: {CPP_ENGINE_PYD}")
         return CPP_ENGINE_PYD
@@ -347,6 +397,11 @@ def ensure_cpp_engine(
         raise FileNotFoundError(
             f"No se generó {CPP_ENGINE_PYD} tras build_cpp_engine.ps1"
         )
+    if not _cpp_engine_usable():
+        raise RuntimeError(
+            f"{CPP_ENGINE_PYD.name} se generó pero no carga con {sys.executable}. "
+            "Revisa MSVC/Python y reintenta con --force-cpp."
+        )
     print(f"[OK] Motor C++ listo: {CPP_ENGINE_PYD}")
     return CPP_ENGINE_PYD
 
@@ -382,6 +437,24 @@ def _pyinstaller_binary_args(cpp_pyd: Path | None) -> list[str]:
     if cpp_pyd is None or not cpp_pyd.exists():
         return []
     return ["--add-binary", f"{cpp_pyd};modules/nesting_engine"]
+
+
+def verify_build_artifacts(exe_path: Path, cpp_pyd: Path | None):
+    """Falla si el paquete dist/ no refleja el proyecto actual."""
+    if not exe_path.is_file():
+        raise FileNotFoundError(f"No se generó el ejecutable: {exe_path}")
+    if cpp_pyd is None or not cpp_pyd.is_file():
+        raise RuntimeError("Build incompleto: falta algorithm_cpp.pyd en el motor de nesting.")
+    dist_plates = exe_path.parent / "modules" / "Plates.xlsx"
+    repo_plates = ROOT / "modules" / "Plates.xlsx"
+    if repo_plates.is_file() and not dist_plates.is_file():
+        raise FileNotFoundError(f"Falta inventario en dist: {dist_plates}")
+    manifest = exe_path.parent / "arga_build_manifest.json"
+    if manifest.is_file():
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if not data.get("cpp_engine"):
+            raise RuntimeError("Manifiesto de build sin motor C++ empaquetado.")
+    print(f"[OK] Artefactos verificados: {exe_path.name} + motor C++ + sidecars.")
 
 
 def build_exe(name: str, onefile: bool = True, cpp_pyd: Path | None = None):
@@ -769,7 +842,7 @@ def main():
     if not args.skip_deps:
         ensure_build_dependencies()
 
-    needs_cpp = not args.skip_cpp and (args.force_cpp or not CPP_ENGINE_PYD.exists())
+    needs_cpp = _needs_cpp_rebuild(force_cpp=args.force_cpp, skip_cpp=args.skip_cpp)
     install_msvc = args.install_msvc
     if needs_cpp and not _msvc_available():
         if install_msvc:
@@ -789,6 +862,11 @@ def main():
         force_cpp=args.force_cpp,
         install_msvc=install_msvc,
     )
+    if cpp_pyd is None and not args.allow_no_cpp:
+        raise RuntimeError(
+            "No se puede empaquetar sin algorithm_cpp.pyd. "
+            "Quita --allow-no-cpp o compila el motor C++."
+        )
 
     if not args.skip_smoke:
         smoke_test_imports()
@@ -798,6 +876,7 @@ def main():
     align_plates_inventory_after_build(exe_path)
     seed_persistent_sidecars(exe_path)
     write_build_manifest(exe_path, cpp_pyd)
+    verify_build_artifacts(exe_path, cpp_pyd)
     print_deploy_checklist(exe_path)
     if args.associate_arganest:
         associate_extensions(exe_path)
