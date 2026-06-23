@@ -340,6 +340,41 @@ def _wrap_item_lines(
     return lines if lines else [s]
 
 
+def _wrap_proceso_lines(
+    c,
+    txt: str,
+    max_width: float,
+    font: str,
+    size: float,
+    max_lines: int = 2,
+) -> list[str]:
+    """Parte texto de proceso (p. ej. CORTE/MAQ, CORTAR EN 3\"X3\")."""
+    s = str(txt or "").strip()
+    if not s:
+        return [""]
+    if _text_w(c, s, font, size) <= max_width:
+        return [s]
+    if ", " in s:
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        lines: list[str] = []
+        cur = ""
+        for part in parts:
+            test = f"{cur}, {part}".lstrip(", ").strip() if cur else part
+            if _text_w(c, test, font, size) <= max_width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = part
+                if len(lines) >= max_lines:
+                    break
+        if cur and len(lines) < max_lines:
+            lines.append(cur)
+        if lines:
+            return lines
+    return _wrap_item_lines(c, s, max_width, font, size, max_lines=max_lines)
+
+
 def _item_text_block_height(n_lines: int, size: float) -> float:
     """Altura visual del bloque de texto (puntos) para n líneas de ítem."""
     n = max(1, n_lines)
@@ -746,9 +781,19 @@ def generar_pdf_nesteo_largos_piso(snapshot: dict, ruta_pdf: str | None = None) 
                 data_font_size,
                 max_lines=4,
             )
+            proceso_inner_w = max(8.0, col_widths[5] - 2 * CELL_PAD_X)
+            proceso_lines = _wrap_proceso_lines(
+                c,
+                str(row.get("proceso") or ""),
+                proceso_inner_w,
+                FONT_REG,
+                data_font_size,
+                max_lines=2,
+            )
             row_h = max(
                 ROW_H_DATA,
                 _item_text_block_height(len(item_lines), data_font_size) + 2 * CELL_PAD_Y,
+                _item_text_block_height(len(proceso_lines), data_font_size) + 2 * CELL_PAD_Y,
             )
 
             if y < margin + row_h + 0.35 * inch:
@@ -782,6 +827,12 @@ def generar_pdf_nesteo_largos_piso(snapshot: dict, ruta_pdf: str | None = None) 
                 if i == 0:
                     _draw_cell_text_wrapped(
                         c, item_lines, col_xs[i], col_widths[i], row_top, row_bot,
+                        size=data_font_size,
+                        align="C",
+                    )
+                elif i == 5:
+                    _draw_cell_text_wrapped(
+                        c, proceso_lines, col_xs[i], col_widths[i], row_top, row_bot,
                         size=data_font_size,
                         align="C",
                     )

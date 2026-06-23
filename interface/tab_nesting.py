@@ -1799,16 +1799,51 @@ class TabNesting(ctk.CTkFrame):
         except Exception:
             return None
 
+    def _nombre_canonico_pieza(self, nom):
+        s = str(nom or "").strip()
+        if not s:
+            return ""
+        if "," in s:
+            return s.split(",", 1)[0].strip()
+        return s
+
+    def _datos_partes_activos_para_nesting(self):
+        datos = getattr(self.app, "datos_partes_actuales", []) or []
+        return list(datos)
+
     def _contar_piezas_reales_grupo(self, clave):
         grp = (self.app.resultados_nesting or {}).get(clave) or {}
         hojas = grp.get("hojas") or []
         conteo = {}
         for hoja in hojas:
             for p in (hoja.get("piezas") or []):
-                nom = str(p.get("nombre", "")).strip()
+                nom = self._nombre_canonico_pieza(p.get("nombre", ""))
                 if not nom or self._es_pieza_virtual(nom):
                     continue
                 conteo[nom] = conteo.get(nom, 0) + 1
+        return conteo
+
+    def _conteo_piezas_job_grupo(self, clave):
+        try:
+            calibre_hoja, material_hoja = (str(clave).split("_", 1) + [""])[:2]
+        except Exception:
+            calibre_hoja, material_hoja = str(clave), ""
+        conteo = {}
+        for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
+            nom = self._nombre_canonico_pieza(p_nom)
+            if not nom:
+                continue
+            if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                continue
+            if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                continue
+            try:
+                q = max(0, int(qty or 0))
+            except Exception:
+                q = 0
+            if q <= 0:
+                continue
+            conteo[nom] = conteo.get(nom, 0) + q
         return conteo
 
     def _construir_fuente_geometria_por_nombre(self, clave):
@@ -2177,7 +2212,9 @@ class TabNesting(ctk.CTkFrame):
         )
 
     def _build_piezas_para_renest_calibre(self, clave):
-        conteo_total = self._contar_piezas_reales_grupo(clave)
+        conteo_job = self._conteo_piezas_job_grupo(clave)
+        conteo_nido = self._contar_piezas_reales_grupo(clave)
+        conteo_total = conteo_job if conteo_job else conteo_nido
         if not conteo_total:
             return []
         fuente = self._construir_fuente_geometria_por_nombre(clave)
@@ -2185,7 +2222,7 @@ class TabNesting(ctk.CTkFrame):
             return []
         piezas_out = []
         for nom, total in conteo_total.items():
-            src = fuente.get(nom)
+            src = fuente.get(nom) or fuente.get(self._nombre_canonico_pieza(nom))
             if not src:
                 continue
             for _ in range(int(total)):

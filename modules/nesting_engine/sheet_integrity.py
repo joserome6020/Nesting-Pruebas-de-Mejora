@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 from collections import Counter, deque
+from typing import List, Tuple
 
 DEFAULT_KERF_IN = 0.3
 
@@ -34,7 +35,7 @@ def _es_pieza_real_nombre(nombre: str) -> bool:
 
 
 def _es_grupo_cu(clave: str = "", hoja=None) -> bool:
-    if isinstance(hoja, dict) and (hoja.get("modo_largos_cu") or hoja.get("ignorar_deduccion_cu")):
+    if isinstance(hoja, dict) and hoja.get("modo_largos_cu"):
         return True
     clv = str(clave or "").strip().upper()
     return clv.endswith("_CU") or "| CU" in clv or clv.endswith("|CU")
@@ -266,7 +267,14 @@ def deduplicar_hojas_grupo(hojas):
     """
     Elimina placas madre con el mismo stock y layout (piezas repetidas por error de restos).
     Conserva el bloque con más piezas reales; ante empate, mayor eficiencia directa.
+
+    No aplica a barras largo CU (1D): varias hojas comparten placa_id pero son cortes distintos.
     """
+    hojas = list(hojas or [])
+    madres = [h for h in hojas if isinstance(h, dict) and not h.get("es_retazo")]
+    if madres and all(h.get("modo_largos_cu") for h in madres):
+        return hojas
+
     bloques = _bloques_madre_rtz(hojas)
     if not bloques:
         return list(hojas or [])
@@ -338,6 +346,41 @@ def deduplicar_hojas_grupo(hojas):
     return out
 
 
+def validar_colocacion_completa(
+    piezas_origen: list,
+    hojas: list,
+    piezas_pendientes: list | None = None,
+) -> Tuple[bool, str]:
+    """True si todas las piezas del pack quedaron colocadas en las hojas."""
+    esperado = Counter(
+        str(p.get("nombre") or "").strip()
+        for p in (piezas_origen or [])
+        if str(p.get("nombre") or "").strip()
+    )
+    colocado = Counter()
+    for hoja in hojas or []:
+        for p in piezas_reales_en_hoja(hoja):
+            nom = str(p.get("nombre") or "").strip()
+            if nom:
+                colocado[nom] += 1
+
+    if esperado == colocado:
+        return True, ""
+
+    faltan = sum(max(0, esperado[n] - colocado.get(n, 0)) for n in esperado)
+    sobran = sum(max(0, colocado[n] - esperado.get(n, 0)) for n in colocado)
+    pend = list(piezas_pendientes or [])
+    det = ""
+    if pend:
+        det = " Piezas sin colocar: " + ", ".join(str(x) for x in pend[:10])
+        if len(pend) > 10:
+            det += f" (+{len(pend) - 10} más)"
+    return (
+        False,
+        f"Inventario incompleto: faltan {faltan} colocación(es), sobran {sobran}.{det}",
+    )
+
+
 def sanitizar_hojas_grupo(piezas_origen, hojas, clave: str = "", kerf_global: float = DEFAULT_KERF_IN):
     hojas = reconciliar_hojas_grupo(piezas_origen, hojas)
     hojas = deduplicar_hojas_grupo(hojas)
@@ -359,7 +402,25 @@ def deduplicar_resultados_nesting(resultados, kerf_global: float = DEFAULT_KERF_
             grupo["hojas"] = sanitizar_hojas_grupo(
                 pool, hojas, clave=str(clave), kerf_global=kerf_global
             )
+            ok_inv, msg_inv = validar_colocacion_completa(
+                pool,
+                grupo["hojas"],
+                piezas_pendientes=grupo.get("piezas_pendientes"),
+            )
+            if not ok_inv:
+                grupo["error"] = msg_inv
+                grupo.pop("hojas", None)
         else:
-            grupo["hojas"] = deduplicar_hojas_grupo(hojas)
+            hojas_largos = [
+                h for h in hojas if isinstance(h, dict) and h.get("modo_largos_cu")
+            ]
+            hojas_otras = [
+                h for h in hojas if isinstance(h, dict) and not h.get("modo_largos_cu")
+            ]
+            if hojas_largos and hojas_otras:
+                # Mixto placa+largos: dedup solo en 2D; barras 1D se conservan todas.
+                grupo["hojas"] = deduplicar_hojas_grupo(hojas_otras) + hojas_largos
+            else:
+                grupo["hojas"] = deduplicar_hojas_grupo(hojas)
             normalizar_kerf_hojas(grupo["hojas"], clave=str(clave), kerf_global=kerf_global)
         asegurar_identidad_hojas(grupo["hojas"], clave=str(clave))

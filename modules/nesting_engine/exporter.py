@@ -566,19 +566,25 @@ def exportar_resultados_a_dxf(
                     pols[0],
                     pols[1:] if len(pols) > 1 else [],
                 )
-                # Posición 1:1 con visor: exportar polígonos colocados (mm), no clonar bloque DXF.
-                ruta_export = ""
+                compensada_pieza = bool(
+                    pz.get("plasma_compensada_manual") or compensada_manual
+                )
+                ruta_src = str(pz.get("ruta") or "").strip()
+                use_source_dxf = (
+                    bool(ruta_src)
+                    and os.path.isfile(ruta_src)
+                    and not compensada_pieza
+                    and not es_linea_corte
+                )
 
                 layer_override = pz.get("layer_override")
                 closed_flag = pz.get("closed")
                 if es_cu_hoja and not layer_override:
                     if es_linea_corte:
-                        # Cama láser: solo líneas separadoras (misma capa que nesteo normal).
                         layer_override = "CUT_OUTER"
                         closed_flag = False
                     else:
-                        # Contorno completo para STEP interno (no programación láser).
-                        layer_override = "CUT_CU"
+                        layer_override = "CUT_OUTER"
                         closed_flag = True
 
                 placement = {
@@ -586,12 +592,16 @@ def exportar_resultados_a_dxf(
                     "outer": outer_main,
                     "holes": holes_main,
                     "marks": pz.get("marcas", []),
-                    "ruta": ruta_export,
+                    "ruta": ruta_src if use_source_dxf else "",
+                    "prefer_source_dxf": use_source_dxf,
+                    "compensated": compensada_pieza,
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
                     "shift_x": pz.get("shift_x", 0.0),
                     "shift_y": pz.get("shift_y", 0.0),
                     "rot_deg": pz.get("rot_deg", 0.0),
+                    "rot_origin_cx": pz.get("rot_origin_cx", 0.0),
+                    "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                 }
                 if layer_override:
                     placement["layer_override"] = str(layer_override)
@@ -629,11 +639,16 @@ def exportar_resultados_a_dxf(
                         "holes": plasma_holes,
                         "marks": pz.get("marcas", []),
                         "ruta": "",
+                        "prefer_source_dxf": False,
+                        "compensated": True,
+                        "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
                         "shift_x": pz.get("shift_x", 0.0),
                         "shift_y": pz.get("shift_y", 0.0),
                         "rot_deg": pz.get("rot_deg", 0.0),
+                        "rot_origin_cx": pz.get("rot_origin_cx", 0.0),
+                        "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                     })
 
             sheet_code = hoja.get("sheet_code") or f"{order_label}-H{global_sheet_counter}"

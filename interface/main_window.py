@@ -494,10 +494,30 @@ class SistemaNestingPro(ctk.CTk):
 
         self._logo_x = 8.0
         self._logo_y = 8.0
-        self._logo_dx = 2.4
-        self._logo_dy = 1.8
+        self._logo_vx = 144.0
+        self._logo_vy = 108.0
+        self._logo_last_t = time.perf_counter()
         self._logo_anim_running = True
-        self._animar_logo_arga()
+        self._logo_anim_job = None
+        self._iniciar_hilo_animacion_logo()
+
+    def _iniciar_hilo_animacion_logo(self):
+        def _driver():
+            interval = 1.0 / 60.0
+            next_tick = time.perf_counter()
+            while getattr(self, "_logo_anim_running", False):
+                try:
+                    self.after(0, self._animar_logo_arga)
+                except Exception:
+                    break
+                next_tick += interval
+                delay = next_tick - time.perf_counter()
+                if delay > 0:
+                    time.sleep(delay)
+                else:
+                    next_tick = time.perf_counter()
+
+        threading.Thread(target=_driver, daemon=True).start()
 
     def _animar_logo_arga(self):
         if not self._logo_anim_running:
@@ -505,47 +525,57 @@ class SistemaNestingPro(ctk.CTk):
         if not hasattr(self, "_logo_anim_label") or not self._logo_anim_label.winfo_exists():
             return
 
-        self._logo_box.update_idletasks()
+        now = time.perf_counter()
+        dt = min(max(now - self._logo_last_t, 0.0), 0.25)
+        self._logo_last_t = now
+        if dt <= 0:
+            return
+
+        remaining = dt
+        while remaining > 0:
+            step = min(remaining, 1.0 / 120.0)
+            self._integrar_logo_frame(step)
+            remaining -= step
+
+        self._logo_anim_label.place(x=int(self._logo_x), y=int(self._logo_y))
+
+    def _integrar_logo_frame(self, dt: float) -> None:
         bw = max(1, int(self._logo_box.winfo_width()))
         bh = max(1, int(self._logo_box.winfo_height()))
         lw = max(1, int(self._logo_anim_label.winfo_width()))
         lh = max(1, int(self._logo_anim_label.winfo_height()))
 
-        nx = self._logo_x + self._logo_dx
-        ny = self._logo_y + self._logo_dy
+        nx = self._logo_x + self._logo_vx * dt
+        ny = self._logo_y + self._logo_vy * dt
 
         if nx <= 0:
-            nx = 0
-            self._logo_dx = abs(self._logo_dx)
+            nx = 0.0
+            self._logo_vx = abs(self._logo_vx)
         elif nx + lw >= bw:
-            nx = max(0, bw - lw)
-            self._logo_dx = -abs(self._logo_dx)
+            nx = max(0.0, float(bw - lw))
+            self._logo_vx = -abs(self._logo_vx)
 
         if ny <= 0:
-            ny = 0
-            self._logo_dy = abs(self._logo_dy)
+            ny = 0.0
+            self._logo_vy = abs(self._logo_vy)
         elif ny + lh >= bh:
-            ny = max(0, bh - lh)
-            self._logo_dy = -abs(self._logo_dy)
+            ny = max(0.0, float(bh - lh))
+            self._logo_vy = -abs(self._logo_vy)
 
         self._logo_x = nx
         self._logo_y = ny
-        self._logo_anim_label.place(x=int(nx), y=int(ny))
-        self._logo_anim_job = self.ventana_carga.after(16, self._animar_logo_arga)
 
     def actualizar_progreso(self, mensaje, porcentaje):
+        if getattr(self, "_logo_anim_running", False):
+            return
+
         def _actualizar_gui():
             if hasattr(self, 'barra_carga') and self.barra_carga.winfo_exists():
                 self.barra_carga.set(porcentaje)
-                
             if hasattr(self, 'lbl_porcentaje') and self.lbl_porcentaje.winfo_exists():
                 self.lbl_porcentaje.configure(text=f"{int(porcentaje * 100)}%")
-                
             if hasattr(self, 'lbl_mensaje_carga') and self.lbl_mensaje_carga.winfo_exists():
                 self.lbl_mensaje_carga.configure(text=mensaje)
-                
-            self.update_idletasks()
-            
         self.after(0, _actualizar_gui)
 
     def _on_unmap_popup_carga(self, event):

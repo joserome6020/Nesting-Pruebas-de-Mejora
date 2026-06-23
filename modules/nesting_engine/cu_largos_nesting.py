@@ -21,6 +21,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from shapely.geometry import LineString
 from shapely import affinity
 
+from .cu_inventory import es_placa_largo_cu
 from .efficiency_metrics import calcular_eficiencias_grupo
 
 TOL_ANCHO_IN_MIN = 0.02
@@ -143,9 +144,14 @@ def _colocar_pieza_nativa(
         "area": float(p_data.get("area", poly_final.area) or poly_final.area),
         "calibre": p_data.get("calibre", ""),
         "material": p_data.get("material", "CU"),
+        "ruta": str(p_data.get("ruta") or ""),
+        "orig_minx": float(p_data.get("orig_minx", 0.0) or 0.0),
+        "orig_miny": float(p_data.get("orig_miny", 0.0) or 0.0),
+        "shift_x": float(x_mm),
+        "shift_y": float(y_mm),
         "rot_deg": 0.0,
-        "shift_x": 0.0,
-        "shift_y": 0.0,
+        "rot_origin_cx": float(p_data.get("rot_origin_cx", 0.0) or 0.0),
+        "rot_origin_cy": float(p_data.get("rot_origin_cy", 0.0) or 0.0),
         "corte_superior_mm": float(corte_superior_mm),
         "calibre_superior": bool(calibre_superior),
         "y_corte_superior_mm": y_corte,
@@ -180,6 +186,126 @@ def _bbox_poligono(pts: list) -> Tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _vertices_cerrados(exterior: list) -> list:
+    if not exterior:
+        return []
+    pts = list(exterior)
+    if len(pts) > 1 and pts[0] == pts[-1]:
+        pts = pts[:-1]
+    return pts
+
+
+def _es_arista_horizontal(x1: float, y1: float, x2: float, y2: float, tol: float) -> bool:
+    return abs(y1 - y2) <= tol
+
+
+def _es_arista_vertical(x1: float, y1: float, x2: float, y2: float, tol: float) -> bool:
+    return abs(x1 - x2) <= tol
+
+
+def _tiene_escalon_uperior(exterior: list, tol: float = TOL_GEOM_MM) -> bool:
+    """
+    True si el contorno tiene un escalón/muesca (arista horizontal interior).
+    Piezas laminadas rectas solo tienen techo plano a todo lo ancho.
+    """
+    pts = _vertices_cerrados(exterior)
+    if len(pts) < 3:
+        return False
+    _minx, miny, _maxx, maxy = _bbox_poligono(pts)
+    for i in range(len(pts)):
+        x1, y1 = float(pts[i][0]), float(pts[i][1])
+        x2, y2 = float(pts[(i + 1) % len(pts)][0]), float(pts[(i + 1) % len(pts)][1])
+        if not _es_arista_horizontal(x1, y1, x2, y2, tol):
+            continue
+        y = (y1 + y2) / 2.0
+        if y <= miny + tol or y >= maxy - tol:
+            continue
+        return True
+    return False
+
+
+def _solo_cortes_guillotina_vertical(exterior: list, tol: float = TOL_GEOM_MM) -> bool:
+    """
+    Lámina ortogonal sin escalón: basta guillotina vertical entre piezas.
+    (Aplica aunque el DXF tenga muchos vértices colineales en el bbox.)
+    """
+    pts = _vertices_cerrados(exterior)
+    if len(pts) < 3:
+        return True
+    minx, miny, maxx, maxy = _bbox_poligono(pts)
+    ancho = maxx - minx
+    alto = maxy - miny
+    if ancho <= tol or alto <= tol:
+        return True
+
+    cobertura_techo = 0.0
+    for i in range(len(pts)):
+        x1, y1 = float(pts[i][0]), float(pts[i][1])
+        x2, y2 = float(pts[(i + 1) % len(pts)][0]), float(pts[(i + 1) % len(pts)][1])
+        if not (
+            _es_arista_horizontal(x1, y1, x2, y2, tol)
+            or _es_arista_vertical(x1, y1, x2, y2, tol)
+        ):
+            return False
+        if _es_arista_horizontal(x1, y1, x2, y2, tol) and abs((y1 + y2) / 2.0 - maxy) <= tol:
+            cobertura_techo += abs(x2 - x1)
+
+    if cobertura_techo < ancho - max(tol, ancho * 0.02):
+        return False
+    if _tiene_escalon_uperior(exterior, tol=tol):
+        return False
+    return True
+
+
+def _frontera_basta_guillotina_vertical(
+    exterior: list,
+    frontera_x: float,
+    tol: float = TOL_GEOM_MM,
+) -> bool:
+    """
+    En esta frontera de rebanada no hace falta relieve láser: el contorno
+    presenta un canto vertical continuo (corte vertical entre piezas).
+    """
+    pts = _vertices_cerrados(exterior)
+    if len(pts) < 3:
+        return True
+    minx, miny, maxx, maxy = _bbox_poligono(pts)
+    alto = maxy - miny
+    if alto <= tol:
+        return True
+    if abs(frontera_x - minx) > tol and abs(frontera_x - maxx) > tol:
+        return True
+
+    band = max((maxx - minx) * RELIEF_BAND_FRAC, RELIEF_BAND_MIN_MM)
+    span_vert = 0.0
+
+    for i in range(len(pts)):
+        x1, y1 = float(pts[i][0]), float(pts[i][1])
+        x2, y2 = float(pts[(i + 1) % len(pts)][0]), float(pts[(i + 1) % len(pts)][1])
+        xmin_e = min(x1, x2)
+        xmax_e = max(x1, x2)
+        ymin_e = min(y1, y2)
+        ymax_e = max(y1, y2)
+
+        if xmax_e < frontera_x - band or xmin_e > frontera_x + band:
+            continue
+
+        if _es_arista_vertical(x1, y1, x2, y2, tol) and abs((x1 + x2) / 2.0 - frontera_x) <= tol:
+            span_vert = max(span_vert, ymax_e - ymin_e)
+            continue
+
+        # Escalón local en la frontera (arista horizontal interior o diagonal).
+        if _es_arista_horizontal(x1, y1, x2, y2, tol):
+            y = (y1 + y2) / 2.0
+            if miny + tol < y < maxy - tol:
+                return False
+            continue
+
+        return False
+
+    return span_vert >= alto - max(tol, alto * 0.05)
+
+
 def _segmentos_relieve_en_frontera(
     exterior: list,
     frontera_x: float,
@@ -191,12 +317,14 @@ def _segmentos_relieve_en_frontera(
     """
     if not exterior or len(exterior) < 2:
         return []
+    if _solo_cortes_guillotina_vertical(exterior, tol=tol):
+        return []
+    if _frontera_basta_guillotina_vertical(exterior, frontera_x, tol=tol):
+        return []
     if _es_rectangulo_axis_aligned(exterior, tol=0.5):
         return []
 
-    pts = list(exterior)
-    if pts[0] == pts[-1]:
-        pts = pts[:-1]
+    pts = _vertices_cerrados(exterior)
     n = len(pts)
     if n < 2:
         return []
@@ -220,6 +348,9 @@ def _segmentos_relieve_en_frontera(
         xmax_e = max(x1, x2)
         ymin_e = min(y1, y2)
         ymax_e = max(y1, y2)
+        seg_len = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5
+        if seg_len <= tol:
+            continue
 
         if _es_horizontal(y1, y2, miny):
             continue
@@ -237,7 +368,10 @@ def _segmentos_relieve_en_frontera(
             if abs(centro_x - frontera_x) > band * 0.65:
                 continue
 
-        segmentos.append([(x1, y1), (x2, y2)])
+        if _es_arista_horizontal(x1, y1, x2, y2, tol) or _es_arista_vertical(x1, y1, x2, y2, tol):
+            segmentos.append([(x1, y1), (x2, y2)])
+        elif seg_len > tol * 2:
+            segmentos.append([(x1, y1), (x2, y2)])
 
     return segmentos
 
@@ -256,19 +390,24 @@ def _segmentos_corte_laser_pieza(
     """
     if not exterior:
         return []
-    pts = list(exterior)
-    if pts[0] == pts[-1]:
-        pts = pts[:-1]
+    if _solo_cortes_guillotina_vertical(exterior, tol=tol):
+        return []
+
+    pts = _vertices_cerrados(exterior)
     if len(pts) < 2:
         return []
     minx, _miny, maxx, _maxy = _bbox_poligono(pts)
 
-    izq = _segmentos_relieve_en_frontera(exterior, minx, tol=tol) if idx > 0 else []
-    der = _segmentos_relieve_en_frontera(exterior, maxx, tol=tol)
+    izq: List[list] = []
+    der: List[list] = []
+    if idx > 0 and not _frontera_basta_guillotina_vertical(exterior, minx, tol=tol):
+        izq = _segmentos_relieve_en_frontera(exterior, minx, tol=tol)
+    if idx < n_total - 1 and not _frontera_basta_guillotina_vertical(exterior, maxx, tol=tol):
+        der = _segmentos_relieve_en_frontera(exterior, maxx, tol=tol)
 
     if izq:
         return izq
-    if der and (idx < n_total - 1 or n_total == 1 or idx == n_total - 1):
+    if der:
         return der
     return []
 
@@ -338,6 +477,8 @@ def _linea_corte_vertical(x_mm: float, alto_mm: float, indice: int) -> dict:
 def _normalizar_barras(placas_ok: List[dict]) -> List[dict]:
     barras = []
     for placa in placas_ok or []:
+        if not es_placa_largo_cu(placa):
+            continue
         w_mm = float(placa.get("w") or 0.0)
         h_mm = float(placa.get("h") or 0.0)
         if w_mm <= 0 or h_mm <= 0:
@@ -370,6 +511,7 @@ def empaquetar_largos_cu(
     for p in piezas or []:
         dims = _dims_pieza_nativo_mm(p.get("poly"))
         if dims is None:
+            sin_colocar.append(copy.deepcopy(p))
             continue
         largo_x, ancho_y = dims
         barra, corte_sup, cal_sup = _resolver_barra_para_pieza(ancho_y, catalogo)
@@ -444,8 +586,6 @@ def empaquetar_largos_cu(
                 corte_superior_mm=float(p_data.get("corte_superior_mm") or 0.0),
                 calibre_superior=bool(p_data.get("calibre_superior")),
             )
-            p_final["layer_override"] = "CUT_CU"
-            p_final["closed"] = True
             piezas_hoja.append(p_final)
             piezas_reales.append(p_final)
             area_usada += float(p_final.get("area") or 0.0)
@@ -525,6 +665,7 @@ def procesar_grupo_largos_cu(
     placas_ok: List[dict],
     wo_name: str = "PENDIENTE",
     dbg_fn: Optional[Callable[[str], None]] = None,
+    exigir_colocacion_total: bool = False,
 ) -> Tuple[str, dict]:
     _log = dbg_fn or (lambda _msg: None)
     _log(f"[CU-LARGOS] clave={clave} | piezas={len(piezas)} | wo={wo_name}")
@@ -540,11 +681,17 @@ def procesar_grupo_largos_cu(
             detalle.append(f"{p.get('nombre', '?')} ({ancho}\")")
         nombres = ", ".join(sorted(detalle))
         _log(f"[CU-LARGOS][SIN-COLOCAR] {nombres}")
-        if not hojas:
+        if exigir_colocacion_total or not hojas:
+            msg_base = (
+                "No se pudieron colocar todas las piezas en largos CU (144\" × 2–6\")."
+                if exigir_colocacion_total
+                else "No se pudieron anidar piezas de cobre."
+            )
             return clave, {
                 "error": (
-                    "No se pudieron anidar piezas de cobre. "
-                    "Verifique ancho exacto vs inventario CU (2–6\") y largo ≤ 144\"."
+                    f"{msg_base} "
+                    f"Sin colocar: {len(sin_colocar)} — {nombres}. "
+                    "Verifique ancho (2–6\") y largo ≤ 144\"."
                 )
             }
 
@@ -563,6 +710,12 @@ def procesar_grupo_largos_cu(
         "placa": "Largos CU",
         "dim": "1D",
         "hojas": hojas,
+        "piezas_pool": [
+            {"nombre": str(p.get("nombre") or "")}
+            for p in (piezas or [])
+            if str(p.get("nombre") or "")
+        ],
+        "piezas_pool_engine": True,
         "costo_total": costo_total,
         "costo_empresa": costo_empresa,
         "costo_proveedor": costo_proveedor,

@@ -475,7 +475,8 @@ def _obtener_lista_base_por_job(cursor, job: str) -> list[dict]:
             {expr_cantidad} AS cantidad,
             {expr_cantidad_base} AS cantidad_base,
             {expr_cantidad_job} AS cantidad_job,
-            {expr_cantidad_total} AS cantidad_total
+            {expr_cantidad_total} AS cantidad_total,
+            {_sql_col_or_null("proceso", columnas_existentes=columnas)}
         FROM public.lista_largos_job
         WHERE {where_expr}
         ORDER BY
@@ -513,6 +514,7 @@ def _expandir_lista_para_wo(cursor, job: str, work_order: str) -> list[dict]:
             "cantidad_job": cantidad_job,
             "cantidad_total_job": cantidad_total_job,
             "cantidad_wo": cantidad_wo,
+            "proceso": str(row.get("proceso") or "").strip(),
         })
 
     return filas

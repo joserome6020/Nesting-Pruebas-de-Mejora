@@ -614,6 +614,7 @@ class TabParts(QWidget, TimerHost):
             "clasificacion": mapa.get("clasificacion") or mapa.get("clasificación"),
             "largo_in": mapa.get("largo (in)") or mapa.get("largo"),
             "cantidad": mapa.get("cantidad") or mapa.get("qty"),
+            "proceso": mapa.get("proceso"),
         }
 
     def _leer_csv_lista_largos(self, csv_path: Path):
@@ -651,11 +652,17 @@ class TabParts(QWidget, TimerHost):
                         except Exception:
                             cantidad = 0
 
+                        proceso = ""
+                        if columnas.get("proceso"):
+                            proceso = str(raw.get(columnas["proceso"], "")).strip()
+
                         rows.append({
                             "nombre": nombre,
                             "clasificacion": clasificacion,
                             "largo_in": largo_in,
                             "cantidad": cantidad,
+                            "cantidad_base": cantidad,
+                            "proceso": proceso,
                         })
 
                     return rows
@@ -775,6 +782,7 @@ class TabParts(QWidget, TimerHost):
             table.setItem(ri, 1, QTableWidgetItem(str(row.get("clasificacion", ""))))
             table.setItem(ri, 2, QTableWidgetItem(f"{float(row.get('largo_in', 0) or 0):.3f}"))
             table.setItem(ri, 3, QTableWidgetItem(str(row.get("cantidad", 0))))
+            table.setItem(ri, 4, QTableWidgetItem(str(row.get("proceso", ""))))
         table.resizeRowsToContents()
         fj_lay.addWidget(table)
         contenedor.layout().addWidget(frame_job)
@@ -815,9 +823,21 @@ class TabParts(QWidget, TimerHost):
         inner = QWidget()
         inner_lay = QVBoxLayout(inner)
         scroll.setWidget(inner)
-        columnas = ("nombre", "clasificacion", "largo_in", "cantidad")
-        encabezados = {"nombre": "NOMBRE", "clasificacion": "CLASIFICACIÓN", "largo_in": "LARGO (in)", "cantidad": "CANTIDAD"}
-        anchos = {"nombre": 360, "clasificacion": 180, "largo_in": 120, "cantidad": 120}
+        columnas = ("nombre", "clasificacion", "largo_in", "cantidad", "proceso")
+        encabezados = {
+            "nombre": "NOMBRE",
+            "clasificacion": "CLASIFICACIÓN",
+            "largo_in": "LARGO (in)",
+            "cantidad": "CANTIDAD",
+            "proceso": "PROCESO",
+        }
+        anchos = {
+            "nombre": 320,
+            "clasificacion": 180,
+            "largo_in": 110,
+            "cantidad": 90,
+            "proceso": 220,
+        }
         for grupo in grupos:
             self._crear_bloque_job(inner, grupo, columnas, encabezados, anchos)
         card_lay.addWidget(scroll, 1)

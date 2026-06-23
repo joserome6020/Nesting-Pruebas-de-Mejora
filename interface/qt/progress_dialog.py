@@ -4,8 +4,7 @@ from __future__ import annotations
 import os
 import time
 
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QPoint, QTimer, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -16,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from .logo_anim_service import hide_logo_anim, show_logo_anim
 from .theme import COLOR_GRIS_DARK, COLOR_TEXTO_SECUNDARIO, surface_dialog_stylesheet
 
 
@@ -31,11 +31,8 @@ class ProgressDialog(QDialog):
         self._inicio_ts = time.time()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick_tiempo)
-        self._logo_timer = QTimer(self)
-        self._logo_pos = [8.0, 8.0]
-        self._logo_vel = [2.4, 1.8]
-        self._logo_running = False
         self._force_close = False
+        self._logo_overlay_activo = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 24, 24, 24)
@@ -64,9 +61,6 @@ class ProgressDialog(QDialog):
         self._logo_box = QFrame()
         self._logo_box.setFixedSize(360, 95)
         self._logo_box.setStyleSheet("background:#FBFCFF;border:1px solid #D8DFEB;border-radius:12px;")
-        self._logo_label = QLabel(self._logo_box)
-        self._logo_label.setFixedSize(54, 54)
-        self._logo_label.move(8, 8)
         lay.addWidget(self._logo_box, alignment=Qt.AlignmentFlag.AlignCenter)
         self._logo_box.hide()
 
@@ -76,7 +70,7 @@ class ProgressDialog(QDialog):
             self.lbl_porcentaje.hide()
             self.lbl_tiempo.hide()
             self._logo_box.show()
-            self._iniciar_animacion_logo()
+            QTimer.singleShot(0, self._iniciar_animacion_logo)
         else:
             self._timer.start(1000)
 
@@ -100,32 +94,20 @@ class ProgressDialog(QDialog):
         )
         return not any(tag in t for tag in con_barra)
 
+    def _logo_screen_pos(self) -> tuple[int, int]:
+        top_left = self._logo_box.mapToGlobal(QPoint(0, 0))
+        return int(top_left.x()), int(top_left.y())
+
     def _iniciar_animacion_logo(self) -> None:
         logo_path = config.ruta_recurso(os.path.join("assets", "branding", "logo_icon1.png"))
-        if os.path.exists(logo_path):
-            pix = QPixmap(logo_path).scaled(54, 54, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            self._logo_label.setPixmap(pix)
-        self._logo_running = True
-        self._logo_timer.timeout.connect(self._animar_logo)
-        self._logo_timer.start(16)
+        sx, sy = self._logo_screen_pos()
+        show_logo_anim(sx, sy, logo_path)
+        self._logo_overlay_activo = True
 
-    def _animar_logo(self) -> None:
-        if not self._logo_running:
-            return
-        bw, bh = self._logo_box.width(), self._logo_box.height()
-        lw, lh = self._logo_label.width(), self._logo_label.height()
-        nx = self._logo_pos[0] + self._logo_vel[0]
-        ny = self._logo_pos[1] + self._logo_vel[1]
-        if nx <= 0:
-            nx, self._logo_vel[0] = 0, abs(self._logo_vel[0])
-        elif nx + lw >= bw:
-            nx, self._logo_vel[0] = max(0, bw - lw), -abs(self._logo_vel[0])
-        if ny <= 0:
-            ny, self._logo_vel[1] = 0, abs(self._logo_vel[1])
-        elif ny + lh >= bh:
-            ny, self._logo_vel[1] = max(0, bh - lh), -abs(self._logo_vel[1])
-        self._logo_pos = [nx, ny]
-        self._logo_label.move(int(nx), int(ny))
+    def _detener_animacion_logo(self) -> None:
+        if self._logo_overlay_activo:
+            hide_logo_anim()
+            self._logo_overlay_activo = False
 
     def _tick_tiempo(self) -> None:
         elapsed = max(0, int(time.time() - self._inicio_ts))
@@ -133,18 +115,18 @@ class ProgressDialog(QDialog):
         self.lbl_tiempo.setText(f"Tiempo: {hh:02d}:{mm:02d}:{ss:02d}")
 
     def actualizar(self, mensaje: str, porcentaje: float) -> None:
+        if self._usar_animacion:
+            return
         self.lbl_mensaje.setText(mensaje)
-        if not self._usar_animacion:
-            self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
-            self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
+        self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
+        self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
 
     def force_close(self) -> None:
         self._force_close = True
         self.close()
 
     def closeEvent(self, event) -> None:
-        if self._logo_running:
-            self._logo_timer.stop()
+        self._detener_animacion_logo()
         self._timer.stop()
         if self._force_close:
             self._force_close = False

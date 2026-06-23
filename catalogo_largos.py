@@ -872,6 +872,7 @@ def asegurar_columnas_lista_largos_job(cursor) -> None:
         "ADD COLUMN IF NOT EXISTS espesor_in NUMERIC(12,3)",
         "ADD COLUMN IF NOT EXISTS herinox_codigo TEXT",
         "ADD COLUMN IF NOT EXISTS material_key TEXT",
+        "ADD COLUMN IF NOT EXISTS proceso TEXT",
     ]
     for col in alteraciones:
         cursor.execute(f"ALTER TABLE public.lista_largos_job {col}")

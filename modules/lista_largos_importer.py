@@ -337,6 +337,7 @@ def _mapear_columnas(fieldnames: list[str]) -> dict:
         "clasificacion": mapa.get("clasificacion") or mapa.get("clasificación"),
         "largo_in": mapa.get("largo (in)") or mapa.get("largo"),
         "cantidad": mapa.get("cantidad") or mapa.get("qty"),
+        "proceso": mapa.get("proceso"),
         "codigo": mapa.get("codigo herinox")
         or mapa.get("codigo_herinox")
         or mapa.get("codigo"),
@@ -395,6 +396,11 @@ def _leer_csv_lista_largos(csv_path: Path) -> list[dict]:
                         if columnas.get("material")
                         else ""
                     )
+                    proceso_csv = (
+                        _norm_text(raw.get(columnas["proceso"]))
+                        if columnas.get("proceso")
+                        else ""
+                    )
 
                     rows.append(
                         {
@@ -402,6 +408,7 @@ def _leer_csv_lista_largos(csv_path: Path) -> list[dict]:
                             "clasificacion": clasificacion,
                             "largo_in": largo_in,
                             "cantidad_base": cantidad_base,
+                            "proceso": proceso_csv,
                             "herinox_codigo": codigo_csv,
                             "perfil_estructural": perfil_csv or None,
                             "material_grade": material_csv or None,
@@ -426,6 +433,7 @@ def _row_hash(job: str, row: dict) -> str:
             _norm_text(row.get("clasificacion")),
             f"{float(row.get('largo_in', 0)):.3f}",
             str(cantidad_base),
+            _norm_text(row.get("proceso")),
         ]
     )
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
@@ -673,9 +681,10 @@ def importar_lista_largos_job(
                     ancho_in,
                     espesor_in,
                     herinox_codigo,
-                    material_key
+                    material_key,
+                    proceso
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job,
@@ -696,6 +705,7 @@ def importar_lista_largos_job(
                     espesor_in,
                     herinox_codigo,
                     material_key,
+                    str(row.get("proceso") or "").strip() or None,
                 ),
             )
             insertados += 1

@@ -1763,7 +1763,33 @@ class TabNesting(QWidget, TimerHost):
             "y elige qué barras van al pedido."
         )
 
-        QMessageBox.information(self, "Cálculo Terminado", mensaje)
+        avisos = []
+        for item in resultados_list or []:
+            data = (item or {}).get("data")
+            if isinstance(data, dict) and data.get("error"):
+                avisos.append(str(data.get("error")))
+                continue
+            if not isinstance(data, dict):
+                continue
+            for clave, info in data.items():
+                if not isinstance(info, dict):
+                    continue
+                if info.get("error"):
+                    avisos.append(f"{clave}: {info.get('error')}")
+                elif info.get("advertencia"):
+                    avisos.append(f"{clave}: {info.get('advertencia')}")
+
+        if avisos:
+            texto_aviso = "\n\n".join(avisos[:5])
+            if len(avisos) > 5:
+                texto_aviso += f"\n\n(+{len(avisos) - 5} avisos más)"
+            QMessageBox.warning(
+                self,
+                "Cálculo con avisos",
+                f"{mensaje}\n\n⚠ Algunos grupos no quedaron completos:\n{texto_aviso}",
+            )
+        else:
+            QMessageBox.information(self, "Cálculo Terminado", mensaje)
 
     def _obtener_tipo_cambio_dof(self):
         """
@@ -1914,6 +1940,7 @@ class TabNesting(QWidget, TimerHost):
         for clave in claves_ordenadas:
             info = resultados[clave]
             es_grupo_cu = self._es_grupo_cobre(clave, info)
+            hojas_del_material = info.get("hojas", [])
             header = QWidget()
             hdr_lay = QHBoxLayout(header)
             hdr_lay.setContentsMargins(0, 10, 0, 0)
@@ -1934,8 +1961,6 @@ class TabNesting(QWidget, TimerHost):
                 self.total_usd_empresa += info["costo_empresa"]
             if "costo_proveedor" in info:
                 self.total_usd_proveedor += info["costo_proveedor"]
-
-            hojas_del_material = info.get("hojas", [])
 
             if es_grupo_cu and hojas_del_material:
                 info.setdefault("ignorar_deduccion_cu", True)
@@ -2052,15 +2077,57 @@ class TabNesting(QWidget, TimerHost):
                 return True
         return False
 
+    def _inventario_desde_resultado(self, resultado) -> dict:
+        inventario = {}
+        for hoja in (resultado or {}).get("hojas") or []:
+            for nom, cnt in self._resumen_piezas_reales_hoja(hoja).items():
+                inventario[nom] = inventario.get(nom, 0) + int(cnt)
+        return inventario
+
+    def _validar_renest_conserva_inventario(self, inv_antes: dict, resultado) -> tuple[bool, str]:
+        inv_antes = self._inventario_piezas_canonico(inv_antes)
+        inv_despues = self._inventario_piezas_canonico(self._inventario_desde_resultado(resultado))
+        if self._inventarios_equivalentes(inv_antes, inv_despues):
+            return True, ""
+        total_antes = sum(int(v) for v in (inv_antes or {}).values())
+        total_despues = sum(int(v) for v in (inv_despues or {}).values())
+        diff = self._texto_diff_inventario(inv_antes, inv_despues)
+        pend = (resultado or {}).get("piezas_pendientes") or []
+        extra = ""
+        if pend:
+            extra = "\nPendientes: " + ", ".join(str(x) for x in pend[:12])
+        return (
+            False,
+            f"El renesteo no conservó todas las piezas ({total_despues}/{total_antes}).\n"
+            f"{diff}{extra}".strip(),
+        )
+
+    def _aplicar_flags_cobre_resultado(self, clave, resultado, backup_grp=None):
+        if not isinstance(resultado, dict):
+            return
+        if not self._es_grupo_cobre(clave, resultado):
+            resultado.pop("ignorar_deduccion_cu", None)
+            for hoja in resultado.get("hojas") or []:
+                if isinstance(hoja, dict) and not hoja.get("es_retazo"):
+                    hoja["ignorar_deduccion"] = False
+            return
+        ign = True
+        if isinstance(backup_grp, dict):
+            ign = bool(backup_grp.get("ignorar_deduccion_cu", True))
+        resultado["ignorar_deduccion_cu"] = ign
+        for hoja in resultado.get("hojas") or []:
+            if isinstance(hoja, dict) and not hoja.get("es_retazo"):
+                hoja["ignorar_deduccion"] = ign
+
     def _bind_menu_renestear_calibre_cobre(self, header, lbl_header, clave):
         def show_menu(pos, widget):
             if not self._ctx_tiene_resultados(clave):
                 return
             menu = QMenu(self)
             menu.addAction(
-                "RENESTEAR CALIBRE DE COBRE COMPLETO",
+                "RENESTEAR CALIBRE COMPLETO",
                 self._safe_ctx(
-                    "Renestear cobre",
+                    "Renestear calibre cobre",
                     lambda c=clave: self.renestear_calibre_completo_ui(c),
                 ),
             )
@@ -2080,13 +2147,39 @@ class TabNesting(QWidget, TimerHost):
             if not self._ctx_hoja_valida(hoja, "Menú de placa"):
                 return
             menu = QMenu(self)
-            menu.addAction(
-                "RENESTEAR ESTA PLACA",
-                self._safe_ctx(
-                    "Renestear placa",
-                    lambda c=clave, h=hoja: self.renestear_solo_placa(c, h),
-                ),
-            )
+            bloque = self._desglosar_bloque_placa_mini(clave, hoja)
+            tiene_rtz = bool(bloque.get("idx_retazos"))
+            es_cu_largos = bool(hoja.get("modo_largos_cu"))
+
+            sub_renest = QMenu("RENESTEAR", menu)
+            if tiene_rtz and not es_cu_largos:
+                sub_renest.addAction(
+                    "CON RTZ (conservar retazo)",
+                    self._safe_ctx(
+                        "Renestear con RTZ",
+                        lambda c=clave, h=hoja: self.renestear_solo_placa(
+                            c, h, absorber_rtz=False
+                        ),
+                    ),
+                )
+                sub_renest.addAction(
+                    "SIN RTZ (piezas a placa madre)",
+                    self._safe_ctx(
+                        "Renestear sin RTZ",
+                        lambda c=clave, h=hoja: self.renestear_solo_placa(
+                            c, h, absorber_rtz=True
+                        ),
+                    ),
+                )
+                menu.addMenu(sub_renest)
+            else:
+                menu.addAction(
+                    "RENESTEAR",
+                    self._safe_ctx(
+                        "Renestear placa",
+                        lambda c=clave, h=hoja: self.renestear_solo_placa(c, h),
+                    ),
+                )
             menu.addAction(
                 "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
@@ -2094,20 +2187,14 @@ class TabNesting(QWidget, TimerHost):
                     lambda c=clave, h=hoja: abrir_modal_transferencia_masiva(self, c, h),
                 ),
             )
-            menu.addAction(
-                "RENESTEAR CALIBRE COMPLETO",
-                self._safe_ctx(
-                    "Renestear calibre",
-                    lambda c=clave: self.renestear_calibre_completo_ui(c),
-                ),
-            )
-            menu.addAction(
-                "COMPENSAR ESTA PLACA (PLASMA)",
-                self._safe_ctx(
-                    "Compensación",
-                    lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
-                ),
-            )
+            if not es_cu_largos and not self._es_grupo_cobre(clave):
+                menu.addAction(
+                    "COMPENSAR ESTA PLACA (PLASMA)",
+                    self._safe_ctx(
+                        "Compensación",
+                        lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
+                    ),
+                )
             sub_cambiar = QMenu("CAMBIAR DE PLACA", menu)
             sub_cambiar.aboutToShow.connect(
                 lambda sm=sub_cambiar, c=clave, h=hoja: self._rellenar_submenu_cambiar_placa(sm, c, h)
@@ -2137,6 +2224,13 @@ class TabNesting(QWidget, TimerHost):
                 return
             menu = QMenu(self)
             menu.addAction(
+                "Renestear calibre completo",
+                self._safe_ctx(
+                    "Renestear calibre",
+                    lambda c=clave: self.renestear_calibre_completo_ui(c),
+                ),
+            )
+            menu.addAction(
                 "Compensar calibre completo (Plasma)",
                 self._safe_ctx(
                     "Compensación",
@@ -2163,16 +2257,67 @@ class TabNesting(QWidget, TimerHost):
         except Exception:
             return None
 
+    def _nombre_canonico_pieza(self, nom):
+        s = str(nom or "").strip()
+        if not s:
+            return ""
+        if "," in s:
+            return s.split(",", 1)[0].strip()
+        return s
+
+    def _inventario_piezas_canonico(self, inv):
+        out = {}
+        for nom, cnt in (inv or {}).items():
+            c = self._nombre_canonico_pieza(nom)
+            if not c:
+                continue
+            out[c] = out.get(c, 0) + int(cnt or 0)
+        return out
+
+    def _datos_partes_activos_para_nesting(self):
+        """Misma fuente que ejecutar_nesting: lote editable activo o PARTS global."""
+        if getattr(self.app, "editable_inputs_actuales", None):
+            datos = self._clonar_datos_partes_edicion(self.app.editable_inputs_actuales)
+            if datos:
+                return datos
+        return self._clonar_datos_partes_edicion(
+            getattr(self.app, "datos_partes_actuales", []) or []
+        )
+
     def _contar_piezas_reales_grupo(self, clave):
         grp = (self.app.resultados_nesting or {}).get(clave) or {}
         hojas = grp.get("hojas") or []
         conteo = {}
         for hoja in hojas:
             for p in (hoja.get("piezas") or []):
-                nom = str(p.get("nombre", "")).strip()
+                nom = self._nombre_canonico_pieza(p.get("nombre", ""))
                 if not nom or self._es_pieza_virtual(nom):
                     continue
                 conteo[nom] = conteo.get(nom, 0) + 1
+        return conteo
+
+    def _conteo_piezas_job_grupo(self, clave):
+        """Cantidades del lote/job activo para calibre+material (fuente de verdad del renesteo)."""
+        try:
+            calibre_hoja, material_hoja = (str(clave).split("_", 1) + [""])[:2]
+        except Exception:
+            calibre_hoja, material_hoja = str(clave), ""
+        conteo = {}
+        for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
+            nom = self._nombre_canonico_pieza(p_nom)
+            if not nom:
+                continue
+            if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                continue
+            if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                continue
+            try:
+                q = max(0, int(qty or 0))
+            except Exception:
+                q = 0
+            if q <= 0:
+                continue
+            conteo[nom] = conteo.get(nom, 0) + q
         return conteo
 
     def _construir_fuente_geometria_por_nombre(self, clave):
@@ -2203,29 +2348,53 @@ class TabNesting(QWidget, TimerHost):
             return MultiLineString(segs)
 
         def _agregar_fuente(nom, poly, marks, cal, mat, ruta):
-            if not nom or nom in fuente or poly is None or getattr(poly, "is_empty", True):
+            canon = self._nombre_canonico_pieza(nom)
+            if not canon or canon in fuente or poly is None or getattr(poly, "is_empty", True):
                 return
             from shapely import affinity
-            mx, my, _, _ = poly.bounds
-            marks_ok = marks
+            from interface.utils_nesting import clave_orientacion_cobre_ruta, es_material_cobre
+
+            poly_use = poly
+            marks_use = marks
+            if es_material_cobre(mat):
+                rot_deg = int(
+                    (getattr(self.app, "orientacion_cobre_por_ruta", {}) or {}).get(
+                        clave_orientacion_cobre_ruta(ruta), 0
+                    )
+                ) % 360
+                if rot_deg:
+                    try:
+                        cx, cy = poly_use.centroid.x, poly_use.centroid.y
+                        poly_use = affinity.rotate(
+                            poly_use, rot_deg, origin=(cx, cy), use_radians=False
+                        )
+                        if marks_use is not None and not marks_use.is_empty:
+                            marks_use = affinity.rotate(
+                                marks_use, rot_deg, origin=(cx, cy), use_radians=False
+                            )
+                    except Exception:
+                        pass
+
+            mx, my, _, _ = poly_use.bounds
+            marks_ok = marks_use
             try:
                 if marks_ok is None:
                     from shapely.geometry import LineString
                     marks_ok = LineString()
             except Exception:
-                marks_ok = marks
-            fuente[nom] = {
-                "nombre": nom,
-                "poly_base": affinity.translate(poly, -mx, -my),
+                marks_ok = marks_use
+            fuente[canon] = {
+                "nombre": canon,
+                "poly_base": affinity.translate(poly_use, -mx, -my),
                 "marks_base": affinity.translate(marks_ok, -mx, -my) if hasattr(marks_ok, "is_empty") and not marks_ok.is_empty else marks_ok,
-                "area_base": float(poly.area),
+                "area_base": float(poly_use.area),
                 "calibre": cal,
                 "material": mat,
                 "ruta": ruta,
             }
 
         # 1) Fuente primaria: geometría fresca desde rutas DXF.
-        for p_nom, mat, qty, cal, st, ruta in getattr(self.app, "datos_partes_actuales", []) or []:
+        for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
             nom = str(p_nom or "").strip()
             if not nom:
                 continue
@@ -2243,7 +2412,8 @@ class TabNesting(QWidget, TimerHost):
         for hoja in (grp.get("hojas") or []):
             for p in (hoja.get("piezas") or []):
                 nom = str(p.get("nombre", "")).strip()
-                if not nom or self._es_pieza_virtual(nom) or nom in fuente:
+                canon = self._nombre_canonico_pieza(nom)
+                if not canon or self._es_pieza_virtual(nom) or canon in fuente:
                     continue
                 pols = p.get("poligonos") or []
                 if not pols or not pols[0]:
@@ -2541,16 +2711,23 @@ class TabNesting(QWidget, TimerHost):
         )
 
     def _build_piezas_para_renest_calibre(self, clave):
-        conteo_total = self._contar_piezas_reales_grupo(clave)
+        conteo_job = self._conteo_piezas_job_grupo(clave)
+        conteo_nido = self._contar_piezas_reales_grupo(clave)
+        # Renesteo de calibre completo debe usar el job/lote, no solo lo ya colocado.
+        conteo_total = conteo_job if conteo_job else conteo_nido
         if not conteo_total:
+            self._renest_calibre_build_info = {}
             return []
         fuente = self._construir_fuente_geometria_por_nombre(clave)
         if not fuente:
+            self._renest_calibre_build_info = {"error": "sin_fuente"}
             return []
         piezas_out = []
+        faltantes_geom = []
         for nom, total in conteo_total.items():
             src = fuente.get(nom)
             if not src:
+                faltantes_geom.append((nom, int(total)))
                 continue
             for _ in range(int(total)):
                 piezas_out.append(
@@ -2564,6 +2741,13 @@ class TabNesting(QWidget, TimerHost):
                         "ruta": src["ruta"],
                     }
                 )
+        self._renest_calibre_build_info = {
+            "conteo_job": conteo_job,
+            "conteo_nido": conteo_nido,
+            "faltantes_geom": faltantes_geom,
+            "total_esperado": sum(int(v) for v in conteo_total.values()),
+            "total_generado": len(piezas_out),
+        }
         return piezas_out
 
     def renestear_calibre_completo_ui(self, clave):
@@ -2572,16 +2756,53 @@ class TabNesting(QWidget, TimerHost):
         if clave not in self.app.resultados_nesting:
             return QMessageBox.warning(self, "Atención", "No se encontró ese calibre/material.")
         piezas_pack = self._build_piezas_para_renest_calibre(clave)
+        build_info = getattr(self, "_renest_calibre_build_info", {}) or {}
+        faltantes_geom = build_info.get("faltantes_geom") or []
+        if faltantes_geom:
+            lineas = "\n".join(f"  · {nom}: {cnt}" for nom, cnt in faltantes_geom[:12])
+            extra = f"\n… y {len(faltantes_geom) - 12} más." if len(faltantes_geom) > 12 else ""
+            return QMessageBox.warning(
+                self,
+                "Atención",
+                "No se encontró geometría DXF para todas las piezas del job:\n"
+                f"{lineas}{extra}",
+            )
         if not piezas_pack:
             return QMessageBox.warning(self, 
                 "Atención",
                 "No se pudieron reconstruir las piezas de este calibre para renestear.",
             )
-        if QMessageBox.question(
-            self,
-            "Renestear calibre completo",
-            f"Se volverá a optimizar todo el calibre {clave} desde cero.\n\n¿Continuar?",
-        ) != QMessageBox.StandardButton.Yes:
+        total_job = int(build_info.get("total_esperado") or len(piezas_pack))
+        if len(piezas_pack) != total_job:
+            return QMessageBox.warning(
+                self,
+                "Atención",
+                f"No se pudieron reconstruir todas las piezas del job.\n"
+                f"Esperadas: {total_job} · Generadas: {len(piezas_pack)}.\n"
+                "Revise PARTS y rutas DXF antes de renestear.",
+            )
+        total_nido = sum(int(v) for v in (build_info.get("conteo_nido") or {}).values())
+        aviso_cantidad = ""
+        if total_nido and total_job != total_nido:
+            aviso_cantidad = (
+                f"\n\nPiezas en el job: {total_job}\n"
+                f"Piezas en el nesteo actual: {total_nido}\n"
+                "Se renesteará con la cantidad del job/lote activo."
+            )
+        es_cobre = self._es_grupo_cobre(clave)
+        if es_cobre:
+            detalle = (
+                f"Se volverá a optimizar el calibre {clave} usando barras largo CU "
+                f"(144\" × 2–6\").{aviso_cantidad}\n\n¿Continuar?"
+            )
+            titulo = "Renestear cobre en largos"
+        else:
+            detalle = (
+                f"Se volverá a optimizar todo el calibre {clave} desde cero."
+                f"{aviso_cantidad}\n\n¿Continuar?"
+            )
+            titulo = "Renestear calibre completo"
+        if QMessageBox.question(self, titulo, detalle) != QMessageBox.StandardButton.Yes:
             return
 
         try:
@@ -2598,6 +2819,7 @@ class TabNesting(QWidget, TimerHost):
 
         def worker():
             backup_grp = copy.deepcopy((self.app.resultados_nesting or {}).get(clave))
+            inv_esperado = self._conteo_piezas_job_grupo(clave) or self._inventario_piezas_grupo(clave)
             try:
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
                 raw = self.app.motor_nesting._procesar_grupo_parallel(
@@ -2609,6 +2831,7 @@ class TabNesting(QWidget, TimerHost):
                     opt,
                     corner,
                     self._work_order_label_lote_activo(),
+                    cu_routing_override="largos" if es_cobre else None,
                 )
                 resultado = raw[1] if isinstance(raw, tuple) and len(raw) == 2 else raw
                 if not isinstance(resultado, dict) or resultado.get("error"):
@@ -2616,6 +2839,11 @@ class TabNesting(QWidget, TimerHost):
                 if not (resultado.get("hojas") or []):
                     raise RuntimeError("El renesteo no generó hojas válidas.")
 
+                ok_inv, msg_inv = self._validar_renest_conserva_inventario(inv_esperado, resultado)
+                if not ok_inv:
+                    raise RuntimeError(msg_inv)
+
+                self._aplicar_flags_cobre_resultado(clave, resultado, backup_grp)
                 self.app.resultados_nesting[clave] = resultado
                 self._recalcular_costos_grupo(clave)
                 self._replicar_lote_activo_a_gemelos()
@@ -2640,6 +2868,7 @@ class TabNesting(QWidget, TimerHost):
                 def on_err(msg=str(e)):
                     if hasattr(self.app, "cerrar_ventana_carga"):
                         self.app.cerrar_ventana_carga()
+                    self.procesar_lista_hojas(self.app.resultados_nesting)
                     QMessageBox.critical(self, 
                         "Renesteo",
                         f"No se pudo renestear el calibre completo.\n\nDetalle:\n{msg}",
@@ -3089,6 +3318,8 @@ class TabNesting(QWidget, TimerHost):
             n.startswith("REMANENTE__")
             or n.startswith("REF__")
             or n.startswith("TATUAJE__")
+            or n.startswith("RETAZO_GUILLOTINA__")
+            or n.startswith("CU_CORTE__")
             or n.startswith("RETAZO_")
         )
 
@@ -3212,10 +3443,18 @@ class TabNesting(QWidget, TimerHost):
             "resumen_retazos": resumen_retazos,
         }
 
+    def _resumen_bloque_placa_y_rtz(self, bloque, absorber_rtz: bool = False) -> dict:
+        resumen = dict(bloque.get("resumen_base") or {})
+        if absorber_rtz:
+            for item in bloque.get("resumen_retazos") or []:
+                for nom, cnt in (item.get("resumen") or {}).items():
+                    resumen[nom] = resumen.get(nom, 0) + int(cnt)
+        return resumen
+
     def _resumen_piezas_reales_hoja(self, hoja):
         resumen = {}
         for p in (hoja.get("piezas") or []):
-            nom = str(p.get("nombre", ""))
+            nom = self._nombre_canonico_pieza(p.get("nombre", ""))
             if self._es_pieza_virtual(nom):
                 continue
             resumen[nom] = resumen.get(nom, 0) + 1
@@ -3411,12 +3650,13 @@ class TabNesting(QWidget, TimerHost):
         corner,
         compensar_plasma=False,
         offset_mm_forzado=None,
+        absorber_rtz=False,
     ):
         material_hoja = clave.split("_")[1] if "_" in clave else clave
         calibre_hoja = clave.split("_")[0] if "_" in clave else ""
 
         bloque = self._desglosar_bloque_placa_mini(clave, hoja)
-        resumen_hoja = bloque["resumen_base"]
+        resumen_hoja = self._resumen_bloque_placa_y_rtz(bloque, absorber_rtz=absorber_rtz)
         idx_retazos_asociados = bloque["idx_retazos"]
 
         piezas_fuente = {}
@@ -3495,6 +3735,8 @@ class TabNesting(QWidget, TimerHost):
                     "id_remanente_usado",
                     "lote_desc",
                     "lote_mult",
+                    "ignorar_deduccion",
+                    "modo_largos_cu",
                 ):
                     if mk in hoja:
                         nh[mk] = hoja[mk]
@@ -3517,6 +3759,8 @@ class TabNesting(QWidget, TimerHost):
                     "id_remanente_usado",
                     "lote_desc",
                     "lote_mult",
+                    "ignorar_deduccion",
+                    "modo_largos_cu",
                 ):
                     if mk in hoja:
                         nueva[mk] = hoja[mk]
@@ -3536,6 +3780,7 @@ class TabNesting(QWidget, TimerHost):
         post_fill=False,
         compensar_plasma=False,
         offset_mm_forzado=None,
+        absorber_rtz=False,
     ):
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
@@ -3554,10 +3799,31 @@ class TabNesting(QWidget, TimerHost):
             return QMessageBox.critical(self, "Error", "Valores no válidos.")
         m = self.global_margin_val
 
-        if hasattr(self.app, "abrir_ventana_carga"):
-            self.app.abrir_ventana_carga("Renesteando placa...")
+        bloque_previo = self._desglosar_bloque_placa_mini(clave, hoja)
+        if absorber_rtz and not bloque_previo.get("idx_retazos"):
+            absorber_rtz = False
+        resumen_esperado = self._resumen_bloque_placa_y_rtz(
+            bloque_previo, absorber_rtz=absorber_rtz
+        )
 
-        bloque_objetivo = self._desglosar_bloque_placa_mini(clave, hoja)
+        if absorber_rtz:
+            if QMessageBox.question(
+                self,
+                "Renestear sin RTZ",
+                "Las piezas de los retazos (RTZ) asociados se moverán a la placa madre "
+                "y los RTZ se eliminarán del resultado.\n\n¿Continuar?",
+            ) != QMessageBox.StandardButton.Yes:
+                return
+
+        if hasattr(self.app, "abrir_ventana_carga"):
+            titulo_carga = (
+                "Renesteando placa (absorbiendo RTZ)..."
+                if absorber_rtz
+                else "Renesteando placa..."
+            )
+            self.app.abrir_ventana_carga(titulo_carga)
+
+        bloque_objetivo = bloque_previo
         idx_objetivo = bloque_objetivo.get("idx_base", -1)
         hoja_ref = hoja
         backup_grupo = self._snapshot_grupo_nesting(clave)
@@ -3581,6 +3847,7 @@ class TabNesting(QWidget, TimerHost):
                 corner,
                 compensar_plasma=compensar_plasma,
                 offset_mm_forzado=offset_mm_forzado,
+                absorber_rtz=absorber_rtz,
             )
 
             if hasattr(self.app, "actualizar_progreso"):
@@ -3589,15 +3856,17 @@ class TabNesting(QWidget, TimerHost):
                 0, lambda: self.finalizar_recalc(
                     nueva,
                     clave_renest=clave,
-                    post_fill=post_fill,
-                    idx_retazos_asociados=idx_retazos_asociados,
+                    post_fill=post_fill and not absorber_rtz,
+                    idx_retazos_asociados=idx_retazos_asociados if absorber_rtz else None,
                     nuevas_retazos=None,
                     hoja_original=copy.deepcopy(hoja),
-                    tiene_minis=bool(idx_retazos_asociados),
+                    tiene_minis=bool(idx_retazos_asociados) and not absorber_rtz,
                     idx_objetivo=idx_objetivo,
                     hoja_ref=hoja_ref,
                     backup_grupo=backup_grupo,
                     inventario_antes=inventario_antes,
+                    resumen_esperado=resumen_esperado if absorber_rtz else None,
+                    eliminar_rtz_asociados=absorber_rtz,
                 )
             )
 
@@ -3774,6 +4043,8 @@ class TabNesting(QWidget, TimerHost):
         hoja_ref=None,
         backup_grupo=None,
         inventario_antes=None,
+        resumen_esperado=None,
+        eliminar_rtz_asociados=False,
     ):
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
@@ -3804,8 +4075,11 @@ class TabNesting(QWidget, TimerHost):
             QMessageBox.warning(self, "Atención", "No se encontró el grupo de material en el resultado.")
             return
 
-        if hoja_original:
-            resumen_req = self._resumen_piezas_reales_hoja(hoja_original)
+        if hoja_original or resumen_esperado:
+            if resumen_esperado:
+                resumen_req = {str(k): int(v) for k, v in resumen_esperado.items()}
+            else:
+                resumen_req = self._resumen_piezas_reales_hoja(hoja_original)
             if not self._hoja_cumple_resumen_esperado(nueva, resumen_req):
                 self._abortar_y_restaurar_nesting(
                     clv,
@@ -3857,6 +4131,24 @@ class TabNesting(QWidget, TimerHost):
 
         self.app.resultados_nesting[clv]["hojas"][idx_match] = nueva
         hoja_ref = self.app.resultados_nesting[clv]["hojas"][idx_match]
+
+        if eliminar_rtz_asociados and idx_retazos_asociados:
+            grp_rtz = self.app.resultados_nesting.get(clv) or {}
+            hojas_rtz = grp_rtz.get("hojas") or []
+            for ridx in sorted(set(idx_retazos_asociados), reverse=True):
+                if 0 <= ridx < len(hojas_rtz) and hojas_rtz[ridx].get("es_retazo"):
+                    hojas_rtz.pop(ridx)
+            grp_rtz["hojas"] = hojas_rtz
+            idx_match = self._resolver_indice_hoja_objetivo(
+                grp_rtz,
+                hoja_ref,
+                idx_objetivo=idx_objetivo,
+                hoja_ref=hoja_ref,
+                hoja_original=hoja_original,
+            )
+            if idx_match >= 0:
+                hoja_ref = grp_rtz["hojas"][idx_match]
+
         if post_fill:
             self._llenar_placa_desde_otras_hojas(clv, hoja_ref)
         hoja_actualizada = self.app.resultados_nesting[clv]["hojas"][idx_match]

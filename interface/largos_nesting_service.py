@@ -322,6 +322,7 @@ def _filas_desde_csv_para_job(app, job: str, factor_lote: int) -> list[dict]:
                     "cantidad": cantidad_wo,
                     "cantidad_base": cantidad_base,
                     "cantidad_wo": cantidad_wo,
+                    "proceso": str(row.get("proceso") or "").strip(),
                 }
             )
     return filas

@@ -42,6 +42,10 @@ from .efficiency_metrics import actualizar_eficiencias_hoja, calcular_eficiencia
 from .nest_optimization import get_nest_profile, score_placa_simulacion
 from .exporter import exportar_resultados_a_dxf
 from .cu_largos_nesting import procesar_grupo_largos_cu
+from .cu_inventory import (
+    inventario_barras_largos_cu,
+    validar_inventario_cu_resultado,
+)
 from .rtz_overlays import (
     sincronizar_overlays_grupo,
     sincronizar_overlays_resultados,
@@ -480,6 +484,7 @@ def _refinar_hoja_empaque(
     corner,
     limite_poly=None,
     intentos=12,
+    mc_iterations=None,
 ):
     """Reempaqueta la hoja ganadora buscando mejor compactación (mismo set de piezas)."""
     from .sheet_integrity import batch_reempaque_desde_hoja
@@ -491,7 +496,10 @@ def _refinar_hoja_empaque(
     if not batch:
         return hoja
 
-    mc_iters = int(get_nest_profile().get("mc_iterations", 15))
+    mc_iters = int(
+        mc_iterations if mc_iterations is not None
+        else get_nest_profile().get("mc_iterations", 15)
+    )
     mejor = hoja
     mejor_area = float(hoja.get("area_usada", 0) or 0)
     mejor_n = len(hoja.get("piezas") or [])
@@ -585,6 +593,7 @@ def _empaquetar_mejor_hoja_mc(
     debug_tag="",
     mc_iterations=None,
     solo_accesorios=False,
+    accesorios_retries=14,
 ):
     """Empaque de hoja: accesorios/RTZ con reintentos; estructurales en un paso MC."""
     if solo_accesorios and piezas:
@@ -598,7 +607,8 @@ def _empaquetar_mejor_hoja_mc(
         mejor_restos = list(piezas)
         mejor_n = len(piezas) + 1
 
-        for intento in range(14):
+        max_retries = max(1, int(accesorios_retries or 14))
+        for intento in range(max_retries):
             if intento == 0:
                 batch = base
             else:
@@ -1075,6 +1085,7 @@ class MotorNesting:
         _dbg_nesting("============================================================")
         grupos = {}
         total_dxf = len(lista_partes)
+        piezas_parser_fallidas = []
         
         for i, (pieza, mat, qty, cal, st, ruta) in enumerate(lista_partes):
             notificar(f"Analizando geometría: {pieza}...", (i / total_dxf) * 0.15)
@@ -1113,6 +1124,7 @@ class MotorNesting:
                     f"[PARSER-FAIL] clave={clave} | pieza={pieza} | ruta={ruta} | "
                     f"motivo=recuperar_geometria_robusta devolvió None"
                 )
+                piezas_parser_fallidas.append(f"{pieza} ({ruta})")
                 continue
 
             n_mark_segs = 0
@@ -1176,6 +1188,7 @@ class MotorNesting:
                 _dbg_nesting(
                     f"[GEOM-EMPTY-EXACT] clave={clave} | pieza={pieza} | ruta={ruta}"
                 )
+                piezas_parser_fallidas.append(f"{pieza} ({ruta})")
                 continue
 
             if poly_nesting is None or poly_nesting.is_empty:
@@ -1224,6 +1237,18 @@ class MotorNesting:
                 "[ABORT] Ningún grupo quedó con piezas válidas después del parser/cleanup"
             )
             return {"error": "No se obtuvo ninguna geometría válida después del parser."}
+
+        if piezas_parser_fallidas:
+            det = ", ".join(piezas_parser_fallidas[:8])
+            if len(piezas_parser_fallidas) > 8:
+                det += f" (+{len(piezas_parser_fallidas) - 8} más)"
+            _dbg_nesting(f"[ABORT] Piezas sin geometría válida: {det}")
+            return {
+                "error": (
+                    f"No se pudo leer la geometría de {len(piezas_parser_fallidas)} pieza(s). "
+                    f"Revise los DXF antes de nestear: {det}"
+                )
+            }
         
         resultados = {}
         notificar("Iniciando Multiprocesamiento...", 0.16)
@@ -1296,7 +1321,19 @@ class MotorNesting:
         notificar("Construyendo modelos visuales...", 1.0)
         return resultados
 
-    def _procesar_grupo_parallel(self, clave, piezas, datos_placas, config_kerf, config_margin, config_opt, config_corner, wo_name="PENDIENTE", q_msg=None):
+    def _procesar_grupo_parallel(
+        self,
+        clave,
+        piezas,
+        datos_placas,
+        config_kerf,
+        config_margin,
+        config_opt,
+        config_corner,
+        wo_name="PENDIENTE",
+        q_msg=None,
+        cu_routing_override=None,
+    ):
         partes_clave = clave.split('_', 1) 
         req_cal = partes_clave[0]
         req_mat = partes_clave[1] if len(partes_clave) > 1 else ""
@@ -1364,13 +1401,34 @@ class MotorNesting:
             return clave, {"error": f"Sin placa. No se halló inventario para {req_cal} {req_mat}."}
 
         if str(req_mat).strip().upper() == "CU":
-            return procesar_grupo_largos_cu(
+            placas_largos = inventario_barras_largos_cu(placas_ok)
+            _dbg_nesting(
+                f"[CU-LARGOS] clave={clave} | barras={len(placas_largos)} | "
+                f"override={str(cu_routing_override or '').strip() or 'auto'}"
+            )
+            if not placas_largos:
+                return clave, {
+                    "error": (
+                        f"Sin barras CU 144\"×2–6\" en inventario para {req_cal} {req_mat}."
+                    )
+                }
+            clave_out, resultado_largos = procesar_grupo_largos_cu(
                 clave,
                 piezas,
-                placas_ok,
+                placas_largos,
                 wo_name=wo_name,
                 dbg_fn=_dbg_nesting,
+                exigir_colocacion_total=True,
             )
+            if (
+                isinstance(resultado_largos, dict)
+                and not resultado_largos.get("error")
+                and piezas
+            ):
+                ok_inv, msg_inv = validar_inventario_cu_resultado(piezas, resultado_largos)
+                if not ok_inv:
+                    return clave_out, {"error": msg_inv}
+            return clave_out, resultado_largos
 
         placas_ok.sort(key=lambda x: (x['precio_lb'], x['precio']))
 
@@ -1390,6 +1448,8 @@ class MotorNesting:
         mc_iters = int(nest_profile.get("mc_iterations", 15))
         mc_fast = int(nest_profile.get("mc_lookahead_iterations", 5))
         use_lookahead = bool(nest_profile.get("lookahead", True))
+        cu_acc_retries = 14
+        cu_refinar_intentos = 12
         _dbg_nesting(
             f"[NEST-PROFILE] clave={clave} | mc={mc_iters} | lookahead={use_lookahead} | mc_fast={mc_fast}"
         )
@@ -1518,6 +1578,7 @@ class MotorNesting:
                         debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=accesorios",
                         mc_iterations=mc_iters,
                         solo_accesorios=True,
+                        accesorios_retries=cu_acc_retries,
                     )
                     restos_est_out = []
                     restos_acc_out = restos_sim
@@ -1598,6 +1659,8 @@ class MotorNesting:
                 config_margin,
                 config_opt,
                 config_corner,
+                intentos=cu_refinar_intentos,
+                mc_iterations=mc_iters,
             )
             if hoja_ref and hoja_ref.get("piezas"):
                 hoja_ganadora = hoja_ref
@@ -1934,11 +1997,15 @@ class MotorNesting:
 
         # REEMPLAZA ESTE BLOQUE EN manager.py (CASI AL FINAL DE LA FUNCIÓN)
         if hojas_finales:
-            from .sheet_integrity import sanitizar_hojas_grupo
+            from .sheet_integrity import sanitizar_hojas_grupo, validar_colocacion_completa
 
             hojas_finales = sanitizar_hojas_grupo(
                 piezas, hojas_finales, clave=clave, kerf_global=config_kerf
             )
+            ok_inv, msg_inv = validar_colocacion_completa(piezas, hojas_finales)
+            if not ok_inv:
+                _dbg_nesting(f"[INVENTARIO-INCOMPLETO] clave={clave} | {msg_inv}")
+                return clave, {"error": msg_inv}
             # Construimos mapa 1-a-1 por nombre base para no agarrar siempre
             # la primera coincidencia cuando hay piezas repetidas.
             source_map = {}
@@ -1974,6 +2041,12 @@ class MotorNesting:
                     p_final['orig_miny'] = p_orig.get('orig_miny', 0.0)
 
                     transform = _inferir_transformacion_desde_resultado(p_orig, p_final)
+
+                    rot_origin = _origen_rotacion_pieza(
+                        p_orig.get("poly_exact") or p_orig.get("poly")
+                    )
+                    p_final["rot_origin_cx"] = rot_origin[0]
+                    p_final["rot_origin_cy"] = rot_origin[1]
 
                     if transform:
                         p_final['rot_deg'] = transform['rot_deg']
@@ -2019,7 +2092,7 @@ class MotorNesting:
 
             sincronizar_overlays_grupo(hojas_finales)
             efi_grupo = calcular_eficiencias_grupo(hojas_finales)
-            return clave, {
+            resultado_placas = {
                 "placa": "Óptima",
                 "dim": "Multi",
                 "hojas": hojas_finales,
@@ -2035,6 +2108,7 @@ class MotorNesting:
                 "reporte": "Reporte Generado.",
                 **efi_grupo,
             }
+            return clave, resultado_placas
         else:
             return clave, {
                 "error": "Error de empaquetado crítico. Geometría imposible de anidar."
