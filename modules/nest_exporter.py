@@ -83,8 +83,16 @@ def _build_placement_matrix(p) -> Matrix44:
     ox = float(p.get("orig_minx", 0.0))
     oy = float(p.get("orig_miny", 0.0))
     rot = math.radians(float(p.get("rot_deg", 0.0) or 0.0))
-    sx = float(p.get("shift_x", 0.0))
-    sy = float(p.get("shift_y", 0.0))
+    if bool(p.get("cu_largos_piece")):
+        bounds = _poly_bounds(p.get("outer") or p.get("outer_poly"))
+        if bounds:
+            sx, sy = bounds[0], bounds[1]
+        else:
+            sx = float(p.get("shift_x", 0.0))
+            sy = float(p.get("shift_y", 0.0))
+    else:
+        sx = float(p.get("shift_x", 0.0))
+        sy = float(p.get("shift_y", 0.0))
     rcx = float(p.get("rot_origin_cx", 0.0) or 0.0)
     rcy = float(p.get("rot_origin_cy", 0.0) or 0.0)
 
@@ -477,6 +485,66 @@ def _layer_for_exported_entity(clase: str, entity, p: dict) -> str:
     return raw
 
 
+def _export_cu_inner_and_marks(
+    msp,
+    p: dict,
+    *,
+    draw_holes: bool = True,
+    draw_marks: bool = True,
+) -> bool:
+    """Inner/marks cobre largos desde polígonos del nest (mm placa, 1:1 con visor)."""
+    added = False
+    if draw_holes:
+        for h in p.get("holes") or p.get("inner") or []:
+            h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
+            if not h_t:
+                continue
+            export_ring_native(msp, h_t, "CUT_INNER", closed=True, prefer_circle=True)
+            added = True
+    if draw_marks:
+        for mk in p.get("marks") or p.get("mark") or []:
+            if not mk:
+                continue
+            mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
+            if mk_t:
+                _add_lwpolyline(msp, mk_t, layer="MARK", closed=False)
+                added = True
+    return added
+
+
+def _export_cu_largos_from_source(
+    msp,
+    doc,
+    p: dict,
+    *,
+    draw_marks: bool = True,
+) -> bool:
+    """
+    Cobre largos con DXF fuente: cortes CUT_OUTER nativos + inner/marks del nest colocado.
+    Los polígonos del nest ya están en mm de placa; no clonar inner/mark del DXF (evita desfase).
+    """
+    ruta = str(p.get("ruta") or "").strip()
+    outer = p.get("outer") or p.get("outer_poly") or []
+    if not ruta or not os.path.isfile(ruta) or len(outer) < 2:
+        return False
+
+    try:
+        part_doc = ezdxf.readfile(ruta)
+    except Exception as e:
+        print(f"[WARN] DXF fuente ilegible {ruta}: {e}")
+        return False
+
+    m = _build_placement_matrix(p)
+    laser_added = _export_cu_laser_outer_cuts_native(msp, part_doc, m, p)
+    if laser_added == 0:
+        outer_t = _transform_poly(outer, tx=0.0, ty=0.0, rot_deg=0.0)
+        if outer_t:
+            laser_added = _export_cu_contour_cuts_from_ring(msp, outer_t, p)
+
+    inner_ok = _export_cu_inner_and_marks(msp, p, draw_marks=draw_marks)
+    return laser_added > 0 or inner_ok
+
+
 def _export_source_dxf_at_placement(
     msp,
     doc,
@@ -632,7 +700,10 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
                 else:
                     _export_ring_exact(msp, outer_t, layer_destino, closed=closed_destino)
 
-        if draw_holes:
+    if p.get("cu_largos_piece"):
+        _export_cu_inner_and_marks(msp, p, draw_holes=draw_holes, draw_marks=draw_marks)
+    else:
+        if draw_holes and has_outer:
             holes = p.get("holes") or p.get("inner") or []
             for h in holes:
                 h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
@@ -644,23 +715,19 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
                 else:
                     _export_ring_exact(msp, h_t, hole_layer, closed=True)
 
-    if draw_marks:
-        part_name = str(p.get("part_name") or p.get("name") or "")
-        marks_layer = str(
-            p.get("marks_layer")
-            or p.get("marks_layer_override")
-            or (
-                "MARK"
-                if p.get("cu_largos_piece")
-                else ("RTZ_LABEL" if part_name.startswith("TATUAJE") else "MARK")
+        if draw_marks:
+            part_name = str(p.get("part_name") or p.get("name") or "")
+            marks_layer = str(
+                p.get("marks_layer")
+                or p.get("marks_layer_override")
+                or ("RTZ_LABEL" if part_name.startswith("TATUAJE") else "MARK")
             )
-        )
-        for mk in marks:
-            if not mk:
-                continue
-            mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
-            if mk_t:
-                _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
+            for mk in marks:
+                if not mk:
+                    continue
+                mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
+                if mk_t:
+                    _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
 
     return has_outer or bool(marks)
 
@@ -843,12 +910,17 @@ def export_nest_to_dxf(
         compensated = bool(p.get("compensated"))
         cu_largos_piece = bool(p.get("cu_largos_piece"))
 
-        # 1) DXF fuente: geometría nativa + capas según modo (2D vs cobre largos).
+        # 1) Cobre largos: cortes nativos + inner/marks del nest (1:1 visor).
+        if cu_largos_piece and prefer_source and not compensated and ruta_original:
+            if _export_cu_largos_from_source(msp, doc, p, draw_marks=draw_marks):
+                continue
+
+        # 2) DXF fuente (placas 2D y demás).
         if prefer_source and not compensated and ruta_original:
             if _export_source_dxf_at_placement(msp, doc, p, draw_marks=draw_marks):
                 continue
 
-        # 2) Block explode — no en cobre largos (mezclaría contorno con CUT_OUTER).
+        # 3) Block explode — no en cobre largos (mezclaría contorno con CUT_OUTER).
         if (
             not compensated
             and not cu_largos_piece
@@ -858,7 +930,7 @@ def export_nest_to_dxf(
             if _export_block_at_placement(msp, doc, cache_blocks, p):
                 continue
 
-        # 3) Respaldo: polígonos del nest (sin DXF o piezas virtuales).
+        # 4) Respaldo: polígonos del nest (sin DXF o piezas virtuales).
         if _export_placed_geometry(
             msp, p, draw_holes=draw_holes, draw_marks=draw_marks
         ):
