@@ -79,15 +79,6 @@ class SistemaNestingPro(QMainWindow):
         self._build_ui()
         QTimer.singleShot(200, self._mostrar_maximizado)
         QTimer.singleShot(300, self._intentar_sync_placas_react_herinox_async)
-        QTimer.singleShot(400, self._precalentar_animacion_logo)
-
-    def _precalentar_animacion_logo(self) -> None:
-        try:
-            from interface.qt.logo_anim_service import warm_logo_anim_service
-
-            warm_logo_anim_service()
-        except Exception:
-            pass
 
     def _init_estado(self):
         self.jobs_procesados = self.cargar_historial()
@@ -390,12 +381,6 @@ class SistemaNestingPro(QMainWindow):
 
     def closeEvent(self, event):
         self.cancelar_tarea_actual()
-        try:
-            from interface.qt.logo_anim_service import shutdown_logo_anim_service
-
-            shutdown_logo_anim_service()
-        except Exception:
-            pass
         event.accept()
 
     def _extractor_numerico(self, valor):

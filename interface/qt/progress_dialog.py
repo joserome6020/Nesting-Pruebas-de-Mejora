@@ -4,7 +4,8 @@ from __future__ import annotations
 import os
 import time
 
-from PySide6.QtCore import QPoint, QTimer, Qt
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -15,8 +16,71 @@ from PySide6.QtWidgets import (
 )
 
 import config
-from .logo_anim_service import hide_logo_anim, show_logo_anim
 from .theme import COLOR_GRIS_DARK, COLOR_TEXTO_SECUNDARIO, surface_dialog_stylesheet
+
+_LOGO_FPS = 60
+_LOGO_INTERVAL_MS = max(1, int(round(1000 / _LOGO_FPS)))
+
+
+def _bounce_1d(p0: float, v: float, lo: float, hi: float, t: float) -> float:
+    width = float(hi - lo)
+    if width <= 1e-6 or abs(v) < 1e-6:
+        return p0
+    period = 2.0 * width
+    q = (p0 - lo + v * t) % period
+    if q < 0:
+        q += period
+    if q <= width:
+        return lo + q
+    return lo + (period - q)
+
+
+class _BouncingLogoLabel(QLabel):
+    """Logo Arga rebotando dentro del recuadro del diálogo (sin ventana flotante)."""
+
+    def __init__(self, parent: QFrame, logo_path: str):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        pix = QPixmap()
+        if logo_path and os.path.exists(logo_path):
+            pix = QPixmap(logo_path).scaled(
+                54,
+                54,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        self.setPixmap(pix)
+        self.setFixedSize(54, 54)
+        self.move(8, 8)
+
+        self._t0 = time.perf_counter()
+        self._vx = 144.0
+        self._vy = 108.0
+        self._x0 = 8.0
+        self._y0 = 8.0
+
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.timeout.connect(self._tick)
+
+    def start(self) -> None:
+        self._t0 = time.perf_counter()
+        self._timer.start(_LOGO_INTERVAL_MS)
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def _tick(self) -> None:
+        box = self.parentWidget()
+        if box is None or self.pixmap() is None or self.pixmap().isNull():
+            return
+        t = time.perf_counter() - self._t0
+        lw, lh = self.width(), self.height()
+        max_x = max(0.0, float(box.width() - lw))
+        max_y = max(0.0, float(box.height() - lh))
+        x = _bounce_1d(self._x0, self._vx, 0.0, max_x, t)
+        y = _bounce_1d(self._y0, self._vy, 0.0, max_y, t)
+        self.move(int(x), int(y))
 
 
 class ProgressDialog(QDialog):
@@ -32,7 +96,7 @@ class ProgressDialog(QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick_tiempo)
         self._force_close = False
-        self._logo_overlay_activo = False
+        self._logo_label: _BouncingLogoLabel | None = None
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 24, 24, 24)
@@ -60,7 +124,9 @@ class ProgressDialog(QDialog):
 
         self._logo_box = QFrame()
         self._logo_box.setFixedSize(360, 95)
-        self._logo_box.setStyleSheet("background:#FBFCFF;border:1px solid #D8DFEB;border-radius:12px;")
+        self._logo_box.setStyleSheet(
+            "background:#FBFCFF;border:1px solid #D8DFEB;border-radius:12px;"
+        )
         lay.addWidget(self._logo_box, alignment=Qt.AlignmentFlag.AlignCenter)
         self._logo_box.hide()
 
@@ -94,20 +160,18 @@ class ProgressDialog(QDialog):
         )
         return not any(tag in t for tag in con_barra)
 
-    def _logo_screen_pos(self) -> tuple[int, int]:
-        top_left = self._logo_box.mapToGlobal(QPoint(0, 0))
-        return int(top_left.x()), int(top_left.y())
-
     def _iniciar_animacion_logo(self) -> None:
+        self._detener_animacion_logo()
         logo_path = config.ruta_recurso(os.path.join("assets", "branding", "logo_icon1.png"))
-        sx, sy = self._logo_screen_pos()
-        show_logo_anim(sx, sy, logo_path)
-        self._logo_overlay_activo = True
+        self._logo_label = _BouncingLogoLabel(self._logo_box, logo_path)
+        self._logo_label.show()
+        self._logo_label.start()
 
     def _detener_animacion_logo(self) -> None:
-        if self._logo_overlay_activo:
-            hide_logo_anim()
-            self._logo_overlay_activo = False
+        if self._logo_label is not None:
+            self._logo_label.stop()
+            self._logo_label.deleteLater()
+            self._logo_label = None
 
     def _tick_tiempo(self) -> None:
         elapsed = max(0, int(time.time() - self._inicio_ts))
