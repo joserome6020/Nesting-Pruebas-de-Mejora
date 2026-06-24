@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -41,6 +42,32 @@ EXCL = {"processed files", "procesados", "nesting", "__pycache__"}
 TOL_MM = 2.5
 MAX_PIECES = 12
 MAX_HOJAS = 2
+
+
+def _duplicate_circles(ents, center_tol: float = 0.35, radius_tol: float = 0.35) -> int:
+    """Cuenta pares de CIRCLE casi coincidentes (empalme por reconstrucción)."""
+    circles = []
+    for e in ents:
+        if e.dxftype() != "CIRCLE":
+            continue
+        circles.append(
+            (
+                float(e.dxf.center.x),
+                float(e.dxf.center.y),
+                float(e.dxf.radius),
+            )
+        )
+    dupes = 0
+    for i in range(len(circles)):
+        cx1, cy1, r1 = circles[i]
+        for j in range(i + 1, len(circles)):
+            cx2, cy2, r2 = circles[j]
+            if (
+                math.hypot(cx1 - cx2, cy1 - cy2) <= center_tol
+                and abs(r1 - r2) <= radius_tol
+            ):
+                dupes += 1
+    return dupes
 
 
 def _corner_circle_spurious(ents, piece_bbox) -> int:
@@ -136,9 +163,9 @@ def _placement_from_pz(pz: dict) -> dict:
     ruta = str(pz.get("ruta") or "").strip()
     use_source = bool(ruta) and os.path.isfile(ruta) and not nom.startswith("CU_CORTE__")
     if nom.startswith("CU_CORTE__"):
-        layer, closed = "CUT_OUTER", False
+        layer, closed, cu_largos = "CUT_OUTER", False, False
     else:
-        layer, closed = "CUT_OUTER", True
+        layer, closed, cu_largos = "CUT_OUTER", True, True
     return {
         "part_name": nom,
         "outer": outer,
@@ -147,6 +174,9 @@ def _placement_from_pz(pz: dict) -> dict:
         "ruta": ruta if use_source else "",
         "prefer_source_dxf": use_source,
         "compensated": False,
+        "cu_largos_piece": cu_largos,
+        "cu_slice_idx": int(pz.get("cu_slice_idx", 0) or 0),
+        "cu_slice_count": int(pz.get("cu_slice_count", 1) or 1),
         "orig_minx": pz.get("orig_minx", 0.0),
         "orig_miny": pz.get("orig_miny", 0.0),
         "shift_x": pz.get("shift_x", 0.0),
@@ -174,7 +204,7 @@ def _validate_piece_isolated(pz: dict) -> list[str]:
     doc = ezdxf.new()
     msp = doc.modelspace()
     mode = "source"
-    if not _export_source_dxf_at_placement(msp, pl):
+    if not _export_source_dxf_at_placement(msp, doc, pl):
         mode = "lines"
         _export_placed_geometry(msp, pl)
 
@@ -187,11 +217,14 @@ def _validate_piece_isolated(pz: dict) -> list[str]:
     ebb = (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
     delta = max(abs(ebb[i] - nbb[i]) for i in range(4))
     spurious = _corner_circle_spurious(ents, nbb)
+    dupes = _duplicate_circles(ents)
     errs = []
     if delta > TOL_MM:
         errs.append(f"{nom}: delta bbox {delta:.2f}mm > {TOL_MM} ({mode})")
     if spurious:
         errs.append(f"{nom}: {spurious} círculo(s) espurio(s) en esquina ({mode})")
+    if dupes:
+        errs.append(f"{nom}: {dupes} par(es) de círculos empalados ({mode})")
     return errs
 
 
@@ -234,10 +267,13 @@ def _validate_full_sheet(dxf_path: str, hoja: dict) -> list[str]:
         ebb = (ext.extmin.x, ext.extmin.y, ext.extmax.x, ext.extmax.y)
         delta = max(abs(ebb[i] - nbb[i]) for i in range(4))
         spurious = _corner_circle_spurious(mine, nbb)
+        dupes = _duplicate_circles(mine)
         if delta > TOL_MM:
             errs.append(f"{nom}: hoja completa delta {delta:.2f}mm")
         if spurious:
             errs.append(f"{nom}: hoja completa {spurious} círculo(s) espurio(s)")
+        if dupes:
+            errs.append(f"{nom}: hoja completa {dupes} par(es) de círculos empalados")
     return errs
 
 
@@ -295,7 +331,13 @@ def main() -> int:
                 "thickness": "0.25",
                 "arga_code": f"VALID-H{i}",
             }
-            export_nest_to_dxf(out, sheet, placements, title="VALIDACION")
+            export_nest_to_dxf(
+                out,
+                {**sheet, "modo_largos_cu": True},
+                placements,
+                title="VALIDACION",
+                modo_largos_cu=True,
+            )
             errs = _validate_full_sheet(out, hoja)
             n_real = sum(
                 1

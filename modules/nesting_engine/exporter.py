@@ -507,7 +507,10 @@ def exportar_resultados_a_dxf(
                 "material": clave.split("_", 1)[1] if "_" in clave else clave,
                 "thickness": thickness_name or "",
                 "arga_code": hoja["sheet_display_name"],
+                "modo_largos_cu": bool(hoja.get("modo_largos_cu")),
             }
+            _cu_bar_w = float(h_mm)
+            _cu_bar_l = float(w_mm)
 
             carpeta_principal = _resolver_carpeta_principal(clave, hoja)
             generar_plasma_hoja = _debe_generar_plasma(clave, hoja)
@@ -539,6 +542,8 @@ def exportar_resultados_a_dxf(
                     continue
 
                 if nom.startswith("TATUAJE_"):
+                    if es_cu_hoja:
+                        continue
                     placements_principales.append({
                         "part_name": nom,
                         "outer": [],
@@ -579,12 +584,13 @@ def exportar_resultados_a_dxf(
 
                 layer_override = pz.get("layer_override")
                 closed_flag = pz.get("closed")
+                cu_largos_piece = False
                 if es_cu_hoja and not layer_override:
                     if es_linea_corte:
                         layer_override = "CUT_OUTER"
                         closed_flag = False
                     else:
-                        layer_override = "CUT_OUTER"
+                        cu_largos_piece = True
                         closed_flag = True
 
                 placement = {
@@ -595,6 +601,11 @@ def exportar_resultados_a_dxf(
                     "ruta": ruta_src if use_source_dxf else "",
                     "prefer_source_dxf": use_source_dxf,
                     "compensated": compensada_pieza,
+                    "cu_largos_piece": cu_largos_piece,
+                    "cu_slice_idx": int(pz.get("cu_slice_idx", 0) or 0),
+                    "cu_slice_count": int(pz.get("cu_slice_count", 1) or 1),
+                    "cu_bar_w_mm": _cu_bar_w if es_cu_hoja else 0.0,
+                    "cu_bar_l_mm": _cu_bar_l if es_cu_hoja else 0.0,
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
                     "shift_x": pz.get("shift_x", 0.0),
@@ -668,6 +679,7 @@ def exportar_resultados_a_dxf(
                 sheet_info,
                 placements_principales,
                 title=f"{carpeta_principal} | {clave}",
+                modo_largos_cu=bool(hoja.get("modo_largos_cu")),
             )
             exportados_principales.append(path_principal)
 

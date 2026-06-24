@@ -4,7 +4,7 @@ Nesting 1D para largos de cobre (CU).
 - Orientación nativa del DXF (sin rotar).
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Export DXF: CUT_OUTER = programación láser (divisores + relieves); CUT_CU = contorno STEP.
+- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = línea vertical inicio barra.
 
 Cortes CUT_OUTER (láser):
   1. Pieza rectangular a ancho exacto de tira (ej. 4" en barra 4"): solo guillotinas verticales.
@@ -12,10 +12,12 @@ Cortes CUT_OUTER (láser):
      línea horizontal CUT_OUTER (CU_CORTE__SUP__) a la altura del ancho real de la pieza.
   3. Pieza con relieve en la frontera entre rebanadas: escalón/diagonal local junto al corte
      vertical (no el techo largo del stock que atravesaría toda la pieza).
+  4. CU_CORTE__V__ intermedias solo en visor; al DXF láser solo la del final de barra.
 """
 from __future__ import annotations
 
 import copy
+import math
 from typing import Callable, Dict, List, Optional, Tuple
 
 from shapely.geometry import LineString
@@ -400,16 +402,106 @@ def _segmentos_corte_laser_pieza(
 
     izq: List[list] = []
     der: List[list] = []
+    segmentos: List[list] = []
     if idx > 0 and not _frontera_basta_guillotina_vertical(exterior, minx, tol=tol):
         izq = _segmentos_relieve_en_frontera(exterior, minx, tol=tol)
     if idx < n_total - 1 and not _frontera_basta_guillotina_vertical(exterior, maxx, tol=tol):
         der = _segmentos_relieve_en_frontera(exterior, maxx, tol=tol)
 
     if izq:
-        return izq
+        segmentos.extend(izq)
     if der:
-        return der
-    return []
+        segmentos.extend(der)
+    return segmentos
+
+
+def _arista_en_relieve_frontera(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    frontera_x: float,
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    tol: float = TOL_GEOM_MM,
+) -> bool:
+    """True si el segmento es corte láser de relieve local en una frontera de rebanada."""
+    xmin_e = min(x1, x2)
+    xmax_e = max(x1, x2)
+    ymin_e = min(y1, y2)
+    ymax_e = max(y1, y2)
+    seg_len = math.hypot(x2 - x1, y2 - y1)
+    if seg_len <= tol:
+        return False
+
+    band = max((maxx - minx) * RELIEF_BAND_FRAC, RELIEF_BAND_MIN_MM)
+
+    if _es_arista_horizontal(x1, y1, x2, y2, tol) and abs((y1 + y2) / 2.0 - miny) <= tol:
+        return False
+
+    if xmax_e < frontera_x - band or xmin_e > frontera_x + band:
+        return False
+
+    if (
+        _es_arista_vertical(x1, y1, x2, y2, tol)
+        and abs((x1 + x2) / 2.0 - frontera_x) <= tol
+        and (ymax_e - ymin_e) > (maxy - miny) * 0.45
+    ):
+        return False
+
+    if _es_arista_horizontal(x1, y1, x2, y2, tol) and abs((y1 + y2) / 2.0 - maxy) <= tol:
+        if abs(xmax_e - xmin_e) > band + tol:
+            return False
+        centro_x = (x1 + x2) / 2.0
+        if abs(centro_x - frontera_x) > band * 0.65:
+            return False
+
+    if _es_arista_horizontal(x1, y1, x2, y2, tol) or _es_arista_vertical(x1, y1, x2, y2, tol):
+        return True
+    return seg_len > tol * 2
+
+
+def segmentos_laser_relieve_desde_contorno(
+    exterior: list,
+    *,
+    idx: int,
+    n_total: int,
+    tol: float = TOL_GEOM_MM,
+) -> List[list]:
+    """
+    Aristas de relieve láser (CUT_OUTER) en fronteras izq/der del contorno colocado.
+    Usa el mismo criterio que el nesting; devuelve ambos lados si aplican.
+    """
+    if not exterior:
+        return []
+    if _solo_cortes_guillotina_vertical(exterior, tol=tol):
+        return []
+
+    pts = _vertices_cerrados(exterior)
+    if len(pts) < 2:
+        return []
+    minx, miny, maxx, maxy = _bbox_poligono(pts)
+    out: List[list] = []
+
+    def _collect(frontera_x: float) -> None:
+        if _frontera_basta_guillotina_vertical(exterior, frontera_x, tol=tol):
+            return
+        n = len(pts)
+        for i in range(n):
+            x1, y1 = float(pts[i][0]), float(pts[i][1])
+            x2, y2 = float(pts[(i + 1) % n][0]), float(pts[(i + 1) % n][1])
+            if _arista_en_relieve_frontera(
+                x1, y1, x2, y2, frontera_x, minx, miny, maxx, maxy, tol
+            ):
+                out.append([(x1, y1), (x2, y2)])
+
+    if idx > 0:
+        _collect(minx)
+    if idx < n_total - 1:
+        _collect(maxx)
+    return out
 
 
 def _linea_corte_segmento(seg: list, tag: str, pieza_nom: str) -> dict:
@@ -598,7 +690,10 @@ def empaquetar_largos_cu(
 
         n_col = len(piezas_reales)
         for idx, p_final in enumerate(piezas_reales):
+            p_final["cu_slice_idx"] = idx
+            p_final["cu_slice_count"] = n_col
             exterior = (p_final.get("poligonos") or [[]])[0]
+            tiene_dxf = bool(str(p_final.get("ruta") or "").strip())
             for seg_i, seg in enumerate(
                 _segmentos_corte_laser_pieza(
                     exterior,
@@ -606,6 +701,9 @@ def empaquetar_largos_cu(
                     n_total=n_col,
                 )
             ):
+                if tiene_dxf:
+                    # Relieves exactos desde DXF fuente en export_nest_to_dxf.
+                    continue
                 piezas_hoja.append(
                     _linea_corte_segmento(
                         seg,
