@@ -238,16 +238,6 @@ def reconciliar_hojas_grupo(piezas_origen, hojas):
     return out
 
 
-def _multiset_nombres_hoja(hoja) -> Counter:
-    return Counter(str(p.get("nombre") or "") for p in piezas_reales_en_hoja(hoja))
-
-
-def _multiset_es_subconjunto_propio(menor: Counter, mayor: Counter) -> bool:
-    if not menor or menor == mayor:
-        return False
-    return all(menor[k] <= mayor.get(k, 0) for k in menor)
-
-
 def asegurar_identidad_hojas(hojas, clave: str = "") -> None:
     """Asigna índice de lista y sheet_uid estable para placas con el mismo placa_id."""
     clv = str(clave or "").strip()
@@ -295,45 +285,10 @@ def deduplicar_hojas_grupo(hojas):
         if prev is None or sc > prev[1]:
             ganador_por_layout[key] = (i, sc)
 
-    # Subconjunto: misma placa_id y layout de B contenido en A → descartar el más pequeño.
-    descartar: set[int] = set()
-    for i, (ma, _) in enumerate(bloques):
-        if i in descartar:
-            continue
-        for j, (mb, _) in enumerate(bloques):
-            if i == j or j in descartar:
-                continue
-            if str(ma.get("placa_id") or "") != str(mb.get("placa_id") or ""):
-                continue
-            ca = _multiset_nombres_hoja(ma)
-            cb = _multiset_nombres_hoja(mb)
-            if _multiset_es_subconjunto_propio(cb, ca):
-                descartar.add(j)
-            elif _multiset_es_subconjunto_propio(ca, cb):
-                descartar.add(i)
-    for i, (ma, _) in enumerate(bloques):
-        if i in descartar:
-            continue
-        fpa = set(fingerprint_layout_hoja(ma))
-        if not fpa:
-            continue
-        for j, (mb, _) in enumerate(bloques):
-            if i == j or j in descartar:
-                continue
-            if str(ma.get("placa_id") or "") != str(mb.get("placa_id") or ""):
-                continue
-            fpb = set(fingerprint_layout_hoja(mb))
-            if not fpb:
-                continue
-            if fpb < fpa:
-                descartar.add(j)
-            elif fpa < fpb:
-                descartar.add(i)
-
+    # Duplicado exacto: misma placa_id y mismo layout espacial (ganador_por_layout).
+    # No descartar subconjuntos espaciales: qty>1 puede repetir nombre/posición en hojas distintas.
     out: list = []
     for i, (madre, rtzs) in enumerate(bloques):
-        if i in descartar:
-            continue
         fp = fingerprint_layout_hoja(madre)
         if not fp:
             out.append(madre)
