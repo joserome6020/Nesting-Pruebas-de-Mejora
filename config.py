@@ -25,7 +25,7 @@ def ruta_persistente(ruta_relativa):
 def asegurar_archivo_persistente(ruta_relativa: str) -> str:
     """
     Ruta persistente junto al .exe; si no existe, copia la plantilla empaquetada (_MEIPASS).
-    Útil para Plates.xlsx, inventario_remanentes.csv, etc. en otras PCs.
+    Útil para inventario_remanentes.csv, herinox_sync.local.json, etc. en otras PCs.
     """
     destino = ruta_persistente(ruta_relativa)
     if os.path.exists(destino):

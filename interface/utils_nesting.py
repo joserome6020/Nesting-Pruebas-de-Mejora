@@ -427,14 +427,27 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     # =====================================================================
     # 3. CÁLCULOS MATEMÁTICOS Y DE ÁREA
     # =====================================================================
+    from modules.nesting_engine.efficiency_metrics import (
+        allocar_nombre_rtz_sobrante_db,
+        hoja_es_sobrante_sin_compra,
+        inicializar_contador_rtz_sobrante,
+    )
+
     reporte_placas = {}
-    piezas_detalladas_db = {} 
+    piezas_detalladas_db = {}
+    contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados)
     
     for clave_mat, info_mat in resultados.items():
         espesor = _normalizar_espesor_a_calibre(clave_mat)
+        calibre_rtz = str(clave_mat).split("_", 1)[0].strip() or "NA"
         for idx, hoja in enumerate(info_mat.get("hojas", [])):
-            p_id_base = hoja.get("placa_id", "DESCONOCIDO")
-            sheet_uid = f"{p_id_base} P{idx+1}"
+            if hoja_es_sobrante_sin_compra(hoja):
+                sheet_uid = allocar_nombre_rtz_sobrante_db(
+                    contador_rtz_sobrante, calibre_rtz, nombre_wo
+                )
+            else:
+                p_id_base = hoja.get("placa_id", "DESCONOCIDO")
+                sheet_uid = f"{p_id_base} P{idx+1}"
             precio_placa = float(hoja.get("precio_placa", 0.0))
             excluir_compra = bool(hoja.get("ignorar_deduccion")) and not hoja.get("es_retazo")
             

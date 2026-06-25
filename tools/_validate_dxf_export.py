@@ -129,11 +129,11 @@ def _load_cu_sample():
 
 
 def _load_barras():
-    xlsx = ROOT / "modules" / "Plates.xlsx"
-    wb = load_workbook(xlsx, read_only=True, data_only=True)
-    ws = wb.active
+    from modules.sheets_manager import PlatesManager
+
+    emp, _ = PlatesManager().obtener_datos_placas_divididos()
     rows = []
-    for row in ws.iter_rows(min_row=2, values_only=True):
+    for row in emp:
         if not row or len(row) < 10:
             continue
         if str(row[1]).strip().upper() != "CU":

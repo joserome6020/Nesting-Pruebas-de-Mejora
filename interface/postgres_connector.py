@@ -4,6 +4,12 @@ import psycopg2
 import json
 
 from modules.lista_largos_importer import importar_lista_largos_job
+from modules.nesting_engine.efficiency_metrics import (
+    allocar_nombre_rtz_sobrante_db,
+    hoja_es_sobrante_sin_compra,
+    inicializar_contador_rtz_sobrante,
+)
+from modules.nesting_engine.sheet_numbering import iterar_grupos_nesting_ordenados
 
 SHEET_METADATA_COLUMNS = {
     "sheet_uid",
@@ -75,7 +81,10 @@ def _obtener_columnas_reporte_cortes(cursor):
     return {row[0] for row in cursor.fetchall()}
 
 
-def _resolver_placa_id_visible(hoja, contador_placas):
+def _resolver_placa_id_visible(hoja, contador_placas, *, contador_rtz=None, calibre=None, wo_name=None):
+    if hoja_es_sobrante_sin_compra(hoja) and contador_rtz is not None:
+        return allocar_nombre_rtz_sobrante_db(contador_rtz, calibre, wo_name)
+
     display_forzado = str(hoja.get("sheet_display_name") or "").strip()
     if display_forzado:
         return display_forzado
@@ -95,6 +104,7 @@ def _build_sheet_meta(
     grupo_calibre,
     sheet_seq_global,
     contador_placas,
+    contador_rtz,
     nombre_job,
     nombre_wo,
     es_swo,
@@ -102,8 +112,15 @@ def _build_sheet_meta(
 ):
     order_label = str(nombre_job if es_swo else nombre_wo).strip()
     thickness_name = str(grupo_calibre).split("_", 1)[0].strip() or "NA"
+    es_sobrante_db = hoja_es_sobrante_sin_compra(hoja)
 
-    display_name = _resolver_placa_id_visible(hoja, contador_placas)
+    display_name = _resolver_placa_id_visible(
+        hoja,
+        contador_placas,
+        contador_rtz=contador_rtz,
+        calibre=thickness_name,
+        wo_name=order_label,
+    )
 
     sheet_seq = int(hoja.get("sheet_seq") or sheet_seq_global)
     sheet_code = str(hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}")
@@ -129,23 +146,35 @@ def _build_sheet_meta(
         f"{_slug_token(display_name)}"
     )
 
-    sheet_uid = str(hoja.get("sheet_uid") or default_sheet_uid)
+    if es_sobrante_db:
+        sheet_uid = default_sheet_uid
+        sheet_display_name_db = display_name
+    else:
+        sheet_uid = str(hoja.get("sheet_uid") or default_sheet_uid)
+        sheet_display_name_db = str(hoja.get("sheet_display_name") or display_name)
 
     meta = {
         "sheet_uid": sheet_uid,
         "sheet_code": sheet_code,
         "sheet_seq": sheet_seq,
-        "sheet_display_name": str(hoja.get("sheet_display_name") or display_name),
+        "sheet_display_name": sheet_display_name_db,
         "plate_group_key": str(hoja.get("plate_group_key") or sheet_uid),
         "placa_ancho_canonico_mm": round(float(hoja.get("placa_ancho_canonico_mm") or placa_w), 2),
         "placa_largo_canonico_mm": round(float(hoja.get("placa_largo_canonico_mm") or placa_h), 2),
         "nest_instance_id": nest_instance_id,
         "source_nest_name": source_nest_name,
-        "is_rtz": bool(hoja.get("is_rtz", str(display_name).upper().startswith("RTZ"))),
+        "is_rtz": bool(
+            hoja.get("is_rtz")
+            or es_sobrante_db
+            or str(display_name).upper().startswith("RTZ")
+        ),
     }
 
-    # Se reinyecta a la hoja para mantener coherencia interna
-    hoja.update(meta)
+    # Sobrante: solo metadata de BD; conservar sheet_display_name del DXF en memoria.
+    if es_sobrante_db:
+        hoja.update({k: v for k, v in meta.items() if k != "sheet_display_name"})
+    else:
+        hoja.update(meta)
 
     return meta
 
@@ -770,6 +799,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         cursor = conexion.cursor()
         piezas_guardadas = 0
         global_sheet_counter = 0
+        contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados_motor)
 
         print("[PQART][DEBUG] Resumen de hojas antes de guardar:")
         for grupo_calibre, datos_grupo in (resultados_motor or {}).items():
@@ -815,14 +845,16 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 print("[BD] S.W.O. Detectada: Se limpiaron los registros individuales previos para insertar el layout maestro.")
 
 
-        for grupo_calibre, datos_grupo in resultados_motor.items():
+        for grupo_calibre, datos_grupo in iterar_grupos_nesting_ordenados(resultados_motor):
             if 'error' in datos_grupo:
                 continue
 
             contador_placas = {}
 
             for indice, hoja in enumerate(datos_grupo.get('hojas', []), start=1):
-                global_sheet_counter += 1
+                global_sheet_counter = int(hoja.get("sheet_seq") or (global_sheet_counter + 1))
+                if not hoja.get("sheet_seq"):
+                    hoja["sheet_seq"] = global_sheet_counter
 
                 eficiencia = hoja.get('eficiencia', 0.0)
                 placa_w = float(hoja.get('placa_w', 0.0) or 0.0)
@@ -833,6 +865,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     grupo_calibre=grupo_calibre,
                     sheet_seq_global=global_sheet_counter,
                     contador_placas=contador_placas,
+                    contador_rtz=contador_rtz_sobrante,
                     nombre_job=nombre_job,
                     nombre_wo=nombre_wo,
                     es_swo=es_swo,

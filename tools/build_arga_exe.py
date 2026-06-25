@@ -120,7 +120,6 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "nesting_engine" / "algorithm_bridge.py",
     ROOT / "modules" / "nesting_engine" / "nest_optimization.py",
     ROOT / "modules" / "nesting_engine" / "cu_largos_nesting.py",
-    ROOT / "modules" / "Plates.xlsx",
 )
 
 SMOKE_IMPORT_MODULES = (
@@ -445,10 +444,6 @@ def verify_build_artifacts(exe_path: Path, cpp_pyd: Path | None):
         raise FileNotFoundError(f"No se generó el ejecutable: {exe_path}")
     if cpp_pyd is None or not cpp_pyd.is_file():
         raise RuntimeError("Build incompleto: falta algorithm_cpp.pyd en el motor de nesting.")
-    dist_plates = exe_path.parent / "modules" / "Plates.xlsx"
-    repo_plates = ROOT / "modules" / "Plates.xlsx"
-    if repo_plates.is_file() and not dist_plates.is_file():
-        raise FileNotFoundError(f"Falta inventario en dist: {dist_plates}")
     manifest = exe_path.parent / "arga_build_manifest.json"
     if manifest.is_file():
         data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -506,62 +501,28 @@ def build_exe(name: str, onefile: bool = True, cpp_pyd: Path | None = None):
 
 
 def sync_repo_plates_from_herinox(phase: str) -> bool:
-    """Sincroniza modules/Plates.xlsx contra Herinox antes o despues del empaquetado."""
+    """Verifica conexión a Herinox antes o después del empaquetado."""
     _ensure_build_import_path()
-    from modules.plates_inventory import repo_plates_path, sync_herinox_and_align_dist
+    from modules.plates_inventory import refresh_plates_from_herinox
 
-    repo_plates = repo_plates_path(ROOT)
     try:
-        resultado, _ = sync_herinox_and_align_dist(ROOT, mirror_to_dist=False)
+        resultado, (empresa, proveedor) = refresh_plates_from_herinox(ROOT)
         if resultado.ok:
             print(
-                f"[OK] [{phase}] Plates.xlsx sincronizado con Herinox via {resultado.source} "
-                f"(coincidencias={resultado.matched_codes}, filas_actualizadas={resultado.updated_rows})"
+                f"[OK] [{phase}] Inventario Herinox verificado via {resultado.source} "
+                f"(placas={resultado.matched_codes}, empresa={len(empresa)}, proveedor={len(proveedor)})"
             )
             return True
-        print(f"[WARN] [{phase}] Sync Herinox omitido: {resultado.message}")
+        print(f"[WARN] [{phase}] Herinox no disponible: {resultado.message}")
     except Exception as exc:
-        print(f"[WARN] [{phase}] No se pudo sincronizar Plates.xlsx con Herinox: {exc}")
-    return repo_plates.exists()
+        print(f"[WARN] [{phase}] No se pudo verificar inventario Herinox: {exc}")
+    return False
 
 
 def align_plates_inventory_after_build(exe_path: Path):
-    """
-    Espeja modules/Plates.xlsx hacia dist/modules/Plates.xlsx para que repo y
-    runtime del EXE queden exactamente iguales.
-    """
-    _ensure_build_import_path()
-    from modules.plates_inventory import (
-        dist_plates_path,
-        mirror_repo_to_dist,
-        plates_files_are_identical,
-        repo_plates_path,
-    )
-
-    repo_plates = repo_plates_path(ROOT)
-    dist_plates = dist_plates_path(ROOT)
-
-    try:
-        mirrored = mirror_repo_to_dist(ROOT)
-        if mirrored:
-            print(f"[OK] Inventario espejado repo->dist: {mirrored}")
-    except Exception as exc:
-        print(f"[WARN] No se pudo espejar Plates.xlsx a dist: {exc}")
-        if repo_plates.exists() and not dist_plates.exists():
-            try:
-                dist_plates.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(repo_plates, dist_plates)
-                print(f"[OK] Plates.xlsx sembrado en runtime: {dist_plates}")
-            except Exception as seed_exc:
-                print(f"[WARN] No se pudo sembrar Plates.xlsx en runtime: {seed_exc}")
-
-    if plates_files_are_identical(ROOT):
-        print(f"[OK] Inventario alineado: {repo_plates} == {dist_plates}")
-    else:
-        print(
-            f"[WARN] Inventario repo/dist no quedo identico tras build. "
-            f"repo={repo_plates} dist={dist_plates}"
-        )
+    """Legacy hook post-build (inventario ya no usa Plates.xlsx)."""
+    _ = exe_path
+    print("[OK] Inventario de placas: fuente directa PostgreSQL/API Herinox (sin Plates.xlsx).")
 
 
 def seed_persistent_sidecars(exe_path: Path):
@@ -571,7 +532,6 @@ def seed_persistent_sidecars(exe_path: Path):
     """
     dist_root = exe_path.parent
     seeds = (
-        (ROOT / "modules" / "Plates.xlsx", dist_root / "modules" / "Plates.xlsx"),
         (ROOT / "inventario_remanentes.csv", dist_root / "inventario_remanentes.csv"),
     )
     for src, dst in seeds:
@@ -604,9 +564,9 @@ def write_build_manifest(exe_path: Path, cpp_pyd: Path | None) -> Path:
             "herinox_catalogo_largos",
         ],
         "deploy_notes": [
-            "Copiar ArgaNestingSuite.exe + carpeta modules/ (Plates.xlsx) al mismo directorio.",
+            "Copiar ArgaNestingSuite.exe al directorio destino.",
             "Opcional: inventario_remanentes.csv junto al exe.",
-            "Requiere red a PostgreSQL nesting (5433) y Herinox (5439) en modo servidor.",
+            "Requiere red a PostgreSQL nesting (5433) y Herinox (5439) para inventario de placas.",
             "FreeCAD en C:\\Program Files\\FreeCAD 1.0\\ para STEP (si aplica).",
         ],
     }
@@ -620,7 +580,6 @@ def print_deploy_checklist(exe_path: Path):
     dist = exe_path.parent
     checks = [
         ("Ejecutable", exe_path.is_file()),
-        ("modules/Plates.xlsx", (dist / "modules" / "Plates.xlsx").is_file()),
         ("arga_build_manifest.json", (dist / "arga_build_manifest.json").is_file()),
     ]
     print("\n=== CHECKLIST DESPLIEGUE (copiar esta carpeta dist/ a otras PCs) ===")

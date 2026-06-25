@@ -427,9 +427,9 @@ def exportar_resultados_a_dxf(
     swo_id: str | None = None,
 ):
     try:
-        from modules.nest_exporter import export_nest_to_dxf
+        from modules.nest_exporter import export_nest_to_dxf, DxfExportValidationError
     except ImportError:
-        from nest_exporter import export_nest_to_dxf
+        from nest_exporter import export_nest_to_dxf, DxfExportValidationError
 
     import config
 
@@ -456,12 +456,24 @@ def exportar_resultados_a_dxf(
         os.makedirs(r, exist_ok=True)
 
     exportados_principales = []
-    global_sheet_counter = 0
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
     plasma_offset_job = 0.0125 * 25.4
 
-    for clave, data in (resultados or {}).items():
-        if not isinstance(data, dict) or "error" in data or "hojas" not in data:
+    from .sheet_numbering import (
+        asignar_numeracion_global_hojas,
+        iterar_grupos_nesting_ordenados,
+        resolver_order_label_sheet_codes,
+    )
+
+    order_label_global = resolver_order_label_sheet_codes(
+        es_swo=es_swo_export,
+        swo_id=swo_ref,
+        wo_label=wo_label,
+    )
+    asignar_numeracion_global_hojas(resultados, order_label_global, sobrescribir=True)
+
+    for clave, data in iterar_grupos_nesting_ordenados(resultados):
+        if "hojas" not in data:
             continue
 
         thickness_str, espesor_pulgadas = _parse_thickness_from_clave(clave)
@@ -478,7 +490,7 @@ def exportar_resultados_a_dxf(
         contador_placas = {}
 
         for idx_hoja, hoja in enumerate(data.get("hojas", []), start=1):
-            global_sheet_counter += 1
+            sheet_seq = int(hoja.get("sheet_seq") or idx_hoja)
 
             w_mm = hoja.get("placa_w", 2438.4)
             h_mm = hoja.get("placa_h", 1219.2)
@@ -495,7 +507,7 @@ def exportar_resultados_a_dxf(
                 hoja,
                 order_label=order_label,
                 thickness_name=thickness_name,
-                sheet_seq=global_sheet_counter,
+                sheet_seq=sheet_seq,
                 display_name=display_name,
                 source_nest_name=swo_ref if es_swo_export else (str(base_name).strip() or "NEST"),
             )
@@ -662,7 +674,7 @@ def exportar_resultados_a_dxf(
                         "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                     })
 
-            sheet_code = hoja.get("sheet_code") or f"{order_label}-H{global_sheet_counter}"
+            sheet_code = hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}"
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
@@ -674,13 +686,19 @@ def exportar_resultados_a_dxf(
             else:
                 path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
 
-            export_nest_to_dxf(
-                path_principal,
-                sheet_info,
-                placements_principales,
-                title=f"{carpeta_principal} | {clave}",
-                modo_largos_cu=bool(hoja.get("modo_largos_cu")),
-            )
+            try:
+                export_nest_to_dxf(
+                    path_principal,
+                    sheet_info,
+                    placements_principales,
+                    title=f"{carpeta_principal} | {clave}",
+                    modo_largos_cu=bool(hoja.get("modo_largos_cu")),
+                    strict=True,
+                )
+            except DxfExportValidationError as exc:
+                raise DxfExportValidationError(
+                    f"Exportación abortada ({nombre_archivo}): {exc}"
+                ) from exc
             exportados_principales.append(path_principal)
 
             _registrar_exportacion_pqart_hoja(
@@ -697,6 +715,7 @@ def exportar_resultados_a_dxf(
                     sheet_info,
                     placements_plasma,
                     title=f"{RUTA_ROBOT_PLASMA} | {clave}",
+                    strict=False,
                 )
 
                 _registrar_exportacion_pqart_hoja(

@@ -296,17 +296,28 @@ def _enumerate_plates(resultados_nesting):
         calcular_eficiencias_grupo = None
 
     try:
-        from utils_nesting import clave_nesting_sort_key
+        from modules.nesting_engine.sheet_numbering import iterar_grupos_nesting_ordenados
     except ImportError:
-        clave_nesting_sort_key = lambda k: str(k).upper()
+        iterar_grupos_nesting_ordenados = None
 
-    claves_ordenadas = sorted(
-        (k for k in (resultados_nesting or {}) if isinstance((resultados_nesting or {}).get(k), dict)),
-        key=clave_nesting_sort_key,
-    )
+    if iterar_grupos_nesting_ordenados is not None:
+        grupos_iter = iterar_grupos_nesting_ordenados(resultados_nesting)
+    else:
+        try:
+            from utils_nesting import clave_nesting_sort_key
+        except ImportError:
+            clave_nesting_sort_key = lambda k: str(k).upper()
 
-    for grupo_calibre in claves_ordenadas:
-        datos_grupo = (resultados_nesting or {}).get(grupo_calibre) or {}
+        claves_ordenadas = sorted(
+            (k for k in (resultados_nesting or {}) if isinstance((resultados_nesting or {}).get(k), dict)),
+            key=clave_nesting_sort_key,
+        )
+        grupos_iter = (
+            (k, (resultados_nesting or {}).get(k) or {})
+            for k in claves_ordenadas
+        )
+
+    for grupo_calibre, datos_grupo in grupos_iter:
         if not isinstance(datos_grupo, dict) or "error" in datos_grupo:
             continue
 
@@ -322,9 +333,12 @@ def _enumerate_plates(resultados_nesting):
         contador_placas = {}
 
         for idx, hoja in enumerate(hojas, start=1):
+            display_previo = str(hoja.get("sheet_display_name") or "").strip()
             codigo_base = hoja.get("placa_id", f"P#{idx}")
 
-            if "RTZ" in str(codigo_base).upper():
+            if display_previo:
+                placa_id_final = display_previo
+            elif "RTZ" in str(codigo_base).upper():
                 placa_id_final = str(codigo_base)
             else:
                 contador_placas[codigo_base] = contador_placas.get(codigo_base, 0) + 1
@@ -352,6 +366,8 @@ def _enumerate_plates(resultados_nesting):
                     "eficiencia_tanque_directa": _to_float(grupo_ef.get("eficiencia_tanque_directa"), 0.0),
                     "eficiencia_tanque_real": _to_float(grupo_ef.get("eficiencia_tanque_real"), 0.0),
                     "ignorar_deduccion": bool(hoja.get("ignorar_deduccion")),
+                    "sheet_code": str(hoja.get("sheet_code") or "").strip() or None,
+                    "sheet_seq": hoja.get("sheet_seq"),
                 }
             )
 
@@ -1228,6 +1244,13 @@ def _draw_sheet_table_continuation_pages(
         c.drawRightString(width - 24, 24, f"{sheet_code}-DET-{cont_idx}")
         c.showPage()
 
+def _resolver_order_label_pdf(nombre_orden="", work_order_label=None, work_order_num=1):
+    orden = str(nombre_orden or "").strip()
+    if orden.upper().startswith("SWO"):
+        return orden
+    return _format_work_order_label(work_order_label, work_order_num)
+
+
 def exportar_pdf_nesting(
     resultados_nesting,
     ruta_pdf,
@@ -1238,6 +1261,20 @@ def exportar_pdf_nesting(
     work_order_label=None,
 ):
     _sync_rtz_overlays_para_pdf(resultados_nesting)
+
+    wo_label = _resolver_order_label_pdf(nombre_orden, work_order_label, work_order_num)
+
+    try:
+        from modules.nesting_engine.sheet_numbering import (
+            asignar_numeracion_global_hojas,
+            numeracion_hojas_es_consistente,
+        )
+
+        if not numeracion_hojas_es_consistente(resultados_nesting, wo_label):
+            asignar_numeracion_global_hojas(resultados_nesting, wo_label, sobrescribir=True)
+    except ImportError:
+        pass
+
     plates = _enumerate_plates(resultados_nesting)
     if not plates:
         raise ValueError("No hay placas para exportar a PDF.")
@@ -1255,7 +1292,7 @@ def exportar_pdf_nesting(
     table_line = colors.HexColor("#CBD5E1")
     body_text = colors.HexColor("#334155")
 
-    wo_label = _format_work_order_label(work_order_label, work_order_num)
+    wo_label = _resolver_order_label_pdf(nombre_orden, work_order_label, work_order_num)
 
     # ---------------- PORTADA ----------------
     _draw_cover_pages(
@@ -1294,7 +1331,7 @@ def exportar_pdf_nesting(
     for page_idx, plate in enumerate(plates, start=1):
         piezas_reales = [p for p in plate["piezas"] if _is_real_piece(p)]
         rows, ids_map = _build_group_summary(piezas_reales, meta_por_ruta, job_fallback)
-        sheet_code = f"{wo_label}-H{page_idx}"
+        sheet_code = plate.get("sheet_code") or f"{wo_label}-H{page_idx}"
         # Marca de agua
         _draw_watermark_logo(c, width, height, LOGO_ICON1_PATH)
         _draw_header_logo_left(c, LOGO_MAIN_PATH)

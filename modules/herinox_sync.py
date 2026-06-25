@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import pandas as pd
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -31,7 +30,10 @@ class HerinoxSyncResult:
 
 
 class HerinoxPlateSync:
-    """Sincroniza placas desde react-Herinox hacia Plates.xlsx."""
+    """Carga placas desde react-Herinox (API o PostgreSQL) para nesting y pestaña SHEETS."""
+
+    SHEET_EMPRESA = "STOCK GRUPO ARGA"
+    SHEET_PROVEEDOR = "STOCK PROVEEDOR"
 
     LOGIN_PATH = "/api/auth/login"
     PLATES_PATH = "/api/plates"
@@ -70,11 +72,20 @@ class HerinoxPlateSync:
             "password": str(settings.get("db_password", "")).strip(),
             "connect_timeout": int(settings.get("db_connect_timeout", 5)),
         }
+        self._rows_empresa: List[list] = []
+        self._rows_proveedor: List[list] = []
+        self._prev_snapshot: Dict[str, list] = {}
 
-    def run(self, plates_xlsx_path: str) -> HerinoxSyncResult:
-        if not self.enabled:
-            return HerinoxSyncResult(ok=True, message="Sync Herinox desactivada por configuracion.", updated_items=[], nominal_by_code={})
+    def get_sheet_rows(self) -> tuple[List[list], List[list]]:
+        """Devuelve (datos_empresa, datos_proveedor) en formato de filas del nesting."""
+        return list(self._rows_empresa), list(self._rows_proveedor)
 
+    def run(self, plates_xlsx_path: str | None = None) -> HerinoxSyncResult:
+        """Carga/refresca inventario de placas desde Herinox. plates_xlsx_path se ignora (legacy)."""
+        _ = plates_xlsx_path
+        return self.refresh()
+
+    def refresh(self) -> HerinoxSyncResult:
         api_error = ""
         plates_by_code: Dict[str, dict] = {}
         source = "none"
@@ -86,7 +97,7 @@ class HerinoxPlateSync:
                 source = "api"
             except Exception as exc:
                 api_error = str(exc)
-        else:
+        elif self.enabled:
             api_error = f"Faltan credenciales API en {self.settings_file}"
 
         if not plates_by_code and self.db_enabled:
@@ -113,14 +124,20 @@ class HerinoxPlateSync:
                         updated_items=[],
                         nominal_by_code={},
                     )
-                return HerinoxSyncResult(ok=False, source="none", message=f"Fallo DB Herinox: {db_error}", updated_items=[], nominal_by_code={})
+                return HerinoxSyncResult(
+                    ok=False,
+                    source="none",
+                    message=f"Fallo DB Herinox: {db_error}",
+                    updated_items=[],
+                    nominal_by_code={},
+                )
 
         if not plates_by_code:
             detalle = f" API: {api_error}" if api_error else ""
             return HerinoxSyncResult(
                 ok=False,
                 source="none",
-                message=f"No se obtuvieron placas para sincronizar.{detalle}",
+                message=f"No se obtuvieron placas desde Herinox.{detalle}",
                 updated_items=[],
                 nominal_by_code={},
             )
@@ -134,7 +151,31 @@ class HerinoxPlateSync:
             for code, remote in plates_by_code.items()
             if code
         }
-        return self._sync_excel(plates_xlsx_path, plates_by_code, source, dof_rate, dof_source, nominal_by_code)
+        empresa_rows, proveedor_rows, updated_items, updated_rows = self._build_sheet_rows(
+            plates_by_code, dof_rate, self._prev_snapshot
+        )
+        self._rows_empresa = empresa_rows
+        self._rows_proveedor = proveedor_rows
+        self._prev_snapshot = {
+            str(row[2]).strip().upper(): row for row in empresa_rows + proveedor_rows if len(row) > 2
+        }
+
+        suffix = ""
+        if not self.enabled:
+            suffix = " (auto-sync desactivada; datos cargados directo desde Herinox)"
+
+        return HerinoxSyncResult(
+            ok=True,
+            updated_rows=updated_rows,
+            matched_codes=len(plates_by_code),
+            sheet_count=2,
+            source=source,
+            dof_rate=float(dof_rate),
+            dof_source=dof_source,
+            message=f"Inventario cargado desde Herinox via {source} (TC {dof_source}: {dof_rate:.4f}).{suffix}",
+            updated_items=updated_items,
+            nominal_by_code=nominal_by_code,
+        )
 
     def _load_settings(self) -> dict:
         settings = {
@@ -332,103 +373,102 @@ class HerinoxPlateSync:
             if conn:
                 conn.close()
 
-    def _sync_excel(
+    _ROW_FIELDS = (
+        ("Thickness", 0),
+        ("Material", 1),
+        ("Arga Code", 2),
+        ("Length", 3),
+        ("Width", 4),
+        ("LB", 5),
+        ("MXN", 6),
+        ("$$/LB", 7),
+        ("Stock", 8),
+    )
+
+    def _build_sheet_rows(
         self,
-        plates_xlsx_path: str,
         plates_by_code: Dict[str, dict],
-        source: str,
         dof_rate: float,
-        dof_source: str,
-        nominal_by_code: Dict[str, str],
-    ) -> HerinoxSyncResult:
-        workbook = pd.read_excel(plates_xlsx_path, sheet_name=None, dtype=object)
-        if not workbook:
-            return HerinoxSyncResult(ok=False, message="Plates.xlsx no contiene hojas.", updated_items=[], nominal_by_code=nominal_by_code)
-
-        updated_rows = 0
-        matched_codes = 0
+        prev_snapshot: Dict[str, list],
+    ) -> tuple[List[list], List[list], List[dict], int]:
+        empresa_rows: List[list] = []
+        proveedor_rows: List[list] = []
         updated_items: List[dict] = []
+        updated_rows = 0
 
-        for sheet_name, df in workbook.items():
-            if df is None or df.empty:
+        for code in sorted(plates_by_code.keys()):
+            remote = plates_by_code[code]
+            origen = self._origen_placa(remote)
+            row = self._remote_to_placa_row(remote, dof_rate, origen)
+            if origen == "PROVEEDOR":
+                proveedor_rows.append(row)
+                sheet_name = self.SHEET_PROVEEDOR
+            else:
+                empresa_rows.append(row)
+                sheet_name = self.SHEET_EMPRESA
+
+            prev = prev_snapshot.get(code)
+            if not prev:
                 continue
-
-            df.columns = [str(c).strip() for c in df.columns]
-            if "Arga Code" not in df.columns:
-                continue
-
-            required_cols = ["Thickness", "Material", "Length", "Width", "LB", "MXN", "$$/LB", "Stock"]
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = ""
-
-            # Evita redundancia pedida por usuario: usar solo columna Stock.
-            if "DISPONIBILIDAD" in df.columns:
-                try:
-                    df.drop(columns=["DISPONIBILIDAD"], inplace=True)
-                except Exception:
-                    pass
-
-            for idx in df.index:
-                code = self._norm_code(df.at[idx, "Arga Code"])
-                if not code:
-                    continue
-                remote = plates_by_code.get(code)
-                if not remote:
-                    changed = False
-                    changed_fields: List[str] = []
-                    changes_detail: List[dict] = []
-
-                    changed_col, old_val, new_val = self._set_if_changed(df, idx, "Stock", "NO EXISTENTE")
-                    if changed_col:
-                        changed = True
-                        changed_fields.append("Stock")
-                        changes_detail.append({"field": "Stock", "before": old_val, "after": new_val})
-
-                    if changed:
-                        updated_rows += 1
-                        updated_items.append(
-                            {
-                                "sheet": str(sheet_name),
-                                "arga_code": code,
-                                "fields": changed_fields,
-                                "changes": changes_detail,
-                            }
-                        )
-                    continue
-
-                matched_codes += 1
-                row_changed, changed_fields, changes_detail = self._apply_herinox_row(
-                    df, idx, remote, dof_rate
+            changed_fields, changes_detail = self._diff_placa_row(prev, row)
+            if changed_fields:
+                updated_rows += 1
+                updated_items.append(
+                    {
+                        "sheet": sheet_name,
+                        "arga_code": code,
+                        "fields": changed_fields,
+                        "changes": changes_detail,
+                    }
                 )
-                if row_changed:
-                    updated_rows += 1
-                    updated_items.append(
-                        {
-                            "sheet": str(sheet_name),
-                            "arga_code": code,
-                            "fields": changed_fields,
-                            "changes": changes_detail,
-                        }
-                    )
 
-        if matched_codes > 0 or updated_rows > 0:
-            with pd.ExcelWriter(plates_xlsx_path, engine="openpyxl", mode="w") as writer:
-                for sheet_name, df in workbook.items():
-                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+        return empresa_rows, proveedor_rows, updated_items, updated_rows
 
-        return HerinoxSyncResult(
-            ok=True,
-            updated_rows=updated_rows,
-            matched_codes=matched_codes,
-            sheet_count=len(workbook),
-            source=source,
-            dof_rate=float(dof_rate),
-            dof_source=dof_source,
-            message=f"Sincronizacion Herinox completada via {source} (TC {dof_source}: {dof_rate:.4f}).",
-            updated_items=updated_items,
-            nominal_by_code=nominal_by_code,
-        )
+    @staticmethod
+    def _origen_placa(remote: dict) -> str:
+        """Clasifica placa en STOCK EMPRESA o STOCK PROVEEDOR."""
+        for key in ("origen", "proveedor", "stockSource", "stockType"):
+            txt = str(remote.get(key) or "").strip().upper()
+            if "PROVEEDOR" in txt or txt in {"PROV", "SUPPLIER", "EXTERNO"}:
+                return "PROVEEDOR"
+        return "EMPRESA"
+
+    def _remote_to_placa_row(self, remote: dict, dof_rate: float, origen: str) -> list:
+        fields = self._build_herinox_field_values(remote, dof_rate)
+        code = self._norm_code(remote.get("codigo"))
+        row = [
+            fields.get("Thickness", ""),
+            fields.get("Material", ""),
+            code,
+            fields.get("Length", ""),
+            fields.get("Width", ""),
+            fields.get("LB", ""),
+            fields.get("MXN", ""),
+            fields.get("$$/LB", ""),
+            fields.get("Stock", ""),
+        ]
+        precio_usd = self._to_float_safe(fields.get("$$/LB", "")) or 0.0
+        row.append(origen)
+        row.append(precio_usd)
+        return row
+
+    def _diff_placa_row(self, prev: list, new: list) -> tuple[List[str], List[dict]]:
+        changed_fields: List[str] = []
+        changes_detail: List[dict] = []
+        for field_name, idx in self._ROW_FIELDS:
+            old_val = prev[idx] if len(prev) > idx else ""
+            new_val = new[idx] if len(new) > idx else ""
+            if self._values_equivalent(old_val, new_val):
+                continue
+            changed_fields.append(field_name)
+            changes_detail.append(
+                {
+                    "field": field_name,
+                    "before": self._format_for_compare(old_val),
+                    "after": self._format_for_compare(new_val),
+                }
+            )
+        return changed_fields, changes_detail
 
     @staticmethod
     def _norm_code(value: Optional[object]) -> str:
@@ -526,52 +566,6 @@ class HerinoxPlateSync:
             values["Thickness"] = thickness_val
         return values
 
-    def _apply_herinox_row(self, df: pd.DataFrame, idx, remote: dict, dof_rate: float):
-        """
-        Si existe Arga Code en Herinox, aplica TODA la informacion remota en el Excel.
-        """
-        changed_fields: List[str] = []
-        changes_detail: List[dict] = []
-        row_changed = False
-
-        for col, new_value in self._build_herinox_field_values(remote, dof_rate).items():
-            changed_col, old_val, new_val = self._force_apply_field(df, idx, col, new_value)
-            if changed_col:
-                row_changed = True
-                changed_fields.append(col)
-                changes_detail.append({"field": col, "before": old_val, "after": new_val})
-
-        return row_changed, changed_fields, changes_detail
-
-    @staticmethod
-    def _force_apply_field(df: pd.DataFrame, idx, col: str, new_value):
-        current = df.at[idx, col]
-        if pd.isna(current):
-            current = ""
-        if pd.isna(new_value):
-            new_value = ""
-        current_txt = HerinoxPlateSync._format_for_compare(current)
-        new_txt = HerinoxPlateSync._format_for_compare(new_value)
-        changed = not HerinoxPlateSync._values_equivalent(current, new_value)
-        df.at[idx, col] = new_value
-        return changed, current_txt, new_txt
-
-    @staticmethod
-    def _set_if_changed(df: pd.DataFrame, idx, col: str, new_value):
-        current = df.at[idx, col]
-        if pd.isna(current):
-            current = ""
-        if pd.isna(new_value):
-            new_value = ""
-        if HerinoxPlateSync._values_equivalent(current, new_value):
-            current_txt = HerinoxPlateSync._format_for_compare(current)
-            new_txt = HerinoxPlateSync._format_for_compare(new_value)
-            return False, current_txt, new_txt
-        current_txt = HerinoxPlateSync._format_for_compare(current)
-        new_txt = HerinoxPlateSync._format_for_compare(new_value)
-        df.at[idx, col] = new_value
-        return True, current_txt, new_txt
-
     @staticmethod
     def _to_float_safe(value):
         try:
@@ -587,13 +581,8 @@ class HerinoxPlateSync:
     def _format_for_compare(value) -> str:
         if value is None:
             return ""
-        try:
-            if pd.isna(value):
-                return ""
-        except Exception:
-            pass
         txt = str(value).strip()
-        if not txt:
+        if not txt or txt.lower() == "nan":
             return ""
         num = HerinoxPlateSync._to_float_safe(txt)
         if num is not None:

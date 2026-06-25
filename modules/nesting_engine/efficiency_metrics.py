@@ -286,6 +286,50 @@ def placa_debe_mostrar_opcion_ignorar(hoja, hojas_grupo=None) -> bool:
     return eficiencia_para_umbral_ignorar(hoja, hojas_grupo) < UMBRAL_EFICIENCIA_IGNORAR_PLACA
 
 
+def hoja_es_sobrante_sin_compra(hoja) -> bool:
+    """Placa madre con switch Sobrante ON: no genera pedido de compra."""
+    if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        return False
+    return bool(hoja.get("ignorar_deduccion", False))
+
+
+def nombre_rtz_para_sobrante_db(contador_rtz: int, calibre: str, wo_name: str) -> str:
+    """Misma nomenclatura que los RTZ del motor: RTZ{n}-{calibre}-{wo}."""
+    cal = str(calibre or "").strip() or "NA"
+    wo = str(wo_name or "").strip() or "W.O."
+    return f"RTZ{int(contador_rtz)}-{cal}-{wo}"
+
+
+def allocar_nombre_rtz_sobrante_db(contador_rtz: dict, calibre: str, wo_name: str) -> str:
+    n = int(contador_rtz.get("n", 1))
+    nombre = nombre_rtz_para_sobrante_db(n, calibre, wo_name)
+    contador_rtz["n"] = n + 1
+    return nombre
+
+
+def _max_indice_rtz_en_resultados(resultados) -> int:
+    import re
+
+    max_n = 0
+    for info_mat in (resultados or {}).values():
+        if not isinstance(info_mat, dict):
+            continue
+        for hoja in info_mat.get("hojas", []) or []:
+            if not isinstance(hoja, dict):
+                continue
+            for campo in ("placa_id", "sheet_display_name"):
+                texto = str(hoja.get(campo) or "").strip()
+                m = re.match(r"RTZ(\d+)", texto, re.IGNORECASE)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+    return max_n
+
+
+def inicializar_contador_rtz_sobrante(resultados) -> dict:
+    """Contador RTZ para placas sobrante, continuando tras RTZ ya nesteados."""
+    return {"n": _max_indice_rtz_en_resultados(resultados) + 1}
+
+
 def actualizar_eficiencias_resultados(resultados_nesting) -> None:
     if not isinstance(resultados_nesting, dict):
         return
