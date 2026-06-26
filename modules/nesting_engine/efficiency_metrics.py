@@ -293,6 +293,46 @@ def hoja_es_sobrante_sin_compra(hoja) -> bool:
     return bool(hoja.get("ignorar_deduccion", False))
 
 
+def hoja_excluida_de_rtz_sobrante(hoja) -> bool:
+    """
+    Cobre en largos (CU): siempre ignora deducción de inventario, pero no debe
+    renombrarse como RTZ ni tratarse como retazo de láser/plasma.
+    """
+    return bool((hoja or {}).get("modo_largos_cu"))
+
+
+def _limpiar_nomenclatura_rtz_en_hoja(hoja: dict) -> None:
+    """Quita flags/nombres RTZ y restaura el código de stock si existía."""
+    if not isinstance(hoja, dict):
+        return
+    original = str(hoja.get("_placa_id_antes_sobrante") or "").strip()
+    pid = str(hoja.get("placa_id") or "").strip()
+    if original:
+        hoja["placa_id"] = original
+    elif pid.upper().startswith("RTZ"):
+        # Sin respaldo: conservar id actual (mejor que inventar otro).
+        pass
+    hoja.pop("sheet_display_name", None)
+    hoja["is_rtz"] = False
+    hoja.pop("is_rtz_plasma_sobrante", None)
+    hoja.pop("rtz_tipo", None)
+    hoja.pop("_rtz_nombre_sobrante", None)
+    hoja.pop("_rtzc_nombre_sobrante", None)
+
+
+def hoja_cuenta_como_rtz(hoja) -> bool:
+    """True si la hoja es retazo real o sobrante láser/plasma renombrado RTZ."""
+    if not isinstance(hoja, dict):
+        return False
+    if hoja.get("es_retazo"):
+        return True
+    if hoja_excluida_de_rtz_sobrante(hoja):
+        return False
+    if bool(hoja.get("is_rtz")):
+        return True
+    return hoja_es_sobrante_sin_compra(hoja)
+
+
 def hoja_es_sobrante_plasma_compensado(hoja) -> bool:
     """Sobrante de piso con piezas compensadas para plasma: solo Robot Plasma."""
     if not isinstance(hoja, dict) or hoja.get("es_retazo"):
@@ -303,9 +343,15 @@ def hoja_es_sobrante_plasma_compensado(hoja) -> bool:
 
 
 def hoja_export_solo_plasma(hoja) -> bool:
-    return hoja_es_sobrante_plasma_compensado(hoja) or bool(
-        hoja.get("is_rtz_plasma_sobrante")
-    )
+    """Placa que solo exporta a Robot Plasma (sin DXF láser duplicado)."""
+    if not isinstance(hoja, dict):
+        return False
+    if hoja_es_sobrante_plasma_compensado(hoja) or bool(hoja.get("is_rtz_plasma_sobrante")):
+        return True
+    # Placa compensada manualmente para plasma: va solo a Robot Plasma.
+    if bool(hoja.get("plasma_compensado_manual")) and not hoja.get("es_retazo", False):
+        return True
+    return False
 
 
 def nombre_rtz_para_placa(
@@ -424,6 +470,8 @@ def allocar_nombre_rtz_sobrante_db(
 
 def es_placa_madre_sobrante_rtz(hoja) -> bool:
     """Placa madre sobrante renombrada RTZ (láser), no RTZC plasma."""
+    if hoja_excluida_de_rtz_sobrante(hoja):
+        return False
     if not hoja_es_sobrante_sin_compra(hoja) or hoja_es_sobrante_plasma_compensado(hoja):
         return False
     pid = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip().upper()
@@ -432,6 +480,8 @@ def es_placa_madre_sobrante_rtz(hoja) -> bool:
 
 def es_placa_madre_rtzc(hoja) -> bool:
     """Placa madre sobrante compensada plasma (solo Robot Plasma)."""
+    if hoja_excluida_de_rtz_sobrante(hoja):
+        return False
     if not hoja_es_sobrante_plasma_compensado(hoja):
         return False
     pid = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip().upper()
@@ -452,6 +502,10 @@ def sincronizar_hoja_sobrante_rtz(
     adopta nomenclatura y flags RTZ (mismo flujo VSM/export que un retazo).
     """
     if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        return
+
+    if hoja_excluida_de_rtz_sobrante(hoja):
+        _limpiar_nomenclatura_rtz_en_hoja(hoja)
         return
 
     if ignorar:

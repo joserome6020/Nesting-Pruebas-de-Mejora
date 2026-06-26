@@ -166,6 +166,8 @@ def _entity_points_xy(entity) -> Optional[List[Tuple[float, float]]]:
 def _buffer_polygon_points(
     points: Sequence[Tuple[float, float]],
     offset_mm: float,
+    *,
+    join_style: int = 1,
 ) -> Optional[List[List[Tuple[float, float]]]]:
     try:
         poly = Polygon(points)
@@ -176,8 +178,8 @@ def _buffer_polygon_points(
             if poly.is_empty:
                 return None
 
-        # join_style=1: redondo, respeta mejor geometría curva.
-        buff = poly.buffer(offset_mm, join_style=1, quad_segs=24)
+        # join_style=1 redondo (curvas); 2 mitre (rectángulos sin filletes espurios).
+        buff = poly.buffer(offset_mm, join_style=int(join_style), quad_segs=24)
         if buff.is_empty:
             return None
 

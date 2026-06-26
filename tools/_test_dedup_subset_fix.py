@@ -72,16 +72,28 @@ def test_name_subset_not_discarded():
 
 
 def test_true_spatial_duplicate_still_removed():
-    """Duplicado real: misma pieza en la misma posición en dos hojas."""
+    """Duplicado real: misma pieza en la misma posición en dos hojas (pool qty=1)."""
     pool = [{"nombre": "Solo"}]
     p = _pieza("Solo", 10, 10, 40, 40)
     hojas = [
         _hoja("PLC036", [p]),
         _hoja("PLC036", [p]),
     ]
-    out = deduplicar_hojas_grupo(hojas)
+    out = sanitizar_hojas_grupo(pool, hojas)
     madres = [h for h in out if not h.get("es_retazo")]
     assert len(madres) == 1, f"duplicado espacial debe quedar 1 hoja, quedaron {len(madres)}"
+
+
+def test_qty10_identical_layouts_kept():
+    """X10: 10 hojas idénticas consumen 10 instancias del pool."""
+    pool = [{"nombre": "OREJA"} for _ in range(10)]
+    p = _pieza("OREJA", 7, 7, 44, 38)
+    hojas = [_hoja("PLC107", [p]) for _ in range(10)]
+    out = sanitizar_hojas_grupo(pool, hojas)
+    madres = [h for h in out if not h.get("es_retazo")]
+    assert len(madres) == 10, f"esperadas 10 hojas, quedaron {len(madres)}"
+    ok, msg = validar_colocacion_completa(pool, out)
+    assert ok, msg
 
 
 def test_reconciliar_drops_non_consumible():
@@ -119,6 +131,7 @@ if __name__ == "__main__":
     test_repeated_name_two_sheets_same_placa()
     test_name_subset_not_discarded()
     test_spatial_subset_same_position_qty2()
+    test_qty10_identical_layouts_kept()
     test_true_spatial_duplicate_still_removed()
     test_reconciliar_drops_non_consumible()
     print("OK: todos los tests de dedup pasaron")

@@ -4,7 +4,11 @@ import glob
 import traceback
 
 # 1. Redirigir todos los mensajes a un archivo de texto para ver qué pasa en modo GUI
-log_path = r"C:\NEST_EXPORTS\freecad_log.txt"
+_log_dir = os.getenv("FREECAD_LOG_DIR") or os.path.join(
+    os.getenv("FREECAD_STEP_OUT") or os.getcwd(), "_logs"
+)
+os.makedirs(_log_dir, exist_ok=True)
+log_path = os.getenv("FREECAD_LOG_PATH") or os.path.join(_log_dir, "freecad_log.txt")
 log_file = open(log_path, "w", encoding="utf-8")
 sys.stdout = log_file
 sys.stderr = log_file

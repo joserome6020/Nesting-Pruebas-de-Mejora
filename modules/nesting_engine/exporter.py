@@ -9,12 +9,51 @@ RUTA_CAMA_LASER = "CAMA LASER SIN MINI NEST"
 RUTA_CAMA_LASER_12KW = "CAMA LASER 12 KW SIN MINI NEST"
 RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
+REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
 
 
 def _hay_dxfs(ruta):
-    return os.path.isdir(ruta) and any(
-        nombre.lower().endswith(".dxf") for nombre in os.listdir(ruta)
-    )
+    return bool(_listar_dxfs_en_carpeta(ruta))
+
+
+def _listar_dxfs_en_carpeta(ruta):
+    ruta = os.path.normpath(str(ruta or "").strip())
+    if not ruta or not os.path.isdir(ruta):
+        return []
+    archivos = sorted(glob.glob(os.path.join(ruta, "*.dxf")))
+    archivos.extend(sorted(glob.glob(os.path.join(ruta, "*.DXF"))))
+    vistos = set()
+    unicos = []
+    for path in archivos:
+        key = os.path.normcase(path)
+        if key in vistos:
+            continue
+        vistos.add(key)
+        unicos.append(path)
+    return unicos
+
+
+def _localizar_carpeta_dxf(carpeta_esperada: str, job_root_dir: str, etiqueta_familia: str) -> str:
+    candidatos = []
+    for raw in (
+        carpeta_esperada,
+        os.path.join(job_root_dir, etiqueta_familia, "DXF") if job_root_dir else "",
+        os.path.join(job_root_dir, "NESTING", etiqueta_familia, "DXF") if job_root_dir else "",
+    ):
+        cand = os.path.normpath(str(raw or "").strip())
+        if cand and cand not in candidatos:
+            candidatos.append(cand)
+
+    for cand in candidatos:
+        if _hay_dxfs(cand):
+            if cand != os.path.normpath(carpeta_esperada):
+                print(f"[STEP] DXF localizados en ruta alternativa: {cand}")
+            return cand
+
+    carpeta_esperada = os.path.normpath(str(carpeta_esperada or "").strip())
+    if carpeta_esperada:
+        os.makedirs(carpeta_esperada, exist_ok=True)
+    return carpeta_esperada
 
 
 def _es_export_swo(
@@ -208,9 +247,10 @@ def _resolver_display_name_hoja(
         allocar_nombre_rtzc_sobrante_db,
         hoja_es_sobrante_plasma_compensado,
         hoja_es_sobrante_sin_compra,
+        hoja_excluida_de_rtz_sobrante,
     )
 
-    if hoja_es_sobrante_sin_compra(hoja):
+    if hoja_es_sobrante_sin_compra(hoja) and not hoja_excluida_de_rtz_sobrante(hoja):
         nombre_rtz = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip()
         if nombre_rtz.upper().startswith("RTZC") or nombre_rtz.upper().startswith("RTZ"):
             return nombre_rtz
@@ -401,67 +441,104 @@ def _registrar_exportacion_pqart_hoja(
 
     exports.append(payload)
 
-def lanzar_freecad_robotica(rutas, thk, plasma_off):
+def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = None):
     from freecad_runner import ejecutar_macro_freecad
 
-    # CAMA LASER (incluye largos de cobre CU)
-    if _hay_dxfs(rutas.get("cama_laser_dxf", "")):
-        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        os.makedirs(rutas.get("cama_laser_step", ""), exist_ok=True)
-        ejecutar_macro_freecad(
-            rutas["cama_laser_dxf"],
-            rutas["cama_laser_step"],
-            thk,
-            "TR",
-            0.0, 0.0, 0.0,
-        )
+    job_root = os.path.normpath(str(job_root_dir or "").strip())
+    resultados = []
 
-    if _hay_dxfs(rutas.get("cama_laser_12kw_dxf", "")):
-        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        os.makedirs(rutas.get("cama_laser_12kw_step", ""), exist_ok=True)
-        ejecutar_macro_freecad(
-            rutas["cama_laser_12kw_dxf"],
-            rutas["cama_laser_12kw_step"],
+    def _convertir(etiqueta, dxf_key, step_key, origen, ox, oy, oz, *, prefer_verde=False):
+        dxf_dir = _localizar_carpeta_dxf(
+            rutas.get(dxf_key, ""),
+            job_root,
+            {
+                "cama_laser_dxf": RUTA_CAMA_LASER,
+                "cama_laser_12kw_dxf": RUTA_CAMA_LASER_12KW,
+                "robot_laser_dxf": RUTA_ROBOT_LASER,
+                "robot_plasma_dxf": RUTA_ROBOT_PLASMA,
+            }.get(dxf_key, ""),
+        )
+        step_dir = os.path.normpath(str(rutas.get(step_key, "") or "").strip())
+        if not _hay_dxfs(dxf_dir):
+            print(f"[STEP][SKIP] {etiqueta}: sin DXF en {dxf_dir}")
+            resultados.append((etiqueta, False, "sin DXF"))
+            return
+
+        os.makedirs(step_dir, exist_ok=True)
+        n_dxfs = len(_listar_dxfs_en_carpeta(dxf_dir))
+        print(f"[STEP] {etiqueta}: {n_dxfs} DXF -> {step_dir}")
+        ok = ejecutar_macro_freecad(
+            dxf_dir,
+            step_dir,
             thk,
+            origen,
+            ox, oy, oz,
+            prefer_verde=prefer_verde,
+            max_intentos=2,
+        )
+        resultados.append((etiqueta, ok, dxf_dir))
+        if not ok:
+            print(f"[STEP][WARN] {etiqueta}: FreeCAD no generó STEP (ver _logs/freecad_runner.log)")
+
+    # CAMA LASER (incluye largos de cobre CU)
+    if rutas.get("cama_laser_dxf"):
+        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+        _convertir("CAMA LASER", "cama_laser_dxf", "cama_laser_step", "TR", 0.0, 0.0, 0.0)
+
+    if rutas.get("cama_laser_12kw_dxf"):
+        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+        _convertir(
+            "CAMA LASER 12KW",
+            "cama_laser_12kw_dxf",
+            "cama_laser_12kw_step",
             "TR",
             0.0, 0.0, 0.0,
         )
 
     # ROBOT LASER
-    if _hay_dxfs(rutas["robot_laser_dxf"]):
+    if rutas.get("robot_laser_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        ejecutar_macro_freecad(
-            rutas["robot_laser_dxf"],
-            rutas["robot_laser_step_A"],
-            thk,
+        _convertir(
+            "ROBOT LASER A",
+            "robot_laser_dxf",
+            "robot_laser_step_A",
             "TR",
-            4235, -1015, -700
+            4235, -1015, -700,
+            prefer_verde=True,
         )
-        ejecutar_macro_freecad(
-            rutas["robot_laser_dxf"],
-            rutas["robot_laser_step_B"],
-            thk,
+        _convertir(
+            "ROBOT LASER B",
+            "robot_laser_dxf",
+            "robot_laser_step_B",
             "BR",
-            4235, 840, -700
+            4235, 840, -700,
+            prefer_verde=True,
         )
 
     # ROBOT PLASMA
-    if _hay_dxfs(rutas["robot_plasma_dxf"]):
+    if rutas.get("robot_plasma_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = str(plasma_off)
-        ejecutar_macro_freecad(
-            rutas["robot_plasma_dxf"],
-            rutas["robot_plasma_step_A"],
-            thk,
+        _convertir(
+            "ROBOT PLASMA A",
+            "robot_plasma_dxf",
+            "robot_plasma_step_A",
             "TR",
-            4235, -1015, -700
+            4235, -1015, -700,
+            prefer_verde=True,
         )
-        ejecutar_macro_freecad(
-            rutas["robot_plasma_dxf"],
-            rutas["robot_plasma_step_B"],
-            thk,
+        _convertir(
+            "ROBOT PLASMA B",
+            "robot_plasma_dxf",
+            "robot_plasma_step_B",
             "BR",
-            4235, 840, -700
+            4235, 840, -700,
+            prefer_verde=True,
         )
+
+    ok_total = sum(1 for _, ok, _ in resultados if ok)
+    if resultados:
+        print(f"[STEP] Resumen: {ok_total}/{len(resultados)} conversiones exitosas")
+    return resultados
 
 
 def exportar_resultados_a_dxf(
@@ -472,7 +549,10 @@ def exportar_resultados_a_dxf(
     wo_label: str | None = None,
     es_swo: bool = False,
     swo_id: str | None = None,
+    datos_partes=None,
 ):
+    from .dxf_export_log import log, log_section, log_sheet_plan
+
     try:
         from modules.nest_exporter import export_nest_to_dxf, DxfExportValidationError
     except ImportError:
@@ -484,6 +564,12 @@ def exportar_resultados_a_dxf(
     job_root_dir = os.path.join(out_dir, nest_folder)
     es_swo_export = _es_export_swo(base_name, wo_label, es_swo=es_swo)
     swo_ref = str(swo_id or base_name or "").strip()
+
+    log_section("INICIO EXPORTACION DXF")
+    log(f"destino_raiz={out_dir}")
+    log(f"carpeta_nesting={job_root_dir}")
+    log(f"base_name={base_name} | wo_label={wo_label} | es_swo={es_swo_export} | swo_ref={swo_ref}")
+    log(f"generar_step={generar_step} | grupos={len(resultados or {})}")
 
     rutas = {
         "cama_laser_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER, "DXF"),
@@ -501,6 +587,7 @@ def exportar_resultados_a_dxf(
 
     for r in rutas.values():
         os.makedirs(r, exist_ok=True)
+    os.makedirs(os.path.join(job_root_dir, REPORTE_PDF_NESTING), exist_ok=True)
 
     exportados_principales = []
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
@@ -530,6 +617,9 @@ def exportar_resultados_a_dxf(
     for clave, data in iterar_grupos_nesting_ordenados(resultados):
         if "hojas" not in data:
             continue
+
+        log_section(f"GRUPO {clave}")
+        log(f"hojas_en_grupo={len(data.get('hojas') or [])}")
 
         thickness_str, espesor_pulgadas = _parse_thickness_from_clave(clave)
         thickness_name = thickness_str or str(clave).split("_", 1)[0].strip()
@@ -591,6 +681,13 @@ def exportar_resultados_a_dxf(
             compensada_manual = bool(hoja.get("plasma_compensado_manual", False))
             off_manual = float(hoja.get("plasma_offset_mm_manual", plasma_offset_job) or plasma_offset_job)
 
+            if datos_partes and generar_plasma_hoja:
+                from modules.nesting_engine.manager import enriquecer_hoja_export_desde_partes
+
+                n_rutas = enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+                if n_rutas:
+                    log(f"enriquecimiento PARTS: {n_rutas} ruta(s) DXF completada(s)")
+
             placements_principales = []
             placements_plasma = []
 
@@ -649,10 +746,10 @@ def exportar_resultados_a_dxf(
                     pz.get("plasma_compensada_manual") or compensada_manual
                 )
                 ruta_src = str(pz.get("ruta") or "").strip()
+                # Láser: siempre 1:1 desde Processed; la compensación plasma no altera este canal.
                 use_source_dxf = (
                     bool(ruta_src)
                     and os.path.isfile(ruta_src)
-                    and not compensada_pieza
                     and not es_linea_corte
                 )
 
@@ -674,7 +771,7 @@ def exportar_resultados_a_dxf(
                     "marks": pz.get("marcas", []),
                     "ruta": ruta_src if use_source_dxf else "",
                     "prefer_source_dxf": use_source_dxf,
-                    "compensated": compensada_pieza,
+                    "compensated": False,
                     "cu_largos_piece": cu_largos_piece,
                     "cu_slice_idx": int(pz.get("cu_slice_idx", 0) or 0),
                     "cu_slice_count": int(pz.get("cu_slice_count", 1) or 1),
@@ -696,7 +793,10 @@ def exportar_resultados_a_dxf(
 
                 # DXF plasma (solo cuando aplique; cobre no usa plasma)
                 if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA") and not nom.startswith("CU_CORTE__") and not es_cu_hoja:
-                    from modules.plasma_dxf_export import build_plasma_profile_from_nested
+                    from modules.plasma_dxf_export import (
+                        build_plasma_profile_from_nested,
+                        sanitize_plasma_profile,
+                    )
 
                     off_piece = float(
                         pz.get("plasma_offset_mm_manual")
@@ -706,7 +806,10 @@ def exportar_resultados_a_dxf(
                         or 0.0
                     )
                     if compensada_pieza:
-                        plasma_outer, plasma_holes = outer_main, holes_main
+                        plasma_outer, plasma_holes = sanitize_plasma_profile(
+                            pols[0],
+                            pols[1:] if len(pols) > 1 else [],
+                        )
                     else:
                         try:
                             plasma_outer, plasma_holes = build_plasma_profile_from_nested(
@@ -717,19 +820,26 @@ def exportar_resultados_a_dxf(
                         except Exception:
                             plasma_outer, plasma_holes = outer_main, holes_main
 
+                    ruta_src = str(pz.get("ruta") or "").strip()
+                    plasma_ruta = (
+                        ruta_src
+                        if ruta_src and os.path.isfile(ruta_src) and not es_linea_corte
+                        else ""
+                    )
+
                     placements_plasma.append({
                         "part_name": nom + "_PLASMA",
                         "outer": plasma_outer,
                         "holes": plasma_holes,
                         "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
                         "marks": pz.get("marcas", []),
-                        "ruta": "",
+                        "ruta": plasma_ruta,
                         "prefer_source_dxf": False,
                         "compensated": compensada_pieza,
                         "plasma_export": True,
-                        "compensated_plasma_source": False,
+                        "compensated_plasma_source": bool(plasma_ruta),
                         "plasma_offset_mm": off_piece,
-                        "use_native_curves": False,
+                        "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
                         "shift_x": pz.get("shift_x", 0.0),
@@ -747,6 +857,20 @@ def exportar_resultados_a_dxf(
 
             solo_plasma = hoja_export_solo_plasma(hoja)
 
+            log_sheet_plan(
+                clave=clave,
+                hoja=hoja,
+                sheet_info=sheet_info,
+                nombre_archivo=nombre_archivo,
+                carpeta_principal=carpeta_principal,
+                generar_plasma=generar_plasma_hoja,
+                solo_plasma=solo_plasma,
+                compensada_manual=compensada_manual,
+                off_manual=off_manual,
+                n_principal=len(placements_principales),
+                n_plasma=len(placements_plasma),
+            )
+
             # Exportación principal (omitida en RTZC: solo Robot Plasma)
             if not solo_plasma:
                 if carpeta_principal == RUTA_CAMA_LASER:
@@ -757,11 +881,13 @@ def exportar_resultados_a_dxf(
                     path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
 
                 try:
+                    log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
                     export_nest_to_dxf(
                         path_principal,
                         sheet_info,
                         placements_principales,
                         title=f"{carpeta_principal} | {clave}",
+                        canal=carpeta_principal,
                         modo_largos_cu=bool(hoja.get("modo_largos_cu")),
                         strict=True,
                     )
@@ -781,7 +907,10 @@ def exportar_resultados_a_dxf(
             lista_plasma = placements_plasma
             if solo_plasma and not lista_plasma:
                 # RTZC: nunca reutilizar principales (outer láser limpiado agresivamente)
-                from modules.plasma_dxf_export import build_plasma_profile_from_nested
+                from modules.plasma_dxf_export import (
+                    build_plasma_profile_from_nested,
+                    sanitize_plasma_profile,
+                )
 
                 lista_plasma = []
                 comp_hoja = bool(hoja.get("plasma_compensado_manual"))
@@ -797,7 +926,7 @@ def exportar_resultados_a_dxf(
                         continue
                     comp_pz = comp_hoja or bool(pz.get("plasma_compensada_manual"))
                     if comp_pz:
-                        po, ph = _clean_profile_for_production(
+                        po, ph = sanitize_plasma_profile(
                             pols[0],
                             pols[1:] if len(pols) > 1 else [],
                         )
@@ -807,17 +936,24 @@ def exportar_resultados_a_dxf(
                             offset_mm=off_hoja,
                             already_compensated=False,
                         )
+                    ruta_rtzc = str(pz.get("ruta") or "").strip()
+                    plasma_ruta_rtzc = (
+                        ruta_rtzc
+                        if ruta_rtzc and os.path.isfile(ruta_rtzc)
+                        else ""
+                    )
                     lista_plasma.append({
                         "part_name": nom + "_PLASMA",
                         "outer": po,
                         "holes": ph,
                         "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
                         "marks": pz.get("marcas", []),
-                        "ruta": str(pz.get("ruta") or ""),
+                        "ruta": plasma_ruta_rtzc,
                         "compensated": comp_pz,
                         "plasma_export": True,
+                        "compensated_plasma_source": bool(plasma_ruta_rtzc),
                         "plasma_offset_mm": off_hoja,
-                        "use_native_curves": False,
+                        "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
                         "shift_x": pz.get("shift_x", 0.0),
@@ -829,11 +965,13 @@ def exportar_resultados_a_dxf(
 
             if generar_plasma_hoja and lista_plasma:
                 path_plasma = os.path.join(rutas["robot_plasma_dxf"], nombre_archivo)
+                log(f"-> EXPORT PLASMA [{RUTA_ROBOT_PLASMA}]: {path_plasma}")
                 export_nest_to_dxf(
                     path_plasma,
                     sheet_info,
                     lista_plasma,
                     title=f"{RUTA_ROBOT_PLASMA} | {clave}",
+                    canal=RUTA_ROBOT_PLASMA,
                     strict=True,
                 )
 
@@ -846,13 +984,21 @@ def exportar_resultados_a_dxf(
                     exportados_principales.append(path_plasma)
 
     if generar_step:
-        lanzar_freecad_robotica(rutas, thickness_para_step, plasma_offset_job)
-        if es_swo_export:
-            n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
-            print(f"[STEP][SWO] Publicados {n_step} STEP en 3D NESTING")
+        log("Iniciando conversión STEP (FreeCAD)...")
+        import time
+        time.sleep(0.35)
+        lanzar_freecad_robotica(rutas, thickness_para_step, plasma_offset_job, job_root_dir=job_root_dir)
+        n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
+        if n_step:
+            etiqueta = "SWO" if es_swo_export else "WO"
+            log(f"STEP publicados en 3D NESTING: {n_step} archivos ({etiqueta})")
+            print(f"[STEP][{etiqueta}] Publicados {n_step} STEP en 3D NESTING", flush=True)
 
     if es_swo_export and swo_ref.upper().startswith("SWO"):
         from .api_client import enviar_reporte_a_api
         enviar_reporte_a_api(swo_ref, resultados)
 
+    log_section(f"EXPORTACION DXF COMPLETA - {len(exportados_principales)} archivo(s)")
+    for pth in exportados_principales:
+        log(f"  * {pth}")
     return exportados_principales

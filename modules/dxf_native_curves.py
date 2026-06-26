@@ -178,6 +178,17 @@ def _is_monotonic_arc(pts: Sequence[Point], cx: float, cy: float, r: float, tol:
     return True
 
 
+def _bbox_aspect_ratio(pts: Sequence[Point]) -> float:
+    xs = [float(p[0]) for p in pts]
+    ys = [float(p[1]) for p in pts]
+    if not xs:
+        return 1.0
+    w = max(xs) - min(xs)
+    h = max(ys) - min(ys)
+    short = max(min(w, h), 1e-9)
+    return max(w, h) / short
+
+
 def _try_full_circle(pts: Sequence[Point], *, relaxed: bool = False) -> Optional[Tuple[float, float, float]]:
     min_pts = 4 if relaxed else 6
     if len(pts) < min_pts:
@@ -187,6 +198,9 @@ def _try_full_circle(pts: Sequence[Point], *, relaxed: bool = False) -> Optional
         return None
     cx, cy, r, err = fit
     if r < 0.25:
+        return None
+    # Evita clasificar rectángulos/cuadrados como CIRCLE (p. ej. contorno exterior del nest).
+    if _bbox_aspect_ratio(pts) > (1.12 if relaxed else 1.06):
         return None
     tol = _tol_for_radius(r) * (2.5 if relaxed else 1.0)
     if err > tol:
@@ -284,6 +298,38 @@ def _max_collinear_span(pts: List[Point], i: int, n: int) -> int:
     return span
 
 
+def _ring_bbox(pts: Sequence[Point]) -> tuple[float, float, float, float]:
+    xs = [float(p[0]) for p in pts]
+    ys = [float(p[1]) for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _arc_fits_segment(
+    arc: tuple, seg_pts: Sequence[Point], *, slack: float = 0.18
+) -> bool:
+    """El arco debe ser coherente con el tramo facetado (evita arcos gigantes en esquinas)."""
+    if len(seg_pts) < 3:
+        return False
+    xmin, ymin, xmax, ymax = _ring_bbox(seg_pts)
+    chord_span = max(xmax - xmin, ymax - ymin, 1e-6)
+    cx, cy, r = float(arc[1]), float(arc[2]), float(arc[3])
+    if r <= 1e-6:
+        return False
+    if r > chord_span * 1.35:
+        return False
+    margin = max(chord_span * slack, 0.45)
+    p0, p1 = arc[5], arc[6]
+
+    def _near(pt: Point) -> bool:
+        x, y = float(pt[0]), float(pt[1])
+        return (
+            xmin - margin <= x <= xmax + margin
+            and ymin - margin <= y <= ymax + margin
+        )
+
+    return _near(p0) and _near(p1)
+
+
 def _longest_arc_from(pts: List[Point], i: int, n: int) -> Tuple[int, Optional[Tuple]]:
     best_len = 1
     best_arc = None
@@ -291,7 +337,7 @@ def _longest_arc_from(pts: List[Point], i: int, n: int) -> Tuple[int, Optional[T
     for span in range(2, max_span + 1):
         seg = [pts[(i + k) % n] for k in range(span + 1)]
         arc = _fit_arc_segment(seg)
-        if arc:
+        if arc and _arc_fits_segment(arc, seg):
             best_len = span
             best_arc = arc
         elif span > 4 and best_arc is not None:
@@ -318,7 +364,11 @@ def export_ring_native(
 
     if closed and len(pts) >= (4 if prefer_circle else 6):
         circ = _try_full_circle(pts, relaxed=prefer_circle)
-        if circ:
+        if circ and _arc_fits_segment(
+            ("circle", circ[0], circ[1], circ[2], True, pts[0], pts[-1]),
+            pts,
+            slack=0.35,
+        ):
             msp.add_circle((circ[0], circ[1]), circ[2], dxfattribs={"layer": layer})
             return True
 
@@ -331,9 +381,15 @@ def export_ring_native(
             span, arc = _longest_arc_from(pts, i, n)
             if arc and span >= 2:
                 kind = arc[0]
-                if kind == "circle":
+                if kind == "circle" and span >= n - 1:
                     msp.add_circle((arc[1], arc[2]), arc[3], dxfattribs={"layer": layer})
                     return True
+                if kind == "circle":
+                    _add_arc(msp, arc[1], arc[2], arc[3], arc[5], arc[6], arc[4], layer)
+                    i = (i + span) % n
+                    if i == 0:
+                        break
+                    continue
                 _add_arc(msp, arc[1], arc[2], arc[3], arc[5], arc[6], arc[4], layer)
                 i = (i + span) % n
                 if i == 0:

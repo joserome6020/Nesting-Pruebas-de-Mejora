@@ -320,6 +320,121 @@ def _origen_rotacion_pieza(poly):
         return (0.0, 0.0)
 
 
+def enriquecer_piezas_hoja_con_fuentes(hoja: dict, piezas_origen: list) -> int:
+    """
+    Asocia ruta DXF, origen y transformación a piezas ya colocadas en una hoja.
+    Usado tras renest de placa (empaquetar_con_reintentos / recalcular_hoja_full).
+    Devuelve cuántas piezas reales se enriquecieron.
+    """
+    if not isinstance(hoja, dict) or not piezas_origen:
+        return 0
+
+    source_map: dict[str, list] = {}
+    for p_orig in piezas_origen:
+        if not isinstance(p_orig, dict):
+            continue
+        base = _piece_name_base(p_orig.get("nombre"))
+        if not base:
+            continue
+        item = dict(p_orig)
+        if item.get("poly") is not None and item.get("poly_exact") is None:
+            item["poly_exact"] = item.get("poly")
+        source_map.setdefault(base, []).append(item)
+
+    enriquecidas = 0
+    for p_final in hoja.get("piezas") or []:
+        nombre_final = str(p_final.get("nombre") or "")
+        if _is_virtual_piece(nombre_final):
+            continue
+
+        base = _piece_name_base(nombre_final)
+        candidatos = source_map.get(base, [])
+        if not candidatos:
+            continue
+
+        p_orig = candidatos.pop(0)
+        ruta = str(p_orig.get("ruta") or "").strip()
+        if not ruta:
+            continue
+
+        if p_orig.get("debug_id"):
+            p_final["debug_id"] = p_orig.get("debug_id")
+
+        p_final["ruta"] = ruta
+        p_final["orig_minx"] = p_orig.get("orig_minx", 0.0)
+        p_final["orig_miny"] = p_orig.get("orig_miny", 0.0)
+
+        transform = _inferir_transformacion_desde_resultado(p_orig, p_final)
+        rot_origin = _origen_rotacion_pieza(p_orig.get("poly_exact") or p_orig.get("poly"))
+        p_final["rot_origin_cx"] = rot_origin[0]
+        p_final["rot_origin_cy"] = rot_origin[1]
+
+        if transform:
+            p_final["rot_deg"] = transform["rot_deg"]
+            p_final["shift_x"] = transform["shift_x"]
+            p_final["shift_y"] = transform["shift_y"]
+        else:
+            p_final["rot_deg"] = 0.0
+            p_final["shift_x"] = 0.0
+            p_final["shift_y"] = 0.0
+
+        _colocar_geometria_exacta_en_pieza(p_orig, p_final, transform)
+        enriquecidas += 1
+
+    return enriquecidas
+
+
+def catalogo_rutas_desde_datos_partes(datos_partes, clave: str) -> dict[str, str]:
+    """Mapa nombre pieza → ruta DXF desde PARTS / datos_partes_actuales."""
+    material_hoja = clave.split("_")[1] if "_" in clave else str(clave or "")
+    calibre_hoja = clave.split("_")[0] if "_" in clave else ""
+    out: dict[str, str] = {}
+    for row in datos_partes or []:
+        if not row or len(row) < 6:
+            continue
+        p_nom = str(row[0] or "").strip()
+        mat = str(row[1] or "").strip()
+        cal = str(row[3] or "").strip()
+        ruta = str(row[5] or "").strip()
+        if not p_nom or not ruta:
+            continue
+        if not MotorNesting._coinciden(calibre_hoja, cal):
+            continue
+        if not MotorNesting._coinciden(material_hoja, mat):
+            continue
+        out.setdefault(_piece_name_base(p_nom), ruta)
+        out.setdefault(p_nom, ruta)
+    return out
+
+
+def aplicar_rutas_catalogo_en_hoja(hoja: dict, catalogo: dict[str, str]) -> int:
+    """Completa pz['ruta'] faltante desde catálogo PARTS."""
+    if not isinstance(hoja, dict) or not catalogo:
+        return 0
+    aplicadas = 0
+    for pz in hoja.get("piezas") or []:
+        if str(pz.get("ruta") or "").strip():
+            continue
+        nom = str(pz.get("nombre", "") or "").strip()
+        base = _piece_name_base(nom)
+        ruta = catalogo.get(nom) or catalogo.get(base) or ""
+        if ruta and os.path.isfile(str(ruta)):
+            pz["ruta"] = str(ruta)
+            aplicadas += 1
+    return aplicadas
+
+
+def enriquecer_hoja_export_desde_partes(hoja: dict, clave: str, datos_partes) -> int:
+    """
+    Antes de export DXF: solo completa rutas DXF faltantes desde PARTS.
+    No re-infiere transformaciones (corrompe shift si poligonos ya están en placa).
+    """
+    if not isinstance(hoja, dict) or not datos_partes:
+        return 0
+    catalogo = catalogo_rutas_desde_datos_partes(datos_partes, clave)
+    return aplicar_rutas_catalogo_en_hoja(hoja, catalogo)
+
+
 def _colocar_geometria_exacta_en_pieza(p_orig: dict, p_final: dict, transform: dict | None):
     """
     No reescribe poligonos: la posición la define el motor de nesting.
@@ -3421,6 +3536,7 @@ class MotorNesting:
         wo_label=None,
         es_swo=False,
         swo_id=None,
+        datos_partes=None,
     ):
         """Redirige la orden de la interfaz gráfica hacia el archivo exporter.py"""
         return exportar_resultados_a_dxf(
@@ -3431,6 +3547,7 @@ class MotorNesting:
             wo_label=wo_label,
             es_swo=es_swo,
             swo_id=swo_id,
+            datos_partes=datos_partes,
         )
 
 

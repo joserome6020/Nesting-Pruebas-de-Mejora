@@ -46,11 +46,11 @@ app.add_middleware(
 )
 
 DB_CONFIG = {
-    "host": "localhost",
-    "database": "nestingpro_db",
-    "user": "postgres",
-    "password": "nesting123",
-    "port": "5433"
+    "host": os.getenv("NESTING_DB_HOST", "192.168.2.80"),
+    "database": os.getenv("NESTING_DB_NAME", "nestingpro_db"),
+    "user": os.getenv("NESTING_DB_USER", "postgres"),
+    "password": os.getenv("NESTING_DB_PASSWORD", "nesting123"),
+    "port": os.getenv("NESTING_DB_PORT", "5433"),
 }
 
 DB_TIMEZONE = os.getenv("DB_TIMEZONE", "America/Chihuahua")

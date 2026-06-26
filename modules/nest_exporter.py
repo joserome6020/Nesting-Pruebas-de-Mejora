@@ -459,6 +459,27 @@ def _write_native_entity(msp, entity, layer: str) -> int:
             dxfattribs={"layer": layer},
         )
         return 1
+    if typ == "TEXT":
+        ins = entity.dxf.insert
+        msp.add_text(
+            str(entity.dxf.text or ""),
+            dxfattribs={
+                "layer": layer,
+                "height": float(getattr(entity.dxf, "height", 1.0) or 1.0),
+                "rotation": float(getattr(entity.dxf, "rotation", 0.0) or 0.0),
+            },
+        ).set_placement((float(ins.x), float(ins.y)))
+        return 1
+    if typ == "MTEXT":
+        ins = entity.dxf.insert
+        attribs = {
+            "layer": layer,
+            "char_height": float(getattr(entity.dxf, "char_height", 1.0) or 1.0),
+            "rotation": float(getattr(entity.dxf, "rotation", 0.0) or 0.0),
+        }
+        mt = msp.add_mtext(str(entity.plain_text() or ""), dxfattribs=attribs)
+        mt.set_location((float(ins.x), float(ins.y)))
+        return 1
     if typ in ("LWPOLYLINE", "POLYLINE"):
         added = 0
         for sub in entity.virtual_entities():
@@ -1065,7 +1086,7 @@ def _export_cu_largos_from_source(
     except Exception as e:
         _fail_export(label, f"DXF fuente ilegible: {e}")
 
-    m = _resolve_placement_matrix(part_doc, p)
+    m = _resolve_placement_matrix(part_doc, _resolve_placement(p))
     laser_added = _export_cu_laser_outer_for_piece(msp, part_doc, m, p, outer)
     if laser_added <= 0 and not _solo_cortes_guillotina_vertical(outer):
         idx = int(p.get("cu_slice_idx", 0) or 0)
@@ -1235,7 +1256,12 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
                 if p.get("use_native_curves"):
-                    export_ring_native(msp, outer_t, layer_destino, closed=closed_destino)
+                    if not export_ring_native(
+                        msp, outer_t, layer_destino, closed=closed_destino
+                    ):
+                        _export_ring_exact(
+                            msp, outer_t, layer_destino, closed=closed_destino
+                        )
                 else:
                     _export_ring_exact(msp, outer_t, layer_destino, closed=closed_destino)
 
@@ -1250,7 +1276,10 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
                     continue
                 hole_layer = str(p.get("inner_layer_override") or "CUT_INNER")
                 if p.get("use_native_curves"):
-                    export_ring_native(msp, h_t, hole_layer, closed=True, prefer_circle=True)
+                    if not export_ring_native(
+                        msp, h_t, hole_layer, closed=True, prefer_circle=True
+                    ):
+                        _export_ring_exact(msp, h_t, hole_layer, closed=True)
                 else:
                     _export_ring_exact(msp, h_t, hole_layer, closed=True)
 
@@ -1382,6 +1411,7 @@ def export_nest_to_dxf(
     placements: list,
     *,
     title: str = "NEST_EXPORT",
+    canal: str | None = None,
     draw_holes: bool = True,
     draw_labels: bool = False,  
     draw_marks: bool = True,
@@ -1390,6 +1420,20 @@ def export_nest_to_dxf(
     modo_largos_cu: bool = False,
     strict: bool = True,
 ):
+    from modules.nesting_engine.dxf_export_log import (
+        format_placement_spec,
+        log,
+        log_entities_added,
+        log_export_done,
+        log_export_error,
+        log_export_start,
+        resolve_export_mode,
+    )
+
+    canal_tag = str(canal or title or "DXF").strip()
+    log_export_start(
+        out_path, sheet, placements, canal=canal_tag, title=title, strict=strict
+    )
     out_dir = os.path.dirname(out_path) or "."
     os.makedirs(out_dir, exist_ok=True)
     if os.path.isfile(out_path):
@@ -1436,6 +1480,7 @@ def export_nest_to_dxf(
 
     cache_blocks = {} 
     exported_pieces = 0
+    export_nest_to_dxf._plasma_bounds_cache = []
 
     try:
         for i, p in enumerate(placements, start=1):
@@ -1447,97 +1492,63 @@ def export_nest_to_dxf(
 
             ruta_original = p.get("ruta")
             part_name = str(p.get("part_name", p.get("name", f"PART_{i}")))
-            if solo_cobre and part_name.startswith("CU_CORTE__"):
-                if not _is_cu_corte_fin_bar(p, placements):
-                    continue
-
+            # CU_CORTE__ (guillotinas / relieves): todas van al DXF como CUT_OUTER abierto.
             prefer_source = bool(p.get("prefer_source_dxf"))
             compensated = bool(p.get("compensated"))
             plasma_export = bool(p.get("plasma_export"))
-            plasma_source = bool(p.get("compensated_plasma_source"))
             cu_largos_piece = bool(p.get("cu_largos_piece"))
             needs_strict = strict and _placement_needs_strict_source(p)
             count_before = _msp_count(msp)
+            export_mode = resolve_export_mode(p)
+            log(f"PIEZA {i}/{len(placements)}: {format_placement_spec(p, index=i)}")
+            log(f"  modo={export_mode}")
+
+            from modules.dxf_export.dispatcher import export_piece as dxf_export_piece
+            from modules.dxf_export.validate import _entities_bbox_mm
+
+            piece_bounds_cache: list = getattr(
+                export_nest_to_dxf, "_plasma_bounds_cache", []
+            )
+            if not hasattr(export_nest_to_dxf, "_plasma_bounds_cache"):
+                export_nest_to_dxf._plasma_bounds_cache = piece_bounds_cache
+
+            mode, ok_channel = dxf_export_piece(
+                msp,
+                doc,
+                p,
+                draw_holes=draw_holes,
+                draw_marks=draw_marks,
+                strict=strict,
+                solo_cobre=solo_cobre,
+                cache_blocks=cache_blocks,
+                sheet=sheet,
+                all_piece_bounds=piece_bounds_cache if plasma_export else None,
+            )
 
             if plasma_export:
-                from modules.plasma_dxf_export import export_plasma_placement
-
-                if not export_plasma_placement(
-                    msp, p, draw_holes=draw_holes, draw_marks=draw_marks
-                ):
+                if not ok_channel:
                     if strict:
                         _fail_export(part_name, "plasma: sin contorno exportable desde el nest")
                     else:
                         continue
                 new_entities = _msp_snapshot(msp)[count_before:]
+                log_entities_added(part_name, new_entities, mode=export_mode, ok=bool(new_entities))
                 if new_entities:
                     exported_pieces += 1
+                    b = _entities_bbox_mm(new_entities)
+                    if b:
+                        piece_bounds_cache.append(b)
                 continue
 
-            if plasma_source and str(p.get("ruta") or "").strip():
-                from modules.plasma_dxf_export import export_compensated_plasma_from_source
-
-                stats = export_compensated_plasma_from_source(
-                    msp,
-                    doc,
-                    p,
-                    draw_holes=draw_holes,
-                    draw_marks=draw_marks,
-                )
-                ok_plasma = int(stats.get("outer", 0) or 0) > 0
-                if not ok_plasma and _export_placed_geometry(
-                    msp, p, draw_holes=draw_holes, draw_marks=draw_marks
-                ):
-                    ok_plasma = True
-                if not ok_plasma:
+            if bool(p.get("compensated_plasma_source")) and str(p.get("ruta") or "").strip():
+                if not ok_channel:
                     if strict:
-                        _fail_export(part_name, "compensación plasma sin contorno exterior exportable")
+                        _fail_export(
+                            part_name,
+                            "compensación plasma sin contorno exterior exportable",
+                        )
                     else:
                         continue
-            elif cu_largos_piece and prefer_source and not compensated and ruta_original:
-                _export_cu_largos_from_source(
-                    msp,
-                    doc,
-                    p,
-                    draw_holes=draw_holes,
-                    draw_marks=draw_marks,
-                    strict=strict,
-                )
-            elif prefer_source and not compensated and ruta_original:
-                _export_source_dxf_at_placement(
-                    msp, doc, p, draw_marks=draw_marks, strict=strict
-                )
-            elif (
-                not prefer_source
-                and not compensated
-                and not cu_largos_piece
-                and ruta_original
-                and os.path.exists(ruta_original)
-            ):
-                if not _export_block_at_placement(msp, doc, cache_blocks, p):
-                    if strict:
-                        _fail_export(part_name, "no se pudo clonar el DXF fuente (block)")
-            elif (
-                not needs_strict
-                and (
-                    not ruta_original
-                    or compensated
-                    or not prefer_source
-                )
-                and _export_placed_geometry(
-                    msp, p, draw_holes=draw_holes, draw_marks=draw_marks
-                )
-            ):
-                pass
-            elif needs_strict:
-                _fail_export(
-                    part_name,
-                    "requiere exportación 1:1 desde AutoDXF y no se pudo completar",
-                )
-            elif strict and (p.get("outer") or p.get("outer_poly") or p.get("marks")):
-                _fail_export(part_name, "sin geometría exportable")
-            else:
-                continue
 
             new_entities = _msp_snapshot(msp)[count_before:]
 
@@ -1552,6 +1563,13 @@ def export_nest_to_dxf(
                 exported_pieces += 1
             elif new_entities:
                 exported_pieces += 1
+
+            log_entities_added(
+                part_name,
+                new_entities,
+                mode=export_mode,
+                ok=bool(new_entities),
+            )
 
         if strict and exported_pieces == 0:
             raise DxfExportValidationError(
@@ -1571,7 +1589,9 @@ def export_nest_to_dxf(
             _validate_dxf_document(doc)
 
         doc.saveas(out_path)
-    except DxfExportValidationError:
+        log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
+    except DxfExportValidationError as exc:
+        log_export_error(out_path, exc, canal=canal_tag)
         if os.path.isfile(out_path):
             try:
                 os.remove(out_path)

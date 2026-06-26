@@ -11,6 +11,12 @@ for _p in (_ROOT, _IFACE):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    # Log de export DXF y diagnósticos visibles en terminal sin esperar al final del buffer.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
     if getattr(sys, "frozen", False):
         # CWD estable junto al .exe (otras PCs, accesos directos, doble clic).
         os.chdir(os.path.dirname(os.path.abspath(sys.executable)))

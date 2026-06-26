@@ -1702,7 +1702,14 @@ class TabNesting(ctk.CTkFrame):
                     ignorada = bool(hoja.get("ignorar_deduccion", False))
                     es_rtzc = es_placa_madre_rtzc(hoja)
                     es_sobrante_rtz = es_placa_madre_sobrante_rtz(hoja)
-                    prefijo_ign = "⊘ " if ignorada and not es_sobrante_rtz and not es_rtzc else ""
+                    prefijo_ign = (
+                        "⊘ "
+                        if ignorada
+                        and not es_sobrante_rtz
+                        and not es_rtzc
+                        and not hoja.get("modo_largos_cu")
+                        else ""
+                    )
                     texto_btn = (
                         f"   ↳ {nombre_placa} (Accesorios) | {efi_txt}"
                         if es_retazo else
