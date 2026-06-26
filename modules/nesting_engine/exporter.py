@@ -167,8 +167,14 @@ def _debe_generar_plasma(clave, hoja):
         return True
     _, thk_val = _parse_thickness_from_clave(clave)
 
-    # Accesorios / mini nests sin compensar
+    from .efficiency_metrics import hoja_es_sobrante_sin_compra
+
+    # Accesorios / mini nests / sobrante láser (RTZ) sin compensar
     if hoja.get("es_retazo", False):
+        return False
+    if hoja_es_sobrante_sin_compra(hoja) and not bool(
+        hoja.get("plasma_compensado_manual")
+    ):
         return False
 
     # Plasma solo para > 3/8
@@ -184,10 +190,38 @@ def _slug_token(value: str) -> str:
     return text.strip("_") or "NA"
 
 
-def _resolver_display_name_hoja(hoja, contador_placas):
+def _resolver_display_name_hoja(
+    hoja,
+    contador_placas,
+    *,
+    contador_rtz=None,
+    contador_rtzc=None,
+    calibre=None,
+    wo_name=None,
+):
     display_forzado = str(hoja.get("sheet_display_name") or "").strip()
     if display_forzado:
         return display_forzado
+
+    from .efficiency_metrics import (
+        allocar_nombre_rtz_sobrante_db,
+        allocar_nombre_rtzc_sobrante_db,
+        hoja_es_sobrante_plasma_compensado,
+        hoja_es_sobrante_sin_compra,
+    )
+
+    if hoja_es_sobrante_sin_compra(hoja):
+        nombre_rtz = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip()
+        if nombre_rtz.upper().startswith("RTZC") or nombre_rtz.upper().startswith("RTZ"):
+            return nombre_rtz
+        if hoja_es_sobrante_plasma_compensado(hoja) and contador_rtzc is not None and calibre and wo_name:
+            return allocar_nombre_rtzc_sobrante_db(
+                contador_rtzc, calibre, wo_name, hoja=hoja
+            )
+        if contador_rtz is not None and calibre and wo_name:
+            return allocar_nombre_rtz_sobrante_db(
+                contador_rtz, calibre, wo_name, hoja=hoja
+            )
 
     codigo_base = str(hoja.get("placa_id", "STOCK")).strip() or "STOCK"
 
@@ -237,7 +271,20 @@ def _inyectar_metadata_hoja(
     hoja["placa_largo_canonico_mm"] = round(float(hoja.get("placa_largo_canonico_mm") or placa_h), 2)
     hoja["nest_instance_id"] = nest_instance_id
     hoja["source_nest_name"] = str(hoja.get("source_nest_name") or source_nest_name)
-    hoja["is_rtz"] = bool(hoja.get("is_rtz", str(display_name).upper().startswith("RTZ")))
+    from .efficiency_metrics import hoja_es_sobrante_plasma_compensado, hoja_es_sobrante_sin_compra
+
+    es_rtzc = bool(
+        hoja.get("is_rtz_plasma_sobrante") or hoja_es_sobrante_plasma_compensado(hoja)
+    )
+    hoja["is_rtz_plasma_sobrante"] = es_rtzc
+    if es_rtzc:
+        hoja["rtz_tipo"] = str(hoja.get("rtz_tipo") or "COMPENSADO")
+
+    hoja["is_rtz"] = bool(
+        hoja.get("is_rtz")
+        or hoja_es_sobrante_sin_compra(hoja)
+        or str(display_name).upper().startswith("RTZ")
+    )
 
 def _normalizar_tipo_corte_pqart(nombre_carpeta: str) -> str:
     carpeta = str(nombre_carpeta or "").strip().upper()
@@ -472,6 +519,14 @@ def exportar_resultados_a_dxf(
     )
     asignar_numeracion_global_hojas(resultados, order_label_global, sobrescribir=True)
 
+    from .efficiency_metrics import (
+        inicializar_contador_rtz_sobrante,
+        inicializar_contador_rtzc_sobrante,
+    )
+
+    contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados)
+    contador_rtzc_sobrante = inicializar_contador_rtzc_sobrante(resultados)
+
     for clave, data in iterar_grupos_nesting_ordenados(resultados):
         if "hojas" not in data:
             continue
@@ -501,7 +556,14 @@ def exportar_resultados_a_dxf(
             else:
                 order_label = str(wo_label or "").strip() or "W.O."
 
-            display_name = _resolver_display_name_hoja(hoja, contador_placas)
+            display_name = _resolver_display_name_hoja(
+                hoja,
+                contador_placas,
+                contador_rtz=contador_rtz_sobrante,
+                contador_rtzc=contador_rtzc_sobrante,
+                calibre=thickness_name,
+                wo_name=order_label,
+            )
 
             _inyectar_metadata_hoja(
                 hoja,
@@ -634,37 +696,40 @@ def exportar_resultados_a_dxf(
 
                 # DXF plasma (solo cuando aplique; cobre no usa plasma)
                 if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA") and not nom.startswith("CU_CORTE__") and not es_cu_hoja:
-                    try:
-                        if compensada_manual:
-                            plasma_outer = outer_main
-                            plasma_holes = holes_main
-                        else:
-                            off_use = off_manual if off_manual > 0 else plasma_offset_job
-                            outer_poly = Polygon(pols[0])
-                            plasma_outer = list(
-                                outer_poly.buffer(off_use, join_style=2).exterior.coords
+                    from modules.plasma_dxf_export import build_plasma_profile_from_nested
+
+                    off_piece = float(
+                        pz.get("plasma_offset_mm_manual")
+                        or hoja.get("plasma_offset_mm_manual")
+                        or off_manual
+                        or plasma_offset_job
+                        or 0.0
+                    )
+                    if compensada_pieza:
+                        plasma_outer, plasma_holes = outer_main, holes_main
+                    else:
+                        try:
+                            plasma_outer, plasma_holes = build_plasma_profile_from_nested(
+                                pols,
+                                offset_mm=off_piece,
+                                already_compensated=False,
                             )
-
-                            plasma_holes = []
-                            for h in (pols[1:] if len(pols) > 1 else []):
-                                h_comp = Polygon(h).buffer(-off_use, join_style=2)
-                                if not h_comp.is_empty:
-                                    plasma_holes.append(list(h_comp.exterior.coords))
-                    except Exception:
-                        plasma_outer = outer_main
-                        plasma_holes = holes_main
-
-                    plasma_outer, plasma_holes = _clean_profile_for_production(plasma_outer, plasma_holes)
+                        except Exception:
+                            plasma_outer, plasma_holes = outer_main, holes_main
 
                     placements_plasma.append({
                         "part_name": nom + "_PLASMA",
                         "outer": plasma_outer,
                         "holes": plasma_holes,
+                        "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
                         "marks": pz.get("marcas", []),
                         "ruta": "",
                         "prefer_source_dxf": False,
-                        "compensated": True,
-                        "use_native_curves": True,
+                        "compensated": compensada_pieza,
+                        "plasma_export": True,
+                        "compensated_plasma_source": False,
+                        "plasma_offset_mm": off_piece,
+                        "use_native_curves": False,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
                         "shift_x": pz.get("shift_x", 0.0),
@@ -678,44 +743,98 @@ def exportar_resultados_a_dxf(
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
-            # Exportación principal
-            if carpeta_principal == RUTA_CAMA_LASER:
-                path_principal = os.path.join(rutas["cama_laser_dxf"], nombre_archivo)
-            elif carpeta_principal == RUTA_CAMA_LASER_12KW:
-                path_principal = os.path.join(rutas["cama_laser_12kw_dxf"], nombre_archivo)
-            else:
-                path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
+            from .efficiency_metrics import hoja_export_solo_plasma
 
-            try:
-                export_nest_to_dxf(
-                    path_principal,
-                    sheet_info,
-                    placements_principales,
-                    title=f"{carpeta_principal} | {clave}",
-                    modo_largos_cu=bool(hoja.get("modo_largos_cu")),
-                    strict=True,
+            solo_plasma = hoja_export_solo_plasma(hoja)
+
+            # Exportación principal (omitida en RTZC: solo Robot Plasma)
+            if not solo_plasma:
+                if carpeta_principal == RUTA_CAMA_LASER:
+                    path_principal = os.path.join(rutas["cama_laser_dxf"], nombre_archivo)
+                elif carpeta_principal == RUTA_CAMA_LASER_12KW:
+                    path_principal = os.path.join(rutas["cama_laser_12kw_dxf"], nombre_archivo)
+                else:
+                    path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
+
+                try:
+                    export_nest_to_dxf(
+                        path_principal,
+                        sheet_info,
+                        placements_principales,
+                        title=f"{carpeta_principal} | {clave}",
+                        modo_largos_cu=bool(hoja.get("modo_largos_cu")),
+                        strict=True,
+                    )
+                except DxfExportValidationError as exc:
+                    raise DxfExportValidationError(
+                        f"Exportación abortada ({nombre_archivo}): {exc}"
+                    ) from exc
+                exportados_principales.append(path_principal)
+
+                _registrar_exportacion_pqart_hoja(
+                    hoja,
+                    ruta_dxf=path_principal,
+                    tipo_corte=_normalizar_tipo_corte_pqart(carpeta_principal),
                 )
-            except DxfExportValidationError as exc:
-                raise DxfExportValidationError(
-                    f"Exportación abortada ({nombre_archivo}): {exc}"
-                ) from exc
-            exportados_principales.append(path_principal)
-
-            _registrar_exportacion_pqart_hoja(
-                hoja,
-                ruta_dxf=path_principal,
-                tipo_corte=_normalizar_tipo_corte_pqart(carpeta_principal),
-            )
 
             # Exportación plasma solo cuando aplique
-            if generar_plasma_hoja and placements_plasma:
+            lista_plasma = placements_plasma
+            if solo_plasma and not lista_plasma:
+                # RTZC: nunca reutilizar principales (outer láser limpiado agresivamente)
+                from modules.plasma_dxf_export import build_plasma_profile_from_nested
+
+                lista_plasma = []
+                comp_hoja = bool(hoja.get("plasma_compensado_manual"))
+                off_hoja = float(hoja.get("plasma_offset_mm_manual") or plasma_offset_job or 0.0)
+                for pz in hoja.get("piezas", []):
+                    nom = str(pz.get("nombre", "") or "")
+                    if nom.startswith("REF__") or nom.startswith("TATUAJE_"):
+                        continue
+                    if nom.startswith("RETAZO_GUILLOTINA") or nom.startswith("CU_CORTE__"):
+                        continue
+                    pols = pz.get("poligonos", []) or []
+                    if not pols:
+                        continue
+                    comp_pz = comp_hoja or bool(pz.get("plasma_compensada_manual"))
+                    if comp_pz:
+                        po, ph = _clean_profile_for_production(
+                            pols[0],
+                            pols[1:] if len(pols) > 1 else [],
+                        )
+                    else:
+                        po, ph = build_plasma_profile_from_nested(
+                            pols,
+                            offset_mm=off_hoja,
+                            already_compensated=False,
+                        )
+                    lista_plasma.append({
+                        "part_name": nom + "_PLASMA",
+                        "outer": po,
+                        "holes": ph,
+                        "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
+                        "marks": pz.get("marcas", []),
+                        "ruta": str(pz.get("ruta") or ""),
+                        "compensated": comp_pz,
+                        "plasma_export": True,
+                        "plasma_offset_mm": off_hoja,
+                        "use_native_curves": False,
+                        "orig_minx": pz.get("orig_minx", 0.0),
+                        "orig_miny": pz.get("orig_miny", 0.0),
+                        "shift_x": pz.get("shift_x", 0.0),
+                        "shift_y": pz.get("shift_y", 0.0),
+                        "rot_deg": pz.get("rot_deg", 0.0),
+                        "rot_origin_cx": pz.get("rot_origin_cx", 0.0),
+                        "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
+                    })
+
+            if generar_plasma_hoja and lista_plasma:
                 path_plasma = os.path.join(rutas["robot_plasma_dxf"], nombre_archivo)
                 export_nest_to_dxf(
                     path_plasma,
                     sheet_info,
-                    placements_plasma,
+                    lista_plasma,
                     title=f"{RUTA_ROBOT_PLASMA} | {clave}",
-                    strict=False,
+                    strict=True,
                 )
 
                 _registrar_exportacion_pqart_hoja(
@@ -723,6 +842,8 @@ def exportar_resultados_a_dxf(
                     ruta_dxf=path_plasma,
                     tipo_corte=_normalizar_tipo_corte_pqart(RUTA_ROBOT_PLASMA),
                 )
+                if solo_plasma:
+                    exportados_principales.append(path_plasma)
 
     if generar_step:
         lanzar_freecad_robotica(rutas, thickness_para_step, plasma_offset_job)

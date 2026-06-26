@@ -35,10 +35,16 @@ from modules.plasma_compensator import compute_plasma_offset_mm
 from modules.nesting_engine.efficiency_metrics import (
     actualizar_eficiencias_resultados,
     eficiencia_para_umbral_ignorar,
+    es_placa_madre_sobrante_rtz,
+    es_placa_madre_rtzc,
     formatear_eficiencias_placa,
     formatear_eficiencias_tanque,
     hoja_cuenta_para_deduccion,
+    inicializar_contador_rtz_sobrante,
+    inicializar_contador_rtzc_sobrante,
     placa_debe_mostrar_opcion_ignorar,
+    sincronizar_hoja_sobrante_rtz,
+    sincronizar_sobrantes_rtz_en_resultados,
 )
 from modules.nesting_engine.rtz_overlays import sincronizar_overlays_resultados
 from responsive_layout import configurar_contenedor_expandible
@@ -519,6 +525,27 @@ class TabNesting(ctk.CTkFrame):
     
     def _work_order_label_lote_activo(self):
         return f"W.O. {int(getattr(self, 'lote_actual_idx', 0) or 0) + 1}"
+
+    def _order_label_para_rtz(self) -> str:
+        job = str(getattr(self.app, "job_activo", "") or "").strip()
+        if job.upper().startswith("SWO"):
+            return job
+        return self._work_order_label_lote_activo()
+
+    def _sincronizar_sobrante_rtz_placa(self, clave, hoja, ignorar: bool) -> None:
+        if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+            return
+        calibre = str(clave).split("_", 1)[0].strip() or "NA"
+        contador = inicializar_contador_rtz_sobrante(self.app.resultados_nesting or {})
+        contador_rtzc = inicializar_contador_rtzc_sobrante(self.app.resultados_nesting or {})
+        sincronizar_hoja_sobrante_rtz(
+            hoja,
+            ignorar=bool(ignorar),
+            contador_rtz=contador,
+            contador_rtzc=contador_rtzc,
+            calibre=calibre,
+            wo_name=self._order_label_para_rtz(),
+        )
 
     def _multiplicador_lote_activo(self):
         """
@@ -1607,6 +1634,10 @@ class TabNesting(ctk.CTkFrame):
     def procesar_lista_hojas(self, resultados):
         sincronizar_overlays_resultados(resultados)
         actualizar_eficiencias_resultados(resultados)
+        sincronizar_sobrantes_rtz_en_resultados(
+            resultados,
+            wo_name=self._order_label_para_rtz(),
+        )
         for clave in (resultados or {}):
             if isinstance((resultados or {}).get(clave), dict):
                 self._recalcular_costos_grupo(clave)
@@ -1669,14 +1700,23 @@ class TabNesting(ctk.CTkFrame):
                     else:
                         sufijo = ""
                     ignorada = bool(hoja.get("ignorar_deduccion", False))
-                    prefijo_ign = "⊘ " if ignorada else ""
+                    es_rtzc = es_placa_madre_rtzc(hoja)
+                    es_sobrante_rtz = es_placa_madre_sobrante_rtz(hoja)
+                    prefijo_ign = "⊘ " if ignorada and not es_sobrante_rtz and not es_rtzc else ""
                     texto_btn = (
                         f"   ↳ {nombre_placa} (Accesorios) | {efi_txt}"
                         if es_retazo else
                         f"{prefijo_ign}◼ {nombre_placa}{sufijo}{origen_str} | {efi_txt}"
                     )
-                    color_fondo = "#0F172A" if es_retazo else ("#1F2937" if ignorada else "#323741")
-                    color_texto = "#38BDF8" if es_retazo else ("#94A3B8" if ignorada else ("#FCA5A5" if origen_str else "white"))
+                    if es_rtzc:
+                        color_fondo = "#1C1917"
+                        color_texto = "#FB923C"
+                    elif es_sobrante_rtz or es_retazo:
+                        color_fondo = "#0F172A"
+                        color_texto = "#38BDF8"
+                    else:
+                        color_fondo = "#1F2937" if ignorada else "#323741"
+                        color_texto = "#94A3B8" if ignorada else ("#FCA5A5" if origen_str else "white")
 
                     fila_placa = ctk.CTkFrame(self.lista_hojas, fg_color="transparent")
                     fila_placa.pack(fill="x", pady=1, padx=(20, 0) if es_retazo else 0)
@@ -2126,6 +2166,7 @@ class TabNesting(ctk.CTkFrame):
                     opt,
                     corner,
                     self._work_order_label_lote_activo(),
+                    sin_rtz=True,
                 )
                 resultado = raw[1] if isinstance(raw, tuple) and len(raw) == 2 else raw
                 if not isinstance(resultado, dict) or resultado.get("error"):
@@ -2600,6 +2641,7 @@ class TabNesting(ctk.CTkFrame):
         if not isinstance(hoja, dict) or hoja.get("es_retazo"):
             return
         hoja["ignorar_deduccion"] = bool(ignorar)
+        self._sincronizar_sobrante_rtz_placa(clave, hoja, ignorar)
         self._recalcular_costos_grupo(clave)
         self._replicar_lote_activo_a_gemelos()
         self.procesar_lista_hojas(self.app.resultados_nesting)

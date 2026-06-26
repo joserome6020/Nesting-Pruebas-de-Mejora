@@ -263,6 +263,17 @@ def _recolectar_huecos(shell_poly, candidatos_outer, candidatos_inner, anillos_i
     return holes
 
 
+def _filtrar_islas_outer(candidatos_outer, shell_poly: Polygon) -> list[Polygon]:
+    """Descarta micro-polígonos de polygonize fallido en el contorno exterior."""
+    if not candidatos_outer or shell_poly is None or shell_poly.is_empty:
+        return list(candidatos_outer or [])
+    shell_a = float(shell_poly.area)
+    if shell_a <= 0:
+        return list(candidatos_outer)
+    min_isla = max(DXF_MIN_HOLE_AREA_MM2 * 100.0, shell_a * 0.001)
+    return [p for p in candidatos_outer if p is shell_poly or p.area >= min_isla]
+
+
 def _ensamblar_pieza(shell_poly: Polygon, holes: list[Polygon]) -> Polygon | None:
     if shell_poly is None or shell_poly.is_empty:
         return None
@@ -274,6 +285,12 @@ def _ensamblar_pieza(shell_poly: Polygon, holes: list[Polygon]) -> Polygon | Non
             pass
     try:
         pieza = Polygon(shell_poly.exterior.coords, hole_coords)
+        if (
+            not pieza.is_valid
+            or pieza.is_empty
+            or pieza.area < shell_poly.area * 0.5
+        ):
+            raise ValueError("shell+huecos inválido")
     except Exception:
         try:
             pieza = shell_poly
@@ -306,6 +323,7 @@ def recuperar_geometria_robusta(ruta_dxf):
         doc = ezdxf.readfile(ruta_dxf)
         msp = doc.modelspace()
         lines_outer, lines_inner, lines_mark = [], [], []
+        anillos_outer_directos: list[list[tuple[float, float]]] = []
         anillos_inner_directos: list[list[tuple[float, float]]] = []
 
         for entity in msp:
@@ -338,6 +356,7 @@ def recuperar_geometria_robusta(ruta_dxf):
                 if not anillos:
                     lines_inner.extend(entidad_a_lineas(entity))
             else:
+                anillos_outer_directos.extend(anillos)
                 for ring in anillos:
                     if len(ring) >= 2:
                         lines_outer.append(LineString(ring))
@@ -353,13 +372,18 @@ def recuperar_geometria_robusta(ruta_dxf):
             return None, None
 
         candidatos_outer = _poligonos_cerrados_de_lineas(lines_outer)
+        for ring in anillos_outer_directos:
+            p = _anillo_a_poligono(ring)
+            if p is not None:
+                candidatos_outer.append(p)
         if not candidatos_outer:
             return None, None
 
         shell_poly = max(candidatos_outer, key=lambda x: x.area)
+        islas_outer = _filtrar_islas_outer(candidatos_outer, shell_poly)
         candidatos_inner = _poligonos_cerrados_de_lineas(lines_inner)
         holes = _recolectar_huecos(
-            shell_poly, candidatos_outer, candidatos_inner, anillos_inner_directos
+            shell_poly, islas_outer, candidatos_inner, anillos_inner_directos
         )
 
         pieza_final = _ensamblar_pieza(shell_poly, holes)

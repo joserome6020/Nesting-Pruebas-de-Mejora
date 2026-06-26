@@ -38,7 +38,11 @@ from .geometry_parser import (
     poligonos_desde_shapely,
 )
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
-from .efficiency_metrics import actualizar_eficiencias_hoja, calcular_eficiencias_grupo
+from .efficiency_metrics import (
+    actualizar_eficiencias_hoja,
+    calcular_eficiencias_grupo,
+    nombre_rtz_para_placa,
+)
 from .nest_optimization import get_nest_profile, score_placa_simulacion
 from .exporter import exportar_resultados_a_dxf
 from .cu_largos_nesting import procesar_grupo_largos_cu
@@ -793,9 +797,11 @@ class MotorNesting:
         self.orientacion_cobre_por_ruta = {}
         try:
             profile = get_nest_profile()
+            mode = str(os.environ.get("ARGA_NEST_MODE", "first")).strip().lower()
             print(
                 f"[NESTING ENGINE] backend={nesting_engine_name()} | "
-                f"mode=standard mc={profile.get('mc_iterations')} lookahead={profile.get('lookahead')}"
+                f"mode={mode} mc={profile.get('mc_iterations')} "
+                f"lookahead={profile.get('lookahead')} refine={profile.get('refine_hoja')}"
             )
         except Exception:
             try:
@@ -1333,6 +1339,7 @@ class MotorNesting:
         wo_name="PENDIENTE",
         q_msg=None,
         cu_routing_override=None,
+        sin_rtz=False,
     ):
         partes_clave = clave.split('_', 1) 
         req_cal = partes_clave[0]
@@ -1445,17 +1452,20 @@ class MotorNesting:
         accesorios_base = [p for p in piezas if p['area'] <= AREA_LIMITE_MM2]
 
         nest_profile = get_nest_profile()
-        mc_iters = int(nest_profile.get("mc_iterations", 15))
-        mc_fast = int(nest_profile.get("mc_lookahead_iterations", 5))
-        use_lookahead = bool(nest_profile.get("lookahead", True))
-        cu_acc_retries = 14
-        cu_refinar_intentos = 12
+        mc_iters = int(nest_profile.get("mc_iterations", 1))
+        mc_fast = int(nest_profile.get("mc_lookahead_iterations", 1))
+        use_lookahead = bool(nest_profile.get("lookahead", False))
+        refine_hoja = bool(nest_profile.get("refine_hoja", False))
+        cu_acc_retries = int(nest_profile.get("accesorios_retries", 1))
+        cu_refinar_intentos = int(nest_profile.get("refinar_intentos", 0))
         _dbg_nesting(
-            f"[NEST-PROFILE] clave={clave} | mc={mc_iters} | lookahead={use_lookahead} | mc_fast={mc_fast}"
+            f"[NEST-PROFILE] clave={clave} | mc={mc_iters} | lookahead={use_lookahead} | "
+            f"mc_fast={mc_fast} | refine={refine_hoja} | acc_retries={cu_acc_retries}"
         )
 
         hojas_finales = []
         costo_total_lote = 0
+        inventario_aviso = ""
         
         pendientes_est = copy.deepcopy(estructurales)
         accesorios = copy.deepcopy(accesorios_base)
@@ -1648,22 +1658,23 @@ class MotorNesting:
             hoja_ganadora = mejor_hoja_temp
             candidato_ganador = mejor_placa
 
-            # Refinar compactación de la hoja (mismas piezas, mejor orden MC)
-            piezas_pool_ref = pendientes_est if pendientes_est else accesorios
-            hoja_ref = _refinar_hoja_empaque(
-                hoja_ganadora,
-                piezas_pool_ref,
-                candidato_ganador["w"],
-                candidato_ganador["h"],
-                config_kerf,
-                config_margin,
-                config_opt,
-                config_corner,
-                intentos=cu_refinar_intentos,
-                mc_iterations=mc_iters,
-            )
-            if hoja_ref and hoja_ref.get("piezas"):
-                hoja_ganadora = hoja_ref
+            # Refinar compactación solo en modos con refine_hoja (standard/max)
+            if refine_hoja and cu_refinar_intentos > 0:
+                piezas_pool_ref = pendientes_est if pendientes_est else accesorios
+                hoja_ref = _refinar_hoja_empaque(
+                    hoja_ganadora,
+                    piezas_pool_ref,
+                    candidato_ganador["w"],
+                    candidato_ganador["h"],
+                    config_kerf,
+                    config_margin,
+                    config_opt,
+                    config_corner,
+                    intentos=cu_refinar_intentos,
+                    mc_iterations=mc_iters,
+                )
+                if hoja_ref and hoja_ref.get("piezas"):
+                    hoja_ganadora = hoja_ref
 
             from .sheet_integrity import calcular_restos_desde_colocados
 
@@ -1690,7 +1701,17 @@ class MotorNesting:
             
             if pendientes_est: pendientes_est = mejor_restos_est
             else: accesorios = mejor_restos_acc
-                
+
+            if sin_rtz:
+                _dbg_nesting(
+                    f"[SIN-RTZ-PLASMA] clave={clave} | placa_id={candidato_ganador.get('id')} | "
+                    "renesteo compensado plasma: placa madre sin mini-nest ni hojas RTZ."
+                )
+                hojas_finales.append(hoja_ganadora)
+                costo_total_lote += candidato_ganador['precio']
+                num_placa_actual += 1
+                continue
+
             mini_nests_locales = []
             retazos_virtuales = []
             contador_rtz = 1
@@ -1704,7 +1725,9 @@ class MotorNesting:
                         minx, miny, maxx, maxy = hole_poly.bounds
                         w_r, h_r = maxx - minx, maxy - miny
                         if _retazo_cumple_tamano_minimo(w_r, h_r):
-                            id_retazo = f"RTZ{contador_rtz}-{req_cal}-{wo_name}"
+                            id_retazo = nombre_rtz_para_placa(
+                                contador_rtz, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
+                            )
                             poly_local = affinity.translate(hole_poly, -minx, -miny)
                             retazos_virtuales.append({"id": id_retazo, "w": w_r, "h": h_r, "poly_borde": poly_local, "tipo": "HOLE", "global_x": minx, "global_y": miny})
                             contador_rtz += 1
@@ -1731,7 +1754,9 @@ class MotorNesting:
                 minx, miny, maxx, maxy = rem_der.bounds
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
-                    id_retazo = f"RTZ{contador_rtz}-{req_cal}-{wo_name}"
+                    id_retazo = nombre_rtz_para_placa(
+                        contador_rtz, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
+                    )
                     retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_der, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
                     contador_rtz += 1
 
@@ -1740,7 +1765,9 @@ class MotorNesting:
                 minx, miny, maxx, maxy = rem_arr.bounds
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
-                    id_retazo = f"RTZ{contador_rtz}-{req_cal}-{wo_name}"
+                    id_retazo = nombre_rtz_para_placa(
+                        contador_rtz, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
+                    )
                     retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_arr, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
                     contador_rtz += 1
 
@@ -1784,18 +1811,21 @@ class MotorNesting:
                             mc_iterations=mc_iters,
                             solo_accesorios=True,
                         )
-                        hoja_ref_rtz = _refinar_hoja_empaque(
-                            hoja_retazo,
-                            candidatos_seguro,
-                            retazo['w'],
-                            retazo['h'],
-                            config_kerf,
-                            config_margin,
-                            config_opt,
-                            config_corner,
-                            limite_poly=retazo['poly_borde'],
-                            intentos=16,
-                        )
+                        hoja_ref_rtz = None
+                        if refine_hoja and cu_refinar_intentos > 0:
+                            hoja_ref_rtz = _refinar_hoja_empaque(
+                                hoja_retazo,
+                                candidatos_seguro,
+                                retazo['w'],
+                                retazo['h'],
+                                config_kerf,
+                                config_margin,
+                                config_opt,
+                                config_corner,
+                                limite_poly=retazo['poly_borde'],
+                                intentos=max(1, cu_refinar_intentos),
+                                mc_iterations=mc_iters,
+                            )
                         if hoja_ref_rtz and hoja_ref_rtz.get("piezas"):
                             hoja_retazo = hoja_ref_rtz
                             from .sheet_integrity import calcular_restos_desde_colocados
@@ -2005,7 +2035,7 @@ class MotorNesting:
             ok_inv, msg_inv = validar_colocacion_completa(piezas, hojas_finales)
             if not ok_inv:
                 _dbg_nesting(f"[INVENTARIO-INCOMPLETO] clave={clave} | {msg_inv}")
-                return clave, {"error": msg_inv}
+                inventario_aviso = msg_inv
             # Construimos mapa 1-a-1 por nombre base para no agarrar siempre
             # la primera coincidencia cuando hay piezas repetidas.
             source_map = {}
@@ -2108,6 +2138,8 @@ class MotorNesting:
                 "reporte": "Reporte Generado.",
                 **efi_grupo,
             }
+            if inventario_aviso:
+                resultado_placas["advertencia"] = inventario_aviso
             return clave, resultado_placas
         else:
             return clave, {

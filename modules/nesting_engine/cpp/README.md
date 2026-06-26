@@ -49,7 +49,9 @@ Variables de entorno opcionales:
 
 | Variable | Valores | Default |
 |----------|---------|---------|
-| `ARGA_NEST_MODE` | `fast` (5 iter), `standard` (15), `max` (30) | `standard` |
+| `ARGA_NEST_MODE` | `first` (1 iter MC, sin refinado), `fast` (5), `standard` (15), `max` (30) | `first` |
 | `ARGA_NEST_ITERATIONS` | 1–50 | (según modo) |
+
+Modo `first` (default): 1 iteración MC por placa, sin refinado ni lookahead — primer acomodo del motor C++.
 
 Modo `standard`: 15 iteraciones Monte Carlo por placa, compactación fina (C++), score de costo con lookahead de 2ª placa.

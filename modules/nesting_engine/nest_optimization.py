@@ -4,12 +4,20 @@ from __future__ import annotations
 import os
 
 NEST_MODES = {
-    "fast": {"mc_iterations": 5, "mc_lookahead_iterations": 3, "lookahead": False},
-    "standard": {"mc_iterations": 15, "mc_lookahead_iterations": 5, "lookahead": True},
-    "max": {"mc_iterations": 30, "mc_lookahead_iterations": 8, "lookahead": True},
+    "first": {
+        "mc_iterations": 1,
+        "mc_lookahead_iterations": 1,
+        "lookahead": False,
+        "refine_hoja": False,
+        "accesorios_retries": 1,
+        "refinar_intentos": 0,
+    },
+    "fast": {"mc_iterations": 5, "mc_lookahead_iterations": 3, "lookahead": False, "refine_hoja": False, "accesorios_retries": 3, "refinar_intentos": 0},
+    "standard": {"mc_iterations": 15, "mc_lookahead_iterations": 5, "lookahead": True, "refine_hoja": True, "accesorios_retries": 14, "refinar_intentos": 12},
+    "max": {"mc_iterations": 30, "mc_lookahead_iterations": 8, "lookahead": True, "refine_hoja": True, "accesorios_retries": 14, "refinar_intentos": 12},
 }
 
-_DEFAULT_MODE = "standard"
+_DEFAULT_MODE = "first"
 
 
 def get_nest_profile() -> dict:
@@ -26,8 +34,11 @@ def get_nest_profile() -> dict:
             n = NEST_MODES[_DEFAULT_MODE]["mc_iterations"]
         return {
             "mc_iterations": n,
-            "mc_lookahead_iterations": max(3, n // 3),
-            "lookahead": True,
+            "mc_lookahead_iterations": max(1, n // 3),
+            "lookahead": n > 1,
+            "refine_hoja": n > 1,
+            "accesorios_retries": 1 if n <= 1 else min(14, n),
+            "refinar_intentos": 0 if n <= 1 else 12,
         }
 
     return dict(NEST_MODES[_DEFAULT_MODE])

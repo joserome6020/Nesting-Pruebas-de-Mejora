@@ -1453,11 +1453,48 @@ def export_nest_to_dxf(
 
             prefer_source = bool(p.get("prefer_source_dxf"))
             compensated = bool(p.get("compensated"))
+            plasma_export = bool(p.get("plasma_export"))
+            plasma_source = bool(p.get("compensated_plasma_source"))
             cu_largos_piece = bool(p.get("cu_largos_piece"))
             needs_strict = strict and _placement_needs_strict_source(p)
             count_before = _msp_count(msp)
 
-            if cu_largos_piece and prefer_source and not compensated and ruta_original:
+            if plasma_export:
+                from modules.plasma_dxf_export import export_plasma_placement
+
+                if not export_plasma_placement(
+                    msp, p, draw_holes=draw_holes, draw_marks=draw_marks
+                ):
+                    if strict:
+                        _fail_export(part_name, "plasma: sin contorno exportable desde el nest")
+                    else:
+                        continue
+                new_entities = _msp_snapshot(msp)[count_before:]
+                if new_entities:
+                    exported_pieces += 1
+                continue
+
+            if plasma_source and str(p.get("ruta") or "").strip():
+                from modules.plasma_dxf_export import export_compensated_plasma_from_source
+
+                stats = export_compensated_plasma_from_source(
+                    msp,
+                    doc,
+                    p,
+                    draw_holes=draw_holes,
+                    draw_marks=draw_marks,
+                )
+                ok_plasma = int(stats.get("outer", 0) or 0) > 0
+                if not ok_plasma and _export_placed_geometry(
+                    msp, p, draw_holes=draw_holes, draw_marks=draw_marks
+                ):
+                    ok_plasma = True
+                if not ok_plasma:
+                    if strict:
+                        _fail_export(part_name, "compensación plasma sin contorno exterior exportable")
+                    else:
+                        continue
+            elif cu_largos_piece and prefer_source and not compensated and ruta_original:
                 _export_cu_largos_from_source(
                     msp,
                     doc,

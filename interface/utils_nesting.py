@@ -429,22 +429,36 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     # =====================================================================
     from modules.nesting_engine.efficiency_metrics import (
         allocar_nombre_rtz_sobrante_db,
+        allocar_nombre_rtzc_sobrante_db,
+        hoja_es_sobrante_plasma_compensado,
         hoja_es_sobrante_sin_compra,
         inicializar_contador_rtz_sobrante,
+        inicializar_contador_rtzc_sobrante,
     )
 
     reporte_placas = {}
     piezas_detalladas_db = {}
     contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados)
+    contador_rtzc_sobrante = inicializar_contador_rtzc_sobrante(resultados)
     
     for clave_mat, info_mat in resultados.items():
         espesor = _normalizar_espesor_a_calibre(clave_mat)
         calibre_rtz = str(clave_mat).split("_", 1)[0].strip() or "NA"
         for idx, hoja in enumerate(info_mat.get("hojas", [])):
             if hoja_es_sobrante_sin_compra(hoja):
-                sheet_uid = allocar_nombre_rtz_sobrante_db(
-                    contador_rtz_sobrante, calibre_rtz, nombre_wo
-                )
+                nombre_prev = str(
+                    hoja.get("sheet_display_name") or hoja.get("placa_id") or ""
+                ).strip()
+                if nombre_prev.upper().startswith("RTZC") or nombre_prev.upper().startswith("RTZ"):
+                    sheet_uid = nombre_prev
+                elif hoja_es_sobrante_plasma_compensado(hoja):
+                    sheet_uid = allocar_nombre_rtzc_sobrante_db(
+                        contador_rtzc_sobrante, calibre_rtz, nombre_wo, hoja=hoja
+                    )
+                else:
+                    sheet_uid = allocar_nombre_rtz_sobrante_db(
+                        contador_rtz_sobrante, calibre_rtz, nombre_wo, hoja=hoja
+                    )
             else:
                 p_id_base = hoja.get("placa_id", "DESCONOCIDO")
                 sheet_uid = f"{p_id_base} P{idx+1}"

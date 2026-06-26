@@ -255,10 +255,10 @@ def asegurar_identidad_hojas(hojas, clave: str = "") -> None:
 
 def deduplicar_hojas_grupo(hojas):
     """
-    Elimina placas madre con el mismo stock y layout (piezas repetidas por error de restos).
-    Conserva el bloque con más piezas reales; ante empate, mayor eficiencia directa.
+    Reensambla bloques madre+RTZ sin colapsar hojas repetidas legítimas (qty>10, mismo layout).
 
-    No aplica a barras largo CU (1D): varias hojas comparten placa_id pero son cortes distintos.
+    La deduplicación agresiva por huella idéntica eliminaba instancias válidas en lotes X10+.
+    reconciliar_hojas_grupo ya descarta placas fantasma que reutilizan piezas consumidas.
     """
     hojas = list(hojas or [])
     madres = [h for h in hojas if isinstance(h, dict) and not h.get("es_retazo")]
@@ -269,35 +269,10 @@ def deduplicar_hojas_grupo(hojas):
     if not bloques:
         return list(hojas or [])
 
-    def _score_bloque(madre):
-        n = len(piezas_reales_en_hoja(madre))
-        efi = float(madre.get("eficiencia_directa", madre.get("eficiencia", 0.0)) or 0.0)
-        return (n, efi)
-
-    ganador_por_layout: dict[tuple, tuple[int, tuple]] = {}
-    for i, (madre, _) in enumerate(bloques):
-        fp = fingerprint_layout_hoja(madre)
-        if not fp:
-            continue
-        key = (str(madre.get("placa_id") or ""), fp)
-        sc = _score_bloque(madre)
-        prev = ganador_por_layout.get(key)
-        if prev is None or sc > prev[1]:
-            ganador_por_layout[key] = (i, sc)
-
-    # Duplicado exacto: misma placa_id y mismo layout espacial (ganador_por_layout).
-    # No descartar subconjuntos espaciales: qty>1 puede repetir nombre/posición en hojas distintas.
     out: list = []
-    for i, (madre, rtzs) in enumerate(bloques):
-        fp = fingerprint_layout_hoja(madre)
-        if not fp:
-            out.append(madre)
-            out.extend(rtzs)
-            continue
-        key = (str(madre.get("placa_id") or ""), fp)
-        if ganador_por_layout.get(key, (-1,))[0] == i:
-            out.append(madre)
-            out.extend(rtzs)
+    for madre, rtzs in bloques:
+        out.append(madre)
+        out.extend(rtzs)
     return out
 
 
@@ -363,8 +338,10 @@ def deduplicar_resultados_nesting(resultados, kerf_global: float = DEFAULT_KERF_
                 piezas_pendientes=grupo.get("piezas_pendientes"),
             )
             if not ok_inv:
-                grupo["error"] = msg_inv
-                grupo.pop("hojas", None)
+                grupo["advertencia"] = msg_inv
+                grupo.pop("error", None)
+            else:
+                grupo.pop("advertencia", None)
         else:
             hojas_largos = [
                 h for h in hojas if isinstance(h, dict) and h.get("modo_largos_cu")

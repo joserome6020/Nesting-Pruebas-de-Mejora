@@ -293,18 +293,260 @@ def hoja_es_sobrante_sin_compra(hoja) -> bool:
     return bool(hoja.get("ignorar_deduccion", False))
 
 
-def nombre_rtz_para_sobrante_db(contador_rtz: int, calibre: str, wo_name: str) -> str:
-    """Misma nomenclatura que los RTZ del motor: RTZ{n}-{calibre}-{wo}."""
+def hoja_es_sobrante_plasma_compensado(hoja) -> bool:
+    """Sobrante de piso con piezas compensadas para plasma: solo Robot Plasma."""
+    if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        return False
+    return bool(hoja.get("ignorar_deduccion")) and bool(
+        hoja.get("plasma_compensado_manual")
+    )
+
+
+def hoja_export_solo_plasma(hoja) -> bool:
+    return hoja_es_sobrante_plasma_compensado(hoja) or bool(
+        hoja.get("is_rtz_plasma_sobrante")
+    )
+
+
+def nombre_rtz_para_placa(
+    contador_rtz: int,
+    calibre: str,
+    wo_name: str,
+    *,
+    largo_mm: float | None = None,
+    ancho_mm: float | None = None,
+) -> str:
+    """
+    Nomenclatura RTZ: RTZ{n}-{espesor}-{largo}x{ancho}-{wo} (pulgadas en medidas).
+    Sin medidas válidas conserva RTZ{n}-{espesor}-{wo}.
+    """
     cal = str(calibre or "").strip() or "NA"
     wo = str(wo_name or "").strip() or "W.O."
+    w_mm = float(ancho_mm or 0)
+    h_mm = float(largo_mm or 0)
+    if w_mm > 0 and h_mm > 0:
+        largo_in = h_mm / 25.4
+        ancho_in = w_mm / 25.4
+        dims = f"{largo_in:.1f}x{ancho_in:.1f}"
+        return f"RTZ{int(contador_rtz)}-{cal}-{dims}-{wo}"
     return f"RTZ{int(contador_rtz)}-{cal}-{wo}"
 
 
-def allocar_nombre_rtz_sobrante_db(contador_rtz: dict, calibre: str, wo_name: str) -> str:
+def nombre_rtzc_para_placa(
+    contador_rtzc: int,
+    calibre: str,
+    wo_name: str,
+    *,
+    largo_mm: float | None = None,
+    ancho_mm: float | None = None,
+) -> str:
+    """
+    RTZ compensado (sobrante plasma): RTZC{n}-{esp}-{largo}x{ancho}-{wo}.
+    """
+    cal = str(calibre or "").strip() or "NA"
+    wo = str(wo_name or "").strip() or "W.O."
+    w_mm = float(ancho_mm or 0)
+    h_mm = float(largo_mm or 0)
+    if w_mm > 0 and h_mm > 0:
+        largo_in = h_mm / 25.4
+        ancho_in = w_mm / 25.4
+        dims = f"{largo_in:.1f}x{ancho_in:.1f}"
+        return f"RTZC{int(contador_rtzc)}-{cal}-{dims}-{wo}"
+    return f"RTZC{int(contador_rtzc)}-{cal}-{wo}"
+
+
+def nombre_rtzc_para_sobrante_db(
+    contador_rtzc: int,
+    calibre: str,
+    wo_name: str,
+    *,
+    hoja=None,
+) -> str:
+    largo_mm = ancho_mm = None
+    if isinstance(hoja, dict):
+        largo_mm = float(hoja.get("placa_h") or hoja.get("h") or 0) or None
+        ancho_mm = float(hoja.get("placa_w") or hoja.get("w") or 0) or None
+    return nombre_rtzc_para_placa(
+        contador_rtzc,
+        calibre,
+        wo_name,
+        largo_mm=largo_mm,
+        ancho_mm=ancho_mm,
+    )
+
+
+def allocar_nombre_rtzc_sobrante_db(
+    contador_rtzc: dict,
+    calibre: str,
+    wo_name: str,
+    *,
+    hoja=None,
+) -> str:
+    n = int(contador_rtzc.get("n", 1))
+    nombre = nombre_rtzc_para_sobrante_db(n, calibre, wo_name, hoja=hoja)
+    contador_rtzc["n"] = n + 1
+    return nombre
+
+
+def nombre_rtz_para_sobrante_db(
+    contador_rtz: int,
+    calibre: str,
+    wo_name: str,
+    *,
+    hoja=None,
+) -> str:
+    """Misma nomenclatura que los RTZ del motor (incluye largo×ancho si hay hoja)."""
+    largo_mm = ancho_mm = None
+    if isinstance(hoja, dict):
+        largo_mm = float(hoja.get("placa_h") or hoja.get("h") or 0) or None
+        ancho_mm = float(hoja.get("placa_w") or hoja.get("w") or 0) or None
+    return nombre_rtz_para_placa(
+        contador_rtz,
+        calibre,
+        wo_name,
+        largo_mm=largo_mm,
+        ancho_mm=ancho_mm,
+    )
+
+
+def allocar_nombre_rtz_sobrante_db(
+    contador_rtz: dict,
+    calibre: str,
+    wo_name: str,
+    *,
+    hoja=None,
+) -> str:
     n = int(contador_rtz.get("n", 1))
-    nombre = nombre_rtz_para_sobrante_db(n, calibre, wo_name)
+    nombre = nombre_rtz_para_sobrante_db(n, calibre, wo_name, hoja=hoja)
     contador_rtz["n"] = n + 1
     return nombre
+
+
+def es_placa_madre_sobrante_rtz(hoja) -> bool:
+    """Placa madre sobrante renombrada RTZ (láser), no RTZC plasma."""
+    if not hoja_es_sobrante_sin_compra(hoja) or hoja_es_sobrante_plasma_compensado(hoja):
+        return False
+    pid = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip().upper()
+    return pid.startswith("RTZ") and not pid.startswith("RTZC")
+
+
+def es_placa_madre_rtzc(hoja) -> bool:
+    """Placa madre sobrante compensada plasma (solo Robot Plasma)."""
+    if not hoja_es_sobrante_plasma_compensado(hoja):
+        return False
+    pid = str(hoja.get("placa_id") or hoja.get("sheet_display_name") or "").strip().upper()
+    return pid.startswith("RTZC") or bool(hoja.get("is_rtz_plasma_sobrante"))
+
+
+def sincronizar_hoja_sobrante_rtz(
+    hoja: dict,
+    *,
+    ignorar: bool,
+    contador_rtz: dict,
+    calibre: str,
+    wo_name: str,
+    contador_rtzc: dict | None = None,
+) -> None:
+    """
+    Placa madre con switch Sobrante: conserva geometría de placa madre pero
+    adopta nomenclatura y flags RTZ (mismo flujo VSM/export que un retazo).
+    """
+    if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        return
+
+    if ignorar:
+        original = str(hoja.get("_placa_id_antes_sobrante") or hoja.get("placa_id") or "").strip()
+        if original and not original.upper().startswith("RTZ"):
+            hoja["_placa_id_antes_sobrante"] = original
+
+        es_plasma_sobrante = bool(hoja.get("plasma_compensado_manual"))
+
+        if es_plasma_sobrante:
+            contador_rtzc = contador_rtzc or {"n": 1}
+            nombre_prev = str(hoja.get("_rtzc_nombre_sobrante") or "").strip()
+            if nombre_prev.upper().startswith("RTZC"):
+                nombre = nombre_prev
+            else:
+                nombre = allocar_nombre_rtzc_sobrante_db(
+                    contador_rtzc, calibre, wo_name, hoja=hoja
+                )
+                hoja["_rtzc_nombre_sobrante"] = nombre
+            hoja["is_rtz"] = True
+            hoja["is_rtz_plasma_sobrante"] = True
+            hoja["rtz_tipo"] = "COMPENSADO"
+        else:
+            nombre_prev = str(hoja.get("_rtz_nombre_sobrante") or "").strip()
+            if nombre_prev.upper().startswith("RTZ") and not nombre_prev.upper().startswith("RTZC"):
+                nombre = nombre_prev
+            else:
+                nombre = allocar_nombre_rtz_sobrante_db(
+                    contador_rtz, calibre, wo_name, hoja=hoja
+                )
+                hoja["_rtz_nombre_sobrante"] = nombre
+            hoja["is_rtz"] = True
+            hoja.pop("is_rtz_plasma_sobrante", None)
+            hoja.pop("rtz_tipo", None)
+
+        hoja["placa_id"] = nombre
+        hoja["sheet_display_name"] = nombre
+        return
+
+    original = str(hoja.get("_placa_id_antes_sobrante") or "").strip()
+    if original:
+        hoja["placa_id"] = original
+    hoja.pop("sheet_display_name", None)
+    hoja["is_rtz"] = False
+    hoja.pop("is_rtz_plasma_sobrante", None)
+    hoja.pop("rtz_tipo", None)
+
+
+def sincronizar_sobrantes_rtz_en_resultados(
+    resultados: dict,
+    *,
+    wo_name: str,
+) -> None:
+    """Aplica nombres RTZ a todas las placas madre marcadas como sobrante."""
+    if not isinstance(resultados, dict):
+        return
+
+    contador = inicializar_contador_rtz_sobrante(resultados)
+    contador_rtzc = inicializar_contador_rtzc_sobrante(resultados)
+    for clave, info in resultados.items():
+        if not isinstance(info, dict) or "error" in info:
+            continue
+        calibre = str(clave).split("_", 1)[0].strip() or "NA"
+        for hoja in info.get("hojas", []) or []:
+            if hoja_es_sobrante_sin_compra(hoja):
+                sincronizar_hoja_sobrante_rtz(
+                    hoja,
+                    ignorar=True,
+                    contador_rtz=contador,
+                    contador_rtzc=contador_rtzc,
+                    calibre=calibre,
+                    wo_name=wo_name,
+                )
+
+
+def _max_indice_rtzc_en_resultados(resultados) -> int:
+    import re
+
+    max_n = 0
+    for info_mat in (resultados or {}).values():
+        if not isinstance(info_mat, dict):
+            continue
+        for hoja in info_mat.get("hojas", []) or []:
+            if not isinstance(hoja, dict):
+                continue
+            for campo in ("placa_id", "sheet_display_name"):
+                texto = str(hoja.get(campo) or "").strip()
+                m = re.match(r"RTZC(\d+)", texto, re.IGNORECASE)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+    return max_n
+
+
+def inicializar_contador_rtzc_sobrante(resultados) -> dict:
+    return {"n": _max_indice_rtzc_en_resultados(resultados) + 1}
 
 
 def _max_indice_rtz_en_resultados(resultados) -> int:
@@ -319,6 +561,9 @@ def _max_indice_rtz_en_resultados(resultados) -> int:
                 continue
             for campo in ("placa_id", "sheet_display_name"):
                 texto = str(hoja.get(campo) or "").strip()
+                m = re.match(r"RTZC(\d+)", texto, re.IGNORECASE)
+                if m:
+                    continue
                 m = re.match(r"RTZ(\d+)", texto, re.IGNORECASE)
                 if m:
                     max_n = max(max_n, int(m.group(1)))
