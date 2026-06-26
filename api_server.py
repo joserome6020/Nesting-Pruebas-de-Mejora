@@ -3080,13 +3080,11 @@ def _ll_generar_plan_desde_payload(
 
         barras_finales = barras_rem + barras_stock
 
-        # limpieza: quitar remanentes vacíos por seguridad
+        # Quitar barras sin piezas (remanentes vacíos o stock huérfano).
         barras_finales = [
-            b for b in barras_finales
-            if not (
-                str(b.get("source") or "").upper() == "REMANENTE"
-                and len(b.get("cortes") or []) == 0
-            )
+            b
+            for b in barras_finales
+            if len(b.get("cortes") or []) > 0
         ]
 
         data[material] = barras_finales

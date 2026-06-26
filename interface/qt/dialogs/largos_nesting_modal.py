@@ -429,6 +429,8 @@ class LargosNestingDialog(QDialog):
                 reparto_greedy=bool(u_data.get("reparto_greedy")),
                 n_unidades_tira=int(u_data.get("n_unidades_tira") or 1),
                 cant_grupo=int(u_data.get("cant_grupo") or 1),
+                unit_idx_en_tira=u_data.get("unit_idx_en_tira"),
+                n_slots_tira=u_data.get("n_slots_tira"),
             )
             cod = str(u_data.get("codigo") or "")
             if cod:

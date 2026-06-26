@@ -184,6 +184,8 @@ def agregar_filas_desde_plan(
             source = str(barra.get("source") or "STOCK").strip().upper()
             if source == "REMANENTE":
                 continue
+            if not (barra.get("cortes") or []):
+                continue
             largo_stock = float(barra.get("largo_stock") or 0)
             if largo_stock <= 0:
                 continue

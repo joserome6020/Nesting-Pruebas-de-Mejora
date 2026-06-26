@@ -188,6 +188,14 @@ def _remanente_barra_vista(largo_stock: float, cortes: list[dict]) -> float:
     return max(0.0, float(largo_stock) - used)
 
 
+def _slots_comerciales_en_tira(largo_stock: float, largo_com: float) -> int:
+    """Cuántas barras comerciales (ej. 240\") cubre una tira física del nesteo (ej. 480\")."""
+    largo_com = float(largo_com or 0)
+    if largo_com <= 0:
+        return 1
+    return max(1, int(round(float(largo_stock or 0) / largo_com)))
+
+
 def vista_barra_para_unidad_mrl(
     barra: dict,
     largo_comercial: float,
@@ -196,11 +204,13 @@ def vista_barra_para_unidad_mrl(
     reparto_greedy: bool = False,
     n_unidades_tira: int = 1,
     cant_grupo: int = 1,
+    unit_idx_en_tira: int | None = None,
+    n_slots_tira: int | None = None,
 ) -> dict:
     """
     Vista de consumo para una barra comercial MRL (siempre largo comercial, ej. 240\").
-    Si el nesteo usó una tira más larga (ej. 480\"), reparte piezas entre unidades
-    llenando primero la barra #1 sin fusionar piezas iguales.
+    Si el nesteo usó una tira más larga (ej. 480\"), reparte piezas entre slots comerciales
+    de ESA tira solamente (no mezcla cant_grupo global del material).
     """
     import copy
 
@@ -210,42 +220,23 @@ def vista_barra_para_unidad_mrl(
         return dict(barra)
 
     cortes_origen = list(barra.get("cortes") or [])
-    n_comercial = max(1, int(cant_grupo or 1))
+    idx_local = int(unit_idx_en_tira if unit_idx_en_tira is not None else unit_idx)
+    n_slots = int(n_slots_tira) if n_slots_tira else _slots_comerciales_en_tira(stock_origen, largo_com)
 
-    if stock_origen > largo_com + 0.5:
-        n_slices = max(n_comercial, int(round(stock_origen / largo_com)))
+    if stock_origen > largo_com + 0.5 or n_slots > 1:
+        n_slices = max(1, _slots_comerciales_en_tira(stock_origen, largo_com))
         splits = _split_cortes_en_unidades_comerciales(cortes_origen, largo_com, n_slices)
-        idx = min(max(0, int(unit_idx) - 1), len(splits) - 1)
+        idx = min(max(0, idx_local - 1), len(splits) - 1)
         cortes_vista = splits[idx]
         largo_vista = largo_com
         nota_nesteo = (
             f"Piezas en tira nesteo de {stock_origen:.0f}\" "
-            f"→ barra comercial {int(unit_idx)}/{n_comercial} de {largo_com:.0f}\""
-        )
-    elif reparto_greedy and int(n_unidades_tira) > 1:
-        splits = _split_cortes_en_unidades_comerciales(
-            cortes_origen, largo_com or stock_origen, int(n_unidades_tira)
-        )
-        idx = min(max(0, int(unit_idx) - 1), len(splits) - 1)
-        cortes_vista = splits[idx]
-        largo_vista = largo_com if largo_com > 0 else stock_origen
-        nota_nesteo = ""
+            f"→ barra comercial {idx_local}/{n_slices} de {largo_com:.0f}\""
+        ) if stock_origen > largo_com + 0.5 else ""
     else:
         cortes_vista = _etiquetar_cortes_individuales(cortes_origen)
-        # Vista MRL = barra comercial a comprar, no la tira física del nesteo.
         largo_vista = largo_com if largo_com > 0 else stock_origen
         nota_nesteo = ""
-        if (
-            stock_origen > 0
-            and largo_com > 0
-            and abs(stock_origen - largo_com) > 0.5
-            and stock_origen < largo_com
-        ):
-            nota_nesteo = (
-                f"Nesteo sobre tira de {stock_origen:.0f}\" "
-                f"→ barra comercial {int(unit_idx)}/{int(cant_grupo or 1)} "
-                f"de {largo_com:.0f}\""
-            )
 
     rem = _remanente_barra_vista(largo_vista, cortes_vista)
     vista = copy.deepcopy(barra)
@@ -533,47 +524,53 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
     for material, bar_idx, barra in iter_barras_plan(plan):
         if str(barra.get("source") or "STOCK").upper() != "STOCK":
             continue
+        if not (barra.get("cortes") or []):
+            continue
         mat = str(material or "").strip()
         stock_por_material.setdefault(mat, []).append((bar_key(material, bar_idx), barra))
 
-    por_material_cant: dict[str, int] = {}
+    por_material: dict[str, list[dict]] = {}
     for u in unidades:
         mat = str(u.get("material") or "").strip()
-        por_material_cant[mat] = por_material_cant.get(mat, 0) + 1
+        por_material.setdefault(mat, []).append(u)
 
-    for u in unidades:
-        mat = str(u.get("material") or "").strip()
-        largo_com = float(u.get("largo") or 0)
-        unit_idx = int(u.get("unit_idx") or 1)
-        cant_grupo = int(u.get("cant_grupo") or 1)
+    for mat, units in por_material.items():
         tiras = stock_por_material.get(mat, [])
         if not tiras:
             continue
 
-        if len(tiras) == cant_grupo:
-            idx = min(max(0, unit_idx - 1), len(tiras) - 1)
-            key, barra = tiras[idx]
-            u["nesting_key"] = key
-            u["reparto_greedy"] = False
-            u["n_unidades_tira"] = 1
-            stock = float(barra.get("largo_stock") or 0)
-            if stock > largo_com + 0.5:
-                u["reparto_greedy"] = True
-                u["n_unidades_tira"] = max(1, int(round(stock / largo_com)))
-        elif len(tiras) == 1:
-            key, barra = tiras[0]
-            u["nesting_key"] = key
-            stock = float(barra.get("largo_stock") or 0)
-            n_from_strip = max(1, int(round(stock / largo_com))) if largo_com > 0 else 1
-            u["reparto_greedy"] = n_from_strip > 1 or cant_grupo > 1
-            u["n_unidades_tira"] = max(cant_grupo, n_from_strip)
-        else:
-            idx = min(max(0, unit_idx - 1), len(tiras) - 1)
-            key, barra = tiras[idx]
-            u["nesting_key"] = key
-            stock = float(barra.get("largo_stock") or 0)
-            u["reparto_greedy"] = stock > largo_com + 0.5
-            u["n_unidades_tira"] = max(1, int(round(stock / largo_com))) if largo_com > 0 else 1
+        largo_com = float(units[0].get("largo") or 0) if units else 0.0
+        slots: list[dict] = []
+        for nest_key, barra in tiras:
+            n_slots = _slots_comerciales_en_tira(
+                float(barra.get("largo_stock") or 0), largo_com
+            )
+            for local_i in range(n_slots):
+                slots.append(
+                    {
+                        "nesting_key": nest_key,
+                        "unit_idx_en_tira": local_i + 1,
+                        "n_slots_tira": n_slots,
+                    }
+                )
+
+        for u, slot in zip(units, slots):
+            u["nesting_key"] = slot["nesting_key"]
+            u["unit_idx_en_tira"] = slot["unit_idx_en_tira"]
+            u["n_slots_tira"] = slot["n_slots_tira"]
+            u["reparto_greedy"] = int(slot["n_slots_tira"]) > 1
+            u["n_unidades_tira"] = int(slot["n_slots_tira"])
+
+        # Si sobran unidades MRL (desfase catálogo vs nesteo), reutilizar último slot.
+        if len(units) > len(slots) and slots:
+            last = slots[-1]
+            for u in units[len(slots) :]:
+                u["nesting_key"] = last["nesting_key"]
+                u["unit_idx_en_tira"] = last["unit_idx_en_tira"]
+                u["n_slots_tira"] = last["n_slots_tira"]
+                u["reparto_greedy"] = int(last["n_slots_tira"]) > 1
+                u["n_unidades_tira"] = int(last["n_slots_tira"])
+
     return unidades
 
 
@@ -894,6 +891,8 @@ def construir_snapshot_pdf_piso(
             reparto_greedy=bool(u.get("reparto_greedy")),
             n_unidades_tira=int(u.get("n_unidades_tira") or 1),
             cant_grupo=cant_grupo,
+            unit_idx_en_tira=u.get("unit_idx_en_tira"),
+            n_slots_tira=u.get("n_slots_tira"),
         )
         if cod:
             vista["_vista_codigo"] = cod
