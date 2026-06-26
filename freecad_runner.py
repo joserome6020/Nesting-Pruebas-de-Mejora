@@ -313,7 +313,7 @@ def ejecutar_macro_freecad(
         env["FREECAD_DXF_IN"] = dxf_resuelta
         env["FREECAD_STEP_OUT"] = step_resuelta
         env["FREECAD_LOG_DIR"] = log_dir
-        env["FREECAD_LOG_PATH"] = log_path
+        env["FREECAD_LOG_PATH"] = os.path.join(log_dir, "freecad_macro.log")
         env["FREECAD_THK_MM"] = str(thickness_mm)
         env["FREECAD_SCALE"] = str(getattr(config, 'FREECAD_SCALE', 1.0))
         env["FREECAD_ORIGIN"] = origen

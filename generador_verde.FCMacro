@@ -77,6 +77,92 @@ def _collect_edges(obj):
     except: pass
     return edges
 
+def _wire_signature(w):
+    try:
+        bb = w.BoundBox
+        return (
+            round(bb.XMin, 2), round(bb.YMin, 2),
+            round(bb.XMax, 2), round(bb.YMax, 2),
+        )
+    except Exception:
+        return None
+
+def _dedupe_wires(wires):
+    out = []
+    seen = set()
+    for w in wires or []:
+        sig = _wire_signature(w)
+        if sig is None or sig in seen:
+            continue
+        seen.add(sig)
+        out.append(w)
+    return out
+
+def _collect_closed_wires_merged(objects):
+    """Une LINE/ARC sueltos del export nest (1:1) en wires cerrados vía Part.sortEdges."""
+    objs = [o for o in (objects or []) if o is not None]
+    if not objs:
+        return []
+
+    merged = []
+    for obj in objs:
+        merged.extend(_collect_closed_wires(obj))
+
+    all_edges = []
+    for obj in objs:
+        all_edges.extend(_collect_edges(obj))
+
+    if all_edges:
+        try:
+            for group in Part.sortEdges(all_edges):
+                try:
+                    w = Part.Wire(group)
+                    if w.isClosed():
+                        merged.append(w)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return _dedupe_wires(merged)
+
+def _collect_contours_from_doc(doc, perfil):
+    outer_objs, inner_objs, plate_objs, mixed_objs = [], [], [], []
+    mark_e = []
+
+    for obj in doc.Objects:
+        if hasattr(obj, "Group") and obj.Group:
+            lbl = str(obj.Label or "").upper()
+            if _label_matches_any(lbl, perfil.get("mark", set())):
+                for c in obj.Group:
+                    mark_e.extend(_collect_edges(c))
+            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
+                mixed_objs.extend(obj.Group)
+            elif _label_matches_any(lbl, perfil.get("outer", set())):
+                outer_objs.extend(obj.Group)
+            elif _label_matches_any(lbl, perfil.get("inner", set())):
+                inner_objs.extend(obj.Group)
+            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
+                plate_objs.extend(obj.Group)
+        else:
+            lbl = str(obj.Label or "").upper()
+            if _label_matches_any(lbl, perfil.get("mark", set())):
+                mark_e.extend(_collect_edges(obj))
+            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
+                mixed_objs.append(obj)
+            elif _label_matches_any(lbl, perfil.get("outer", set())):
+                outer_objs.append(obj)
+            elif _label_matches_any(lbl, perfil.get("inner", set())):
+                inner_objs.append(obj)
+            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
+                plate_objs.append(obj)
+
+    outer_w = _collect_closed_wires_merged(outer_objs)
+    inner_w = _collect_closed_wires_merged(inner_objs)
+    plate_w = _collect_closed_wires_merged(plate_objs)
+    mixed_contours = _collect_closed_wires_merged(mixed_objs)
+    return outer_w, inner_w, plate_w, mark_e, mixed_contours
+
 def _aplicar_offset_2d(wires, offset_val):
     if abs(offset_val) < 0.001: return wires
     new_wires = []
@@ -297,50 +383,10 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
     importDXF.insert(dxf_path, doc.Name)
     doc.recompute()
 
-    outer_w, inner_w, plate_w, mark_e = [], [], [], []
-    mixed_contours = []
     labels_doc = _collect_labels_from_doc(doc)
     perfil = _resolver_perfil_desde_labels(labels_doc)
     print(f"[{name}] Perfil de capas activo: {perfil['name']}")
-    for obj in doc.Objects:
-        if hasattr(obj, "Group") and obj.Group:
-            lbl = obj.Label.upper()
-            if _label_matches_any(lbl, perfil.get("mark", set())):
-                for c in obj.Group:
-                    mark_e.extend(_collect_edges(c))
-            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
-                for c in obj.Group:
-                    mixed_contours.extend(_collect_closed_wires(c))
-            elif _label_matches_any(lbl, perfil.get("outer", set())):
-                for c in obj.Group:
-                    ws = _collect_closed_wires(c)
-                    outer_w.extend(ws)
-            elif _label_matches_any(lbl, perfil.get("inner", set())):
-                for c in obj.Group:
-                    ws = _collect_closed_wires(c)
-                    inner_w.extend(ws)
-            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
-                for c in obj.Group:
-                    ws = _collect_closed_wires(c)
-                    plate_w.extend(ws)
-
-    if not outer_w and not inner_w and not plate_w and not mark_e:
-        for obj in doc.Objects:
-            if hasattr(obj, "Group"): continue
-            lbl = obj.Label.upper()
-            if _label_matches_any(lbl, perfil.get("mark", set())):
-                mark_e.extend(_collect_edges(obj))
-            elif _label_matches_any(lbl, perfil.get("mixed_contour", set())):
-                mixed_contours.extend(_collect_closed_wires(obj))
-            elif _label_matches_any(lbl, perfil.get("outer", set())):
-                ws = _collect_closed_wires(obj)
-                outer_w.extend(ws)
-            elif _label_matches_any(lbl, perfil.get("inner", set())):
-                ws = _collect_closed_wires(obj)
-                inner_w.extend(ws)
-            elif _label_matches_any(lbl, perfil.get("plate", {"PLATE"})):
-                ws = _collect_closed_wires(obj)
-                plate_w.extend(ws)
+    outer_w, inner_w, plate_w, mark_e, mixed_contours = _collect_contours_from_doc(doc, perfil)
 
     if mixed_contours:
         mats, cuts = _clasificar_wires_paridad(mixed_contours)
@@ -348,9 +394,10 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         inner_w.extend(cuts)
         print(f"[{name}] MIXED contour layer -> material:{len(mats)} cortes:{len(cuts)}")
 
-    print(f"\n[{name}] -> OUTER: {len(outer_w)}, INNER: {len(inner_w)}, LINEAS MARCAJE: {len(mark_e)}")
+    print(f"\n[{name}] -> OUTER: {len(outer_w)}, INNER: {len(inner_w)}, PLATE: {len(plate_w)}, LINEAS MARCAJE: {len(mark_e)}")
 
-    if not outer_w:
+    if not outer_w and not plate_w:
+        print(f"[{name}] SKIP: sin contornos OUTER ni PLATE utilizables")
         App.closeDocument(doc.Name)
         return
 
@@ -484,21 +531,30 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         print(f"[{name}] Extrayendo piezas con INTERSECT...")
         parts = []
         vec_prism = App.Vector(0, 0, thk_mm + 2.0)
+        plate_sig = _wire_signature(plate_wire) if plate_wire else None
 
-        for ow in outer_w_m:
-            try:
-                prism = Part.Face(ow).extrude(vec_prism)
-                prism.translate(App.Vector(0,0,-1.0))
-                
-                # Interceptamos el gran Plate (que ya tiene los agujeros e imprints)
-                piece = plate_solid.common(prism)
-                
-                # Obligamos a que la pieza final no tenga basura superficial
-                piece = _solo_solidos(piece)
+        if not outer_w_m:
+            piece = _solo_solidos(plate_solid)
+            if hasattr(piece, "Volume") and piece.Volume > 1e-6:
+                parts.append(piece)
+        else:
+            for ow in outer_w_m:
+                if plate_sig and _wire_signature(ow) == plate_sig:
+                    continue
+                try:
+                    prism = Part.Face(ow).extrude(vec_prism)
+                    prism.translate(App.Vector(0, 0, -1.0))
 
-                if hasattr(piece, "Volume") and piece.Volume > 1e-6:
-                    parts.append(piece)
-            except: pass
+                    # Interceptamos el gran Plate (que ya tiene los agujeros e imprints)
+                    piece = plate_solid.common(prism)
+
+                    # Obligamos a que la pieza final no tenga basura superficial
+                    piece = _solo_solidos(piece)
+
+                    if hasattr(piece, "Volume") and piece.Volume > 1e-6:
+                        parts.append(piece)
+                except Exception:
+                    pass
 
         if not parts:
             App.closeDocument(doc.Name)
