@@ -348,8 +348,8 @@ def hoja_export_solo_plasma(hoja) -> bool:
         return False
     if hoja_es_sobrante_plasma_compensado(hoja) or bool(hoja.get("is_rtz_plasma_sobrante")):
         return True
-    # Placa compensada manualmente para plasma: va solo a Robot Plasma.
-    if bool(hoja.get("plasma_compensado_manual")) and not hoja.get("es_retazo", False):
+    # Cualquier hoja compensada manualmente (madre o RTZ) va solo a Robot Plasma.
+    if bool(hoja.get("plasma_compensado_manual")):
         return True
     return False
 
