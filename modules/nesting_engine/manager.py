@@ -129,18 +129,7 @@ def _safe_marks_info(marks):
     except Exception:
         return "marks=ERROR"
 
-def _piece_name_base(nombre: str) -> str:
-    return (
-        str(nombre or "")
-        .replace("REF__", "")
-        .replace("TATUAJE__", "")
-        .replace("RETAZO_GUILLOTINA__", "")
-        .replace("CU_CORTE__", "")
-        .replace("REMANENTE__", "")
-        .strip()
-    )
-
-
+from .sheet_integrity import _piece_name_base
 def _is_virtual_piece(nombre: str) -> bool:
     n = str(nombre or "")
     return (

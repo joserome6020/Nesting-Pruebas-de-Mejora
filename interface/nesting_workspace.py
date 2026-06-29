@@ -454,6 +454,49 @@ def cargar_workspace_desde_archivo(ruta_archivo):
     return payload
 
 
+def _relink_rutas_dxf_en_multilote(app, datos_partes) -> int:
+    """Tras cargar .arganest: enlaza ruta DXF desde PARTS a piezas del nest guardado."""
+    if not datos_partes:
+        return 0
+    try:
+        from modules.nesting_engine.manager import enriquecer_hoja_export_desde_partes
+    except Exception:
+        return 0
+
+    total = 0
+    multilote = getattr(app, "resultados_multilote", None) or []
+    for lote in multilote:
+        if not isinstance(lote, dict):
+            continue
+        data = lote.get("data")
+        if not isinstance(data, dict):
+            continue
+        for clave, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            for hoja in info.get("hojas") or []:
+                if isinstance(hoja, dict):
+                    total += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+
+    res = getattr(app, "resultados_nesting", None)
+    if isinstance(res, dict):
+        for clave, info in res.items():
+            if not isinstance(info, dict):
+                continue
+            for hoja in info.get("hojas") or []:
+                if isinstance(hoja, dict):
+                    total += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+
+    try:
+        from modules.nesting_engine.display_geometry import refrescar_poligonos_display_multilote
+
+        refrescar_poligonos_display_multilote(multilote)
+    except Exception:
+        pass
+
+    return total
+
+
 def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     if not isinstance(payload, dict):
         raise ValueError("Payload inválido para aplicar workspace.")
@@ -521,6 +564,8 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
 
     tab.app.source_dxf_paths_workspace = payload.get("source_dxf_paths", []) or _extraer_rutas_dxf(datos_partes)
     tab.app.source_dxf_paths_by_lote = payload.get("source_dxf_paths_by_lote", []) or _extraer_rutas_por_lote(editable_inputs_by_lote)
+
+    _relink_rutas_dxf_en_multilote(tab.app, datos_partes)
 
     _avanzar("Actualizando PARTS…", 0.72)
     # =========================================================

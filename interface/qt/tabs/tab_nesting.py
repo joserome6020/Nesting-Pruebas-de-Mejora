@@ -1129,6 +1129,13 @@ class TabNesting(QWidget, TimerHost):
         self.app.lote_editado_dirty = False
         self._replicar_lote_activo_a_gemelos()
 
+        try:
+            from modules.nesting_engine.display_geometry import refrescar_poligonos_display_resultados
+
+            refrescar_poligonos_display_resultados(nuevo_resultado)
+        except Exception:
+            pass
+
         # Mantener PARTS del lote activo
         self._sincronizar_parts_con_lote_activo()
 
@@ -1793,6 +1800,13 @@ class TabNesting(QWidget, TimerHost):
 
         # NUEVO: construir inputs editables por lote
         self._reconstruir_editables_por_resultado(resultados_list)
+
+        try:
+            from modules.nesting_engine.display_geometry import refrescar_poligonos_display_multilote
+
+            refrescar_poligonos_display_multilote(resultados_list)
+        except Exception:
+            pass
 
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()

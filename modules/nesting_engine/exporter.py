@@ -681,12 +681,21 @@ def exportar_resultados_a_dxf(
             compensada_manual = bool(hoja.get("plasma_compensado_manual", False))
             off_manual = float(hoja.get("plasma_offset_mm_manual", plasma_offset_job) or plasma_offset_job)
 
-            if datos_partes and generar_plasma_hoja:
+            if datos_partes:
                 from modules.nesting_engine.manager import enriquecer_hoja_export_desde_partes
 
                 n_rutas = enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
                 if n_rutas:
                     log(f"enriquecimiento PARTS: {n_rutas} ruta(s) DXF completada(s)")
+
+            try:
+                from modules.nesting_engine.display_geometry import completar_transform_export_hoja
+
+                n_tf = completar_transform_export_hoja(hoja)
+                if n_tf:
+                    log(f"transformaciones DXF inferidas: {n_tf} pieza(s)")
+            except Exception:
+                pass
 
             placements_principales = []
             placements_plasma = []

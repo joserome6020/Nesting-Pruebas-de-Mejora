@@ -154,7 +154,7 @@ def piece_path_from_polys(poligonos, *, refine: bool | None = None) -> QPainterP
 
 
 def piece_display_path(pieza: dict, poligonos, *, refine: bool | None = None) -> QPainterPath:
-    """Dibuja exactamente los polígonos colocados por el motor (coords de placa)."""
+    """Usa polígonos ya en memoria (refrescados al cargar nest, no en cada clic de placa)."""
     return piece_path_from_polys(poligonos, refine=refine)
 
 

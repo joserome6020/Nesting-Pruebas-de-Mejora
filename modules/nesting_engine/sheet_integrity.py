@@ -12,9 +12,15 @@ DEFAULT_KERF_IN = 0.3
 
 
 def _piece_name_base(nombre: str) -> str:
+    s = str(nombre or "").strip()
+    if "__" in s:
+        head, tail = s.split("__", 1)
+        head = head.strip()
+        tail = tail.strip()
+        if tail and (head.startswith("W.O.") or head.upper().startswith("SWO-")):
+            s = tail
     return (
-        str(nombre or "")
-        .replace("REF__", "")
+        s.replace("REF__", "")
         .replace("TATUAJE__", "")
         .replace("RETAZO_GUILLOTINA__", "")
         .replace("CU_CORTE__", "")
