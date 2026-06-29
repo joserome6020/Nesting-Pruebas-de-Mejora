@@ -8,9 +8,89 @@ import config
 
 NESTEOS_LOCALES_DIR = "Nesteos Locales"
 CONTADOR_WO_LOCAL = "contador_wo_local.txt"
+_ONEDRIVE_CORP_NAMES = ("OneDrive - grupoarga.com",)
+
+
+def _normalizar(p: str) -> str:
+    return os.path.normcase(os.path.normpath(str(p or "")))
+
+
+def _candidatos_onedrive_grupoarga() -> list[str]:
+    """Raíces OneDrive corporativo (env + carpeta típica en el perfil)."""
+    roots: list[str] = []
+    seen: set[str] = set()
+
+    def _add(root: str) -> None:
+        key = _normalizar(root)
+        if key and key not in seen and os.path.isdir(root):
+            seen.add(key)
+            roots.append(root)
+
+    for env in ("ONEDRIVECOMMERCIAL", "OneDriveCommercial"):
+        _add(str(os.environ.get(env) or "").strip())
+
+    home = os.path.expanduser("~")
+    for name in _ONEDRIVE_CORP_NAMES:
+        _add(os.path.join(home, name))
+
+    try:
+        for name in os.listdir(home):
+            low = name.lower()
+            if low.startswith("onedrive") and "grupoarga" in low:
+                _add(os.path.join(home, name))
+    except OSError:
+        pass
+
+    return roots
+
+
+def _candidatos_nesteos_locales() -> list[str]:
+    """
+    Orden de preferencia:
+    1) OneDrive corporativo\\Escritorio|Desktop\\Nesteos Locales
+    2) Desktop\\Nesteos Locales (mapeo local actual)
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        key = _normalizar(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+
+    for root in _candidatos_onedrive_grupoarga():
+        for desk in ("Escritorio", "Desktop"):
+            desk_dir = os.path.join(root, desk)
+            if os.path.isdir(desk_dir):
+                _add(os.path.join(desk_dir, NESTEOS_LOCALES_DIR))
+
+    _add(os.path.join(os.path.expanduser("~"), "Desktop", NESTEOS_LOCALES_DIR))
+    return out
+
+
+def _puede_usar_carpeta_local(base: str) -> bool:
+    """True si la carpeta existe o se puede crear (OneDrive sincronizado / Desktop)."""
+    if not base:
+        return False
+    parent = os.path.dirname(base)
+    if not os.path.isdir(parent):
+        return False
+    try:
+        os.makedirs(base, exist_ok=True)
+        probe = os.path.join(base, ".arga_write_probe")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("1")
+        os.remove(probe)
+        return True
+    except OSError:
+        return os.path.isdir(base)
 
 
 def desktop_nesteos_locales() -> str:
+    for cand in _candidatos_nesteos_locales():
+        if _puede_usar_carpeta_local(cand):
+            return cand
     return os.path.join(os.path.expanduser("~"), "Desktop", NESTEOS_LOCALES_DIR)
 
 
@@ -46,10 +126,6 @@ def asegurar_exportacion_local(ruta: str, *, etiqueta: str = "ruta") -> str:
             f"Modo local bloqueado: {etiqueta} quedó fuera de Nesteos Locales ({ruta})."
         )
     return ruta
-
-
-def _normalizar(p: str) -> str:
-    return os.path.normcase(os.path.normpath(str(p or "")))
 
 
 def resolver_carpeta_job_desde_ruta_dxf(ruta_dxf: str) -> str | None:
@@ -103,7 +179,7 @@ def relativa_desde_cliente(ruta_absoluta: str) -> str:
 def resolver_ruta_base_exportacion(app, *, modo_servidor: bool) -> str:
     """
     modo_servidor=True  -> r_base actual (cerca del job en red).
-    modo_servidor=False -> Desktop\\Nesteos Locales\\{cliente}\\{job}\\...
+    modo_servidor=False -> OneDrive\\Escritorio\\Nesteos Locales (o Desktop si no hay OneDrive)\\{cliente}\\{job}\\...
     """
     rutas = []
     for pieza in getattr(app, "datos_partes_actuales", []) or []:

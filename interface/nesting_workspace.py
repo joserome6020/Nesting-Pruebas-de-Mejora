@@ -2,10 +2,32 @@ import copy
 import json
 import os
 import gzip
+import time
 from datetime import datetime
 
 SCHEMA_WORKSPACE = "arga_nesting_workspace_v2"
 COMPRESSED_WORKSPACE_EXTS = {".arganest", ".navanest"}
+
+_ARGANEST_LOAD_T0: float | None = None
+_ARGANEST_LOAD_FILE: str = ""
+
+
+def reset_arganest_load_log(ruta_archivo: str = "") -> None:
+    global _ARGANEST_LOAD_T0, _ARGANEST_LOAD_FILE
+    _ARGANEST_LOAD_T0 = time.perf_counter()
+    _ARGANEST_LOAD_FILE = os.path.basename(str(ruta_archivo or "workspace"))
+
+
+def log_arganest_load(msg: str, *, phase: str = "") -> None:
+    """Traza en consola el avance de carga .arganest (flush inmediato)."""
+    global _ARGANEST_LOAD_T0
+    t0 = _ARGANEST_LOAD_T0 if _ARGANEST_LOAD_T0 is not None else time.perf_counter()
+    elapsed = time.perf_counter() - t0
+    fname = _ARGANEST_LOAD_FILE or "workspace"
+    tag = f"[ARGANEST-LOAD][{fname}][+{elapsed:6.1f}s]"
+    if phase:
+        tag += f" [{phase}]"
+    print(f"{tag} {msg}", flush=True)
 
 
 def _combo_text(combo):
@@ -325,6 +347,16 @@ def construir_payload_workspace(tab):
     if not multilote:
         raise ValueError("No hay resultados de nesting para guardar.")
 
+    try:
+        from modules.nesting_engine.display_geometry import asegurar_dxf_export_cache_para_guardar
+
+        dxf_export_cache = asegurar_dxf_export_cache_para_guardar(
+            multilote,
+            log=lambda msg, **kw: print(f"[ARGANEST-SAVE] {msg}", flush=True),
+        )
+    except Exception as exc:
+        dxf_export_cache = {"transform_ready": False, "error": str(exc)}
+
     datos_partes = _clonar_datos_partes(getattr(tab.app, "datos_partes_actuales", []))
     editable_inputs_by_lote = getattr(tab.app, "editable_inputs_by_lote", []) or []
     editable_inputs_actuales = getattr(tab.app, "editable_inputs_actuales", []) or []
@@ -365,6 +397,7 @@ def construir_payload_workspace(tab):
         "meta_pdf_por_ruta": getattr(tab.app, "meta_pdf_por_ruta", {}),
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
+        "dxf_export_cache": dxf_export_cache,
         "ui_state": {
             "cantidad_tanques": getattr(tab, "cantidad_tanques", "N/A"),
             "multiplicador_tanques": int(getattr(tab.app, "multiplicador_tanques", 1) or 1),
@@ -418,7 +451,16 @@ def guardar_workspace(tab, ruta_archivo):
     return payload
 
 
-def cargar_workspace_desde_archivo(ruta_archivo):
+def cargar_workspace_desde_archivo(ruta_archivo, *, log=None):
+    _log = log or (lambda msg, **_: None)
+    t_read = time.perf_counter()
+    size_mb = 0.0
+    try:
+        size_mb = os.path.getsize(ruta_archivo) / (1024 * 1024)
+    except OSError:
+        pass
+    _log(f"Leyendo archivo ({size_mb:.2f} MB)…", phase="ARCHIVO")
+
     with open(ruta_archivo, "rb") as f:
         raw = f.read()
 
@@ -429,11 +471,14 @@ def cargar_workspace_desde_archivo(ruta_archivo):
     # - Workspaces nuevos .arganest/.navanest comprimidos con gzip.
     # - Workspaces viejos en JSON plano.
     if raw[:2] == b"\x1f\x8b":
+        _log("Descomprimiendo gzip…", phase="ARCHIVO")
         text = gzip.decompress(raw).decode("utf-8")
     else:
         text = raw.decode("utf-8")
 
+    _log(f"Parseando JSON ({len(text) / (1024 * 1024):.2f} MB texto)…", phase="ARCHIVO")
     payload = json.loads(text)
+    _log(f"JSON listo ({time.perf_counter() - t_read:.1f}s)", phase="ARCHIVO")
 
     if not isinstance(payload, dict):
         raise ValueError("El archivo no contiene un workspace válido.")
@@ -454,7 +499,176 @@ def cargar_workspace_desde_archivo(ruta_archivo):
     return payload
 
 
-def _relink_rutas_dxf_en_multilote(app, datos_partes) -> int:
+def enlazar_rutas_en_payload(payload, *, log=None) -> int:
+    """Fase rápida: solo rutas DXF desde PARTS (sin leer geometría)."""
+    _log = log or log_arganest_load
+    if not isinstance(payload, dict):
+        return 0
+    try:
+        from modules.nesting_engine.manager import enriquecer_hoja_export_desde_partes
+    except Exception:
+        return 0
+
+    multilote = payload.get("resultados_multilote") or []
+    datos_partes = payload.get("datos_partes_actuales") or []
+    total = 0
+    _log("Enlazando rutas DXF desde PARTS (sin geometría)…", phase="RUTAS")
+    t0 = time.perf_counter()
+    for lote in multilote:
+        if not isinstance(lote, dict):
+            continue
+        data = lote.get("data")
+        if not isinstance(data, dict):
+            continue
+        for clave, info in data.items():
+            if not isinstance(info, dict):
+                continue
+            for hoja in info.get("hojas") or []:
+                if isinstance(hoja, dict):
+                    total += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+    _log(f"Rutas enlazadas: {total} ({time.perf_counter() - t0:.1f}s)", phase="RUTAS")
+    return total
+
+
+def preparar_dxf_en_payload(payload, *, log=None, solo_rutas: bool = False) -> dict:
+    """
+    En background: rutas (+ geometría 1:1 paralela salvo solo_rutas=True).
+    Modifica resultados_multilote dentro del payload in-place.
+    """
+    _log = log or log_arganest_load
+    if not isinstance(payload, dict):
+        return {}
+
+    multilote = payload.get("resultados_multilote") or []
+    n_rutas = enlazar_rutas_en_payload(payload, log=_log)
+
+    if solo_rutas:
+        payload["_geom_prep_done"] = False
+        payload["_rutas_prep_done"] = True
+        return {"rutas": n_rutas, "geom_ok": 0, "solo_rutas": True}
+
+    _log(f"Refinando transformaciones export 1:1 en paralelo…", phase="DXF")
+    t_dxf = time.perf_counter()
+    try:
+        from modules.nesting_engine.display_geometry import preparar_transform_export_multilote_paralelo
+
+        geom_stats = preparar_transform_export_multilote_paralelo(multilote, log=_log)
+    except Exception as exc:
+        _log(f"Geom paralelo falló: {exc}", phase="DXF")
+        geom_stats = {}
+
+    elapsed = time.perf_counter() - t_dxf
+    stats = {
+        "lotes": len(multilote),
+        "rutas": n_rutas,
+        "geom_ok": int(geom_stats.get("geom_ok", 0) or 0),
+        "piezas": int(geom_stats.get("piezas", 0) or 0),
+        "omitidas": int(geom_stats.get("omitidas", 0) or 0),
+        "pendientes": int(geom_stats.get("pendientes", 0) or 0),
+        "workers": geom_stats.get("workers", 0),
+        "dxf_unicos": geom_stats.get("dxf_unicos", 0),
+        "segundos_dxf": round(elapsed, 1),
+    }
+    payload["_geom_prep_done"] = True
+    payload["_geom_prep_stats"] = stats
+    _log(
+        f"DXF listo en {elapsed:.1f}s — {stats['geom_ok']}/{stats['piezas']} piezas "
+        f"({stats.get('omitidas', 0)} omitidas, {stats.get('workers', '?')} workers)",
+        phase="DXF",
+    )
+    return stats
+
+
+def preparar_dxf_en_app(app, *, log=None) -> dict:
+    """Transformaciones export 1:1 sobre el nest ya cargado (background post-UI)."""
+    multilote = getattr(app, "resultados_multilote", None) or []
+    payload = {"resultados_multilote": multilote}
+    enlazar_rutas_en_payload(payload, log=log)
+    _log = log or log_arganest_load
+    _log("Transformaciones export 1:1 en app (paralelo)…", phase="DXF")
+    t0 = time.perf_counter()
+    try:
+        from modules.nesting_engine.display_geometry import preparar_transform_export_multilote_paralelo
+
+        geom_stats = preparar_transform_export_multilote_paralelo(multilote, log=_log)
+    except Exception as exc:
+        _log(f"Transform paralelo falló: {exc}", phase="DXF")
+        return {}
+    elapsed = time.perf_counter() - t0
+    stats = {
+        "geom_ok": int(geom_stats.get("ok", geom_stats.get("geom_ok", 0)) or 0),
+        "piezas": int(geom_stats.get("piezas", 0) or 0),
+        "omitidas": int(geom_stats.get("omitidas", 0) or 0),
+        "segundos_dxf": round(elapsed, 1),
+        "workers": geom_stats.get("workers", 0),
+        "cache_hits": int(geom_stats.get("omitidas", 0) or 0),
+    }
+    setattr(app, "_geom_prep_stats", stats)
+    setattr(app, "_transform_export_done", True)
+    setattr(app, "_geom_prep_done", True)
+    _log(
+        f"Transform listo en {elapsed:.1f}s — "
+        f"{stats['geom_ok']}/{stats['piezas']} piezas",
+        phase="DXF",
+    )
+    return stats
+
+
+def preparar_dxf_cache_en_payload(payload, *, log=None) -> dict:
+    """
+    Tras leer .arganest: reconoce transform ya guardada y evita reproceso
+    si dxf_export_cache / sellos por pieza están completos.
+    """
+    _log = log or log_arganest_load
+    if not isinstance(payload, dict):
+        return {}
+    multilote = payload.get("resultados_multilote") or []
+    try:
+        from modules.nesting_engine.display_geometry import (
+            auditar_cache_dxf_multilote,
+            normalizar_sellos_dxf_en_multilote,
+        )
+
+        normalizar_sellos_dxf_en_multilote(multilote)
+        audit = auditar_cache_dxf_multilote(multilote)
+    except Exception as exc:
+        _log(f"Auditoría cache DXF falló: {exc}", phase="DXF")
+        return {}
+
+    saved_cache = payload.get("dxf_export_cache") or {}
+    cache_version = int(saved_cache.get("version", 0) or 0)
+    payload["dxf_export_cache"] = audit
+
+    if audit.get("transform_ready"):
+        payload["_geom_prep_done"] = True
+        payload["_transform_export_done"] = True
+        payload["_geom_prep_stats"] = {
+            "geom_ok": audit.get("transform_ok", 0),
+            "piezas": audit.get("piezas_con_ruta", 0),
+            "omitidas": audit.get("piezas_virtual", 0) + audit.get("piezas_sin_ruta", 0),
+            "segundos_dxf": 0,
+            "desde_cache": True,
+        }
+        src = "archivo" if saved_cache.get("transform_ready") and cache_version else "piezas"
+        _log(
+            f"Cache DXF export OK ({src}): "
+            f"{audit.get('transform_ok', 0)}/{audit.get('piezas_con_ruta', 0)} "
+            f"piezas — sin reproceso",
+            phase="DXF",
+        )
+    else:
+        payload["_geom_prep_done"] = False
+        payload["_transform_export_done"] = False
+        _log(
+            f"Cache DXF incompleta: {audit.get('pendientes_transform', '?')} "
+            f"pieza(s) pendiente(s) de transform",
+            phase="DXF",
+        )
+
+    return audit
+
+
+def _relink_rutas_dxf_en_multilote(app, datos_partes, *, incluir_geom: bool = True) -> int:
     """Tras cargar .arganest: enlaza ruta DXF desde PARTS a piezas del nest guardado."""
     if not datos_partes:
         return 0
@@ -487,12 +701,19 @@ def _relink_rutas_dxf_en_multilote(app, datos_partes) -> int:
                 if isinstance(hoja, dict):
                     total += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
 
-    try:
-        from modules.nesting_engine.display_geometry import refrescar_poligonos_display_multilote
+    if incluir_geom:
+        try:
+            from modules.nesting_engine.display_geometry import preparar_transform_export_multilote_paralelo
 
-        refrescar_poligonos_display_multilote(multilote)
-    except Exception:
-        pass
+            log_arganest_load("Refrescando transform export (modo sync, paralelo)…", phase="DXF")
+            t0 = time.perf_counter()
+            preparar_transform_export_multilote_paralelo(multilote, log=log_arganest_load)
+            log_arganest_load(
+                f"Transform export lista ({time.perf_counter() - t0:.1f}s)",
+                phase="DXF",
+            )
+        except Exception as exc:
+            log_arganest_load(f"Geometría 1:1 omitida: {exc}", phase="DXF")
 
     return total
 
@@ -502,6 +723,7 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         raise ValueError("Payload inválido para aplicar workspace.")
 
     def _avanzar(msg, pct):
+        log_arganest_load(msg, phase="UI")
         app = getattr(tab, "app", None)
         if app is not None and hasattr(app, "actualizar_progreso"):
             try:
@@ -565,7 +787,19 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     tab.app.source_dxf_paths_workspace = payload.get("source_dxf_paths", []) or _extraer_rutas_dxf(datos_partes)
     tab.app.source_dxf_paths_by_lote = payload.get("source_dxf_paths_by_lote", []) or _extraer_rutas_por_lote(editable_inputs_by_lote)
 
-    _relink_rutas_dxf_en_multilote(tab.app, datos_partes)
+    if payload.get("_geom_prep_done"):
+        stats = payload.get("_geom_prep_stats") or {}
+        log_arganest_load(
+            f"DXF ya preparado "
+            f"({stats.get('geom_ok', '?')}/{stats.get('piezas', '?')} piezas, "
+            f"{stats.get('segundos_dxf', '?')}s)",
+            phase="UI",
+        )
+    elif payload.get("_rutas_prep_done"):
+        log_arganest_load("Rutas enlazadas; geom 1:1 continúa en background", phase="UI")
+    else:
+        log_arganest_load("Enlace DXF en hilo UI (modo sync)…", phase="UI")
+        _relink_rutas_dxf_en_multilote(tab.app, datos_partes, incluir_geom=True)
 
     _avanzar("Actualizando PARTS…", 0.72)
     # =========================================================
@@ -683,4 +917,5 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
             pass
 
     _avanzar("Listo", 1.0)
+    log_arganest_load("Workspace aplicado en UI", phase="FIN")
     return True

@@ -48,7 +48,16 @@ from interface.qt.dialogs.nesting_modals import (
     abrir_modal_transferencia_masiva,
 )
 from interface.qt.dialogs.lote_editor import abrir_editor_lote
-from nesting_workspace import guardar_workspace, cargar_workspace_desde_archivo, aplicar_workspace
+from nesting_workspace import (
+    guardar_workspace,
+    cargar_workspace_desde_archivo,
+    aplicar_workspace,
+    reset_arganest_load_log,
+    log_arganest_load,
+    enlazar_rutas_en_payload,
+    preparar_dxf_en_app,
+    preparar_dxf_cache_en_payload,
+)
 from postgres_connector import guardar_nesting_en_postgresql
 from reporte_pdf_nesting import exportar_pdf_nesting
 from interface.qt.export_paths import (
@@ -315,15 +324,123 @@ class TabNesting(QWidget, TimerHost):
     def _thread_cargar_workspace(self, ruta_archivo, mostrar_exito):
         err = None
         payload = None
+        reset_arganest_load_log(ruta_archivo)
+        log_arganest_load("Hilo de carga iniciado (fase rápida)", phase="INICIO")
         try:
             if hasattr(self.app, "actualizar_progreso"):
-                self.app.actualizar_progreso("Leyendo archivo…", 0.2)
-            payload = cargar_workspace_desde_archivo(ruta_archivo)
+                self.app.actualizar_progreso("Leyendo archivo…", 0.15)
+            payload = cargar_workspace_desde_archivo(ruta_archivo, log=log_arganest_load)
             if hasattr(self.app, "actualizar_progreso"):
-                self.app.actualizar_progreso("Preparando restauración…", 0.55)
+                self.app.actualizar_progreso("Enlazando rutas DXF…", 0.45)
+            enlazar_rutas_en_payload(payload, log=log_arganest_load)
+            preparar_dxf_cache_en_payload(payload, log=log_arganest_load)
+            if not payload.get("_geom_prep_done"):
+                payload["_rutas_prep_done"] = True
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso("Abriendo nest en UI…", 0.72)
+            log_arganest_load("Fase rápida lista; abriendo UI…", phase="INICIO")
         except Exception as e:
             err = str(e)
+            log_arganest_load(f"ERROR: {err}", phase="ERROR")
         self._ui(self._finalizar_carga_workspace, ruta_archivo, payload, err, mostrar_exito)
+
+    def _thread_refinar_geom_workspace(self):
+        """Fase B: geometría 1:1 paralela sin bloquear la UI."""
+        try:
+            preparar_dxf_en_app(self.app, log=log_arganest_load)
+        except Exception as exc:
+            log_arganest_load(f"Refinado background falló: {exc}", phase="ERROR")
+        finally:
+            self._ui(self._on_geom_prep_finalizado)
+
+    def _redibujar_hoja_actual_tras_geom(self):
+        hoja = getattr(self, "hoja_actual_data", None)
+        clave = getattr(self, "clave_actual", None)
+        if hoja is not None and clave:
+            try:
+                log_arganest_load(f"Redibujando placa visible ({clave})…", phase="UI")
+                self.dibujar_hoja_full(hoja, clave)
+            except Exception:
+                pass
+
+    def _iniciar_refinado_geom_background(self):
+        if getattr(self, "_geom_refine_thread", None) is not None:
+            try:
+                if self._geom_refine_thread.is_alive():
+                    log_arganest_load("Refinado geom ya en curso", phase="DXF")
+                    return
+            except Exception:
+                pass
+        setattr(self.app, "_geom_prep_done", False)
+        setattr(self.app, "_transform_export_done", False)
+        self._actualizar_botones_geom_prep()
+        self._geom_refine_thread = threading.Thread(
+            target=self._thread_refinar_geom_workspace,
+            daemon=True,
+        )
+        self._geom_refine_thread.start()
+        log_arganest_load("Transform export 1:1 iniciado en background (paralelo)", phase="DXF")
+
+    def _geom_prep_en_curso(self) -> bool:
+        if getattr(self.app, "_geom_prep_done", True):
+            return False
+        th = getattr(self, "_geom_refine_thread", None)
+        try:
+            return th is not None and th.is_alive()
+        except Exception:
+            return False
+
+    def _actualizar_botones_geom_prep(self):
+        busy = self._geom_prep_en_curso()
+        btn = getattr(self, "btn_exportar", None)
+        if btn is not None:
+            btn.setEnabled(not busy)
+            if busy:
+                btn.setToolTip(
+                    "Esperando transformaciones DXF 1:1 del .arganest "
+                    "(evita exportar con rotación incorrecta)."
+                )
+            else:
+                btn.setToolTip("")
+
+    def _bloquear_hasta_geom_prep(self):
+        """En hilo de export: espera a que termine el refinado post-.arganest."""
+        th = getattr(self, "_geom_refine_thread", None)
+        if th is None:
+            return
+        try:
+            if th.is_alive():
+                log_arganest_load(
+                    "Exportación en espera: transform export 1:1 en curso…",
+                    phase="EXPORT",
+                )
+                th.join()
+        except Exception:
+            pass
+
+    def _on_geom_prep_finalizado(self):
+        setattr(self.app, "_transform_export_done", True)
+        setattr(self.app, "_geom_prep_done", True)
+        self._actualizar_botones_geom_prep()
+        self._refrescar_display_hoja_actual()
+
+    def _refrescar_display_hoja_actual(self):
+        hoja = getattr(self, "hoja_actual_data", None)
+        clave = getattr(self, "clave_actual", None)
+        if hoja is None or not clave:
+            return
+        try:
+            from modules.nesting_engine.display_geometry import refrescar_poligonos_display_hoja
+
+            n = refrescar_poligonos_display_hoja(hoja)
+            if n:
+                log_arganest_load(
+                    f"Display 1:1 placa visible ({clave}): {n} pieza(s)",
+                    phase="DISPLAY",
+                )
+                self.dibujar_hoja_full(hoja, clave)
+        except Exception:
+            pass
 
     def _finalizar_carga_workspace(self, ruta_archivo, payload, err=None, mostrar_exito=True):
         if err:
@@ -345,6 +462,16 @@ class TabNesting(QWidget, TimerHost):
             if hasattr(self.app, "cerrar_ventana_carga"):
                 self.app.cerrar_ventana_carga()
             QTimer.singleShot(0, lambda: self._completar_vista_workspace_post_carga())
+            if (
+                payload.get("_rutas_prep_done")
+                and not payload.get("_geom_prep_done")
+                and not (payload.get("dxf_export_cache") or {}).get("transform_ready")
+            ):
+                self._iniciar_refinado_geom_background()
+            elif payload.get("_geom_prep_done"):
+                setattr(self.app, "_transform_export_done", True)
+                setattr(self.app, "_geom_prep_done", True)
+                self._actualizar_botones_geom_prep()
             if mostrar_exito:
                 QTimer.singleShot(
                     50,
@@ -1521,6 +1648,25 @@ class TabNesting(QWidget, TimerHost):
         self._reposicionar_panel_ajuste()
 
     def dibujar_hoja_full(self, hoja, clave):
+        try:
+            from modules.nesting_engine.display_geometry import (
+                pieza_necesita_geom_dxf,
+                refrescar_poligonos_display_hoja,
+                refrescar_poligonos_display_pieza,
+            )
+
+            if not self._geom_prep_en_curso():
+                refrescar_poligonos_display_hoja(hoja)
+            else:
+                for pz in hoja.get("piezas") or []:
+                    if (
+                        isinstance(pz, dict)
+                        and pz.get("_transform_export_ok")
+                        and pieza_necesita_geom_dxf(pz)
+                    ):
+                        refrescar_poligonos_display_pieza(pz)
+        except Exception:
+            pass
         if hoja and clave and not hoja.get("es_retazo"):
             self.sincronizar_overlays_clave(clave)
         if hoja is not self.hoja_actual_data:
@@ -5439,6 +5585,18 @@ class TabNesting(QWidget, TimerHost):
         if not hasattr(self.app, 'resultados_multilote') or not self.app.resultados_multilote:
             return QMessageBox.warning(self, "Atención", "No hay datos para exportar.")
 
+        if self._geom_prep_en_curso():
+            return QMessageBox.information(
+                self,
+                "Validación geométrica en curso",
+                "El nest se abrió en vista rápida, pero aún se calculan las "
+                "transformaciones DXF 1:1 en segundo plano.\n\n"
+                "Espera a que termine (el botón EXPORTAR se habilitará solo) para evitar "
+                "DXF con piezas mal rotadas o fuera de placa.\n\n"
+                "El visor puede verse poligonal hasta abrir cada placa; el export usa "
+                "el DXF fuente con la rotación correcta.",
+            )
+
         # =====================================================
         # === RADAR DE RUTAS DE IMPORTACIÓN (DIAGNÓSTICO) ===
         # =====================================================
@@ -5469,6 +5627,7 @@ class TabNesting(QWidget, TimerHost):
 
         def worker():
             try:
+                self._bloquear_hasta_geom_prep()
                 modo_servidor = bool(getattr(self.app, "exportar_a_servidor", True))
                 print(
                     f"[EXPORT] modo={'SERVIDOR+BD' if modo_servidor else 'LOCAL (Nesteos Locales)'}"
