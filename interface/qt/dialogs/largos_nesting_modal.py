@@ -431,6 +431,7 @@ class LargosNestingDialog(QDialog):
                 cant_grupo=int(u_data.get("cant_grupo") or 1),
                 unit_idx_en_tira=u_data.get("unit_idx_en_tira"),
                 n_slots_tira=u_data.get("n_slots_tira"),
+                cortes_slot=u_data.get("cortes_slot"),
             )
             cod = str(u_data.get("codigo") or "")
             if cod:

@@ -106,3 +106,9 @@ HERINOX_DB_NAME = os.getenv("HERINOX_DB_NAME", "herinox").strip()
 HERINOX_DB_USER = os.getenv("HERINOX_DB_USER", "herinox").strip()
 HERINOX_DB_PASSWORD = os.getenv("HERINOX_DB_PASSWORD", "herinox_password_2024").strip()
 HERINOX_DB_CONNECT_TIMEOUT = int(os.getenv("HERINOX_DB_CONNECT_TIMEOUT", "5"))
+
+# Respaldo local de catálogo Herinox (precios / dimensiones).
+HERINOX_CACHE_DIR = ruta_persistente(os.path.join("cache", ""))
+HERINOX_LARGOS_CACHE_FILE = os.path.join(HERINOX_CACHE_DIR, "herinox_catalog_largos.json")
+HERINOX_PLATES_CACHE_FILE = os.path.join(HERINOX_CACHE_DIR, "herinox_plates_snapshot.json")
+HERINOX_PLATES_XLSX_FILE = ruta_persistente("Plates.xlsx")

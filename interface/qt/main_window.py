@@ -259,6 +259,12 @@ class SistemaNestingPro(QMainWindow):
         except Exception as e:
             print(f"[HERINOX BRIDGE] WARN: {e}")
         try:
+            from catalogo_largos import _cargar_placas_largos_desde_herinox
+
+            _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+        except Exception as e:
+            print(f"[HERINOX LARGOS] WARN prefetch/respaldo: {e}")
+        try:
             resultado = self.plates_manager.sincronizar_desde_react_herinox()
         except Exception as e:
             print(f"[HERINOX SYNC] ERROR inesperado: {e}")

@@ -1,6 +1,7 @@
 """Carga plan de lista de largos y sincroniza pedido material_requerido_ldg."""
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 import psycopg2
@@ -142,6 +143,31 @@ def _etiquetar_cortes_individuales(cortes: list[dict]) -> list[dict]:
     return expandidos
 
 
+def _util_comercial_in(largo_com: float) -> float:
+    return max(0.0, float(largo_com or 0) - 2 * RECORTE_EXTREMO_LARGOS_IN)
+
+
+def _cap_cortes_a_util(cortes: list[dict], largo_com: float) -> list[dict]:
+    """Nunca mostrar más piezas de las que caben en una barra comercial (util − kerf)."""
+    import copy
+
+    util = _util_comercial_in(largo_com)
+    if util <= 0:
+        return []
+    out: list[dict] = []
+    used = 0.0
+    for corte in cortes or []:
+        largo = float(corte.get("largo") or 0)
+        if largo <= 0:
+            continue
+        kerf = KERF_LARGOS_IN if out else 0.0
+        if used + kerf + largo > util + 0.02:
+            break
+        out.append(copy.deepcopy(corte))
+        used += kerf + largo
+    return out
+
+
 def _split_cortes_en_unidades_comerciales(
     cortes: list[dict],
     largo_comercial: float,
@@ -152,9 +178,9 @@ def _split_cortes_en_unidades_comerciales(
 
     piezas = _etiquetar_cortes_individuales(cortes)
     if n_unidades <= 1:
-        return [piezas]
+        return [_cap_cortes_a_util(piezas, largo_comercial)]
 
-    util = max(0.0, float(largo_comercial) - 2 * RECORTE_EXTREMO_LARGOS_IN)
+    util = _util_comercial_in(largo_comercial)
     buckets: list[list[dict]] = [[] for _ in range(n_unidades)]
     used = [0.0] * n_unidades
     bucket_idx = 0
@@ -170,6 +196,9 @@ def _split_cortes_en_unidades_comerciales(
             bucket_idx += 1
 
         kerf = KERF_LARGOS_IN if buckets[bucket_idx] else 0.0
+        if used[bucket_idx] + kerf + largo > util + 0.02:
+            # No cabe en ningún slot comercial de esta tira física — omitir en vista.
+            continue
         buckets[bucket_idx].append(copy.deepcopy(corte))
         used[bucket_idx] += kerf + largo
         if bucket_idx < n_unidades - 1 and used[bucket_idx] >= util - 0.02:
@@ -190,10 +219,15 @@ def _remanente_barra_vista(largo_stock: float, cortes: list[dict]) -> float:
 
 def _slots_comerciales_en_tira(largo_stock: float, largo_com: float) -> int:
     """Cuántas barras comerciales (ej. 240\") cubre una tira física del nesteo (ej. 480\")."""
+    import math
+
     largo_com = float(largo_com or 0)
     if largo_com <= 0:
         return 1
-    return max(1, int(round(float(largo_stock or 0) / largo_com)))
+    stock = max(0.0, float(largo_stock or 0))
+    if stock <= 0:
+        return 1
+    return max(1, math.ceil(stock / largo_com))
 
 
 def vista_barra_para_unidad_mrl(
@@ -206,11 +240,11 @@ def vista_barra_para_unidad_mrl(
     cant_grupo: int = 1,
     unit_idx_en_tira: int | None = None,
     n_slots_tira: int | None = None,
+    cortes_slot: list[dict] | None = None,
 ) -> dict:
     """
-    Vista de consumo para una barra comercial MRL (siempre largo comercial, ej. 240\").
-    Si el nesteo usó una tira más larga (ej. 480\"), reparte piezas entre slots comerciales
-    de ESA tira solamente (no mezcla cant_grupo global del material).
+    Vista MRL: siempre largo comercial (ej. 240\").
+    Si la tira física es más larga (480\"), reparte con tope estricto de util por slot.
     """
     import copy
 
@@ -221,10 +255,16 @@ def vista_barra_para_unidad_mrl(
 
     cortes_origen = list(barra.get("cortes") or [])
     idx_local = int(unit_idx_en_tira if unit_idx_en_tira is not None else unit_idx)
-    n_slots = int(n_slots_tira) if n_slots_tira else _slots_comerciales_en_tira(stock_origen, largo_com)
+    n_slices = _slots_comerciales_en_tira(stock_origen, largo_com)
 
-    if stock_origen > largo_com + 0.5 or n_slots > 1:
-        n_slices = max(1, _slots_comerciales_en_tira(stock_origen, largo_com))
+    if cortes_slot is not None:
+        cortes_vista = _cap_cortes_a_util(cortes_slot, largo_com)
+        largo_vista = largo_com
+        nota_nesteo = (
+            f"Piezas en tira nesteo de {stock_origen:.0f}\" "
+            f"→ barra comercial {idx_local}/{n_slices} de {largo_com:.0f}\""
+        ) if n_slices > 1 else ""
+    elif n_slices > 1:
         splits = _split_cortes_en_unidades_comerciales(cortes_origen, largo_com, n_slices)
         idx = min(max(0, idx_local - 1), len(splits) - 1)
         cortes_vista = splits[idx]
@@ -232,9 +272,9 @@ def vista_barra_para_unidad_mrl(
         nota_nesteo = (
             f"Piezas en tira nesteo de {stock_origen:.0f}\" "
             f"→ barra comercial {idx_local}/{n_slices} de {largo_com:.0f}\""
-        ) if stock_origen > largo_com + 0.5 else ""
+        )
     else:
-        cortes_vista = _etiquetar_cortes_individuales(cortes_origen)
+        cortes_vista = _cap_cortes_a_util(cortes_origen, largo_com or stock_origen)
         largo_vista = largo_com if largo_com > 0 else stock_origen
         nota_nesteo = ""
 
@@ -494,6 +534,28 @@ def _plan_desde_nesting(app, tab) -> dict[str, Any] | None:
     return None
 
 
+def resolver_plan_largos_para_tab(app, tab) -> dict[str, Any] | None:
+    """
+    Misma fuente que el modal Nesteo de largos: memoria post-nesting → BD si hace falta.
+    Cachea el plan en app.plan_largos_por_lote para costos y export.
+    """
+    plan = _plan_desde_nesting(app, tab)
+    if isinstance(plan, dict) and (plan.get("data") or {}):
+        return plan
+    try:
+        plan_ctx, _, err = cargar_plan_largos_contexto(app, tab)
+        if err or not isinstance(plan_ctx, dict) or not (plan_ctx.get("data") or {}):
+            return None
+        idx = _lote_idx(tab)
+        if not hasattr(app, "plan_largos_por_lote") or app.plan_largos_por_lote is None:
+            app.plan_largos_por_lote = {}
+        app.plan_largos_por_lote[idx] = plan_ctx
+        app.plan_largos_job = str(getattr(app, "job_activo", "") or "").strip()
+        return plan_ctx
+    except Exception:
+        return None
+
+
 def previsualizar_pedido_mrl(
     plan: dict[str, Any],
     barras_excluidas_pedido: set[str] | None = None,
@@ -542,8 +604,10 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
         largo_com = float(units[0].get("largo") or 0) if units else 0.0
         slots: list[dict] = []
         for nest_key, barra in tiras:
-            n_slots = _slots_comerciales_en_tira(
-                float(barra.get("largo_stock") or 0), largo_com
+            stock_t = float(barra.get("largo_stock") or 0)
+            n_slots = _slots_comerciales_en_tira(stock_t, largo_com)
+            splits = _split_cortes_en_unidades_comerciales(
+                list(barra.get("cortes") or []), largo_com, n_slots
             )
             for local_i in range(n_slots):
                 slots.append(
@@ -551,6 +615,7 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
                         "nesting_key": nest_key,
                         "unit_idx_en_tira": local_i + 1,
                         "n_slots_tira": n_slots,
+                        "cortes_slot": splits[local_i] if local_i < len(splits) else [],
                     }
                 )
 
@@ -558,20 +623,120 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
             u["nesting_key"] = slot["nesting_key"]
             u["unit_idx_en_tira"] = slot["unit_idx_en_tira"]
             u["n_slots_tira"] = slot["n_slots_tira"]
+            u["cortes_slot"] = slot["cortes_slot"]
             u["reparto_greedy"] = int(slot["n_slots_tira"]) > 1
             u["n_unidades_tira"] = int(slot["n_slots_tira"])
 
-        # Si sobran unidades MRL (desfase catálogo vs nesteo), reutilizar último slot.
-        if len(units) > len(slots) and slots:
-            last = slots[-1]
-            for u in units[len(slots) :]:
-                u["nesting_key"] = last["nesting_key"]
-                u["unit_idx_en_tira"] = last["unit_idx_en_tira"]
-                u["n_slots_tira"] = last["n_slots_tira"]
-                u["reparto_greedy"] = int(last["n_slots_tira"]) > 1
-                u["n_unidades_tira"] = int(last["n_slots_tira"])
+        # Unidades MRL de más (desfase catálogo): sin mapa de corte — no reutilizar último slot.
+        for u in units[len(slots) :]:
+            u.pop("nesting_key", None)
+            u.pop("cortes_slot", None)
+            u.pop("unit_idx_en_tira", None)
+            u.pop("n_slots_tira", None)
+            u["reparto_greedy"] = False
+            u["n_unidades_tira"] = 1
 
     return unidades
+
+
+def auditar_consumo_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """
+    Verifica coherencia MRL ↔ slots comerciales ↔ piezas mapeadas.
+    Devuelve ok=True si cantidades cuadran y ningún slot excede el útil.
+    """
+    from lista_largos_material_requerido import agregar_filas_desde_plan
+
+    filas_mrl = agregar_filas_desde_plan(plan)
+    unidades = listar_unidades_mrl_plan(plan)
+    total_mrl = sum(int(f.get("cantidad") or 0) for f in filas_mrl)
+
+    piezas_plan = 0
+    piezas_slot = 0
+    slots_calc = 0
+    overflow = 0
+    sin_mapa = 0
+    detalle: list[dict[str, Any]] = []
+
+    units_por_mat: dict[str, list[dict]] = defaultdict(list)
+    for u in unidades:
+        units_por_mat[str(u.get("material") or "").strip()].append(u)
+
+    mrl_por_mat = {str(f["material"]).strip(): int(f.get("cantidad") or 0) for f in filas_mrl}
+
+    for material, _idx, barra in iter_barras_plan(plan):
+        if str(barra.get("source") or "STOCK").upper() == "REMANENTE":
+            continue
+        if not (barra.get("cortes") or []):
+            continue
+        piezas_plan += len(barra.get("cortes") or [])
+
+    for mat, units in units_por_mat.items():
+        mrl_qty = mrl_por_mat.get(mat, 0)
+        n_units = len(units)
+        n_slots_mat = sum(
+            _slots_comerciales_en_tira(
+                float(b.get("largo_stock") or 0),
+                float(units[0].get("largo") or 0) if units else 0.0,
+            )
+            for _mk, b in [
+                (bar_key(material, bar_idx), barra)
+                for material, bar_idx, barra in iter_barras_plan(plan)
+                if str(material or "").strip() == mat
+                and str(barra.get("source") or "STOCK").upper() == "STOCK"
+                and (barra.get("cortes") or [])
+            ]
+        )
+        slots_calc += n_slots_mat
+        p_slot = sum(len(u.get("cortes_slot") or []) for u in units)
+        piezas_slot += p_slot
+        sin_mapa += sum(1 for u in units if not u.get("nesting_key"))
+        for u in units:
+            cs = u.get("cortes_slot") or []
+            if cs and _slot_overflow(cs, float(u.get("largo") or 0)):
+                overflow += 1
+        if mrl_qty != n_units or mrl_qty != n_slots_mat or p_slot < sum(
+            len(b.get("cortes") or [])
+            for _m, _i, b in iter_barras_plan(plan)
+            if str(_m or "").strip() == mat
+            and str(b.get("source") or "STOCK").upper() == "STOCK"
+        ):
+            detalle.append(
+                {
+                    "material": mat,
+                    "mrl": mrl_qty,
+                    "unidades": n_units,
+                    "slots": n_slots_mat,
+                    "piezas_slot": p_slot,
+                }
+            )
+
+    ok = (
+        total_mrl == len(unidades) == slots_calc
+        and piezas_plan == piezas_slot
+        and overflow == 0
+        and sin_mapa == 0
+    )
+    return {
+        "ok": ok,
+        "mrl_barras": total_mrl,
+        "unidades": len(unidades),
+        "slots": slots_calc,
+        "piezas_plan": piezas_plan,
+        "piezas_mapeadas": piezas_slot,
+        "overflow_slots": overflow,
+        "sin_mapa": sin_mapa,
+        "detalle": detalle,
+    }
+
+
+def _slot_overflow(cortes: list[dict], largo_com: float) -> bool:
+    util = _util_comercial_in(largo_com)
+    used = 0.0
+    for i, c in enumerate(cortes or []):
+        if i > 0:
+            used += KERF_LARGOS_IN
+        used += float(c.get("largo") or 0)
+    return used > util + 0.02
 
 
 def obtener_exclusiones_mrl_unidades(app, lote_idx: int) -> set[str]:
@@ -893,6 +1058,7 @@ def construir_snapshot_pdf_piso(
             cant_grupo=cant_grupo,
             unit_idx_en_tira=u.get("unit_idx_en_tira"),
             n_slots_tira=u.get("n_slots_tira"),
+            cortes_slot=u.get("cortes_slot"),
         )
         if cod:
             vista["_vista_codigo"] = cod

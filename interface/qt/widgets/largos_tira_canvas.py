@@ -230,7 +230,18 @@ class LargosTiraCanvas(QWidget):
 
             cursor_x += pw
 
-        rem = float(self._barra.get("remanente_show", self._barra.get("remanente_calc", 0)) or 0)
+        used_real = 0.0
+        for i, corte in enumerate(cortes):
+            if i > 0:
+                used_real += KERF_IN
+            used_real += float(corte.get("largo") or 0)
+
+        rem = max(0.0, util - used_real)
+        overflow = used_real > util + 0.02
+        ocupado = min(used_real, util) if util > 0 else 0.0
+        efi = (ocupado / util * 100.0) if util > 0 else 0.0
+        efi_col = "#EF4444" if overflow else "#22C55E" if efi >= 70 else "#F59E0B" if efi >= 40 else "#EF4444"
+
         if rem > 0.5 and cursor_x < ux_end - 2:
             rw = ux_end - cursor_x
             p.setBrush(QColor("#475569"))
@@ -257,10 +268,6 @@ class LargosTiraCanvas(QWidget):
             p.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             p.drawText(tip_rect, Qt.AlignmentFlag.AlignCenter, self._hover_tip)
 
-        ocupado = util - rem
-        efi = (ocupado / util * 100.0) if util > 0 else 0.0
-        efi_col = "#22C55E" if efi >= 70 else "#F59E0B" if efi >= 40 else "#EF4444"
-
         footer = QRectF(0, h_total - footer_h, w_total, footer_h)
         p.fillRect(footer, QColor("#020617"))
         p.setPen(QPen(QColor("#334155"), 1))
@@ -277,6 +284,8 @@ class LargosTiraCanvas(QWidget):
         p.setPen(QColor(efi_col))
         p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         efi_txt = f"Aprovechamiento: {efi:.1f}%"
+        if overflow:
+            efi_txt += "  ·  EXCEDE ÚTIL"
         p.drawText(margin, stats_y + 16, efi_txt)
 
         p.setFont(QFont("Segoe UI", 8))

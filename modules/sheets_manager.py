@@ -42,6 +42,12 @@ class PlatesManager:
         Refresca inventario de placas desde react-Herinox.
         Se ejecuta al iniciar y desde la pestaña SHEETS para mantener datos al día.
         """
+        try:
+            from modules.herinox_catalog_cache import copiar_plates_xlsx_seed_si_falta
+
+            copiar_plates_xlsx_seed_si_falta()
+        except Exception:
+            pass
         resultado = self._sync.refresh()
         if resultado.ok:
             self._datos_empresa, self._datos_proveedor = self._sync.get_sheet_rows()

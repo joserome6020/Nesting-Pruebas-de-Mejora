@@ -125,6 +125,44 @@ def extraer_codigo_herinox_combo(texto: str) -> str:
     return str(parsed.get("codigo_herinox") or "").strip().upper()
 
 
+_ESPESOR_CATALOG_REV: Dict[str, str] | None = None
+
+
+def _codigo_herinox_por_clasificacion(texto: str) -> str:
+    """Resuelve SLC051, PTR016, etc. desde texto lista_largos (ej. 'Solera 4 x 1/2')."""
+    global _ESPESOR_CATALOG_REV
+    key = str(texto or "").strip().lower()
+    if not key:
+        return ""
+    if _ESPESOR_CATALOG_REV is None:
+        por_clas: Dict[str, list[str]] = {}
+        try:
+            from modules.consulta_herinox_bridge import _load_largos_espesor_catalog
+
+            catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+            por_codigo, _ = _indices_catalogo(catalogo)
+            for cod, entry in (_load_largos_espesor_catalog() or {}).items():
+                cl = str(entry.get("clasificacion") or "").strip().lower()
+                if cl:
+                    por_clas.setdefault(cl, []).append(str(cod).strip().upper())
+        except Exception:
+            por_clas = {}
+        rev: Dict[str, str] = {}
+        for cl, cods in por_clas.items():
+            elegido = ""
+            for cod in sorted(cods):
+                if cod in por_codigo:
+                    elegido = cod
+                    break
+            rev[cl] = elegido or (sorted(cods)[0] if cods else "")
+        _ESPESOR_CATALOG_REV = rev
+    return _ESPESOR_CATALOG_REV.get(key, "")
+
+
+def resolver_codigo_herinox_material(texto: str) -> str:
+    return extraer_codigo_herinox_combo(texto) or _codigo_herinox_por_clasificacion(texto)
+
+
 def parse_clasificacion_largo(texto: str) -> Dict[str, Any]:
     """
     Interpreta textos de inventario/nesting como:
@@ -452,15 +490,38 @@ def _cargar_placas_largos_desde_herinox(
             placa["espesor_display"] = esp_txt
             placa["perfil_display"] = _perfil_display_herinox(placa)
             catalogo.append(placa)
+        if catalogo:
+            try:
+                from modules.herinox_catalog_cache import guardar_snapshot_largos
+
+                guardar_snapshot_largos(catalogo, source="db", usd_mxn=usd_mxn)
+            except Exception as cache_exc:
+                print(f"⚠️ No se pudo guardar respaldo catálogo largos: {cache_exc}")
         return catalogo
     except Exception as exc:
         print(f"⚠️ No se pudo cargar catálogo Herinox: {exc}")
-        return []
     finally:
         if cursor:
             cursor.close()
         if conexion:
             conexion.close()
+
+    try:
+        from modules.herinox_catalog_cache import cargar_snapshot_largos
+
+        items, meta = cargar_snapshot_largos()
+        if items:
+            if solo_disponibles:
+                items = [p for p in items if p.get("disponible")]
+            if items:
+                print(
+                    f"ℹ️ Catálogo largos desde respaldo local "
+                    f"({meta.get('updated_at', '?')}, {len(items)} ítems)"
+                )
+                return items
+    except Exception as cache_exc:
+        print(f"⚠️ Respaldo catálogo largos no disponible: {cache_exc}")
+    return []
 
 
 def _puntuar_match(
@@ -702,7 +763,7 @@ def datos_material_requerido_pedido(
     Pedido Cominox: largo comercial del catálogo Herinox por código
     y costo = precio unitario × cantidad de barras estándar.
     """
-    codigo = extraer_codigo_herinox_combo(material)
+    codigo = resolver_codigo_herinox_material(material)
     info = enriquecer_fila_pedido(
         material,
         0.0,

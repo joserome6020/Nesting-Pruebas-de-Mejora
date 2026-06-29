@@ -173,8 +173,14 @@ def agregar_filas_desde_plan(
 
     catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
     excluir = barras_excluidas_pedido or set()
-    # Consumo total del plan por material (suma largo_stock de cada barra STOCK).
+    largo_cat_por_material: Dict[str, float] = {}
     acumulado: Dict[str, Dict[str, Any]] = {}
+
+    def _largo_cat_material(material: str) -> float:
+        if material not in largo_cat_por_material:
+            datos = datos_material_requerido_pedido(material, 1, catalogo=catalogo)
+            largo_cat_por_material[material] = float(datos.get("largo") or 0)
+        return largo_cat_por_material[material]
 
     for material, barras in _iter_barras_por_material(plan):
         for bar_idx, barra in enumerate(barras):
@@ -189,18 +195,24 @@ def agregar_filas_desde_plan(
             largo_stock = float(barra.get("largo_stock") or 0)
             if largo_stock <= 0:
                 continue
+            try:
+                from interface.largos_nesting_service import _slots_comerciales_en_tira
+
+                largo_cat = _largo_cat_material(material)
+                n_slots = _slots_comerciales_en_tira(largo_stock, largo_cat)
+            except Exception:
+                n_slots = 1
             if material not in acumulado:
-                acumulado[material] = {"material": material, "total_in": 0.0}
-            acumulado[material]["total_in"] += largo_stock
+                acumulado[material] = {"material": material, "total_slots": 0}
+            acumulado[material]["total_slots"] += max(1, n_slots)
 
     filas: List[Dict[str, Any]] = []
     for item in acumulado.values():
-        # Largo comercial = catálogo Herinox (20 ft / 40 ft del código).
         datos_base = datos_material_requerido_pedido(
             item["material"], 1, catalogo=catalogo
         )
         largo_cat = float(datos_base.get("largo") or 0)
-        cantidad = _cantidad_barras_catalogo(item["total_in"], largo_cat)
+        cantidad = max(1, int(item.get("total_slots") or 1))
         datos = datos_material_requerido_pedido(
             item["material"], cantidad, catalogo=catalogo
         )

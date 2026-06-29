@@ -80,6 +80,42 @@ class HerinoxPlateSync:
         """Devuelve (datos_empresa, datos_proveedor) en formato de filas del nesting."""
         return list(self._rows_empresa), list(self._rows_proveedor)
 
+    def _cargar_respaldo_local(self) -> Optional[HerinoxSyncResult]:
+        try:
+            from modules.herinox_catalog_cache import cargar_respaldo_placas
+
+            emp, prov, meta = cargar_respaldo_placas()
+            if not emp and not prov:
+                return None
+            self._rows_empresa = emp
+            self._rows_proveedor = prov
+            self._prev_snapshot = {
+                str(row[2]).strip().upper(): row for row in emp + prov if len(row) > 2
+            }
+            dof_rate = float(meta.get("dof_rate") or 18.5)
+            dof_source = str(meta.get("dof_source") or "CACHE")
+            codes = {
+                str(row[2]).strip().upper()
+                for row in emp + prov
+                if len(row) > 2 and str(row[2]).strip()
+            }
+            return HerinoxSyncResult(
+                ok=True,
+                matched_codes=len(codes),
+                sheet_count=2,
+                source=str(meta.get("source") or "cache"),
+                dof_rate=dof_rate,
+                dof_source=dof_source,
+                message=(
+                    f"Inventario desde respaldo local ({meta.get('updated_at', '?')}) — "
+                    "Herinox no disponible."
+                ),
+                nominal_by_code={},
+            )
+        except Exception as exc:
+            print(f"[HERINOX CACHE] No se pudo cargar respaldo local: {exc}")
+            return None
+
     def run(self, plates_xlsx_path: str | None = None) -> HerinoxSyncResult:
         """Carga/refresca inventario de placas desde Herinox. plates_xlsx_path se ignora (legacy)."""
         _ = plates_xlsx_path
@@ -116,6 +152,15 @@ class HerinoxPlateSync:
             if not plates_by_code and not db_error:
                 db_error = "sin datos desde PostgreSQL"
             if not plates_by_code and db_error:
+                fallback = self._cargar_respaldo_local()
+                if fallback:
+                    if api_error:
+                        fallback.message = (
+                            f"{fallback.message} (API falló: {api_error}; DB: {db_error})"
+                        )
+                    else:
+                        fallback.message = f"{fallback.message} (DB: {db_error})"
+                    return fallback
                 if api_error:
                     return HerinoxSyncResult(
                         ok=False,
@@ -134,6 +179,9 @@ class HerinoxPlateSync:
 
         if not plates_by_code:
             detalle = f" API: {api_error}" if api_error else ""
+            fallback = self._cargar_respaldo_local()
+            if fallback:
+                return fallback
             return HerinoxSyncResult(
                 ok=False,
                 source="none",
@@ -159,6 +207,23 @@ class HerinoxPlateSync:
         self._prev_snapshot = {
             str(row[2]).strip().upper(): row for row in empresa_rows + proveedor_rows if len(row) > 2
         }
+
+        try:
+            from modules.herinox_catalog_cache import guardar_snapshot_placas
+
+            paths = guardar_snapshot_placas(
+                empresa_rows,
+                proveedor_rows,
+                source=source,
+                dof_rate=float(dof_rate),
+                dof_source=dof_source,
+            )
+            print(
+                f"[HERINOX CACHE] Respaldo placas guardado | json={paths.get('json', '')} | "
+                f"xlsx={paths.get('xlsx', '')}"
+            )
+        except Exception as cache_exc:
+            print(f"[HERINOX CACHE] WARN: no se pudo guardar respaldo placas: {cache_exc}")
 
         suffix = ""
         if not self.enabled:

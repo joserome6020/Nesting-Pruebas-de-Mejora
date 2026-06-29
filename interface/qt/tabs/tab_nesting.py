@@ -1994,8 +1994,16 @@ class TabNesting(QWidget, TimerHost):
                 self._recalcular_costos_grupo(clave)
         scroll_clear(self.lista_hojas)
 
-        costo_proyecto = 0
-        self.total_usd_empresa = 0.0
+        from interface.nesting_costos import calcular_reporte_costos, aplicar_totales_a_tab
+
+        reporte_costos = calcular_reporte_costos(
+            resultados,
+            app=self.app,
+            lote_idx=int(getattr(self, "lote_actual_idx", 0) or 0),
+            tab=self,
+        )
+        costo_proyecto = float(reporte_costos.get("total_mxn") or 0.0)
+        self.total_usd_empresa = float(reporte_costos.get("total_empresa_mxn") or 0.0)
         self.total_usd_proveedor = 0.0
 
         claves_ordenadas = sorted(
@@ -2019,13 +2027,6 @@ class TabNesting(QWidget, TimerHost):
             else:
                 self._bind_menu_compensar_calibre(header, lbl_header, clave)
             scroll_add_widget(self.lista_hojas, header)
-
-            if "costo_total" in info:
-                costo_proyecto += info["costo_total"]
-            if "costo_empresa" in info:
-                self.total_usd_empresa += info["costo_empresa"]
-            if "costo_proveedor" in info:
-                self.total_usd_proveedor += info["costo_proveedor"]
 
             if es_grupo_cu and hojas_del_material:
                 info.setdefault("ignorar_deduccion_cu", True)
@@ -3606,30 +3607,10 @@ class TabNesting(QWidget, TimerHost):
         parent.layout().addWidget(fila_ign)
 
     def _recalcular_costos_grupo(self, clave):
+        from interface.nesting_costos import recalcular_costos_grupo
+
         grp = self.app.resultados_nesting.get(clave)
-        if not isinstance(grp, dict):
-            return
-        hojas = grp.get("hojas", []) or []
-        costo_total = sum(
-            float(h.get("precio_placa", 0.0) or 0.0)
-            for h in hojas
-            if hoja_cuenta_para_deduccion(h)
-        )
-        costo_empresa = sum(
-            float(h.get("precio_placa", 0.0) or 0.0)
-            for h in hojas
-            if hoja_cuenta_para_deduccion(h)
-            and str(h.get("origen_placa", "EMPRESA")).upper() == "EMPRESA"
-        )
-        costo_proveedor = sum(
-            float(h.get("precio_placa", 0.0) or 0.0)
-            for h in hojas
-            if hoja_cuenta_para_deduccion(h)
-            and str(h.get("origen_placa", "EMPRESA")).upper() != "EMPRESA"
-        )
-        grp["costo_total"] = costo_total
-        grp["costo_empresa"] = costo_empresa
-        grp["costo_proveedor"] = costo_proveedor
+        recalcular_costos_grupo(grp)
 
     def _llenar_placa_desde_otras_hojas(self, clave, hoja_objetivo):
         grupo = self.app.resultados_nesting.get(clave, {})

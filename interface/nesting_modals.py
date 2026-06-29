@@ -86,107 +86,94 @@ def abrir_modal_configuracion(parent):
 
 
 def abrir_modal_costos(parent):
-    ventana = ctk.CTkToplevel(parent)
-    ventana.title("Reporte Económico del Proyecto")
-    ventana.geometry("480x550") 
-    ventana.configure(fg_color="#F8FAFC")
-    ventana.attributes('-topmost', True)
-    ventana.grab_set()
-    
-    try: centrar_en_monitor_actual(ventana, parent)
-    except: pass
-    
-    ctk.CTkLabel(ventana, text="💲 RESUMEN DE INVERSIÓN", font=("Inter", 16, "bold"), text_color="#0F172A").pack(pady=(25, 10))
-    
-    tc = float(getattr(parent, "tipo_cambio_usdmxn", 18.50) or 18.50)
-    fuente_tc = str(getattr(parent, "tipo_cambio_fuente", "FALLBACK"))
-    ts_tc = str(getattr(parent, "tipo_cambio_actualizado", ""))
+    from interface.nesting_costos import aplicar_totales_a_tab, calcular_reporte_costos
 
-    ctk.CTkLabel(ventana, text=f"MXN: ${parent.costo_mxn_val:,.2f}", font=("Inter", 24, "bold"), text_color="#10B981").pack()
-    ctk.CTkLabel(ventana, text=f"USD: ${parent.costo_usd_val:,.2f}", font=("Inter", 16, "bold"), text_color="#64748B").pack(pady=(0, 4))
+    if hasattr(parent, "_actualizar_tipo_cambio"):
+        parent._actualizar_tipo_cambio()
+
+    resultados = getattr(parent.app, "resultados_nesting", None) or {}
+    reporte = calcular_reporte_costos(
+        resultados,
+        app=parent.app,
+        lote_idx=int(getattr(parent, "lote_actual_idx", 0) or 0),
+        tab=parent,
+    )
+    tc = float(getattr(parent, "tipo_cambio_usdmxn", 18.50) or 18.50)
+    aplicar_totales_a_tab(parent, reporte, tc)
+
+    ventana = ctk.CTkToplevel(parent)
+    ventana.title("Costos del nesteo actual")
+    ventana.geometry("440x520")
+    ventana.configure(fg_color="#F8FAFC")
+    ventana.attributes("-topmost", True)
+    # No modal: el usuario puede seguir trabajando el canvas.
+    try:
+        centrar_en_monitor_actual(ventana, parent)
+    except Exception:
+        pass
+
     ctk.CTkLabel(
         ventana,
-        text=f"TC DOF usado: {tc:,.4f} MXN/USD ({fuente_tc})",
+        text="Costos del nesteo actual",
+        font=("Inter", 16, "bold"),
+        text_color="#0F172A",
+    ).pack(pady=(20, 4))
+    ctk.CTkLabel(
+        ventana,
+        text="Independiente del historial WO · refleja movimientos y renest",
         font=("Inter", 10),
-        text_color="#64748B"
-    ).pack()
-    if ts_tc:
-        ctk.CTkLabel(ventana, text=f"Actualizado: {ts_tc}", font=("Inter", 9), text_color="#94A3B8").pack(pady=(0, 10))
+        text_color="#64748B",
+    ).pack(pady=(0, 10))
+
+    total_mxn = float(reporte.get("total_mxn") or 0.0)
+    total_usd = (total_mxn / tc) if tc > 0 else 0.0
+    ctk.CTkLabel(ventana, text=f"${total_mxn:,.2f} MXN", font=("Inter", 24, "bold"), text_color="#10B981").pack()
+    ctk.CTkLabel(ventana, text=f"${total_usd:,.2f} USD", font=("Inter", 14, "bold"), text_color="#64748B").pack(pady=(0, 6))
+
+    fuente_tc = str(getattr(parent, "tipo_cambio_fuente", "FALLBACK"))
+    ts_tc = str(getattr(parent, "tipo_cambio_actualizado", "") or "")
+    ctk.CTkLabel(
+        ventana,
+        text=f"TC DOF: {tc:,.4f} ({fuente_tc})" + (f" · {ts_tc}" if ts_tc else ""),
+        font=("Inter", 9),
+        text_color="#94A3B8",
+    ).pack(pady=(0, 8))
+
+    ctk.CTkLabel(
+        ventana,
+        text=(
+            f"Stock interno: ${reporte.get('total_empresa_mxn', 0):,.2f} MXN · "
+            f"{reporte.get('placas_total', 0)} placas · "
+            f"{reporte.get('barras_largos_total', 0)} barras largos"
+        ),
+        font=("Inter", 12, "bold"),
+        text_color="#0EA5E9",
+    ).pack(pady=(0, 8))
+
+    ctk.CTkLabel(ventana, text="Por calibre / material y largos", font=("Inter", 12, "bold"), text_color="#1E293B").pack(
+        pady=(8, 4), padx=24, anchor="w"
+    )
+
+    scroll = ctk.CTkScrollableFrame(ventana, fg_color="#FFFFFF", corner_radius=10)
+    scroll.pack(fill="both", expand=True, padx=20, pady=(0, 12))
+    lineas = reporte.get("lineas") or []
+    if lineas:
+        for item in lineas:
+            costo = float(item.get("costo_mxn") or 0.0)
+            usd = (costo / tc) if tc > 0 else 0.0
+            n_pl = int(item.get("placas") or 0)
+            unidad = "barra(s)" if item.get("tipo_linea") == "largos" else "placa(s)"
+            txt = (
+                f"[{item.get('etiqueta', '')}] {format_clave_calibre_display(item.get('clave', '')) if item.get('tipo_linea') != 'largos' else item.get('clave_display', item.get('clave', ''))}\n"
+                f"{n_pl} {unidad} · ${costo:,.2f} MXN · ${usd:,.2f} USD"
+            )
+            ctk.CTkLabel(scroll, text=txt, font=("Inter", 11), text_color="#334155", anchor="w", justify="left").pack(
+                fill="x", padx=8, pady=4
+            )
     else:
-        ctk.CTkLabel(ventana, text="", font=("Inter", 9), text_color="#94A3B8").pack(pady=(0, 10))
-    
-    total_mxn_empresa = 0.0
-    total_mxn_proveedor = 0.0
-    desglose_UI = []
+        ctk.CTkLabel(scroll, text="Sin placas con costo.", text_color="#64748B").pack(pady=12)
 
-    if hasattr(parent.app, 'resultados_nesting') and parent.app.resultados_nesting:
-        for clave, info in parent.app.resultados_nesting.items():
-            costo_mat_emp = 0.0
-            costo_mat_prov = 0.0
-            
-            for hoja in info.get("hojas", []):
-                if hoja.get("es_retazo", False) or hoja.get("ignorar_deduccion"):
-                    continue
-                precio = hoja.get("precio_placa", 0.0)
-                origen = hoja.get("origen_placa", "EMPRESA")
-
-                if origen == "PROVEEDOR":
-                    costo_mat_prov += precio
-                else:
-                    costo_mat_emp += precio
-            
-            total_mxn_empresa += costo_mat_emp
-            total_mxn_proveedor += costo_mat_prov
-            
-            costo_total_mat = costo_mat_emp + costo_mat_prov
-            
-            if costo_mat_emp > 0 and costo_mat_prov == 0:
-                etiqueta = "🏢 [EMP]"
-            elif costo_mat_prov > 0 and costo_mat_emp == 0:
-                etiqueta = "🚚 [PROV]"
-            elif costo_mat_prov > 0 and costo_mat_emp > 0:
-                etiqueta = "🏢/🚚 [MIX]"
-            else:
-                etiqueta = "📦 [RET]" 
-                
-            desglose_UI.append({
-                "clave": clave,
-                "etiqueta": etiqueta,
-                "total": costo_total_mat
-            })
-
-    frame_origen = ctk.CTkFrame(ventana, fg_color="transparent")
-    frame_origen.pack(fill="x", padx=40, pady=(0, 15))
-    
-    ctk.CTkLabel(frame_origen, text=f"🏢 Stock Interno: ${total_mxn_empresa:,.2f} MXN", font=("Inter", 13, "bold"), text_color="#0EA5E9").pack(side="top", anchor="center")
-    ctk.CTkLabel(frame_origen, text=f"🚚 Gasto Proveedor: ${total_mxn_proveedor:,.2f} MXN", font=("Inter", 13, "bold"), text_color="#EF4444").pack(side="top", anchor="center", pady=(2,0))
-
-    ctk.CTkLabel(ventana, text="📦 DESGLOSE POR MATERIAL", font=("Inter", 12, "bold"), text_color="#1E293B").pack(pady=(10, 5), padx=30, anchor="w")
-    
-    frame_desglose = ctk.CTkScrollableFrame(ventana, fg_color="#FFFFFF", border_width=1, border_color="#CBD5E1", height=150)
-    frame_desglose.pack(fill="both", expand=True, padx=30, pady=(0, 20))
-    
-    if desglose_UI:
-        for item in desglose_UI:
-            f_item = ctk.CTkFrame(frame_desglose, fg_color="transparent")
-            f_item.pack(fill="x", pady=2)
-            
-            texto_mostrar = f"{item['etiqueta']} {item['clave']}"
-            
-            ctk.CTkLabel(f_item, text=texto_mostrar, font=("Inter", 11), text_color="#1E293B").pack(side="left")
-            total_mxn = float(item["total"] or 0.0)
-            total_usd = (total_mxn / tc) if tc > 0 else 0.0
-            ctk.CTkLabel(
-                f_item,
-                text=f"${total_mxn:,.2f} MXN  |  ${total_usd:,.2f} USD",
-                font=("Inter", 11, "bold"),
-                text_color="#0F172A"
-            ).pack(side="right")
-    else:
-        ctk.CTkLabel(frame_desglose, text="No hay datos de nesting calculados.", font=("Inter", 11, "italic")).pack(pady=20)
-    
-    btn_cerrar = ctk.CTkButton(ventana, text="CERRAR REPORTE", font=("Inter", 12, "bold"), fg_color="#1E293B", hover_color="#475569", height=40, command=ventana.destroy)
-    btn_cerrar.pack(padx=30, pady=(0, 25), fill="x")
+    ctk.CTkButton(ventana, text="Cerrar", command=ventana.destroy).pack(pady=(0, 16))
 
 
 def mostrar_modal_escenarios(parent, escenarios_resultados):

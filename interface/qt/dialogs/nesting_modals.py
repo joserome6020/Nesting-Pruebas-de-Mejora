@@ -18,8 +18,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from interface.nesting_costos import aplicar_totales_a_tab, calcular_reporte_costos
 from interface.qt.theme import (
+    COLOR_ACENTO,
     COLOR_BORDE,
+    COLOR_EXITO,
     COLOR_GRIS_DARK,
     COLOR_TEXTO_SECUNDARIO,
     COLOR_TEXTO_TITULO,
@@ -102,89 +105,193 @@ def abrir_modal_configuracion(parent):
     dlg.exec()
 
 
-def abrir_modal_costos(parent):
-    dlg = QDialog(parent)
-    dlg.setWindowTitle("Reporte Económico del Proyecto")
-    dlg.setModal(True)
-    dlg.resize(480, 550)
-    dlg.setStyleSheet(surface_dialog_stylesheet())
+class CostosOrdenDialog(QDialog):
+    """Ventana no modal: costos del nesteo actual (mismo estilo que escenarios WO)."""
 
-    lay = QVBoxLayout(dlg)
-    tit = QLabel("RESUMEN DE INVERSIÓN", alignment=Qt.AlignmentFlag.AlignCenter)
-    tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
-    lay.addWidget(tit)
+    def __init__(self, parent, reporte: dict, tc: float, meta_tc: dict):
+        super().__init__(parent)
+        self._parent_tab = parent
+        self.setWindowTitle("Costos del nesteo actual")
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setModal(False)
+        self.resize(480, 560)
+        self.setStyleSheet(surface_dialog_stylesheet())
 
-    tc = float(getattr(parent, "tipo_cambio_usdmxn", 18.50) or 18.50)
-    fuente_tc = str(getattr(parent, "tipo_cambio_fuente", "FALLBACK"))
-    ts_tc = str(getattr(parent, "tipo_cambio_actualizado", ""))
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 16)
+        root.setSpacing(10)
 
-    lay.addWidget(QLabel(f"MXN: ${parent.costo_mxn_val:,.2f}", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel(f"USD: ${parent.costo_usd_val:,.2f}", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel(f"TC DOF usado: {tc:,.4f} MXN/USD ({fuente_tc})", alignment=Qt.AlignmentFlag.AlignCenter))
-    if ts_tc:
-        lay.addWidget(QLabel(f"Actualizado: {ts_tc}", alignment=Qt.AlignmentFlag.AlignCenter))
+        tit = QLabel("COSTOS DEL NESTEO ACTUAL", alignment=Qt.AlignmentFlag.AlignCenter)
+        tit.setStyleSheet(f"font-weight:700;font-size:15px;color:{COLOR_TEXTO_TITULO};")
+        root.addWidget(tit)
+        sub = QLabel(
+            "Refleja movimientos, renest y switches de compra · no es el historial WO",
+            alignment=Qt.AlignmentFlag.AlignCenter,
+        )
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+        root.addWidget(sub)
 
-    total_mxn_empresa = 0.0
-    total_mxn_proveedor = 0.0
-    desglose_UI = []
+        total_mxn = float(reporte.get("total_mxn") or 0.0)
+        total_usd = (total_mxn / tc) if tc > 0 else 0.0
+        card = QWidget()
+        card.setObjectName("LightCard")
+        card.setStyleSheet(
+            f"QWidget#LightCard{{background:#FFFFFF;border:2px solid #3B82F6;"
+            f"border-radius:12px;}}"
+        )
+        card_l = QVBoxLayout(card)
+        card_l.setContentsMargins(16, 14, 16, 14)
+        lbl_mxn = QLabel(f"${total_mxn:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_mxn.setStyleSheet(f"font-size:24px;font-weight:800;color:{COLOR_EXITO};")
+        lbl_usd = QLabel(f"${total_usd:,.2f} USD", alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_usd.setStyleSheet(f"font-size:14px;font-weight:600;color:{COLOR_TEXTO_SECUNDARIO};")
+        card_l.addWidget(lbl_mxn)
+        card_l.addWidget(lbl_usd)
+        root.addWidget(card)
 
-    if hasattr(parent.app, "resultados_nesting") and parent.app.resultados_nesting:
-        for clave, info in parent.app.resultados_nesting.items():
-            costo_mat_emp = 0.0
-            costo_mat_prov = 0.0
-            for hoja in info.get("hojas", []):
-                if hoja.get("es_retazo", False) or hoja.get("ignorar_deduccion"):
-                    continue
-                precio = hoja.get("precio_placa", 0.0)
-                origen = hoja.get("origen_placa", "EMPRESA")
-                if origen == "PROVEEDOR":
-                    costo_mat_prov += precio
-                else:
-                    costo_mat_emp += precio
-            total_mxn_empresa += costo_mat_emp
-            total_mxn_proveedor += costo_mat_prov
-            costo_total_mat = costo_mat_emp + costo_mat_prov
-            if costo_mat_emp > 0 and costo_mat_prov == 0:
-                etiqueta = "[EMP]"
-            elif costo_mat_prov > 0 and costo_mat_emp == 0:
-                etiqueta = "[PROV]"
-            elif costo_mat_prov > 0 and costo_mat_emp > 0:
-                etiqueta = "[MIX]"
-            else:
-                etiqueta = "[RET]"
-            desglose_UI.append({"clave": clave, "etiqueta": etiqueta, "total": costo_total_mat})
-
-    lay.addWidget(QLabel(f"Stock Interno: ${total_mxn_empresa:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel(f"Gasto Proveedor: ${total_mxn_proveedor:,.2f} MXN", alignment=Qt.AlignmentFlag.AlignCenter))
-    lay.addWidget(QLabel("DESGLOSE POR MATERIAL"))
-
-    scroll = QScrollArea()
-    scroll.setWidgetResizable(True)
-    inner = QWidget()
-    inner_lay = QVBoxLayout(inner)
-    if desglose_UI:
-        for item in desglose_UI:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(f"{item['etiqueta']} {format_clave_calibre_display(item['clave'])}"))
-            total_mxn = float(item["total"] or 0.0)
-            total_usd = (total_mxn / tc) if tc > 0 else 0.0
-            row.addWidget(
-                QLabel(f"${total_mxn:,.2f} MXN  |  ${total_usd:,.2f} USD"),
-                alignment=Qt.AlignmentFlag.AlignRight,
+        row_split = QHBoxLayout()
+        row_split.setSpacing(8)
+        emp = float(reporte.get("total_empresa_mxn") or 0.0)
+        placas = int(reporte.get("placas_total") or 0)
+        barras_lg = int(reporte.get("barras_largos_total") or 0)
+        for txt, val, col, es_moneda in (
+            ("Stock interno", emp, "#0EA5E9", True),
+            ("Placas", placas, COLOR_ACENTO, False),
+            ("Perfiles MRL", barras_lg, "#EA580C", False),
+        ):
+            val_txt = f"${val:,.0f}" if es_moneda else str(int(val))
+            box = QLabel(f"{txt}\n{val_txt}")
+            box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            box.setStyleSheet(
+                f"background:#FFFFFF;border:1px solid {COLOR_BORDE};border-radius:10px;"
+                f"padding:10px;font-size:11px;font-weight:600;color:{col};"
             )
-            inner_lay.addLayout(row)
-    else:
-        inner_lay.addWidget(QLabel("No hay datos de nesting calculados."))
-    scroll.setWidget(inner)
-    lay.addWidget(scroll, 1)
+            row_split.addWidget(box)
+        root.addLayout(row_split)
 
-    btn_cerrar = QPushButton("CERRAR REPORTE")
-    apply_push_button(btn_cerrar, "#FFFFFF", font_size=11)
-    btn_cerrar.clicked.connect(dlg.accept)
-    lay.addWidget(btn_cerrar)
+        tc_txt = f"TC {tc:,.4f} ({meta_tc.get('fuente', 'FALLBACK')})"
+        if meta_tc.get("actualizado"):
+            tc_txt += f" · {meta_tc['actualizado']}"
+        lbl_tc = QLabel(tc_txt, alignment=Qt.AlignmentFlag.AlignCenter)
+        lbl_tc.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:10px;")
+        root.addWidget(lbl_tc)
 
-    _centrar_dialogo(dlg, parent)
-    dlg.exec()
+        lbl_des = QLabel("Por calibre / material y largos")
+        lbl_des.setStyleSheet(f"font-weight:700;font-size:12px;color:{COLOR_TEXTO_TITULO};")
+        root.addWidget(lbl_des)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(8)
+        lineas = reporte.get("lineas") or []
+        if lineas:
+            for item in lineas:
+                row_w = QWidget()
+                row_w.setObjectName("LightCard")
+                row_w.setStyleSheet(
+                    f"QWidget#LightCard{{background:#FFFFFF;border:1px solid {COLOR_BORDE};"
+                    f"border-radius:12px;}}"
+                )
+                rl = QVBoxLayout(row_w)
+                rl.setContentsMargins(14, 12, 14, 12)
+                top = QHBoxLayout()
+                etiqueta = str(item.get("etiqueta") or "")
+                if etiqueta == "LARGOS":
+                    badge_style = (
+                        "font-size:10px;font-weight:700;color:#C2410C;background:#FFF7ED;"
+                        "padding:2px 6px;border-radius:4px;"
+                    )
+                else:
+                    badge_style = (
+                        "font-size:10px;font-weight:700;color:#1D4ED8;background:#EFF6FF;"
+                        "padding:2px 6px;border-radius:4px;"
+                    )
+                badge = QLabel(f"[{etiqueta}]")
+                badge.setStyleSheet(badge_style)
+                top.addWidget(badge)
+                nom = QLabel(str(item.get("clave_display") or item.get("clave") or ""))
+                nom.setWordWrap(True)
+                nom.setStyleSheet(f"font-weight:600;font-size:12px;color:{COLOR_TEXTO_TITULO};")
+                top.addWidget(nom, 1)
+                rl.addLayout(top)
+                n_pl = int(item.get("placas") or 0)
+                costo = float(item.get("costo_mxn") or 0.0)
+                usd = (costo / tc) if tc > 0 else 0.0
+                unidad = "barra(s)" if item.get("tipo_linea") == "largos" else "placa(s)"
+                det = QLabel(f"{n_pl} {unidad} · ${costo:,.2f} MXN · ${usd:,.2f} USD")
+                det.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-weight:600;font-size:11px;")
+                rl.addWidget(det)
+                inner_lay.addWidget(row_w)
+        else:
+            vacio = QLabel("Sin placas con costo en el nesteo actual.", alignment=Qt.AlignmentFlag.AlignCenter)
+            vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:16px;")
+            inner_lay.addWidget(vacio)
+        inner_lay.addStretch()
+        scroll.setWidget(inner)
+        root.addWidget(scroll, 1)
+
+        btn_ref = QPushButton("ACTUALIZAR")
+        apply_push_button(btn_ref, COLOR_GRIS_DARK, font_size=11, padding="10px 16px")
+        btn_ref.clicked.connect(self._refrescar)
+        root.addWidget(btn_ref)
+
+        _centrar_dialogo(self, parent)
+
+    def _refrescar(self):
+        p = self._parent_tab
+        if p is None:
+            return
+        self.close()
+        abrir_modal_costos(p)
+
+    def closeEvent(self, event):
+        p = self._parent_tab
+        if p is not None and getattr(p, "_dlg_costos", None) is self:
+            p._dlg_costos = None
+        super().closeEvent(event)
+
+
+def abrir_modal_costos(parent):
+    """Muestra costos en vivo del nesteo actual (independiente de HISTORIAL DE W.O.)."""
+    dlg = getattr(parent, "_dlg_costos", None)
+    if dlg is not None:
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+            return
+        except RuntimeError:
+            parent._dlg_costos = None
+
+    if hasattr(parent, "_actualizar_tipo_cambio"):
+        parent._actualizar_tipo_cambio()
+
+    resultados = getattr(parent.app, "resultados_nesting", None) or {}
+    reporte = calcular_reporte_costos(
+        resultados,
+        app=parent.app,
+        lote_idx=int(getattr(parent, "lote_actual_idx", 0) or 0),
+        tab=parent,
+    )
+    tc = float(getattr(parent, "tipo_cambio_usdmxn", 18.50) or 18.50)
+    aplicar_totales_a_tab(parent, reporte, tc)
+
+    meta_tc = {
+        "fuente": str(getattr(parent, "tipo_cambio_fuente", "FALLBACK")),
+        "actualizado": str(getattr(parent, "tipo_cambio_actualizado", "") or ""),
+    }
+
+    dlg = CostosOrdenDialog(parent, reporte, tc, meta_tc)
+    parent._dlg_costos = dlg
+    dlg.show()
 
 
 def mostrar_modal_escenarios(parent, escenarios_resultados):
