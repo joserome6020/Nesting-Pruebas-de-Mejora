@@ -91,6 +91,8 @@ from modules.nesting_engine.efficiency_metrics import (
     formatear_eficiencias_placa,
     formatear_eficiencias_tanque,
     hoja_cuenta_para_deduccion,
+    hoja_es_sobrante_sin_compra,
+    hoja_excluida_de_rtz_sobrante,
     inicializar_contador_rtz_sobrante,
     inicializar_contador_rtzc_sobrante,
     placa_debe_mostrar_opcion_ignorar,
@@ -2441,6 +2443,29 @@ class TabNesting(QWidget, TimerHost):
                         lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
                     ),
                 )
+            info_grupo = (self.app.resultados_nesting or {}).get(clave)
+            puede_sobrante_forzado = (
+                not hoja_excluida_de_rtz_sobrante(hoja)
+                and not self._es_grupo_cobre(clave, info_grupo)
+            )
+            if puede_sobrante_forzado:
+                menu.addSeparator()
+                if hoja_es_sobrante_sin_compra(hoja):
+                    menu.addAction(
+                        "QUITAR SOBRANTE (forzado)",
+                        self._safe_ctx(
+                            "Quitar sobrante",
+                            lambda c=clave, h=hoja: self._toggle_ignorar_deduccion_placa(c, h, False),
+                        ),
+                    )
+                else:
+                    menu.addAction(
+                        "MARCAR COMO SOBRANTE (forzado)",
+                        self._safe_ctx(
+                            "Sobrante forzado",
+                            lambda c=clave, h=hoja: self._toggle_ignorar_deduccion_placa(c, h, True),
+                        ),
+                    )
             sub_cambiar = QMenu("CAMBIAR DE PLACA", menu)
             sub_cambiar.aboutToShow.connect(
                 lambda sm=sub_cambiar, c=clave, h=hoja: self._rellenar_submenu_cambiar_placa(sm, c, h)

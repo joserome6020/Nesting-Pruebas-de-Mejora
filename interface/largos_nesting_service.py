@@ -947,7 +947,7 @@ def enviar_pedido_largos_filtrado(
 ) -> tuple[bool, str]:
     if not str(orden_id or "").strip():
         return False, "No hay WO/SWO asociada. Exporta el nesting antes de enviar el pedido."
-    asegurar_tabla_material_requerido_ldg()
+    asegurar_tabla_material_requerido_ldg(_db_config())
     conexion = None
     cursor = None
     try:

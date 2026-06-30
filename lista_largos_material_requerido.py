@@ -17,7 +17,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 DB_CONFIG = {
-    "host": os.getenv("NESTING_DB_HOST", "localhost"),
+    "host": os.getenv("NESTING_DB_HOST", "192.168.2.80"),
     "database": os.getenv("NESTING_DB_NAME", "nestingpro_db"),
     "user": os.getenv("NESTING_DB_USER", "postgres"),
     "password": os.getenv("NESTING_DB_PASSWORD", "nesting123"),
@@ -32,6 +32,7 @@ def _resolver_db_config(db_config: dict | None = None) -> dict:
         cfg = dict(db_config)
         if "database" not in cfg and cfg.get("dbname"):
             cfg["database"] = cfg["dbname"]
+        cfg.pop("dbname", None)
         return cfg
     return dict(DB_CONFIG)
 

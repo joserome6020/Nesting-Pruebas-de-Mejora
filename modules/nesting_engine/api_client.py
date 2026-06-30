@@ -1,6 +1,10 @@
 import json
+import re
 import urllib.request
 import urllib.parse
+import urllib.error
+
+CENTRALIZED_BASE_URL = "http://192.168.2.80:8003"
 
 def enviar_reporte_a_api(nombre_swo, datos_resultados):
     """Envía el reporte del acomodo al servidor."""
@@ -45,7 +49,7 @@ def avanzar_swo_centralizado(swo_id):
     
     Endpoint: POST /nesting/swo/auto-advance {"swo_id": "SWO-001"}
     """
-    base_url = "http://192.168.2.80:8003"
+    base_url = CENTRALIZED_BASE_URL
     url = f"{base_url}/nesting/swo/auto-advance"
     
     try:
@@ -64,6 +68,82 @@ def avanzar_swo_centralizado(swo_id):
         return False
 
 
+def _get_json(url, timeout=5):
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _listar_jobs_centralizado(timeout=8):
+    return _get_json(f"{CENTRALIZED_BASE_URL}/jobs", timeout=timeout) or []
+
+
+def _tokens_job_centralizado(job_number: str) -> set[str]:
+    raw = str(job_number or "").strip().upper()
+    if not raw:
+        return set()
+    parts = re.split(r"[^A-Z0-9]+", raw)
+    return {p for p in parts if len(p) >= 4}
+
+
+def resolver_job_centralizado(job_number: str) -> tuple[str | None, dict | None]:
+    """
+    Resuelve el job_number del VSM cuando el nesting usa otro alias de carpeta.
+    Ej.: nesting `06-30-2275TANK25325` -> VSM `06-30-2275TANK_HEADIRON25325`.
+    """
+    job_in = str(job_number or "").strip()
+    if not job_in:
+        return None, None
+
+    url_get = (
+        f"{CENTRALIZED_BASE_URL}/jobs/by-number/"
+        f"{urllib.parse.quote(job_in)}"
+    )
+    try:
+        data = _get_json(url_get)
+        resolved = str(data.get("job_number") or job_in).strip()
+        return resolved, data
+    except urllib.error.HTTPError as err:
+        if err.code != 404:
+            raise
+
+    tokens = _tokens_job_centralizado(job_in)
+    if not tokens:
+        return None, None
+
+    candidatos: list[tuple[int, dict]] = []
+    for item in _listar_jobs_centralizado():
+        if not isinstance(item, dict):
+            continue
+        numero = str(item.get("job_number") or "").strip()
+        if not numero:
+            continue
+        local_path = str(item.get("local_path") or "").replace("\\", "/").upper()
+        numero_up = numero.upper()
+        score = 0
+        if job_in.upper() in numero_up or numero_up in job_in.upper():
+            score += 8
+        if job_in.upper() in local_path:
+            score += 12
+        score += sum(2 for tok in tokens if tok in numero_up)
+        score += sum(3 for tok in tokens if tok in local_path)
+        if score > 0:
+            candidatos.append((score, item))
+
+    if not candidatos:
+        return None, None
+
+    candidatos.sort(key=lambda x: (-x[0], str(x[1].get("job_number") or "")))
+    mejor = candidatos[0][1]
+    resolved = str(mejor.get("job_number") or "").strip()
+    if resolved and resolved.upper() != job_in.upper():
+        print(
+            f"[CENTRALIZED] Job '{job_in}' resuelto como '{resolved}' "
+            f"(alias VSM)."
+        )
+    return resolved or None, mejor
+
+
 def avanzar_job_centralizado(job_number):
     """
     Al exportar DXF/STEP desde Nesting, marca el job en "Ingeniería Finalizado"
@@ -74,16 +154,17 @@ def avanzar_job_centralizado(job_number):
     - Job en 'inventor' -> lo marca directamente como finalizado
     - Job en otra etapa -> se omite para no retroceder el flujo
     """
-    base_url = "http://192.168.2.80:8003"
+    base_url = CENTRALIZED_BASE_URL
 
-    # 1. Buscar el job por número
-    url_get = f"{base_url}/jobs/by-number/{urllib.parse.quote(str(job_number).strip())}"
     try:
-        req_get = urllib.request.Request(url_get, method='GET')
-        with urllib.request.urlopen(req_get, timeout=5) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            job_id = data.get("id")
-            job_status = (data.get("status") or "").strip().lower()
+        resolved, data = resolver_job_centralizado(job_number)
+        if not data or not resolved:
+            print(f"[CENTRALIZED] Job '{job_number}' no encontrado en CentralizedSystem.")
+            return False
+
+        job_id = data.get("id")
+        job_status = (data.get("status") or "").strip().lower()
+        job_number = resolved
 
         if not job_id:
             print(f"[CENTRALIZED] Job '{job_number}' no encontrado en CentralizedSystem.")
@@ -154,15 +235,32 @@ def trigger_pedido_po(job_number):
     API en Docker: 192.168.2.80:8005/crearPedido
     """
     url = "http://192.168.2.80:8005/crearPedido/"
+    job_in = str(job_number or "").strip()
+    job_vsm, _ = resolver_job_centralizado(job_in)
+    candidatos = []
+    for candidato in (job_in, job_vsm):
+        c = str(candidato or "").strip()
+        if c and c not in candidatos:
+            candidatos.append(c)
     try:
-        print(f"[PEDIDO-PO] Disparando Pedido para Job '{job_number}'...")
-        code, body = _post_json(url, {"jobNumber": str(job_number).strip()}, timeout=30)
-        if code in (200, 201):
-            print(f"[PEDIDO-PO] Pedido creado exitosamente para Job '{job_number}'. Datos: {body.get('datosCreados', [])}")
-            return True
-        else:
-            print(f"[PEDIDO-PO] Error al crear pedido para Job '{job_number}'. Codigo: {code}")
-            return False
+        ultimo_error = None
+        for job_try in candidatos:
+            print(f"[PEDIDO-PO] Disparando Pedido para Job '{job_try}'...")
+            try:
+                code, body = _post_json(url, {"jobNumber": job_try}, timeout=30)
+                if code in (200, 201):
+                    print(
+                        f"[PEDIDO-PO] Pedido creado exitosamente para Job '{job_try}'. "
+                        f"Datos: {body.get('datosCreados', [])}"
+                    )
+                    return True
+                print(f"[PEDIDO-PO] Error al crear pedido para Job '{job_try}'. Codigo: {code}")
+            except Exception as e:
+                ultimo_error = e
+                print(f"[PEDIDO-PO][WARN] Job '{job_try}': {e}")
+        if ultimo_error:
+            raise ultimo_error
+        return False
     except Exception as e:
         print(f"[PEDIDO-PO][ERROR] Fallo al crear pedido para Job '{job_number}': {str(e)}")
         return False
