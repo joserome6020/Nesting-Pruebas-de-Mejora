@@ -1104,10 +1104,12 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     propagar_material=False,
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
-                _reportar_pedidos_material(
-                    resultado_largos.get("pedidos_material"),
-                    f"import job='{job_original}'",
-                )
+                pedidos = resultado_largos.get("pedidos_material")
+                if pedidos:
+                    _reportar_pedidos_material(
+                        pedidos,
+                        f"import job='{job_original}'",
+                    )
             except Exception as e:
                 print(
                     f"[BD][LISTA_LARGOS][WARN] No se pudo importar la lista de largos "

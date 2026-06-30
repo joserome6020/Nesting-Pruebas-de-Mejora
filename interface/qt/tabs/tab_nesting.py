@@ -1256,6 +1256,7 @@ class TabNesting(QWidget, TimerHost):
         self.app.resultados_multilote[self.lote_actual_idx]["data"] = nuevo_resultado
         self.app.resultados_nesting = nuevo_resultado
         self.app.lote_editado_dirty = False
+        self.app.resultados_multilote[self.lote_actual_idx].pop("gemelo_desync", None)
         self._replicar_lote_activo_a_gemelos()
 
         try:
@@ -1714,13 +1715,46 @@ class TabNesting(QWidget, TimerHost):
         if activar_primero:
             self.on_lote_selected(opciones[idx_sel])
 
+    def _persistir_lote_saliente(self, old_idx, *, nuevo_idx=None):
+        """Guarda resultados_nesting en el slot multilote al cambiar de WO (no al cargar)."""
+        if nuevo_idx is not None and int(old_idx) == int(nuevo_idx):
+            return
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        li = int(old_idx)
+        if not ml or li < 0 or li >= len(ml):
+            return
+        rn = getattr(self.app, "resultados_nesting", None)
+        if not isinstance(rn, dict) or not rn:
+            return
+        slot = ml[li].get("data")
+        if slot is rn:
+            return
+        if ml[li].get("gemelo_desync"):
+            ml[li]["data"] = copy.deepcopy(rn)
+        else:
+            ml[li]["data"] = rn
+
+    def _cargar_resultados_lote_idx(self, idx):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        li = int(idx)
+        if not ml or li < 0 or li >= len(ml):
+            self.app.resultados_nesting = {}
+            return
+        slot = ml[li].get("data")
+        if ml[li].get("gemelo_desync") and isinstance(slot, dict):
+            self.app.resultados_nesting = copy.deepcopy(slot)
+            ml[li]["data"] = self.app.resultados_nesting
+        else:
+            self.app.resultados_nesting = slot or {}
+
     def on_lote_selected(self, val, *, sync_parts: bool = True):
         try:
             idx = [self.cmb_lotes.itemText(i) for i in range(self.cmb_lotes.count())].index(val)
-            self.lote_actual_idx = idx
+            old_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
+            self._persistir_lote_saliente(old_idx, nuevo_idx=idx)
 
-            # Resultado visual del lote seleccionado
-            self.app.resultados_nesting = self.app.resultados_multilote[idx]["data"]
+            self.lote_actual_idx = idx
+            self._cargar_resultados_lote_idx(idx)
 
             # NUEVO: mover también el set editable del lote activo
             if (
@@ -2199,9 +2233,12 @@ class TabNesting(QWidget, TimerHost):
                 self._crear_switch_ignorar_cu_grupo(self.lista_hojas, clave, info)
 
             if len(hojas_del_material) == 0:
-                aviso_txt = info.get("error") or info.get("advertencia") or "NO HAY EN INVENTARIO"
+                aviso_txt, aviso_cross = self._texto_aviso_material_grupo(info)
+                if not aviso_txt:
+                    aviso_txt = "NO HAY EN INVENTARIO"
                 err_lbl = QLabel(f"AVISO: {aviso_txt}")
-                err_lbl.setStyleSheet("font-weight:700;color:#EF4444;")
+                color = "#38BDF8" if aviso_cross else "#EF4444"
+                err_lbl.setStyleSheet(f"font-weight:700;color:{color};")
                 err_lbl.setWordWrap(True)
                 scroll_add_widget(self.lista_hojas, err_lbl)
             else:
@@ -3693,23 +3730,33 @@ class TabNesting(QWidget, TimerHost):
         if idx < 0 or idx >= len(resultados_ml):
             return
 
+        if resultados_ml[idx].get("gemelo_desync"):
+            return
+        if self._data_tiene_transferencias_cross_wo(self.app.resultados_nesting):
+            return
+
         lote_k_ref = resultados_ml[idx].get("lote_k")
         data_ref = copy.deepcopy(self.app.resultados_nesting)
         for j, orden in enumerate(resultados_ml):
             if j == idx:
                 continue
-            if orden.get("lote_k") == lote_k_ref:
-                self.app.resultados_multilote[j]["data"] = copy.deepcopy(data_ref)
-                if (
-                    hasattr(self.app, "editable_inputs_by_lote")
-                    and isinstance(self.app.editable_inputs_by_lote, list)
-                    and idx < len(self.app.editable_inputs_by_lote)
-                ):
-                    while len(self.app.editable_inputs_by_lote) <= j:
-                        self.app.editable_inputs_by_lote.append([])
-                    self.app.editable_inputs_by_lote[j] = self._clonar_datos_partes_edicion(
-                        self.app.editable_inputs_by_lote[idx]
-                    )
+            if orden.get("lote_k") != lote_k_ref:
+                continue
+            if orden.get("gemelo_desync"):
+                continue
+            if self._data_tiene_transferencias_cross_wo(orden.get("data")):
+                continue
+            self.app.resultados_multilote[j]["data"] = copy.deepcopy(data_ref)
+            if (
+                hasattr(self.app, "editable_inputs_by_lote")
+                and isinstance(self.app.editable_inputs_by_lote, list)
+                and idx < len(self.app.editable_inputs_by_lote)
+            ):
+                while len(self.app.editable_inputs_by_lote) <= j:
+                    self.app.editable_inputs_by_lote.append([])
+                self.app.editable_inputs_by_lote[j] = self._clonar_datos_partes_edicion(
+                    self.app.editable_inputs_by_lote[idx]
+                )
 
     def _toggle_ignorar_deduccion_cu_grupo(self, clave, info, ignorar: bool):
         if not isinstance(info, dict):
@@ -4017,6 +4064,373 @@ class TabNesting(QWidget, TimerHost):
         self.app.resultados_nesting[clave] = copy.deepcopy(snapshot)
         return True
 
+    def _etiqueta_work_order(self, lote_idx):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if len(ml) <= 1:
+            return ""
+        lk = ml[lote_idx].get("lote_k", "") if 0 <= int(lote_idx) < len(ml) else ""
+        base = f"Work Order {int(lote_idx) + 1}"
+        if lk:
+            return f"{base} [ Lote X{lk} ]"
+        return base
+
+    def _data_tiene_transferencias_cross_wo(self, data):
+        if not isinstance(data, dict):
+            return False
+        for grp in data.values():
+            if not isinstance(grp, dict):
+                continue
+            if grp.get("transferencias_cross_wo_salida") or grp.get("transferencias_cross_wo_entrada"):
+                return True
+        return False
+
+    def _desacoplar_ordenes_multilote(self, *lote_indices):
+        """Clona el data completo de cada WO para romper gemelas compartidas en memoria."""
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        vistos = set()
+        for raw_idx in lote_indices:
+            li = int(raw_idx)
+            if li in vistos or li < 0 or li >= len(ml):
+                continue
+            vistos.add(li)
+            data = ml[li].get("data")
+            if isinstance(data, dict):
+                ml[li]["data"] = copy.deepcopy(data)
+
+    def _marcar_gemelas_desync(self, *lote_indices):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        for raw_idx in lote_indices:
+            li = int(raw_idx)
+            if 0 <= li < len(ml):
+                ml[li]["gemelo_desync"] = True
+
+    def _hoja_en_orden_multilote(self, lote_idx, clave, hoja_idx=None, hoja_ref=None):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        li = int(lote_idx)
+        if li < 0 or li >= len(ml):
+            return None
+        hojas = ((ml[li].get("data") or {}).get(clave) or {}).get("hojas") or []
+        if hoja_idx is not None and 0 <= int(hoja_idx) < len(hojas):
+            return hojas[int(hoja_idx)]
+        if isinstance(hoja_ref, dict):
+            uid = str(hoja_ref.get("sheet_uid") or "").strip()
+            pid = str(hoja_ref.get("placa_id", "") or "")
+            for h in hojas:
+                if h is hoja_ref:
+                    return h
+                if uid and str(h.get("sheet_uid") or "").strip() == uid:
+                    return h
+                if pid and str(h.get("placa_id") or "") == pid and not h.get("es_retazo"):
+                    return h
+        return None
+
+    def _desacoplar_multilote_grupo(self, clave):
+        """
+        WO gemelas pueden compartir el mismo dict de grupo (legacy).
+        Clona el grupo completo por WO antes de transferir cross-WO.
+        """
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if len(ml) < 2:
+            return
+        refs_grupo: dict[int, list[int]] = {}
+        for li, orden in enumerate(ml):
+            grp = (orden.get("data") or {}).get(clave)
+            if isinstance(grp, dict):
+                refs_grupo.setdefault(id(grp), []).append(li)
+        for locs in refs_grupo.values():
+            if len(locs) <= 1:
+                continue
+            canonical = copy.deepcopy(ml[locs[0]]["data"][clave])
+            for li in locs:
+                ml[li]["data"][clave] = copy.deepcopy(canonical)
+
+    def _preparar_transferencia_cross_wo(
+        self, clave, lote_origen_idx, lote_dest_idx, hoja_origen, entry_destino
+    ):
+        self._desacoplar_ordenes_multilote(lote_origen_idx, lote_dest_idx)
+        self._desacoplar_multilote_grupo(clave)
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        li_o = int(lote_origen_idx)
+        li_d = int(lote_dest_idx)
+        if 0 <= li_o < len(ml):
+            self.app.resultados_nesting = ml[li_o].get("data") or {}
+        resultados_dest = ml[li_d].get("data") if 0 <= li_d < len(ml) else {}
+        hoja_o = self._hoja_en_orden_multilote(
+            li_o, clave, hoja_idx=entry_destino.get("_hoja_origen_idx"), hoja_ref=hoja_origen
+        ) or hoja_origen
+        hoja_d = self._hoja_en_orden_multilote(
+            li_d, clave, hoja_idx=entry_destino.get("hoja_idx"), hoja_ref=entry_destino.get("hoja")
+        ) or entry_destino.get("hoja")
+        return hoja_o, hoja_d, resultados_dest
+
+    def _registrar_meta_transferencia_cross_wo(
+        self,
+        clave,
+        lote_origen_idx,
+        lote_dest_idx,
+        placa_origen,
+        placa_destino,
+        movidas,
+    ):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if not ml:
+            return
+        registro = {
+            "cantidad": int(movidas or 0),
+            "placa_origen": str(placa_origen or "Placa"),
+            "placa_destino": str(placa_destino or "Placa"),
+            "wo_origen": self._etiqueta_work_order(lote_origen_idx),
+            "wo_destino": self._etiqueta_work_order(lote_dest_idx),
+        }
+        li_o = int(lote_origen_idx)
+        li_d = int(lote_dest_idx)
+        if 0 <= li_o < len(ml):
+            grp_o = (ml[li_o].get("data") or {}).setdefault(clave, {})
+            if isinstance(grp_o, dict):
+                grp_o.setdefault("transferencias_cross_wo_salida", []).append(
+                    {
+                        "cantidad": registro["cantidad"],
+                        "wo": registro["wo_destino"],
+                        "placa": registro["placa_destino"],
+                    }
+                )
+        if 0 <= li_d < len(ml):
+            grp_d = (ml[li_d].get("data") or {}).setdefault(clave, {})
+            if isinstance(grp_d, dict):
+                grp_d.setdefault("transferencias_cross_wo_entrada", []).append(
+                    {
+                        "cantidad": registro["cantidad"],
+                        "wo": registro["wo_origen"],
+                        "placa": registro["placa_origen"],
+                    }
+                )
+
+    def _texto_aviso_material_grupo(self, info):
+        if not isinstance(info, dict):
+            return None, False
+        salidas = info.get("transferencias_cross_wo_salida") or []
+        if salidas:
+            partes = [
+                f"{t.get('cantidad', '?')} pieza(s) → {t.get('wo', 'otra WO')} · {t.get('placa', 'placa')}"
+                for t in salidas
+            ]
+            return (
+                "Piezas movidas a otra Work Order: " + "; ".join(partes),
+                True,
+            )
+        entradas = info.get("transferencias_cross_wo_entrada") or []
+        adv = str(info.get("advertencia") or "").strip()
+        if entradas and adv.startswith("Inventario incompleto"):
+            partes = [
+                f"{t.get('cantidad', '?')} pieza(s) desde {t.get('wo', 'otra WO')} · {t.get('placa', 'placa')}"
+                for t in entradas
+            ]
+            return (
+                "Incluye piezas recibidas de otra Work Order: " + "; ".join(partes),
+                True,
+            )
+        if adv:
+            return adv, False
+        if info.get("error"):
+            return str(info.get("error")), False
+        return None, False
+
+    def _texto_resumen_transferencia(
+        self,
+        *,
+        movidas,
+        restantes=0,
+        placa_origen,
+        placa_destino,
+        lote_origen_idx,
+        lote_dest_idx,
+        parcial=False,
+    ):
+        wo_orig = self._etiqueta_work_order(lote_origen_idx)
+        wo_dest = self._etiqueta_work_order(lote_dest_idx)
+        cross_wo = int(lote_origen_idx) != int(lote_dest_idx)
+        p_orig = str(placa_origen or "Placa")
+        p_dest = str(placa_destino or "Placa")
+
+        if cross_wo:
+            lineas = [
+                f"Se movieron {movidas} pieza(s).",
+                f"Origen:  {wo_orig} · {p_orig}",
+                f"Destino: {wo_dest} · {p_dest}",
+            ]
+            if restantes > 0:
+                lineas.append(
+                    f"Quedan {restantes} pieza(s) en {wo_orig} · {p_orig}."
+                )
+            elif parcial:
+                lineas.append("No cupieron más piezas con la configuración actual.")
+            else:
+                lineas.append(
+                    f"Las piezas ya están anidadas en {wo_dest} · {p_dest}."
+                )
+            lineas.append(
+                "\nNota: las Work Orders gemelas ya no se sincronizan automáticamente "
+                "tras un movimiento entre órdenes."
+            )
+            return "\n".join(lineas)
+
+        if restantes > 0 or parcial:
+            return (
+                f"Se movieron {movidas} pieza(s) de {p_orig} a {p_dest}.\n"
+                f"Quedan {restantes} pieza(s) en {p_orig}."
+            )
+        return (
+            f"Se movieron {movidas} pieza(s) de {p_orig} a {p_dest}.\n"
+            f"Destino: {p_dest}"
+        )
+
+    def _destinos_transferencia_placa(self, clave, hoja_origen, lote_origen_idx=None):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if lote_origen_idx is None:
+            lote_origen_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
+
+        lotes = [(lote_origen_idx, self.app.resultados_nesting)]
+        if len(ml) > 1:
+            for i, orden in enumerate(ml):
+                if i == lote_origen_idx:
+                    continue
+                data = orden.get("data") or {}
+                if clave in data:
+                    lotes.append((i, data))
+
+        entries = []
+        for lote_idx, resultados in lotes:
+            hojas = (resultados.get(clave) or {}).get("hojas") or []
+            wo = self._etiqueta_work_order(lote_idx)
+            for h_idx, h in enumerate(hojas):
+                if h.get("es_retazo"):
+                    continue
+                if lote_idx == lote_origen_idx and h is hoja_origen:
+                    continue
+                entries.append(
+                    {
+                        "lote_idx": lote_idx,
+                        "hoja": h,
+                        "hoja_idx": h_idx,
+                        "hojas_ctx": hojas,
+                        "resultados": resultados,
+                        "wo_label": wo,
+                    }
+                )
+        return entries
+
+    def _inventario_piezas_multilote_grupo(self, clave):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if len(ml) <= 1:
+            return self._inventario_piezas_grupo(clave)
+        inventario = {}
+        for orden in ml:
+            data = orden.get("data") or {}
+            if clave not in data:
+                continue
+            for nom, cnt in self._inventario_piezas_grupo(clave, data).items():
+                inventario[nom] = inventario.get(nom, 0) + int(cnt)
+        return inventario
+
+    def _snapshot_multilote_grupos(self, clave):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if len(ml) <= 1:
+            snap = self._snapshot_grupo_nesting(clave)
+            return {int(getattr(self, "lote_actual_idx", 0) or 0): snap} if snap else {}
+        snaps = {}
+        for i, orden in enumerate(ml):
+            grp = (orden.get("data") or {}).get(clave)
+            if isinstance(grp, dict):
+                snaps[i] = copy.deepcopy(grp)
+        return snaps
+
+    def _restaurar_multilote_grupos(self, clave, snaps):
+        if not snaps:
+            return False
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if not ml:
+            solo = next(iter(snaps.values()), None)
+            return self._restaurar_grupo_nesting(clave, solo)
+        for i, snap in snaps.items():
+            idx = int(i)
+            if 0 <= idx < len(ml):
+                ml[idx].setdefault("data", {})[clave] = copy.deepcopy(snap)
+        idx_act = int(getattr(self, "lote_actual_idx", 0) or 0)
+        if 0 <= idx_act < len(ml):
+            self.app.resultados_nesting = ml[idx_act].get("data") or {}
+        return True
+
+    def _activar_lote_idx(self, lote_idx):
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        idx = int(lote_idx)
+        if not ml or idx < 0 or idx >= len(ml):
+            return
+        old_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
+        self._persistir_lote_saliente(old_idx, nuevo_idx=idx)
+        if self.cmb_lotes.count() > idx:
+            self.cmb_lotes.setCurrentIndex(idx)
+            return
+        self.lote_actual_idx = idx
+        self._cargar_resultados_lote_idx(idx)
+
+    def _post_transferencia_exito(
+        self,
+        clave,
+        lote_origen_idx,
+        lote_dest_idx,
+        hoja_destino,
+        *,
+        limpiar_seleccion=True,
+        placa_origen=None,
+        placa_destino=None,
+        movidas=0,
+    ):
+        cross_wo = int(lote_origen_idx) != int(lote_dest_idx)
+        if cross_wo and int(movidas or 0) > 0:
+            self._registrar_meta_transferencia_cross_wo(
+                clave,
+                lote_origen_idx,
+                lote_dest_idx,
+                placa_origen or "?",
+                placa_destino or (hoja_destino or {}).get("placa_id", "Placa"),
+                movidas,
+            )
+            self._marcar_gemelas_desync(lote_origen_idx, lote_dest_idx)
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        afectados = {int(lote_origen_idx)}
+        if cross_wo:
+            afectados.add(int(lote_dest_idx))
+
+        prev_rn = self.app.resultados_nesting
+        for idx in sorted(afectados):
+            if ml and 0 <= idx < len(ml):
+                self.app.resultados_nesting = ml[idx].get("data") or {}
+            self.sincronizar_overlays_clave(clave)
+            self._recalcular_costos_grupo(clave)
+        self.app.resultados_nesting = prev_rn
+
+        if not cross_wo:
+            self._replicar_lote_activo_a_gemelos()
+
+        if limpiar_seleccion:
+            self.visor.limpiar_seleccion_piezas()
+            self.on_piece_selected()
+            self.btn_transferir.setEnabled(False)
+            self.btn_rot_90.setEnabled(False)
+            self.btn_rot_m1.setEnabled(False)
+            self.btn_rot_p1.setEnabled(False)
+
+        if cross_wo:
+            self._activar_lote_idx(int(lote_dest_idx))
+
+        self.procesar_lista_hojas(self.app.resultados_nesting)
+        if hoja_destino is not None:
+            _, h_viva = self._asegurar_indice_hoja_objetivo(clave, hoja_destino)
+            if h_viva is not None:
+                self.dibujar_hoja_full(h_viva, clave)
+            else:
+                self.dibujar_hoja_full(hoja_destino, clave)
+
     def _buscar_hoja_restaurada(self, clave, hoja_original=None, idx_objetivo=None):
         grp = (getattr(self.app, "resultados_nesting", None) or {}).get(clave, {})
         hojas = grp.get("hojas") or []
@@ -4035,8 +4449,13 @@ class TabNesting(QWidget, TimerHost):
         mensaje,
         hoja_original=None,
         idx_objetivo=None,
+        multilote_snaps=None,
     ):
-        if snapshot is not None:
+        if multilote_snaps:
+            self._restaurar_multilote_grupos(clave, multilote_snaps)
+            if len(multilote_snaps) <= 1:
+                self._replicar_lote_activo_a_gemelos()
+        elif snapshot is not None:
             self._restaurar_grupo_nesting(clave, snapshot)
             self._replicar_lote_activo_a_gemelos()
         self.procesar_lista_hojas(self.app.resultados_nesting)
@@ -5349,26 +5768,49 @@ class TabNesting(QWidget, TimerHost):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Fallo al cargar: {e}")
 
-    def ejecutar_transferencia_masiva(self, idx_destino, hojas_disp, hoja_origen, clave, ventana):
-        if idx_destino == -1:
+    def ejecutar_transferencia_masiva(self, entry_idx, entries, hoja_origen, clave, ventana):
+        if entry_idx < 0 or entry_idx >= len(entries):
             return QMessageBox.warning(self, "Atención", "Debes seleccionar una placa destino.")
-        hoja_destino = hojas_disp[idx_destino]
+        entry = entries[entry_idx]
+        hoja_destino = entry["hoja"]
+        resultados_dest = entry["resultados"]
+        lote_dest_idx = int(entry["lote_idx"])
+        lote_origen_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
+        cross_wo = lote_dest_idx != lote_origen_idx
         if hasattr(ventana, "accept"):
             ventana.accept()
         else:
             ventana.close()
 
         if hasattr(self.app, "abrir_ventana_carga"):
-            self.app.abrir_ventana_carga("Moviendo piezas a otra placa...")
+            msg = "Moviendo piezas a otra Work Order..." if cross_wo else "Moviendo piezas a otra placa..."
+            self.app.abrir_ventana_carga(msg)
 
-        backup_grupo = self._snapshot_grupo_nesting(clave)
-        inventario_antes = self._inventario_piezas_grupo(clave)
+        if cross_wo:
+            hoja_origen, hoja_destino, resultados_dest = self._preparar_transferencia_cross_wo(
+                clave,
+                lote_origen_idx,
+                lote_dest_idx,
+                hoja_origen,
+                entry,
+            )
+        else:
+            resultados_dest = self.app.resultados_nesting
+
+        backup_multilote = self._snapshot_multilote_grupos(clave)
+        inventario_antes = self._inventario_piezas_multilote_grupo(clave)
+        placa_origen_id = str(hoja_origen.get("placa_id", "Placa") or "Placa")
+        placa_destino_id = str(hoja_destino.get("placa_id", "Placa") or "Placa")
 
         def worker():
+            kwargs = {}
+            if cross_wo:
+                kwargs["resultados_destino"] = resultados_dest
             resultado = self.app.motor_nesting.transferir_piezas_a_placa(
                 self.app.resultados_nesting,
                 hoja_origen,
                 hoja_destino,
+                **kwargs,
             )
             self.app.after(
                 0,
@@ -5376,8 +5818,12 @@ class TabNesting(QWidget, TimerHost):
                     r,
                     hoja_destino,
                     clave,
-                    backup_grupo=backup_grupo,
+                    lote_origen_idx=lote_origen_idx,
+                    lote_dest_idx=lote_dest_idx,
+                    backup_multilote=backup_multilote,
                     inventario_antes=inventario_antes,
+                    placa_origen=placa_origen_id,
+                    placa_destino=placa_destino_id,
                 ),
             )
 
@@ -5388,27 +5834,32 @@ class TabNesting(QWidget, TimerHost):
         resultado,
         hoja_destino,
         clave,
+        lote_origen_idx=0,
+        lote_dest_idx=0,
+        backup_multilote=None,
         backup_grupo=None,
         inventario_antes=None,
+        placa_origen=None,
+        placa_destino=None,
     ):
         if hasattr(self.app, "cerrar_ventana_carga"):
             self.app.cerrar_ventana_carga()
 
-        snapshot = backup_grupo if backup_grupo is not None else self._snapshot_grupo_nesting(clave)
         inv_antes = (
             inventario_antes
             if inventario_antes is not None
-            else self._inventario_piezas_grupo(clave)
+            else self._inventario_piezas_multilote_grupo(clave)
         )
-        inv_despues = self._inventario_piezas_grupo(clave)
+        inv_despues = self._inventario_piezas_multilote_grupo(clave)
         if not self._inventarios_equivalentes(inv_antes, inv_despues):
             diff = self._texto_diff_inventario(inv_antes, inv_despues)
             self._abortar_y_restaurar_nesting(
                 clave,
-                snapshot,
+                backup_grupo,
                 "La transferencia alteró el inventario total de piezas.\n"
                 f"{diff}".strip(),
                 hoja_original=hoja_destino,
+                multilote_snaps=backup_multilote,
             )
             return
 
@@ -5416,41 +5867,59 @@ class TabNesting(QWidget, TimerHost):
         restantes = int((resultado or {}).get("restantes", 0) or 0)
 
         if movidas > 0:
-            self.visor.limpiar_seleccion_piezas()
-            self.on_piece_selected()
-            self.btn_transferir.setEnabled(False)
-            self.btn_rot_90.setEnabled(False)
-            self.btn_rot_m1.setEnabled(False)
-            self.btn_rot_p1.setEnabled(False)
-            self._recalcular_costos_grupo(clave)
-            self.sincronizar_overlays_clave(clave)
-            self._replicar_lote_activo_a_gemelos()
-            self.procesar_lista_hojas(self.app.resultados_nesting)
-            self.dibujar_hoja_full(hoja_destino, clave)
-            if restantes > 0:
-                QMessageBox.warning(
-                    self,
-                    "Transferencia masiva",
-                    f"Piezas movidas: {movidas}\n"
-                    f"Piezas que permanecen en origen: {restantes}\n\n"
-                    "No cupieron más piezas con la configuración actual.",
-                )
+            p_orig = placa_origen or str(
+                (resultado or {}).get("placa_origen", "") or "Placa"
+            )
+            p_dest = placa_destino or str(
+                (resultado or {}).get("placa_destino", "")
+                or hoja_destino.get("placa_id", "Placa")
+            )
+            self._post_transferencia_exito(
+                clave,
+                lote_origen_idx,
+                lote_dest_idx,
+                hoja_destino,
+                placa_origen=p_orig,
+                placa_destino=p_dest,
+                movidas=movidas,
+            )
+            parcial = restantes > 0
+            msg = self._texto_resumen_transferencia(
+                movidas=movidas,
+                restantes=restantes,
+                placa_origen=p_orig,
+                placa_destino=p_dest,
+                lote_origen_idx=lote_origen_idx,
+                lote_dest_idx=lote_dest_idx,
+                parcial=parcial,
+            )
+            if parcial:
+                QMessageBox.warning(self, "Transferencia masiva", msg)
             else:
-                QMessageBox.information(
-                    self,
-                    "Transferencia masiva",
-                    f"Se movieron las {movidas} piezas a la placa destino.",
-                )
+                QMessageBox.information(self, "Transferencia masiva", msg)
         else:
-            QMessageBox.warning(self, 
+            motivo = str((resultado or {}).get("motivo", "") or "").strip()
+            detalle = (
+                f"\n\nDetalle técnico: {motivo}"
+                if motivo and motivo not in ("", "sin_espacio")
+                else ""
+            )
+            QMessageBox.warning(
+                self,
                 "Transferencia masiva",
-                "No se pudo mover ninguna pieza a la placa destino con la configuración actual.",
+                "No se pudo mover ninguna pieza a la placa destino con la configuración actual."
+                + detalle,
             )
 
-    def ejecutar_transferencia(self, idx_destino, hojas_disp, ventana):
-        if idx_destino == -1:
+    def ejecutar_transferencia(self, entry_idx, entries, ventana):
+        if entry_idx < 0 or entry_idx >= len(entries):
             return QMessageBox.warning(self, "Atención", "Debes seleccionar una placa.")
-        hoja_destino = hojas_disp[idx_destino]
+        entry = entries[entry_idx]
+        hoja_destino = entry["hoja"]
+        resultados_dest = entry["resultados"]
+        lote_dest_idx = int(entry["lote_idx"])
+        lote_origen_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
+        cross_wo = lote_dest_idx != lote_origen_idx
         piezas_sel = list(self.visor.piezas_seleccionadas)
         indices_sel = sorted(self.visor.piezas_seleccionadas_indices)
         if not indices_sel and self.visor.idx_pieza_seleccionada >= 0:
@@ -5487,26 +5956,48 @@ class TabNesting(QWidget, TimerHost):
             )
             self.app.abrir_ventana_carga(msg_carga)
 
-        backup_grupo = self._snapshot_grupo_nesting(self.clave_actual)
-        inventario_antes = self._inventario_piezas_grupo(self.clave_actual)
-        hoja_origen_snap = self.hoja_actual_data
+        if cross_wo:
+            hoja_origen_snap, hoja_destino, resultados_dest = self._preparar_transferencia_cross_wo(
+                self.clave_actual,
+                lote_origen_idx,
+                lote_dest_idx,
+                self.hoja_actual_data,
+                entry,
+            )
+        else:
+            hoja_origen_snap = self.hoja_actual_data
+            resultados_dest = self.app.resultados_nesting
+
+        backup_multilote = self._snapshot_multilote_grupos(self.clave_actual)
+        inventario_antes = self._inventario_piezas_multilote_grupo(self.clave_actual)
+        placa_origen_id = str(hoja_origen_snap.get("placa_id", "Placa") or "Placa")
+        placa_destino_id = str(hoja_destino.get("placa_id", "Placa") or "Placa")
 
         def worker():
+            kwargs = {
+                "piezas_especificas": piezas_sel,
+                "piezas_indices": indices_sel,
+            }
+            if cross_wo:
+                kwargs["resultados_destino"] = resultados_dest
             resultado = self.app.motor_nesting.transferir_piezas_a_placa(
                 self.app.resultados_nesting,
                 hoja_origen_snap,
                 hoja_destino,
-                piezas_especificas=piezas_sel,
-                piezas_indices=indices_sel,
+                **kwargs,
             )
             self.app.after(
                 0,
                 lambda r=resultado: self.finalizar_transferencia(
                     r,
                     hoja_destino,
-                    backup_grupo=backup_grupo,
+                    lote_origen_idx=lote_origen_idx,
+                    lote_dest_idx=lote_dest_idx,
+                    backup_multilote=backup_multilote,
                     inventario_antes=inventario_antes,
                     clave=self.clave_actual,
+                    placa_origen=placa_origen_id,
+                    placa_destino=placa_destino_id,
                 ),
             )
 
@@ -5516,29 +6007,34 @@ class TabNesting(QWidget, TimerHost):
         self,
         exito,
         hoja_destino=None,
+        lote_origen_idx=0,
+        lote_dest_idx=0,
+        backup_multilote=None,
         backup_grupo=None,
         inventario_antes=None,
         clave=None,
+        placa_origen=None,
+        placa_destino=None,
     ):
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
 
         clv = clave if clave is not None else self.clave_actual
-        snapshot = backup_grupo if backup_grupo is not None else self._snapshot_grupo_nesting(clv)
         inv_antes = (
             inventario_antes
             if inventario_antes is not None
-            else self._inventario_piezas_grupo(clv)
+            else self._inventario_piezas_multilote_grupo(clv)
         )
-        inv_despues = self._inventario_piezas_grupo(clv)
+        inv_despues = self._inventario_piezas_multilote_grupo(clv)
         if not self._inventarios_equivalentes(inv_antes, inv_despues):
             diff = self._texto_diff_inventario(inv_antes, inv_despues)
             self._abortar_y_restaurar_nesting(
                 clv,
-                snapshot,
+                backup_grupo,
                 "La transferencia alteró el inventario total de piezas.\n"
                 f"{diff}".strip(),
                 hoja_original=hoja_destino,
+                multilote_snaps=backup_multilote,
             )
             return
 
@@ -5548,35 +6044,39 @@ class TabNesting(QWidget, TimerHost):
             exito = bool(resultado.get("ok"))
 
         if exito:
-            self.visor.limpiar_seleccion_piezas()
-            self.on_piece_selected()
+            movidas = int((resultado or {}).get("movidas", 0) or 0) if resultado else 0
+            p_orig = placa_origen or "Placa"
+            p_dest = placa_destino or str(
+                (hoja_destino or {}).get("placa_id", "Placa")
+            )
+            self._post_transferencia_exito(
+                clv,
+                lote_origen_idx,
+                lote_dest_idx,
+                hoja_destino,
+                limpiar_seleccion=True,
+                placa_origen=p_orig,
+                placa_destino=p_dest,
+                movidas=movidas,
+            )
 
-            self.sincronizar_overlays_clave(clv)
-            self._recalcular_costos_grupo(clv)
-            self._replicar_lote_activo_a_gemelos()
-            self.procesar_lista_hojas(self.app.resultados_nesting)
-            if hoja_destino is not None:
-                self.dibujar_hoja_full(hoja_destino, clv)
-            else:
-                hojas = self.app.resultados_nesting.get(clv, {}).get("hojas", [])
-                if hojas:
-                    self.dibujar_hoja_full(hojas[0], clv)
-
-            if resultado and int(resultado.get("solicitadas", 0) or 0) > 1:
-                movidas = int(resultado.get("movidas", 0) or 0)
-                solicitadas = int(resultado.get("solicitadas", 0) or 0)
+            if resultado:
                 restantes = int(resultado.get("restantes", 0) or 0)
-                if restantes > 0:
-                    QMessageBox.warning(self, 
-                        "Transferencia parcial",
-                        f"Se movieron {movidas} de {solicitadas} piezas seleccionadas.\n"
-                        f"{restantes} pieza(s) permanecen en la placa origen.",
-                    )
+                parcial = restantes > 0
+                msg = self._texto_resumen_transferencia(
+                    movidas=movidas,
+                    restantes=restantes,
+                    placa_origen=p_orig,
+                    placa_destino=p_dest,
+                    lote_origen_idx=lote_origen_idx,
+                    lote_dest_idx=lote_dest_idx,
+                    parcial=parcial,
+                )
+                titulo = "Transferencia parcial" if parcial else "Transferencia exitosa"
+                if parcial:
+                    QMessageBox.warning(self, titulo, msg)
                 else:
-                    QMessageBox.information(self, 
-                        "Éxito",
-                        f"Se movieron las {movidas} piezas seleccionadas correctamente.",
-                    )
+                    QMessageBox.information(self, titulo, msg)
             else:
                 QMessageBox.information(self, "Éxito", "Transferencia exitosa.")
         else:

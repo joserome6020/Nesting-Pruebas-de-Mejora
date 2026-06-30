@@ -371,7 +371,41 @@ def _sufijo_placa_duplicada(hojas_disp, hoja, idx):
     return f" · P{iguales.index(idx) + 1}"
 
 
-def _build_transfer_dialog(parent, piezas_sel, hojas_disp, titulo, on_confirm):
+def _poblar_destinos_transferencia(inner_lay, group, entries, var_destino, *, excluir_hoja=None):
+    destinos = 0
+    for i, entry in enumerate(entries):
+        hoja = entry["hoja"]
+        if excluir_hoja is not None and hoja is excluir_hoja:
+            continue
+        hojas_ctx = entry.get("hojas_ctx") or []
+        h_idx = int(entry.get("hoja_idx", i))
+        wo = str(entry.get("wo_label") or "").strip()
+        efi_dir = float(hoja.get("eficiencia_directa", hoja.get("eficiencia", 0)) or 0)
+        efi_real = float(hoja.get("eficiencia_real", efi_dir) or 0)
+        nombre_placa = hoja.get("placa_id", f"Placa #{h_idx + 1}")
+        if hoja.get("es_retazo", False):
+            nombre_placa = f"{nombre_placa} (RTZ)"
+        w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
+        h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
+        sufijo_dup = _sufijo_placa_duplicada(hojas_ctx, hoja, h_idx)
+        prefijo_wo = f"{wo} · " if wo else ""
+        texto_principal = f"{prefijo_wo}{nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
+        color_eficiencia = "#10B981" if efi_dir > 70 else ("#F59E0B" if efi_dir > 40 else "#EF4444")
+
+        row = QHBoxLayout()
+        rb = QRadioButton(texto_principal)
+        group.addButton(rb, i)
+        rb.toggled.connect(lambda checked, idx=i: var_destino.update({"idx": idx}) if checked else None)
+        row.addWidget(rb)
+        lbl = QLabel(f"Dir {efi_dir:.1f}% | Real {efi_real:.1f}%")
+        lbl.setStyleSheet(f"color:{color_eficiencia};font-weight:700;")
+        row.addWidget(lbl)
+        inner_lay.addLayout(row)
+        destinos += 1
+    return destinos
+
+
+def _build_transfer_dialog(parent, piezas_sel, entries, titulo, on_confirm):
     multi = len(piezas_sel) > 1
     dlg = QDialog(parent)
     dlg.setWindowTitle("Mudar Piezas" if multi else "Mudar Pieza")
@@ -401,41 +435,20 @@ def _build_transfer_dialog(parent, piezas_sel, hojas_disp, titulo, on_confirm):
     group = QButtonGroup(dlg)
     var_destino = {"idx": -1}
 
-    idx_actual = -1
-    for i, h in enumerate(hojas_disp):
-        if h is parent.hoja_actual_data:
-            idx_actual = i
-
-    for i, hoja in enumerate(hojas_disp):
-        if i == idx_actual:
-            continue
-        efi_dir = float(hoja.get("eficiencia_directa", hoja.get("eficiencia", 0)) or 0)
-        efi_real = float(hoja.get("eficiencia_real", efi_dir) or 0)
-        nombre_placa = hoja.get("placa_id", f"Placa #{i+1}")
-        if hoja.get("es_retazo", False):
-            nombre_placa = f"{nombre_placa} (RTZ)"
-        w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
-        h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
-        sufijo_dup = _sufijo_placa_duplicada(hojas_disp, hoja, i)
-        texto_principal = f"{nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
-        color_eficiencia = "#10B981" if efi_dir > 70 else ("#F59E0B" if efi_dir > 40 else "#EF4444")
-
-        row = QHBoxLayout()
-        rb = QRadioButton(texto_principal)
-        group.addButton(rb, i)
-        rb.toggled.connect(lambda checked, idx=i: var_destino.update({"idx": idx}) if checked else None)
-        row.addWidget(rb)
-        lbl = QLabel(f"Dir {efi_dir:.1f}% | Real {efi_real:.1f}%")
-        lbl.setStyleSheet(f"color:{color_eficiencia};font-weight:700;")
-        row.addWidget(lbl)
-        inner_lay.addLayout(row)
+    _poblar_destinos_transferencia(
+        inner_lay,
+        group,
+        entries,
+        var_destino,
+        excluir_hoja=getattr(parent, "hoja_actual_data", None),
+    )
 
     scroll.setWidget(inner)
     lay.addWidget(scroll, 1)
 
     btn_conf = QPushButton("✅ CONFIRMAR TRANSFERENCIA")
     apply_push_button(btn_conf, COLOR_GRIS_DARK, font_size=11)
-    btn_conf.clicked.connect(lambda: on_confirm(var_destino["idx"], hojas_disp, dlg))
+    btn_conf.clicked.connect(lambda: on_confirm(var_destino["idx"], entries, dlg))
     lay.addWidget(btn_conf)
 
     _centrar_dialogo(dlg, parent)
@@ -449,9 +462,17 @@ def abrir_modal_transferencia(parent):
     if not piezas_sel and parent.info_pieza_seleccionada:
         piezas_sel = [parent.info_pieza_seleccionada]
 
-    hojas_disp = parent.app.resultados_nesting.get(parent.clave_actual, {}).get("hojas", [])
-    if len(hojas_disp) <= 1:
-        QMessageBox.information(parent, "Aviso", "No hay otras placas de este mismo material para realizar la transferencia.")
+    clave = getattr(parent, "clave_actual", None)
+    hoja_origen = parent.hoja_actual_data
+    if not clave or not hoja_origen:
+        return
+    entries = parent._destinos_transferencia_placa(clave, hoja_origen)
+    if not entries:
+        QMessageBox.information(
+            parent,
+            "Aviso",
+            "No hay otras placas (ni en otras Work Orders) de este material para realizar la transferencia.",
+        )
         return
 
     multi = len(piezas_sel) > 1
@@ -460,7 +481,7 @@ def abrir_modal_transferencia(parent):
         if multi
         else "MUDAR PIEZA A OTRA PLACA"
     )
-    _build_transfer_dialog(parent, piezas_sel, hojas_disp, titulo, parent.ejecutar_transferencia)
+    _build_transfer_dialog(parent, piezas_sel, entries, titulo, parent.ejecutar_transferencia)
 
 
 def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
@@ -472,16 +493,20 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
         )
         return
 
-    hojas_disp = parent.app.resultados_nesting.get(clave, {}).get("hojas", [])
-    if len(hojas_disp) <= 1:
-        QMessageBox.information(parent, "Aviso", "No hay otras placas de este mismo material para recibir piezas.")
-        return
-
     bloque = parent._desglosar_bloque_placa_mini(clave, hoja_origen)
     resumen = bloque.get("resumen_base") or {}
     total_piezas = sum(int(v) for v in resumen.values())
     if total_piezas <= 0:
         QMessageBox.warning(parent, "Atención", "La placa seleccionada no tiene piezas reales para mover.")
+        return
+
+    entries = parent._destinos_transferencia_placa(clave, hoja_origen)
+    if not entries:
+        QMessageBox.information(
+            parent,
+            "Aviso",
+            "No hay otras placas madre (ni en otras Work Orders) de este material para recibir piezas.",
+        )
         return
 
     placa_origen = str(hoja_origen.get("placa_id", "Placa") or "Placa")
@@ -497,7 +522,10 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
     lbl_tit = QLabel(titulo, alignment=Qt.AlignmentFlag.AlignCenter)
     lbl_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(lbl_tit)
-    lay.addWidget(QLabel("Se moverán todas las piezas que quepan en la placa destino.", alignment=Qt.AlignmentFlag.AlignCenter))
+    hint = "Se moverán todas las piezas que quepan en la placa destino."
+    if len(getattr(parent.app, "resultados_multilote", None) or []) > 1:
+        hint += " También puedes elegir placas de otra Work Order activa."
+    lay.addWidget(QLabel(hint, alignment=Qt.AlignmentFlag.AlignCenter))
 
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
@@ -506,44 +534,7 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
     group = QButtonGroup(dlg)
     var_destino = {"idx": -1}
 
-    idx_actual = -1
-    for i, h in enumerate(hojas_disp):
-        if h is hoja_origen:
-            idx_actual = i
-
-    destinos = 0
-    for i, hoja in enumerate(hojas_disp):
-        if i == idx_actual:
-            continue
-        if hoja.get("es_retazo", False):
-            continue
-        destinos += 1
-        efi_dir = float(hoja.get("eficiencia_directa", hoja.get("eficiencia", 0)) or 0)
-        efi_real = float(hoja.get("eficiencia_real", efi_dir) or 0)
-        nombre_placa = hoja.get("placa_id", f"Placa #{i+1}")
-        w_in = float(hoja.get("placa_w", 0) or 0) / 25.4
-        h_in = float(hoja.get("placa_h", 0) or 0) / 25.4
-        sufijo_dup = _sufijo_placa_duplicada(hojas_disp, hoja, i)
-        texto_principal = f"{nombre_placa}{sufijo_dup}  ({w_in:.0f}\" x {h_in:.0f}\")"
-        color_eficiencia = "#10B981" if efi_dir > 70 else ("#F59E0B" if efi_dir > 40 else "#EF4444")
-
-        row = QHBoxLayout()
-        rb = QRadioButton(texto_principal)
-        group.addButton(rb, i)
-        rb.toggled.connect(lambda checked, idx=i: var_destino.update({"idx": idx}) if checked else None)
-        row.addWidget(rb)
-        lbl = QLabel(f"Dir {efi_dir:.1f}% | Real {efi_real:.1f}%")
-        lbl.setStyleSheet(f"color:{color_eficiencia};font-weight:700;")
-        row.addWidget(lbl)
-        inner_lay.addLayout(row)
-
-    if destinos <= 0:
-        QMessageBox.information(
-            parent,
-            "Aviso",
-            "No hay otras placas madre de este material para recibir piezas.",
-        )
-        return
+    destinos = _poblar_destinos_transferencia(inner_lay, group, entries, var_destino)
 
     scroll.setWidget(inner)
     lay.addWidget(scroll, 1)
@@ -551,7 +542,9 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
     btn_conf = QPushButton("✅ MOVER PIEZAS POSIBLES")
     apply_push_button(btn_conf, COLOR_GRIS_DARK, font_size=11)
     btn_conf.clicked.connect(
-        lambda: parent.ejecutar_transferencia_masiva(var_destino["idx"], hojas_disp, hoja_origen, clave, dlg)
+        lambda: parent.ejecutar_transferencia_masiva(
+            var_destino["idx"], entries, hoja_origen, clave, dlg
+        )
     )
     lay.addWidget(btn_conf)
 

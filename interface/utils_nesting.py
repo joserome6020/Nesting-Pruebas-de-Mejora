@@ -300,6 +300,8 @@ def escalar_piezas(datos, T_original, k_objetivo):
     return nuevos_datos
 
 def ensamblar_escenario(esc, nestings):
+    import uuid
+
     lista_ordenes = []
     costo_total_proyecto = 0
     eficiencia_sum = 0
@@ -308,6 +310,7 @@ def ensamblar_escenario(esc, nestings):
     for lote_k, lote_mult in esc:
         res_k = nestings[lote_k]
         for _ in range(lote_mult):
+            wo_idx = len(lista_ordenes) + 1
             orden_dict = {}
             for clave, info in res_k.items():
                 orden_dict[clave] = copy.deepcopy(info)
@@ -316,6 +319,9 @@ def ensamblar_escenario(esc, nestings):
                         hoja["lote_k"] = lote_k
                         hoja["lote_mult"] = 1
                         hoja["lote_desc"] = f"Lote {lote_k}X"
+                        hoja["wo_instance"] = wo_idx
+                        if not hoja.get("es_retazo"):
+                            hoja["sheet_uid"] = str(uuid.uuid4())
                         if not hoja.get("es_retazo") and not hoja.get("ignorar_deduccion"):
                             costo_total_proyecto += hoja.get('precio_placa', 0)
                         eficiencia_sum += hoja.get('eficiencia', 0)

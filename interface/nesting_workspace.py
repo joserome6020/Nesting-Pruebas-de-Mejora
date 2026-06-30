@@ -841,6 +841,17 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     tab.costo_mxn_val = float(ui.get("costo_mxn_val", 0.0) or 0.0)
     tab.lote_actual_idx = lote_idx
 
+    ml = tab.app.resultados_multilote or []
+    if ml and 0 <= lote_idx < len(ml):
+        slot = ml[lote_idx].get("data")
+        if ml[lote_idx].get("gemelo_desync") and isinstance(slot, dict):
+            tab.app.resultados_nesting = copy.deepcopy(slot)
+            ml[lote_idx]["data"] = tab.app.resultados_nesting
+        else:
+            tab.app.resultados_nesting = slot or {}
+    else:
+        tab.app.resultados_nesting = {}
+
     _label_set_text(getattr(tab, "lbl_cantidad", None), f"CANTIDAD: {tab.cantidad_tanques}")
     try:
         _combo_set_text(getattr(tab, "cmb_opt", None), ui.get("cmb_opt_val", "OPTIMIZAR LARGO"))

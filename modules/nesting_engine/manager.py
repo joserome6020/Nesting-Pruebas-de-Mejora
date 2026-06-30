@@ -2278,11 +2278,15 @@ class MotorNesting:
         return piezas
 
     def _conteo_piezas_reales_en_hojas(self, hojas):
-        total = 0
+        conteo: dict[str, int] = {}
         for h in hojas or []:
-            if isinstance(h, dict):
-                total += len(self._piezas_reales_en_hoja(h))
-        return total
+            if not isinstance(h, dict):
+                continue
+            for p in self._piezas_reales_en_hoja(h):
+                nom = str(p.get("nombre", "") or "")
+                if nom:
+                    conteo[nom] = conteo.get(nom, 0) + 1
+        return conteo
 
     def _misma_pieza_visual(self, a, b):
         if a is b or id(a) == id(b):
@@ -2297,7 +2301,60 @@ class MotorNesting:
         for _, grupo in resultados_nesting.items():
             if isinstance(grupo, dict) and hoja in (grupo.get("hojas") or []):
                 return grupo
+        uid = str(hoja.get("sheet_uid") or "").strip()
+        if uid:
+            for _, grupo in resultados_nesting.items():
+                if not isinstance(grupo, dict):
+                    continue
+                for h in (grupo.get("hojas") or []):
+                    if str(h.get("sheet_uid") or "").strip() == uid:
+                        return grupo
         return None
+
+    def _idx_hoja_en_grupo(self, hojas, hoja):
+        if not isinstance(hojas, list) or not isinstance(hoja, dict):
+            return -1
+        try:
+            return hojas.index(hoja)
+        except ValueError:
+            pass
+        uid = str(hoja.get("sheet_uid") or "").strip()
+        if uid:
+            for i, h in enumerate(hojas):
+                if str(h.get("sheet_uid") or "").strip() == uid:
+                    return i
+        pid = str(hoja.get("placa_id", "") or "")
+        es_rtz = bool(hoja.get("es_retazo", False))
+        w_ref = float(hoja.get("placa_w", 0) or 0)
+        h_ref = float(hoja.get("placa_h", 0) or 0)
+        nest_idx = hoja.get("_nest_list_idx")
+        if nest_idx is not None:
+            ni = int(nest_idx)
+            if 0 <= ni < len(hojas):
+                h_cand = hojas[ni]
+                if (
+                    str(h_cand.get("placa_id", "") or "") == pid
+                    and bool(h_cand.get("es_retazo", False)) == es_rtz
+                    and abs(float(h_cand.get("placa_w", 0) or 0) - w_ref) <= 0.5
+                    and abs(float(h_cand.get("placa_h", 0) or 0) - h_ref) <= 0.5
+                ):
+                    return ni
+        return -1
+
+    def _resolver_hoja_viva(self, resultados, hoja):
+        """Devuelve la referencia actual de la hoja dentro de resultados."""
+        if not isinstance(hoja, dict):
+            return hoja
+        grupo = self._grupo_de_hoja(resultados, hoja)
+        if not isinstance(grupo, dict):
+            return hoja
+        hojas = grupo.get("hojas") or []
+        if hoja in hojas:
+            return hoja
+        idx = self._idx_hoja_en_grupo(hojas, hoja)
+        if 0 <= idx < len(hojas):
+            return hojas[idx]
+        return hoja
 
     def _pieza_real_en_hoja_por_idx(self, hoja, idx):
         piezas = (hoja or {}).get("piezas") or []
@@ -2500,6 +2557,38 @@ class MotorNesting:
         except Exception:
             return None
 
+    def _rtz_hoja_para_id(self, madre, hojas_grupo, rtz_id):
+        if not isinstance(madre, dict) or not isinstance(hojas_grupo, list):
+            return None
+        idx = self._idx_hoja_en_grupo(hojas_grupo, madre)
+        if idx < 0:
+            return None
+        rid = str(rtz_id or "")
+        for rtz in _rtz_hojas_de_madre(hojas_grupo, idx):
+            if str(rtz.get("placa_id", "") or "") == rid:
+                return rtz
+        return None
+
+    def _rtz_ids_vacios_en_madre(self, madre, hojas_grupo):
+        if not isinstance(madre, dict) or not isinstance(hojas_grupo, list):
+            return ()
+        idx = self._idx_hoja_en_grupo(hojas_grupo, madre)
+        if idx < 0:
+            return ()
+        vacios = []
+        for rtz in _rtz_hojas_de_madre(hojas_grupo, idx):
+            rid = str(rtz.get("placa_id", "") or "")
+            if rid and not self._piezas_reales_en_hoja(rtz):
+                vacios.append(rid)
+        return tuple(vacios)
+
+    def _excluir_rtz_para_transfer(self, hoja_origen, hoja_destino, hojas_grupo):
+        ids = list(
+            self._rtz_ids_a_liberar_en_destino(hoja_origen, hoja_destino, hojas_grupo)
+        )
+        ids.extend(self._rtz_ids_vacios_en_madre(hoja_destino, hojas_grupo))
+        return tuple(dict.fromkeys(ids))
+
     def _zonas_rtz_reservadas_madre(self, madre, hojas_grupo=None, excluir_rtz_ids=None):
         """Áreas de placa madre reservadas a RTZ/mini-nest (no anidar piezas madre)."""
         zonas = []
@@ -2526,18 +2615,29 @@ class MotorNesting:
                 rid = nom.replace("RETAZO_GUILLOTINA__", "", 1)
                 if rid in excluir:
                     continue
+                rtz = self._rtz_hoja_para_id(madre, hojas_grupo, rid)
+                if rtz is not None and not self._piezas_reales_en_hoja(rtz):
+                    continue
                 _agregar(reconstruir_poly_seguro(p.get("poligonos") or []))
+
+        guillotine_rids = {
+            str(p.get("nombre", "") or "").replace("RETAZO_GUILLOTINA__", "", 1)
+            for p in (madre.get("piezas") or [])
+            if str(p.get("nombre", "") or "").startswith("RETAZO_GUILLOTINA__")
+        }
 
         if not isinstance(hojas_grupo, list):
             return zonas
-        try:
-            idx = hojas_grupo.index(madre)
-        except ValueError:
+        idx = self._idx_hoja_en_grupo(hojas_grupo, madre)
+        if idx < 0:
             return zonas
 
         for rtz in _rtz_hojas_de_madre(hojas_grupo, idx):
             rtz_id = str(rtz.get("placa_id", "") or "")
             if rtz_id in excluir:
+                continue
+            # RTZ vacío sin overlay guillotine: el área sigue libre en la madre.
+            if not self._piezas_reales_en_hoja(rtz) and rtz_id not in guillotine_rids:
                 continue
             gx, gy = _inferir_global_rtz(madre, rtz)
             rw = float(rtz.get("placa_w", 0) or 0)
@@ -2565,10 +2665,7 @@ class MotorNesting:
             return ()
         if not isinstance(hojas_grupo, list):
             return ()
-        try:
-            idx = hojas_grupo.index(hoja_origen)
-        except ValueError:
-            return ()
+        idx = self._idx_hoja_en_grupo(hojas_grupo, hoja_origen)
         if idx <= 0:
             return ()
         madre = hojas_grupo[idx - 1]
@@ -2815,7 +2912,7 @@ class MotorNesting:
         if not candidatos_raw:
             return [], None
 
-        excluir_rtz = self._rtz_ids_a_liberar_en_destino(
+        excluir_rtz = self._excluir_rtz_para_transfer(
             hoja_origen, hoja_destino, hojas_grupo
         )
 
@@ -3090,7 +3187,7 @@ class MotorNesting:
         intentos_mc=48,
         hoja_origen=None,
     ):
-        excluir_rtz = self._rtz_ids_a_liberar_en_destino(
+        excluir_rtz = self._excluir_rtz_para_transfer(
             hoja_origen, hoja_destino, hojas_grupo
         )
         piezas_pack = list(piezas_dest_base)
@@ -3135,17 +3232,25 @@ class MotorNesting:
         return True, nueva_dest
 
     def _maximo_lote_transferible(
-        self, hoja_destino, piezas_dest_base, candidatos_raw, hojas_grupo=None, hoja_origen=None
+        self,
+        hoja_destino,
+        piezas_dest_base,
+        candidatos_raw,
+        hojas_grupo=None,
+        hoja_origen=None,
+        intentos_mc=12,
     ):
         """Respaldo lento (MC). Preferir _maximo_lote_incremental."""
         if not candidatos_raw:
             return []
+        intentos_todas = max(12, int(intentos_mc or 12))
+        intentos_parcial = max(8, intentos_todas // 2)
         ok_todas, _ = self._simular_renest_en_destino(
             hoja_destino,
             piezas_dest_base,
             candidatos_raw,
             hojas_grupo,
-            intentos_mc=12,
+            intentos_mc=intentos_todas,
             hoja_origen=hoja_origen,
         )
         if ok_todas:
@@ -3162,7 +3267,7 @@ class MotorNesting:
                 piezas_dest_base,
                 trial,
                 hojas_grupo,
-                intentos_mc=8,
+                intentos_mc=intentos_parcial,
                 hoja_origen=hoja_origen,
             )
             if ok:
@@ -3216,14 +3321,37 @@ class MotorNesting:
         except ValueError:
             pass
 
-    def _aplicar_transferencia_lote(self, origen_grupo, origen_hoja, hoja_destino, piezas_mover, nueva_dest):
+    def _conteo_piezas_en_grupos(self, *grupos):
+        conteo = {}
+        vistos = set()
+        for grupo in grupos:
+            if not isinstance(grupo, dict):
+                continue
+            gid = id(grupo)
+            if gid in vistos:
+                continue
+            vistos.add(gid)
+            for nom, cnt in self._conteo_piezas_reales_en_hojas(grupo.get("hojas") or []).items():
+                conteo[nom] = conteo.get(nom, 0) + int(cnt)
+        return conteo
+
+    def _aplicar_transferencia_lote(
+        self,
+        origen_grupo,
+        origen_hoja,
+        hoja_destino,
+        piezas_mover,
+        nueva_dest,
+        dest_grupo=None,
+    ):
+        dest_grupo = dest_grupo or origen_grupo
         overlays_dest = self._extraer_overlays_hoja(hoja_destino)
         overlays_orig = self._extraer_overlays_hoja(origen_hoja)
         mover_ids = {id(p) for p in piezas_mover}
 
-        hojas_grupo = origen_grupo.get("hojas") if isinstance(origen_grupo, dict) else None
+        hojas_orig = origen_grupo.get("hojas") if isinstance(origen_grupo, dict) else None
         nueva_orig, params_o = self._renest_origen_tras_transferencia(
-            origen_hoja, mover_ids, hojas_grupo
+            origen_hoja, mover_ids, hojas_orig
         )
 
         params_d = self._params_hoja(hoja_destino)
@@ -3238,18 +3366,87 @@ class MotorNesting:
             overlays_orig,
         )
         hoja_destino.update(nueva_dest)
-        origen_hoja.update(nueva_orig)
-        if isinstance(origen_grupo, dict):
+        misma_hoja = origen_hoja is hoja_destino
+        if not misma_hoja:
+            origen_hoja.update(nueva_orig)
+        if isinstance(origen_grupo, dict) and not misma_hoja:
             hojas = origen_grupo.get("hojas") or []
             sincronizar_overlays_grupo(hojas)
             for h in hojas:
                 actualizar_eficiencias_hoja(h, hojas_grupo=hojas)
             calcular_eficiencias_grupo(hojas)
+        elif misma_hoja:
+            actualizar_eficiencias_hoja(hoja_destino)
         else:
             actualizar_eficiencias_hoja(hoja_destino)
-            actualizar_eficiencias_hoja(origen_hoja)
+            if not misma_hoja:
+                actualizar_eficiencias_hoja(origen_hoja)
 
-        self._eliminar_hoja_origen_si_vacia(origen_grupo, origen_hoja)
+        if dest_grupo is not origen_grupo and isinstance(dest_grupo, dict):
+            hojas_dest = dest_grupo.get("hojas") or []
+            sincronizar_overlays_grupo(hojas_dest)
+            for h in hojas_dest:
+                actualizar_eficiencias_hoja(h, hojas_grupo=hojas_dest)
+            calcular_eficiencias_grupo(hojas_dest)
+
+        if not misma_hoja:
+            self._eliminar_hoja_origen_si_vacia(origen_grupo, origen_hoja)
+
+        if dest_grupo is not origen_grupo:
+            self._ajustar_piezas_pool_cross_wo(
+                origen_grupo, dest_grupo, piezas_mover
+            )
+
+    def _quitar_piezas_de_pool(self, grupo, piezas_mover):
+        if not isinstance(grupo, dict) or not grupo.get("piezas_pool_engine"):
+            return
+        pool = list(grupo.get("piezas_pool") or [])
+        if not pool or not piezas_mover:
+            return
+        to_remove = Counter(
+            str(p.get("nombre") or "").strip()
+            for p in piezas_mover
+            if str(p.get("nombre") or "").strip()
+        )
+        to_remove_base = Counter(
+            _piece_name_base(str(p.get("nombre") or ""))
+            for p in piezas_mover
+            if str(p.get("nombre") or "").strip()
+        )
+        nuevo = []
+        for entry in pool:
+            nom = str(entry.get("nombre") or "").strip()
+            if not nom:
+                nuevo.append(entry)
+                continue
+            base = _piece_name_base(nom)
+            if to_remove.get(nom, 0) > 0:
+                to_remove[nom] -= 1
+                continue
+            if to_remove_base.get(base, 0) > 0:
+                to_remove_base[base] -= 1
+                continue
+            nuevo.append(entry)
+        grupo["piezas_pool"] = nuevo
+
+    def _agregar_piezas_a_pool(self, grupo, piezas_mover):
+        if not isinstance(grupo, dict) or not grupo.get("piezas_pool_engine"):
+            return
+        pool = list(grupo.get("piezas_pool") or [])
+        for p in piezas_mover:
+            nom = str(p.get("nombre") or "").strip()
+            if nom:
+                pool.append({"nombre": nom})
+        grupo["piezas_pool"] = pool
+
+    def _ajustar_piezas_pool_cross_wo(self, origen_grupo, dest_grupo, piezas_mover):
+        """Evita que reconciliar elimine la placa destino al recibir piezas de otra WO."""
+        if not piezas_mover:
+            return
+        if isinstance(dest_grupo, dict):
+            self._agregar_piezas_a_pool(dest_grupo, piezas_mover)
+        if isinstance(origen_grupo, dict) and origen_grupo is not dest_grupo:
+            self._quitar_piezas_de_pool(origen_grupo, piezas_mover)
 
     def transferir_piezas_a_placa(
         self,
@@ -3258,6 +3455,7 @@ class MotorNesting:
         hoja_destino,
         piezas_especificas=None,
         piezas_indices=None,
+        resultados_destino=None,
     ):
         """
         Renestea destino con todas las piezas candidatas juntas y mueve el máximo lote posible.
@@ -3286,8 +3484,27 @@ class MotorNesting:
                 resultado["motivo"] = "origen_no_encontrado"
                 return resultado
 
-            hojas_grupo = origen_grupo.get("hojas") or []
-            conteo_antes = self._conteo_piezas_reales_en_hojas(hojas_grupo)
+            resultados_dest = (
+                resultados_destino
+                if resultados_destino is not None
+                else resultados_nesting
+            )
+            dest_grupo = self._grupo_de_hoja(resultados_dest, hoja_destino)
+            if dest_grupo is None:
+                resultado["motivo"] = "destino_no_encontrado"
+                return resultado
+
+            hoja_origen = self._resolver_hoja_viva(resultados_nesting, hoja_origen)
+            hoja_destino = self._resolver_hoja_viva(resultados_dest, hoja_destino)
+            if hoja_origen is hoja_destino:
+                resultado["motivo"] = "misma_placa"
+                return resultado
+
+            hojas_grupo_orig = origen_grupo.get("hojas") or []
+            hojas_grupo_dest = dest_grupo.get("hojas") or []
+            cross_wo = dest_grupo is not origen_grupo
+            intentos_renest = 24 if cross_wo else 12
+            conteo_antes = self._conteo_piezas_en_grupos(origen_grupo, dest_grupo)
             candidatos = self._resolver_candidatos_transferencia(
                 hoja_origen,
                 piezas_especificas,
@@ -3319,6 +3536,8 @@ class MotorNesting:
                     hoja_destino,
                     hoja_origen=hoja_origen,
                     idx_hint=idx_hint,
+                    resultados_destino=resultados_dest,
+                    dest_grupo=dest_grupo,
                 ):
                     resultado["movidas"] = 1
                     resultado["restantes"] = len(self._piezas_reales_en_hoja(hoja_origen))
@@ -3328,6 +3547,33 @@ class MotorNesting:
             es_masiva = piezas_especificas is None
             movidas_total = 0
             pendientes_inicial = len(candidatos)
+
+            if es_masiva and cross_wo and len(candidatos) > 1:
+                piezas_dest_base = self._pack_piezas_destino(hoja_destino)
+                ok_all, nueva_dest = self._simular_renest_en_destino(
+                    hoja_destino,
+                    piezas_dest_base,
+                    candidatos,
+                    hojas_grupo_dest,
+                    intentos_mc=max(48, intentos_renest * 2),
+                    hoja_origen=hoja_origen,
+                )
+                if ok_all and nueva_dest:
+                    self._aplicar_transferencia_lote(
+                        origen_grupo,
+                        hoja_origen,
+                        hoja_destino,
+                        candidatos,
+                        nueva_dest,
+                        dest_grupo=dest_grupo,
+                    )
+                    resultado["movidas"] = len(candidatos)
+                    resultado["restantes"] = len(
+                        self._piezas_reales_en_hoja(hoja_origen)
+                    )
+                    resultado["solicitadas"] = pendientes_inicial
+                    resultado["ok"] = True
+                    return resultado
 
             while True:
                 if es_masiva:
@@ -3342,7 +3588,7 @@ class MotorNesting:
                     break
 
                 lote, nueva_dest = self._maximo_lote_incremental(
-                    hoja_destino, pendientes, hojas_grupo, hoja_origen=hoja_origen
+                    hoja_destino, pendientes, hojas_grupo_dest, hoja_origen=hoja_origen
                 )
 
                 if not lote:
@@ -3351,16 +3597,17 @@ class MotorNesting:
                         hoja_destino,
                         piezas_dest_base,
                         pendientes,
-                        hojas_grupo,
+                        hojas_grupo_dest,
                         hoja_origen=hoja_origen,
+                        intentos_mc=intentos_renest,
                     )
                     if lote:
                         ok, nueva_dest = self._simular_renest_en_destino(
                             hoja_destino,
                             piezas_dest_base,
                             lote,
-                            hojas_grupo,
-                            intentos_mc=12,
+                            hojas_grupo_dest,
+                            intentos_mc=intentos_renest,
                             hoja_origen=hoja_origen,
                         )
                         if not ok or nueva_dest is None:
@@ -3385,6 +3632,8 @@ class MotorNesting:
                             p,
                             hoja_destino,
                             hoja_origen=hoja_origen,
+                            resultados_destino=resultados_dest,
+                            dest_grupo=dest_grupo,
                         ):
                             movidas_total += 1
                     if movidas_total > 0:
@@ -3403,6 +3652,7 @@ class MotorNesting:
                     hoja_destino,
                     lote,
                     nueva_dest,
+                    dest_grupo=dest_grupo,
                 )
                 movidas_total += len(lote)
 
@@ -3411,12 +3661,10 @@ class MotorNesting:
                 if len(lote) >= len(pendientes):
                     break
 
-            conteo_despues = self._conteo_piezas_reales_en_hojas(
-                origen_grupo.get("hojas") or []
-            )
+            conteo_despues = self._conteo_piezas_en_grupos(origen_grupo, dest_grupo)
             if conteo_despues != conteo_antes:
                 _dbg_nesting(
-                    f"[TRANSFER] conteo grupo {conteo_antes} -> {conteo_despues}"
+                    f"[TRANSFER] conteo multigrupo {conteo_antes} -> {conteo_despues}"
                 )
             resultado["movidas"] = movidas_total
             resultado["restantes"] = len(self._piezas_reales_en_hoja(hoja_origen))
@@ -3437,6 +3685,8 @@ class MotorNesting:
         hoja_destino,
         hoja_origen=None,
         idx_hint=None,
+        resultados_destino=None,
+        dest_grupo=None,
     ):
         """
         Mueve una pieza de su hoja origen a una hoja destino y reoptimiza ambas.
@@ -3465,6 +3715,17 @@ class MotorNesting:
             if origen_hoja is hoja_destino:
                 return False
 
+            resultados_dest = (
+                resultados_destino
+                if resultados_destino is not None
+                else resultados_nesting
+            )
+            if dest_grupo is None:
+                dest_grupo = self._grupo_de_hoja(resultados_dest, hoja_destino)
+            if dest_grupo is None:
+                return False
+            hoja_destino = self._resolver_hoja_viva(resultados_dest, hoja_destino)
+
             pieza_mover = origen_hoja["piezas"][idx_origen]
             if self._as_pack_piece_visual(pieza_mover) is None:
                 return False
@@ -3473,14 +3734,23 @@ class MotorNesting:
             if params_d["w"] <= 0 or params_d["h"] <= 0:
                 return False
 
-            hojas_grupo = (origen_grupo or {}).get("hojas") if isinstance(origen_grupo, dict) else None
-            excluir_rtz = self._rtz_ids_a_liberar_en_destino(
-                origen_hoja, hoja_destino, hojas_grupo
+            hojas_grupo_orig = (
+                (origen_grupo or {}).get("hojas")
+                if isinstance(origen_grupo, dict)
+                else None
+            )
+            hojas_grupo_dest = (
+                (dest_grupo or origen_grupo or {}).get("hojas")
+                if isinstance(dest_grupo or origen_grupo, dict)
+                else hojas_grupo_orig
+            )
+            excluir_rtz = self._excluir_rtz_para_transfer(
+                origen_hoja, hoja_destino, hojas_grupo_dest
             )
             nueva_dest = self._intentar_colocacion_incremental(
                 hoja_destino,
                 pieza_mover,
-                hojas_grupo,
+                hojas_grupo_dest,
                 excluir_rtz_ids=excluir_rtz,
             )
             if nueva_dest is None:
@@ -3489,9 +3759,9 @@ class MotorNesting:
                 nueva_dest, sobras_dest = self._empaquetar_respetando_rtz_madre(
                     piezas_dest,
                     hoja_destino,
-                    hojas_grupo,
+                    hojas_grupo_dest,
                     debug_tag="transfer_dest",
-                    intentos=12,
+                    intentos=24 if dest_grupo is not origen_grupo else 12,
                     excluir_rtz_ids=excluir_rtz,
                 )
                 if nueva_dest is None or sobras_dest:
@@ -3507,6 +3777,7 @@ class MotorNesting:
                 hoja_destino,
                 [pieza_mover],
                 nueva_dest,
+                dest_grupo=dest_grupo,
             )
             return True
         except Exception as e:
