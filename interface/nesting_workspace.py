@@ -342,6 +342,118 @@ def _reconstruir_editable_inputs_by_lote(payload, resultados_multilote, datos_ba
     return salida
 
 
+def _construir_ui_state_workspace(tab, multilote, lote_idx=0):
+    lote_idx = int(lote_idx or 0)
+    cantidad = getattr(tab, "cantidad_tanques", "N/A")
+    if isinstance(multilote, list) and 0 <= lote_idx < len(multilote):
+        k = multilote[lote_idx].get("lote_k", cantidad)
+        if k not in (None, "", "N/A"):
+            cantidad = f"X{k}" if not str(k).upper().startswith("X") else str(k)
+    return {
+        "cantidad_tanques": cantidad,
+        "multiplicador_tanques": int(_inferir_multiplicador_desde_multilote(multilote, lote_idx)),
+        "lote_k_activo": int(_inferir_multiplicador_desde_multilote(multilote, lote_idx)),
+        "global_margin_val": getattr(tab, "global_margin_val", 0.15),
+        "global_kerf_val": getattr(tab, "global_kerf_val", 0.3),
+        "global_corner_val": getattr(tab, "global_corner_val", "INFERIOR IZQUIERDA"),
+        "costo_usd_val": getattr(tab, "costo_usd_val", 0.0),
+        "costo_mxn_val": getattr(tab, "costo_mxn_val", 0.0),
+        "cmb_opt_val": _combo_text(getattr(tab, "cmb_opt", None)),
+        "ajuste_desplegado": bool(getattr(tab, "ajuste_desplegado", False)),
+    }
+
+
+def _vista_desde_resultados(mini_resultados):
+    for clave, info in (mini_resultados or {}).items():
+        hojas = info.get("hojas") or []
+        if not hojas:
+            continue
+        hoja = hojas[0]
+        uid = str(hoja.get("sheet_uid") or "").strip()
+        if not uid and hoja.get("_nest_list_idx") is not None:
+            uid = f"idx:{int(hoja.get('_nest_list_idx'))}"
+        return {
+            "clave_actual": str(clave),
+            "placa_id": hoja.get("placa_id"),
+            "sheet_uid": uid or None,
+            "nest_list_idx": hoja.get("_nest_list_idx"),
+        }
+    return {
+        "clave_actual": "",
+        "placa_id": None,
+        "sheet_uid": None,
+        "nest_list_idx": None,
+    }
+
+
+def construir_payload_workspace_lote_export(
+    tab,
+    *,
+    lote_idx,
+    mini_resultados,
+    n_wo,
+    k_val,
+):
+    """Workspace .arganest de un solo lote/WO (export automático junto a DXF)."""
+    lote_idx = int(lote_idx or 0)
+    ml_src = getattr(tab.app, "resultados_multilote", None) or []
+    if 0 <= lote_idx < len(ml_src):
+        lote_entry = copy.deepcopy(ml_src[lote_idx])
+    else:
+        lote_entry = {"lote_k": k_val}
+    lote_entry["data"] = copy.deepcopy(mini_resultados or {})
+    multilote = [lote_entry]
+
+    try:
+        from modules.nesting_engine.display_geometry import asegurar_dxf_export_cache_para_guardar
+
+        dxf_export_cache = asegurar_dxf_export_cache_para_guardar(
+            multilote,
+            log=lambda msg, **kw: print(f"[ARGANEST-SAVE][EXPORT] {msg}", flush=True),
+        )
+    except Exception as exc:
+        dxf_export_cache = {"transform_ready": False, "error": str(exc)}
+
+    datos_partes = _clonar_datos_partes(getattr(tab.app, "datos_partes_actuales", []))
+    editable_inputs_by_lote_full = getattr(tab.app, "editable_inputs_by_lote", []) or []
+    if editable_inputs_by_lote_full and 0 <= lote_idx < len(editable_inputs_by_lote_full):
+        editable_inputs = _clonar_datos_partes(editable_inputs_by_lote_full[lote_idx])
+    elif getattr(tab.app, "editable_inputs_actuales", None) and lote_idx == int(
+        getattr(tab, "lote_actual_idx", 0) or 0
+    ):
+        editable_inputs = _clonar_datos_partes(tab.app.editable_inputs_actuales)
+    else:
+        editable_inputs = _clonar_datos_partes(datos_partes)
+    editable_inputs_by_lote = [editable_inputs]
+
+    payload = {
+        "schema": SCHEMA_WORKSPACE,
+        "saved_at": _now_iso(),
+        "workspace_type": "nesting_workspace",
+        "job_activo": getattr(tab.app, "job_activo", "NESTING"),
+        "lote_actual_idx": 0,
+        "resultados_multilote": multilote,
+        "datos_partes_actuales": editable_inputs or datos_partes,
+        "editable_inputs_by_lote": editable_inputs_by_lote,
+        "editable_inputs_actuales": _clonar_datos_partes(editable_inputs),
+        "lote_editado_dirty": bool(getattr(tab.app, "lote_editado_dirty", False)),
+        "source_dxf_paths": _extraer_rutas_dxf(editable_inputs or datos_partes),
+        "source_dxf_paths_by_lote": _extraer_rutas_por_lote(editable_inputs_by_lote),
+        "meta_pdf_por_ruta": getattr(tab.app, "meta_pdf_por_ruta", {}),
+        "wo_reales_por_lote": {0: str(n_wo)},
+        "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
+        "dxf_export_cache": dxf_export_cache,
+        "ui_state": _construir_ui_state_workspace(tab, multilote, lote_idx=0),
+        "vista_actual": _vista_desde_resultados(mini_resultados),
+        "export_meta": {
+            "lote_idx_origen": lote_idx,
+            "work_order": str(n_wo),
+            "lote_k": k_val,
+        },
+    }
+    return _deepcopy_jsonsafe(payload)
+
+
 def construir_payload_workspace(tab):
     multilote = _get_resultados_multilote(tab)
     if not multilote:
@@ -398,18 +510,9 @@ def construir_payload_workspace(tab):
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
-        "ui_state": {
-            "cantidad_tanques": getattr(tab, "cantidad_tanques", "N/A"),
-            "multiplicador_tanques": int(getattr(tab.app, "multiplicador_tanques", 1) or 1),
-            "lote_k_activo": int(_inferir_multiplicador_desde_multilote(multilote, getattr(tab, "lote_actual_idx", 0))),
-            "global_margin_val": getattr(tab, "global_margin_val", 0.15),
-            "global_kerf_val": getattr(tab, "global_kerf_val", 0.3),
-            "global_corner_val": getattr(tab, "global_corner_val", "INFERIOR IZQUIERDA"),
-            "costo_usd_val": getattr(tab, "costo_usd_val", 0.0),
-            "costo_mxn_val": getattr(tab, "costo_mxn_val", 0.0),
-            "cmb_opt_val": _combo_text(getattr(tab, "cmb_opt", None)),
-            "ajuste_desplegado": bool(getattr(tab, "ajuste_desplegado", False)),
-        },
+        "ui_state": _construir_ui_state_workspace(
+            tab, multilote, lote_idx=int(getattr(tab, "lote_actual_idx", 0) or 0)
+        ),
         "vista_actual": {
             "clave_actual": getattr(tab, "clave_actual", "") or "",
             "placa_id": _get_placa_id_actual(tab),
@@ -425,9 +528,7 @@ def construir_payload_workspace(tab):
     return _deepcopy_jsonsafe(payload)
 
 
-def guardar_workspace(tab, ruta_archivo):
-    payload = construir_payload_workspace(tab)
-
+def guardar_workspace_payload(payload, ruta_archivo):
     carpeta = os.path.dirname(os.path.abspath(ruta_archivo))
     if carpeta:
         os.makedirs(carpeta, exist_ok=True)
@@ -439,8 +540,6 @@ def guardar_workspace(tab, ruta_archivo):
         separators=(",", ":"),
     )
 
-    # .arganest/.navanest: formato compacto + compresión gzip (sin pérdida).
-    # .json: se mantiene en texto plano para inspección manual.
     if ext in COMPRESSED_WORKSPACE_EXTS:
         with gzip.open(ruta_archivo, "wb", compresslevel=6) as f:
             f.write(json_text.encode("utf-8"))
@@ -449,6 +548,11 @@ def guardar_workspace(tab, ruta_archivo):
             f.write(json_text)
 
     return payload
+
+
+def guardar_workspace(tab, ruta_archivo):
+    payload = construir_payload_workspace(tab)
+    return guardar_workspace_payload(payload, ruta_archivo)
 
 
 def cargar_workspace_desde_archivo(ruta_archivo, *, log=None):

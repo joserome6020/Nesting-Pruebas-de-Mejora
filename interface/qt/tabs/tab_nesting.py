@@ -50,6 +50,8 @@ from interface.qt.dialogs.nesting_modals import (
 from interface.qt.dialogs.lote_editor import abrir_editor_lote
 from nesting_workspace import (
     guardar_workspace,
+    guardar_workspace_payload,
+    construir_payload_workspace_lote_export,
     cargar_workspace_desde_archivo,
     aplicar_workspace,
     reset_arganest_load_log,
@@ -166,6 +168,19 @@ class TabNesting(QWidget, TimerHost):
 
         return os.path.join(ruta_export_base, "NESTING", REPORTE_PDF_NESTING)
 
+    def _ruta_carpeta_arganest_nesting(self, ruta_export_base: str) -> str:
+        from modules.nesting_engine.exporter import ARCHIVO_ARGANEST_NESTING
+
+        return os.path.join(ruta_export_base, "NESTING", ARCHIVO_ARGANEST_NESTING)
+
+    def _nombre_archivo_export_lote(self, job_activo: str, n_wo: str, *, extension: str) -> str:
+        orden_archivo = str(job_activo).replace("/", "-").replace("\\", "-")
+        wo_archivo = str(n_wo).replace("/", "-").replace("\\", "-")
+        ext = str(extension or "").strip().lower()
+        if ext and not ext.startswith("."):
+            ext = f".{ext}"
+        return f"Nesting_{orden_archivo}-{wo_archivo}{ext}"
+
     def _exportar_pdf_nesting_en_carpeta_export(
         self,
         mini_resultados,
@@ -178,9 +193,9 @@ class TabNesting(QWidget, TimerHost):
         carpeta_pdf = self._ruta_carpeta_reporte_pdf_nesting(ruta_export_base)
         os.makedirs(carpeta_pdf, exist_ok=True)
 
-        orden_archivo = job.replace("/", "-").replace("\\", "-")
-        wo_archivo = str(n_wo).replace("/", "-").replace("\\", "-")
-        nombre_pdf = f"Nesting_Reporte_{orden_archivo}-{wo_archivo}.pdf"
+        nombre_pdf = self._nombre_archivo_export_lote(job, n_wo, extension=".pdf").replace(
+            "Nesting_", "Nesting_Reporte_", 1
+        )
         ruta_pdf = os.path.join(carpeta_pdf, nombre_pdf)
 
         exportar_pdf_nesting(
@@ -192,6 +207,33 @@ class TabNesting(QWidget, TimerHost):
             work_order_label=str(n_wo),
         )
         return ruta_pdf
+
+    def _exportar_arganest_en_carpeta_export(
+        self,
+        mini_resultados,
+        ruta_export_base: str,
+        n_wo: str,
+        *,
+        lote_idx: int,
+        k_val,
+        job_activo: str | None = None,
+    ) -> str:
+        job = str(job_activo or getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
+        carpeta_arganest = self._ruta_carpeta_arganest_nesting(ruta_export_base)
+        os.makedirs(carpeta_arganest, exist_ok=True)
+
+        nombre_arganest = self._nombre_archivo_export_lote(job, n_wo, extension=".arganest")
+        ruta_arganest = os.path.join(carpeta_arganest, nombre_arganest)
+
+        payload = construir_payload_workspace_lote_export(
+            self,
+            lote_idx=int(lote_idx),
+            mini_resultados=mini_resultados,
+            n_wo=str(n_wo),
+            k_val=k_val,
+        )
+        guardar_workspace_payload(payload, ruta_arganest)
+        return ruta_arganest
 
     def exportar_reporte_pdf_nesting(self):
         if not hasattr(self.app, 'resultados_nesting') or not self.app.resultados_nesting:
@@ -266,7 +308,11 @@ class TabNesting(QWidget, TimerHost):
             return QMessageBox.warning(self, "Atención", "No hay datos de nesting para guardar.")
 
         orden_actual = str(getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
-        nombre_sugerido = f"{orden_actual.replace('/', '-').replace('\\\\', '-')}.arganest"
+        wo_real = self._obtener_wo_real_lote_actual()
+        if wo_real:
+            nombre_sugerido = self._nombre_archivo_export_lote(orden_actual, wo_real, extension=".arganest")
+        else:
+            nombre_sugerido = f"{orden_actual.replace('/', '-').replace('\\\\', '-')}.arganest"
 
         ruta_archivo = self._ask_save_file(
             title="Guardar workspace de nesting",
@@ -6279,6 +6325,22 @@ class TabNesting(QWidget, TimerHost):
                         print(f"[PDF][EXPORT] Reporte automático: {ruta_pdf_auto}")
                     except Exception as e_pdf:
                         print(f"[PDF][EXPORT][WARN] Lote {i + 1}: no se pudo generar el PDF: {e_pdf}")
+
+                    try:
+                        ruta_arganest_auto = self._exportar_arganest_en_carpeta_export(
+                            mini_resultados,
+                            ruta_export,
+                            n_wo,
+                            lote_idx=i,
+                            k_val=k_val,
+                            job_activo=job_activo,
+                        )
+                        print(f"[ARGANEST][EXPORT] Workspace automático: {ruta_arganest_auto}")
+                    except Exception as e_arganest:
+                        print(
+                            f"[ARGANEST][EXPORT][WARN] Lote {i + 1}: "
+                            f"no se pudo generar el .arganest: {e_arganest}"
+                        )
 
                     if modo_servidor:
                         try:

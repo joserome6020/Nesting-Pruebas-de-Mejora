@@ -10,6 +10,7 @@ RUTA_CAMA_LASER_12KW = "CAMA LASER 12 KW SIN MINI NEST"
 RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
+ARCHIVO_ARGANEST_NESTING = "ARCHIVO DE NESTEO ARGANEST"
 
 
 def _hay_dxfs(ruta):
@@ -588,6 +589,7 @@ def exportar_resultados_a_dxf(
     for r in rutas.values():
         os.makedirs(r, exist_ok=True)
     os.makedirs(os.path.join(job_root_dir, REPORTE_PDF_NESTING), exist_ok=True)
+    os.makedirs(os.path.join(job_root_dir, ARCHIVO_ARGANEST_NESTING), exist_ok=True)
 
     exportados_principales = []
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
