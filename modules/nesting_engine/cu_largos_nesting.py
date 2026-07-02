@@ -597,12 +597,12 @@ def _pieza_cu_exime_separacion(item: dict) -> bool:
 
 def _gap_entre_piezas_cu(prev_item: dict, next_item: dict, separacion_in: float) -> float:
     """
-    Separación en mm entre dos piezas consecutivas en la barra.
-    Piezas ≤15\" (largo DXF) fuerzan gap 0; si ambas son >15\" usa separacion_in (p. ej. 3/8\").
+    Separación en mm antes de colocar next_item en la barra.
+    Piezas ≤15\" (largo DXF): gap 0. Piezas >15\": separacion_in (p. ej. 3/8\") tras la anterior.
     """
     if prev_item is None or next_item is None:
         return 0.0
-    if _pieza_cu_exime_separacion(prev_item) or _pieza_cu_exime_separacion(next_item):
+    if _pieza_cu_exime_separacion(next_item):
         return 0.0
     return max(0.0, float(separacion_in or 0.0)) * 25.4
 
