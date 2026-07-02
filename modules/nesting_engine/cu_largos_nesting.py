@@ -4,7 +4,7 @@ Nesting 1D para largos de cobre (CU).
 - Orientación nativa del DXF (sin rotar).
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Separación 3/8" entre piezas ≤15" de largo (eje X del DXF); piezas >15" siempre sin separación
+- Separación 3/8" entre piezas >15" de largo (eje X del DXF); piezas ≤15" siempre sin separación
   (incluso al renestear con otra distancia).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = contorno completo de pieza
   (+ marcador vertical inicio barra en export de hoja).
@@ -34,7 +34,7 @@ TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
-# Piezas con largo DXF (eje X) mayor a este umbral van siempre sin separación (renest no aplica).
+# Piezas con largo DXF (eje X) hasta este umbral van siempre sin separación (renest no aplica).
 LARGO_SIN_SEPARACION_CU_IN = 15.0
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40
@@ -591,14 +591,14 @@ def _largo_pieza_cu_in(item: dict) -> float:
 
 
 def _pieza_cu_exime_separacion(item: dict) -> bool:
-    """True si el largo DXF supera el umbral: siempre gap 0 con vecinos."""
-    return _largo_pieza_cu_in(item) > LARGO_SIN_SEPARACION_CU_IN
+    """True si el largo DXF es ≤15\": siempre gap 0 con vecinos."""
+    return _largo_pieza_cu_in(item) <= LARGO_SIN_SEPARACION_CU_IN
 
 
 def _gap_entre_piezas_cu(prev_item: dict, next_item: dict, separacion_in: float) -> float:
     """
     Separación en mm entre dos piezas consecutivas en la barra.
-    Piezas >15\" (largo DXF) fuerzan gap 0; el resto usa separacion_in (p. ej. 3/8\").
+    Piezas ≤15\" (largo DXF) fuerzan gap 0; si ambas son >15\" usa separacion_in (p. ej. 3/8\").
     """
     if prev_item is None or next_item is None:
         return 0.0

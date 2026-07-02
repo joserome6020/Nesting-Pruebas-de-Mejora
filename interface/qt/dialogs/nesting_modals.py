@@ -62,8 +62,8 @@ def preguntar_separacion_cobre_renest(parent, valor_actual: float = 0.375) -> fl
     hint = QLabel(
         "Distancia en el eje del largo entre piezas consecutivas en la barra.\n"
         "Predeterminado: 3/8\". Use 0 para piezas sin separación.\n"
-        "Nota: piezas con largo DXF > 15\" siempre van sin separación "
-        "(esta opción no las afecta).",
+        "Nota: piezas con largo DXF ≤15\" siempre van sin separación "
+        "(esta opción solo aplica entre piezas >15\").",
         wordWrap=True,
     )
     hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")

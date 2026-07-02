@@ -3252,8 +3252,8 @@ class TabNesting(QWidget, TimerHost):
                 return
             detalle = (
                 f"Se volverá a optimizar el calibre {clave} usando barras largo CU "
-                f"(144\" × 2–6\") con separación {cu_separacion_in:g}\" entre piezas "
-                f"≤15\" de largo (las piezas >15\" siempre van sin separación)."
+                f"(144\" × 2–6\") con separación {cu_separacion_in:g}\" solo entre piezas "
+                f">15\" de largo (las ≤15\" siempre van sin separación)."
                 f"{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear cobre en largos"
