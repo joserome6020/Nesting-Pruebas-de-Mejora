@@ -194,6 +194,7 @@ def ejecutar_macro_freecad(
     *,
     prefer_verde: bool = False,
     max_intentos: int = 2,
+    material: str = "",
 ) -> bool:
 
     def snapshot_steps(folder: str):
@@ -249,8 +250,17 @@ def ejecutar_macro_freecad(
     log_path = _resolve_log_path(step_resuelta)
     log_dir = os.path.dirname(log_path)
 
+    dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta)
+    n_dxf = len(dxf_files)
+    # Cobre / nests grandes: un FreeCAD por lote; ~2 min/archivo, tope 6 h.
+    timeout_sec = max(1800.0, min(21600.0, n_dxf * 120.0))
+
     with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"\n--- INICIANDO CONVERSIÓN STEP ({origen}) ---\n")
+        def _log(msg: str) -> None:
+            f.write(msg)
+            f.flush()
+
+        _log(f"\n--- INICIANDO CONVERSIÓN STEP ({origen}) ---\n")
         f.write(f"Ejecutable: {ruta_exe}\n")
         f.write(f"Macro: {ruta_macro}\n")
         f.write(f"DXF folder (solicitado): {dxf_folder}\n")
@@ -285,7 +295,9 @@ def ejecutar_macro_freecad(
             return False
 
         dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta)
-        f.write(f"DXF detectados: {len(dxf_files)}\n")
+        n_dxf = len(dxf_files)
+        _log(f"DXF detectados: {n_dxf}\n")
+        _log(f"Timeout FreeCAD: {int(timeout_sec)} s\n")
         for path in dxf_files[:20]:
             f.write(f" - {path}\n")
         if len(dxf_files) > 20:
@@ -320,62 +332,84 @@ def ejecutar_macro_freecad(
         env["FREECAD_OFFSET_X"] = str(off_x)
         env["FREECAD_OFFSET_Y"] = str(off_y)
         env["FREECAD_OFFSET_Z"] = str(off_z)
+        if material:
+            env["FREECAD_MATERIAL"] = str(material).strip().upper()
 
         cmd = [ruta_exe, ruta_macro]
-        f.write(f"Comando lanzado: {' '.join(cmd)}\n")
+        _log(f"Comando lanzado: {' '.join(cmd)}\n")
 
         for intento in range(1, max(1, int(max_intentos)) + 1):
             if intento > 1:
-                f.write(f"\n--- REINTENTO STEP {intento}/{max_intentos} ---\n")
+                _log(f"\n--- REINTENTO STEP {intento}/{max_intentos} ---\n")
                 time.sleep(1.0)
                 dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta, timeout_sec=5.0)
-                f.write(f"DXF detectados (reintento): {len(dxf_files)}\n")
+                _log(f"DXF detectados (reintento): {len(dxf_files)}\n")
 
             try:
-                proc = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    timeout=1800,
-                )
+                timeout_sec = max(1800.0, min(21600.0, len(dxf_files) * 120.0))
+                _log(f"Timeout FreeCAD (intento {intento}): {int(timeout_sec)} s\n")
+                stdout_log = os.path.join(log_dir, "freecad_stdout.log")
+                stderr_log = os.path.join(log_dir, "freecad_stderr.log")
+                with open(stdout_log, "w", encoding="utf-8") as out_f, open(
+                    stderr_log, "w", encoding="utf-8"
+                ) as err_f:
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=out_f,
+                        stderr=err_f,
+                        env=env,
+                        timeout=timeout_sec,
+                    )
 
-                f.write("=== SALIDA DE FREECAD ===\n")
-                f.write((proc.stdout or "") + "\n")
-                f.write("=== ERRORES DE FREECAD ===\n")
-                f.write((proc.stderr or "") + "\n")
-                f.write(f"Return code: {proc.returncode}\n")
+                try:
+                    with open(stdout_log, "r", encoding="utf-8", errors="replace") as out_f:
+                        stdout_text = out_f.read()
+                except Exception:
+                    stdout_text = ""
+                try:
+                    with open(stderr_log, "r", encoding="utf-8", errors="replace") as err_f:
+                        stderr_text = err_f.read()
+                except Exception:
+                    stderr_text = ""
+
+                _log("=== SALIDA DE FREECAD ===\n")
+                _log((stdout_text or "") + "\n")
+                _log("=== ERRORES DE FREECAD ===\n")
+                _log((stderr_text or "") + "\n")
+                _log(f"Return code: {proc.returncode}\n")
 
                 after_snapshot = snapshot_steps(step_resuelta)
                 nuevos, actualizados = diff_steps(before_snapshot, after_snapshot)
 
-                f.write(f"STEP después: {len(after_snapshot)}\n")
-                f.write(f"STEP nuevos: {len(nuevos)}\n")
-                f.write(f"STEP actualizados: {len(actualizados)}\n")
+                _log(f"STEP después: {len(after_snapshot)}\n")
+                _log(f"STEP nuevos: {len(nuevos)}\n")
+                _log(f"STEP actualizados: {len(actualizados)}\n")
 
                 for path in nuevos:
-                    f.write(f"STEP NUEVO -> {path}\n")
+                    _log(f"STEP NUEVO -> {path}\n")
 
                 for path in actualizados:
-                    f.write(f"STEP ACTUALIZADO -> {path}\n")
+                    _log(f"STEP ACTUALIZADO -> {path}\n")
 
                 ok = (
                     proc.returncode == 0
                     and (nuevos or actualizados or len(after_snapshot) > 0)
                 )
                 if ok:
-                    f.write("RESULTADO FINAL: OK\n")
+                    _log("RESULTADO FINAL: OK\n")
                     return True
 
                 if proc.returncode != 0:
-                    f.write("RESULTADO: FAIL (FreeCAD devolvió código distinto de 0)\n")
+                    _log("RESULTADO: FAIL (FreeCAD devolvió código distinto de 0)\n")
                 elif not nuevos and not actualizados and len(after_snapshot) == 0:
-                    f.write("RESULTADO: FAIL (no se detectó ningún STEP en la carpeta destino)\n")
+                    _log("RESULTADO: FAIL (no se detectó ningún STEP en la carpeta destino)\n")
                 else:
-                    f.write("RESULTADO: FAIL (FreeCAD terminó pero no dejó STEP nuevos ni actualizados)\n")
+                    _log("RESULTADO: FAIL (FreeCAD terminó pero no dejó STEP nuevos ni actualizados)\n")
 
+            except subprocess.TimeoutExpired as e:
+                _log(f"TIMEOUT FreeCAD tras {int(timeout_sec)}s: {e}\n")
             except Exception as e:
-                f.write(f"EXCEPCIÓN DE WINDOWS: {e}\n")
+                _log(f"EXCEPCIÓN DE WINDOWS: {e}\n")
 
-        f.write("RESULTADO FINAL: FAIL (agotados reintentos)\n")
+        _log("RESULTADO FINAL: FAIL (agotados reintentos)\n")
         return False

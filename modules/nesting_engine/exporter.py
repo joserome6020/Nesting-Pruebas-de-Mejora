@@ -95,6 +95,98 @@ def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
     return copiados
 
 
+_ULTIMO_RESUMEN_STEP: dict[str, dict[str, int]] = {}
+
+
+def obtener_resumen_step_ultimo_export() -> dict[str, dict[str, int]]:
+    """Resumen DXF vs STEP del último export (vacío si no hubo conversión 3D)."""
+    return dict(_ULTIMO_RESUMEN_STEP)
+
+
+def _auditar_steps_en_rutas(rutas: dict) -> dict[str, dict[str, int]]:
+    familias = [
+        ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
+        ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
+        ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
+        ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
+    ]
+    resumen: dict[str, dict[str, int]] = {}
+    for etiqueta, dxf_key, step_key in familias:
+        dxf_dir = os.path.normpath(str(rutas.get(dxf_key) or "").strip())
+        step_dir = os.path.normpath(str(rutas.get(step_key) or "").strip())
+        n_dxf = len(_listar_dxfs_en_carpeta(dxf_dir)) if dxf_dir else 0
+        n_step = 0
+        if step_dir and os.path.isdir(step_dir):
+            n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
+        if n_dxf > 0 or n_step > 0:
+            resumen[etiqueta] = {"dxf": n_dxf, "step": n_step}
+    return resumen
+
+
+def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[str, int]]:
+    """Falla el export si había DXF de cobre/láser y no se generó ningún STEP."""
+    _log = log_fn or (lambda _msg: None)
+    resumen = _auditar_steps_en_rutas(rutas)
+    for etiqueta, counts in resumen.items():
+        n_dxf = int(counts.get("dxf") or 0)
+        n_step = int(counts.get("step") or 0)
+        if n_dxf <= 0:
+            continue
+        _log(f"STEP audit [{etiqueta}]: {n_step}/{n_dxf} archivos")
+        if n_step <= 0:
+            step_dir = rutas.get(
+                {
+                    "CAMA LASER": "cama_laser_step",
+                    "CAMA LASER 12KW": "cama_laser_12kw_step",
+                    "ROBOT LASER": "robot_laser_step_A",
+                    "ROBOT PLASMA": "robot_plasma_step_A",
+                }.get(etiqueta, ""),
+                "",
+            )
+            log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
+            raise RuntimeError(
+                f"FreeCAD no generó STEP en {etiqueta} ({n_dxf} DXF, 0 STEP). "
+                f"Revisa el log: {log_hint}"
+            )
+        if n_step < n_dxf:
+            _log(
+                f"WARN [{etiqueta}]: STEP incompletos ({n_step}/{n_dxf}). "
+                "Puede ser timeout o DXF sin contorno CUT_CU/Plate."
+            )
+    return resumen
+
+
+def _generar_steps_cobre_fuentes_in_place(resultados: dict, job_root_dir: str, *, log_fn=None) -> int:
+    """Escribe manifiesto de DXF fuente cobre y genera STEP junto a cada DXF (sin mover)."""
+    from modules.cobre_step_fuentes import (
+        escribir_manifest_cobre,
+        procesar_steps_cobre_en_ubicacion_fuentes,
+        recolectar_fuentes_cobre_desde_resultados,
+    )
+
+    manifest = recolectar_fuentes_cobre_desde_resultados(resultados or {})
+    fuentes = manifest.get("fuentes") or []
+    if not fuentes:
+        return 0
+
+    dest_manifest = os.path.join(job_root_dir, RUTA_CAMA_LASER)
+    path = escribir_manifest_cobre(dest_manifest, manifest)
+    if log_fn:
+        log_fn(f"Manifiesto cobre: {path} ({len(fuentes)} DXF fuente)")
+
+    esp_in = float(manifest.get("espesor_in") or 0.25)
+    thk_mm = esp_in * 25.4
+    res = procesar_steps_cobre_en_ubicacion_fuentes(
+        manifest,
+        thk_mm=thk_mm,
+        log_fn=log_fn,
+    )
+    ok_dirs = sum(1 for _c, ok, _d in res if ok)
+    if log_fn:
+        log_fn(f"STEP cobre in-place: {ok_dirs}/{len(res)} carpeta(s) fuente")
+    return ok_dirs
+
+
 def _safe_float(value, default=None):
     try:
         return float(value)
@@ -442,13 +534,27 @@ def _registrar_exportacion_pqart_hoja(
 
     exports.append(payload)
 
-def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = None):
+def _job_tiene_cobre(resultados: dict) -> bool:
+    for data in (resultados or {}).values():
+        if isinstance(data, dict) and data.get("modo_largos_cu"):
+            return True
+    return False
+
+
+def lanzar_freecad_robotica(
+    rutas,
+    thk,
+    plasma_off,
+    job_root_dir: str | None = None,
+    *,
+    es_cobre: bool = False,
+):
     from freecad_runner import ejecutar_macro_freecad
 
     job_root = os.path.normpath(str(job_root_dir or "").strip())
     resultados = []
 
-    def _convertir(etiqueta, dxf_key, step_key, origen, ox, oy, oz, *, prefer_verde=False):
+    def _convertir(etiqueta, dxf_key, step_key, origen, ox, oy, oz, *, prefer_verde=False, material="STEEL"):
         dxf_dir = _localizar_carpeta_dxf(
             rutas.get(dxf_key, ""),
             job_root,
@@ -476,6 +582,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             ox, oy, oz,
             prefer_verde=prefer_verde,
             max_intentos=2,
+            material=material,
         )
         resultados.append((etiqueta, ok, dxf_dir))
         if not ok:
@@ -484,7 +591,14 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
     # CAMA LASER (incluye largos de cobre CU)
     if rutas.get("cama_laser_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        _convertir("CAMA LASER", "cama_laser_dxf", "cama_laser_step", "TR", 0.0, 0.0, 0.0)
+        _convertir(
+            "CAMA LASER",
+            "cama_laser_dxf",
+            "cama_laser_step",
+            "TR",
+            0.0, 0.0, 0.0,
+            material="CU" if es_cobre else "STEEL",
+        )
 
     if rutas.get("cama_laser_12kw_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
@@ -494,6 +608,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             "cama_laser_12kw_step",
             "TR",
             0.0, 0.0, 0.0,
+            material="STEEL",
         )
 
     # ROBOT LASER
@@ -506,6 +621,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             "TR",
             4235, -1015, -700,
             prefer_verde=True,
+            material="STEEL",
         )
         _convertir(
             "ROBOT LASER B",
@@ -514,6 +630,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             "BR",
             4235, 840, -700,
             prefer_verde=True,
+            material="STEEL",
         )
 
     # ROBOT PLASMA
@@ -526,6 +643,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             "TR",
             4235, -1015, -700,
             prefer_verde=True,
+            material="STEEL",
         )
         _convertir(
             "ROBOT PLASMA B",
@@ -534,6 +652,7 @@ def lanzar_freecad_robotica(rutas, thk, plasma_off, job_root_dir: str | None = N
             "BR",
             4235, 840, -700,
             prefer_verde=True,
+            material="STEEL",
         )
 
     ok_total = sum(1 for _, ok, _ in resultados if ok)
@@ -998,7 +1117,16 @@ def exportar_resultados_a_dxf(
         log("Iniciando conversión STEP (FreeCAD)...")
         import time
         time.sleep(0.35)
-        lanzar_freecad_robotica(rutas, thickness_para_step, plasma_offset_job, job_root_dir=job_root_dir)
+        lanzar_freecad_robotica(
+            rutas,
+            thickness_para_step,
+            plasma_offset_job,
+            job_root_dir=job_root_dir,
+            es_cobre=_job_tiene_cobre(resultados),
+        )
+        _generar_steps_cobre_fuentes_in_place(resultados, job_root_dir, log_fn=log)
+        _ULTIMO_RESUMEN_STEP.clear()
+        _ULTIMO_RESUMEN_STEP.update(_validar_steps_tras_export(rutas, log_fn=log))
         n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
         if n_step:
             etiqueta = "SWO" if es_swo_export else "WO"

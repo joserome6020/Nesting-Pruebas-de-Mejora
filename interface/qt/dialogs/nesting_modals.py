@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -40,6 +41,61 @@ def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
     fg = dlg.frameGeometry()
     fg.moveCenter(center)
     dlg.move(fg.topLeft())
+
+
+def preguntar_separacion_cobre_renest(parent, valor_actual: float = 0.375) -> float | None:
+    """
+    Panel de separación entre piezas CU antes de renestear calibre completo.
+    Retorna pulgadas (0 = sin separación) o None si el usuario cancela.
+    """
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Separación entre piezas de cobre")
+    dlg.setModal(True)
+    dlg.setFixedSize(420, 210)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+
+    lay = QVBoxLayout(dlg)
+    tit = QLabel("SEPARACIÓN ENTRE PIEZAS CU", alignment=Qt.AlignmentFlag.AlignCenter)
+    tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(tit)
+
+    hint = QLabel(
+        "Distancia en el eje del largo entre piezas consecutivas en la barra.\n"
+        "Predeterminado: 3/8\". Use 0 para piezas sin separación.",
+        wordWrap=True,
+    )
+    hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(hint)
+
+    row = QHBoxLayout()
+    row.addWidget(QLabel("Separación (in):"))
+    spin = QDoubleSpinBox()
+    spin.setRange(0.0, 24.0)
+    spin.setDecimals(4)
+    spin.setSingleStep(0.0625)
+    spin.setValue(max(0.0, float(valor_actual or 0.375)))
+    spin.setFixedWidth(110)
+    row.addWidget(spin)
+    row.addStretch(1)
+    lay.addLayout(row)
+
+    btns = QHBoxLayout()
+    btn_cancel = QPushButton("Cancelar")
+    btn_ok = QPushButton("Continuar")
+    apply_push_button(btn_ok, COLOR_ACENTO, font_size=11)
+    apply_push_button(btn_cancel, COLOR_GRIS_DARK, font_size=11)
+    btns.addStretch(1)
+    btns.addWidget(btn_cancel)
+    btns.addWidget(btn_ok)
+    lay.addLayout(btns)
+
+    btn_cancel.clicked.connect(dlg.reject)
+    btn_ok.clicked.connect(dlg.accept)
+    _centrar_dialogo(dlg, parent)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return float(spin.value())
 
 
 def abrir_modal_configuracion(parent):

@@ -1444,6 +1444,7 @@ class MotorNesting:
         q_msg=None,
         cu_routing_override=None,
         sin_rtz=False,
+        cu_separacion_in=None,
     ):
         partes_clave = clave.split('_', 1) 
         req_cal = partes_clave[0]
@@ -1530,6 +1531,11 @@ class MotorNesting:
                 wo_name=wo_name,
                 dbg_fn=_dbg_nesting,
                 exigir_colocacion_total=True,
+                separacion_in=(
+                    float(cu_separacion_in)
+                    if cu_separacion_in is not None
+                    else None
+                ),
             )
             if (
                 isinstance(resultado_largos, dict)

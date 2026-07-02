@@ -21,6 +21,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from freecad_runner import ejecutar_macro_freecad
 
+try:
+    from modules.cobre_step_fuentes import buscar_manifest_en_nesting
+except ImportError:
+    buscar_manifest_en_nesting = None  # type: ignore
+
 DB_CONFIG = {
     "host": "localhost",
     "database": "nestingpro_db",
@@ -296,6 +301,10 @@ def resolver_destinos_step(step_root: str):
 def clasificar_familia(nombre_carpeta: str):
     nombre = (nombre_carpeta or "").upper()
 
+    # Cobre largos / cama láser (DXF nest con CUT_CU + fuentes en manifiesto)
+    if "CAMA LASER" in nombre:
+        return "COBRE"
+
     # Solo aceptar familias ROBOT
     if "ROBOT" not in nombre:
         return None
@@ -308,6 +317,25 @@ def clasificar_familia(nombre_carpeta: str):
         return "LASER"
 
     return None
+
+
+def resolver_destinos_step_cobre(step_root: str):
+    """Cobre / CAMA LASER: un solo STEP junto al nest (sin Cama A/B)."""
+    step_root = norm_path(step_root)
+    if not step_root:
+        return []
+
+    os.makedirs(step_root, exist_ok=True)
+    return [
+        {
+            "tag": "COBRE",
+            "dir": step_root,
+            "origen": "TR",
+            "off_x": 0.0,
+            "off_y": 0.0,
+            "off_z": 0.0,
+        }
+    ]
 
 
 def descubrir_familias(ruta_nesting: str):
@@ -332,6 +360,10 @@ def descubrir_familias(ruta_nesting: str):
 
         dxf_dir = norm_path(os.path.join(ruta_familia, "DXF"))
         step_root = norm_path(os.path.join(ruta_familia, "STEP"))
+        if tipo == "COBRE":
+            destinos = resolver_destinos_step_cobre(step_root)
+        else:
+            destinos = resolver_destinos_step(step_root)
 
         familias.append({
             "nombre": nombre,
@@ -339,7 +371,7 @@ def descubrir_familias(ruta_nesting: str):
             "ruta_base": ruta_familia,
             "dxf_dir": dxf_dir,
             "step_root": step_root,
-            "destinos_step": resolver_destinos_step(step_root),
+            "destinos_step": destinos,
         })
 
     return familias
@@ -470,6 +502,7 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
             dbg(f"[{nombre}] [{tag}] DXF -> {dxf_path}")
             dbg(f"[{nombre}] [{tag}] STEP esperado -> {step_path}")
 
+        material_fc = "CU" if str(tipo).upper() == "COBRE" else "STEEL"
         ok = ejecutar_macro_freecad(
             dxf_dir_fc,
             step_dir_fc,
@@ -477,7 +510,8 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
             origen,
             off_x,
             off_y,
-            off_z
+            off_z,
+            material=material_fc,
         )
 
         post_steps = contar_archivos(step_dir, "*.step")
@@ -562,7 +596,7 @@ def procesar_ruta_nesting(
         dbg(f"DESTINOS STEP => {fam['destinos_step']}")
 
     if not familias:
-        dbg("❌ No se detectó ninguna subcarpeta candidata (LASER/PLASMA) dentro de NESTING.")
+        dbg("❌ No se detectó ninguna subcarpeta candidata (CAMA LASER / ROBOT LASER / PLASMA) dentro de NESTING.")
         return {
             "ok": False,
             "familias_detectadas": 0,
@@ -579,6 +613,15 @@ def procesar_ruta_nesting(
             dbg(f"⚠️ No se pudo interpretar el calibre '{calibre_str}', usando 0.25 in por default.")
     else:
         espesor_in, espesor_txt = inferir_espesor_desde_dxf(familias)
+        if espesor_in is None and buscar_manifest_en_nesting is not None:
+            manifest_thk = buscar_manifest_en_nesting(ruta_nesting)
+            if manifest_thk and manifest_thk.get("espesor_in") is not None:
+                try:
+                    espesor_in = float(manifest_thk["espesor_in"])
+                    espesor_txt = str(espesor_in)
+                    dbg(f"📦 Espesor desde manifiesto cobre: {espesor_txt}\"")
+                except Exception:
+                    espesor_in = None
         if espesor_in is None:
             dbg("⚠️ No se pudo inferir el espesor desde los DXF. Usando 0.25 in por default.")
             espesor_in = 0.25
@@ -599,6 +642,27 @@ def procesar_ruta_nesting(
         if dxf_count > 0:
             familias_con_dxf += 1
         resultados.extend(procesar_familia(fam, thk_mm, plasma_off))
+
+    if buscar_manifest_en_nesting is not None:
+        manifest = buscar_manifest_en_nesting(ruta_nesting)
+    else:
+        manifest = None
+    if manifest:
+        dbg(
+            f"📋 Manifiesto cobre: {manifest.get('_manifest_path', 'cobre_dxf_fuentes.json')} | "
+            f"fuentes={len(manifest.get('fuentes') or [])}"
+        )
+        from modules.cobre_step_fuentes import procesar_steps_cobre_en_ubicacion_fuentes
+
+        fuente_res = procesar_steps_cobre_en_ubicacion_fuentes(
+            manifest,
+            thk_mm=thk_mm,
+            log_fn=dbg,
+        )
+        for carpeta, ok, _ in fuente_res:
+            resultados.append((f"COBRE_FUENTE_{os.path.basename(carpeta)}", ok))
+    else:
+        dbg("ℹ️ Sin manifiesto cobre_dxf_fuentes.json (solo STEP de barras nesteadas).")
 
     if not resultados:
         dbg("❌ No hubo ninguna conversión intentada.")

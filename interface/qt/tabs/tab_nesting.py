@@ -1943,6 +1943,9 @@ class TabNesting(QWidget, TimerHost):
 
                 self.app.tiempo_calculo = time.time() - tiempo_inicio
                 lista_unica = [{"lote_k": T, "data": res}]
+                self._preparar_resultados_nesting_pesado(
+                    lista_unica, progress_callback=receptor_en_vivo
+                )
                 self.app.after(0, lambda rl=lista_unica: self.finalizar(rl))
                 return
 
@@ -2012,13 +2015,26 @@ class TabNesting(QWidget, TimerHost):
             top_window.accept()
         elif hasattr(top_window, "close"):
             top_window.close()
-        self.finalizar(resultados_list)
 
-    def finalizar(self, resultados_list):
-        # Guardamos la lista completa de Work Orders
-        self.app.resultados_multilote = resultados_list
+        def _bg_prep_y_finalizar():
+            self._preparar_resultados_nesting_pesado(resultados_list)
+            self.app.after(0, lambda: self.finalizar(resultados_list))
 
-        # Nesteo de largos: mismo cálculo que placas (revisión/pedido en NESTEO DE LARGOS)
+        threading.Thread(target=_bg_prep_y_finalizar, daemon=True).start()
+
+    def _preparar_resultados_nesting_pesado(self, resultados_list, progress_callback=None):
+        """
+        Trabajo CPU/IO pesado fuera del hilo UI: plan de largos (BD) y refinado DXF display.
+        Debe ejecutarse en el hilo worker de nesting, no en finalizar().
+        """
+        def _notify(msg, pct=0.99):
+            if progress_callback:
+                try:
+                    progress_callback(msg, pct)
+                except Exception:
+                    pass
+
+        _notify("Calculando plan de largos…", 0.99)
         try:
             from interface.largos_nesting_service import calcular_planes_largos_nesting
 
@@ -2026,15 +2042,32 @@ class TabNesting(QWidget, TimerHost):
         except Exception as e_largos:
             print(f"[LARGOS_NESTING][WARN] No se pudo calcular plan de largos: {e_largos}")
 
+        _notify("Refinando geometría de display…", 0.995)
+        try:
+            from modules.nesting_engine.display_geometry import preparar_geom_multilote_paralelo
+
+            def _log_display(msg, phase="DISPLAY"):
+                _notify(str(msg), 0.995)
+
+            stats = preparar_geom_multilote_paralelo(resultados_list, log=_log_display)
+            geom_ok = int((stats or {}).get("geom_ok", 0) or 0)
+            if geom_ok:
+                print(f"[NESTING][DISPLAY] geom_ok={geom_ok}")
+        except Exception as exc_display:
+            print(f"[NESTING][DISPLAY][WARN] {exc_display}")
+            try:
+                from modules.nesting_engine.display_geometry import refrescar_poligonos_display_multilote
+
+                refrescar_poligonos_display_multilote(resultados_list)
+            except Exception:
+                pass
+
+    def finalizar(self, resultados_list):
+        # Guardamos la lista completa de Work Orders
+        self.app.resultados_multilote = resultados_list
+
         # NUEVO: construir inputs editables por lote
         self._reconstruir_editables_por_resultado(resultados_list)
-
-        try:
-            from modules.nesting_engine.display_geometry import refrescar_poligonos_display_multilote
-
-            refrescar_poligonos_display_multilote(resultados_list)
-        except Exception:
-            pass
 
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
@@ -3207,10 +3240,20 @@ class TabNesting(QWidget, TimerHost):
                 "Se renesteará con la cantidad del job/lote activo."
             )
         es_cobre = self._es_grupo_cobre(clave)
+        cu_separacion_in = None
         if es_cobre:
+            from interface.qt.dialogs.nesting_modals import preguntar_separacion_cobre_renest
+            from modules.nesting_engine.cu_largos_nesting import DEFAULT_SEPARACION_CU_IN
+
+            grp_act = (self.app.resultados_nesting or {}).get(clave) or {}
+            valor_sep = float(grp_act.get("separacion_cu_in", DEFAULT_SEPARACION_CU_IN))
+            cu_separacion_in = preguntar_separacion_cobre_renest(self, valor_sep)
+            if cu_separacion_in is None:
+                return
             detalle = (
                 f"Se volverá a optimizar el calibre {clave} usando barras largo CU "
-                f"(144\" × 2–6\").{aviso_cantidad}\n\n¿Continuar?"
+                f"(144\" × 2–6\") con separación {cu_separacion_in:g}\" entre piezas."
+                f"{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear cobre en largos"
         else:
@@ -3234,6 +3277,8 @@ class TabNesting(QWidget, TimerHost):
         if hasattr(self.app, "abrir_ventana_carga"):
             self.app.abrir_ventana_carga("Renesteando calibre completo...")
 
+        sep_cu = cu_separacion_in
+
         def worker():
             backup_grp = copy.deepcopy((self.app.resultados_nesting or {}).get(clave))
             inv_esperado = self._conteo_piezas_job_grupo(clave) or self._inventario_piezas_grupo(clave)
@@ -3249,6 +3294,7 @@ class TabNesting(QWidget, TimerHost):
                     corner,
                     self._work_order_label_lote_activo(),
                     cu_routing_override="largos" if es_cobre else None,
+                    cu_separacion_in=sep_cu if es_cobre else None,
                 )
                 resultado = raw[1] if isinstance(raw, tuple) and len(raw) == 2 else raw
                 if not isinstance(resultado, dict) or resultado.get("error"):
@@ -6451,6 +6497,22 @@ class TabNesting(QWidget, TimerHost):
                         f"Carpeta base: {desktop_nesteos_locales()}\n\n"
                         "No se envió información a PostgreSQL ni al servidor centralizado."
                     )
+
+                if respuesta_3d:
+                    try:
+                        from modules.nesting_engine.exporter import obtener_resumen_step_ultimo_export
+
+                        step_resumen = obtener_resumen_step_ultimo_export()
+                        lineas_step = []
+                        for fam, counts in sorted(step_resumen.items()):
+                            n_dxf = int(counts.get("dxf") or 0)
+                            n_step = int(counts.get("step") or 0)
+                            if n_dxf > 0:
+                                lineas_step.append(f"  • {fam}: {n_step}/{n_dxf} STEP")
+                        if lineas_step:
+                            mensaje_final += "\n\nArchivos 3D (STEP):\n" + "\n".join(lineas_step)
+                    except Exception:
+                        pass
 
                 ruta_mostrar = rutas_generadas[0] if rutas_generadas else r_base
                 self.app.after(0, lambda: self.finalizar_exportacion(True, mensaje_final, ruta_mostrar))

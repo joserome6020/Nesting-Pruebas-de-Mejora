@@ -45,6 +45,52 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
+def _normalize_material_kind(raw: str) -> str:
+    u = str(raw or "").strip().upper()
+    if u in ("CU", "COBRE", "COPPER"):
+        return "copper"
+    return "steel"
+
+def _material_kind_for_export() -> str:
+    return _normalize_material_kind(_env("FREECAD_MATERIAL", "STEEL"))
+
+def _appearance_preset(kind: str) -> dict:
+    if kind == "copper":
+        return {
+            "diffuse": (0.78, 0.48, 0.22),
+            "ambient": (0.32, 0.20, 0.09),
+            "specular": (0.95, 0.78, 0.45),
+            "shininess": 0.90,
+        }
+    return {
+        "diffuse": (0.58, 0.60, 0.63),
+        "ambient": (0.22, 0.23, 0.25),
+        "specular": (0.90, 0.90, 0.92),
+        "shininess": 0.72,
+    }
+
+def _apply_part_appearance(view_obj, kind: str) -> None:
+    if not view_obj:
+        return
+    preset = _appearance_preset(kind)
+    try:
+        view_obj.ShapeAppearance = App.Material(
+            DiffuseColor=preset["diffuse"],
+            AmbientColor=preset["ambient"],
+            SpecularColor=preset["specular"],
+            EmissiveColor=(0.0, 0.0, 0.0),
+            Shininess=float(preset["shininess"]),
+            Transparency=0.0,
+        )
+        return
+    except Exception:
+        pass
+    try:
+        d = preset["diffuse"]
+        view_obj.ShapeColor = (d[0], d[1], d[2], 0.0)
+    except Exception:
+        pass
+
 def _collect_closed_wires_from_obj(obj):
     wires = []
     if not hasattr(obj, "Shape") or obj.Shape.isNull(): return wires
@@ -94,6 +140,7 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
     doc.recompute()
 
     outer_wires, inner_wires, plate_wires, mark_edges = [], [], [], []
+    has_cut_cu = False
 
     print(f"\n--- Analizando DXF: {name} ---")
 
@@ -108,6 +155,9 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
             for parent in obj.InList:
                 if hasattr(parent, "Group"):
                     layer_str += "_" + parent.Label.upper()
+
+        if "CUT_CU" in layer_str:
+            has_cut_cu = True
 
         # Clasificación
         # CUT_CU: contorno cerrado de piezas cobre → sólidos STEP.
@@ -155,26 +205,26 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
         final_parts_solids = outer_solids
 
     objects_to_export = []
-    jade_color = (0.0, 0.66, 0.42, 0.0) # Verde Jade
-    mark_color = (1.0, 0.84, 0.0, 0.0)  # Amarillo Oro para Marcas
+    material_kind = "copper" if has_cut_cu else _material_kind_for_export()
+    mark_color = (0.55, 0.55, 0.58, 0.0)  # grabado sutil
 
     # 3. ENSAMBLAJE (PLACAS Y PIEZAS)
     if plate_solids:
         comp_plate = Part.makeCompound(plate_solids)
-        comp_plate.translate(App.Vector(off_x, off_y, off_z)) 
+        comp_plate.translate(App.Vector(off_x, off_y, off_z))
         feat_plate = doc.addObject("Part::Feature", "JADE_REFERENCE_PLATE")
         feat_plate.Label = "Jade_Plate"
         feat_plate.Shape = comp_plate
-        if feat_plate.ViewObject: feat_plate.ViewObject.ShapeColor = jade_color
+        _apply_part_appearance(feat_plate.ViewObject, material_kind)
         objects_to_export.append(feat_plate)
 
     if final_parts_solids:
         comp_parts = Part.makeCompound(final_parts_solids)
-        comp_parts.translate(App.Vector(off_x, off_y, off_z)) 
+        comp_parts.translate(App.Vector(off_x, off_y, off_z))
         feat_parts = doc.addObject("Part::Feature", "JADE_NESTED_PARTS")
         feat_parts.Label = "Jade_Parts"
         feat_parts.Shape = comp_parts
-        if feat_parts.ViewObject: feat_parts.ViewObject.ShapeColor = jade_color
+        _apply_part_appearance(feat_parts.ViewObject, material_kind)
         objects_to_export.append(feat_parts)
 
     # 4. INYECCIÓN DE MARCAS EN 3D SUPERFICIAL

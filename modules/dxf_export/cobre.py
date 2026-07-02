@@ -1,4 +1,4 @@
-"""Canal cobre largos — cortes parciales CUT_OUTER + marcador CUT_CU."""
+"""Canal cobre largos — CUT_OUTER láser + CUT_CU contorno completo + inner/marks."""
 from __future__ import annotations
 
 import os

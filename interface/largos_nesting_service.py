@@ -21,6 +21,7 @@ def _db_config() -> dict:
         "user": getattr(config, "NESTING_DB_USER", "postgres"),
         "password": getattr(config, "NESTING_DB_PASSWORD", "nesting123"),
         "port": getattr(config, "NESTING_DB_PORT", "5433"),
+        "connect_timeout": int(getattr(config, "NESTING_DB_CONNECT_TIMEOUT", 5)),
     }
 
 

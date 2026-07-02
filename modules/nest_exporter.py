@@ -972,6 +972,61 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
     return added
 
 
+def _export_cu_full_contour_cut_cu_native(msp, doc, part_doc, m, p: dict) -> int:
+    """Contorno exterior completo de la pieza en CUT_CU (1:1 desde DXF fuente)."""
+    added = 0
+    layers_used: set[str] = set()
+    for entity in part_doc.modelspace():
+        if entity.dxftype() not in (
+            "LINE",
+            "LWPOLYLINE",
+            "POLYLINE",
+            "ARC",
+            "CIRCLE",
+            "ELLIPSE",
+            "SPLINE",
+        ):
+            continue
+        if _clasificar_capa(str(entity.dxf.layer)) != "outer":
+            continue
+        try:
+            new_e = entity.copy()
+            if not new_e.transform(m):
+                continue
+            added += _write_native_entity(msp, new_e, "CUT_CU")
+            layers_used.add("CUT_CU")
+        except Exception:
+            continue
+    if layers_used:
+        _import_layers_from_source(part_doc, doc, layers_used)
+    return added
+
+
+def _export_cu_full_contour_cut_cu_from_ring(msp, ring: list) -> int:
+    """Respaldo: contorno colocado completo en CUT_CU."""
+    pts = normalize_ring(ring, closed=True)
+    if len(pts) < 3:
+        return 0
+    if _export_ring_exact(msp, pts, "CUT_CU", closed=True):
+        return 1
+    return 0
+
+
+def _export_cu_full_contour_cut_cu(
+    msp,
+    doc,
+    part_doc,
+    m,
+    p: dict,
+    outer: list,
+) -> int:
+    """CUT_CU: geometría exterior completa de la pieza (independiente del láser CUT_OUTER)."""
+    added = _export_cu_full_contour_cut_cu_native(msp, doc, part_doc, m, p)
+    if added <= 0 and outer:
+        added = _export_cu_full_contour_cut_cu_from_ring(msp, outer)
+    return added
+
+
 def _layer_for_exported_entity(clase: str, entity, p: dict) -> str:
     """Capa destino según modo de exportación."""
     raw = str(entity.dxf.layer or "").strip()
@@ -1121,6 +1176,9 @@ def _export_cu_largos_from_source(
         if strict:
             _fail_export(label, "marcaje no exportable desde el DXF fuente")
 
+    if not str(label).startswith("CU_CORTE__"):
+        _export_cu_full_contour_cut_cu(msp, doc, part_doc, m, p, outer)
+
 
 def _export_source_dxf_at_placement(
     msp,
@@ -1252,6 +1310,8 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
         if outer_t and not p.get("cu_largos_holes_only"):
             if p.get("cu_largos_piece"):
                 _export_cu_contour_cuts_from_ring(msp, outer_t, p)
+                if not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__"):
+                    _export_cu_full_contour_cut_cu_from_ring(msp, outer_t)
             else:
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
@@ -1364,10 +1424,10 @@ def _is_cu_corte_fin_bar(p: dict, placements: list) -> bool:
 
 
 def _export_cu_bar_inicio_marker(msp, bar_w: float) -> None:
-    """Línea vertical en x=0 que marca el inicio de la barra maestra (solo CUT_CU)."""
+    """Marcador visual de inicio de barra (no participa en sólidos STEP)."""
     if bar_w <= TOL_GEOM_MM:
         return
-    msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "CUT_CU"})
+    msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "BAR_START"})
 
 
 def _setup_layers(doc, *, solo_cobre: bool = False):
@@ -1382,8 +1442,9 @@ def _setup_layers(doc, *, solo_cobre: bool = False):
     ensure("CUT_INNER", 2)
     ensure("MARK", 4)
     ensure("CUT_CU", 1)
+    ensure("Plate", 3)
+    ensure("BAR_START", 8)
     if not solo_cobre:
-        ensure("Plate", 3)
         ensure("Plate_Text", 7)
         ensure("RTZ_LABEL", 4)
 
@@ -1460,11 +1521,12 @@ def export_nest_to_dxf(
     _sheet_bar_l = sheet_len
     _sheet_bar_w = sheet_w
 
-    if not solo_cobre:
-        L, W = sheet_len, sheet_w
+    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM:
+        L, W = sheet_len, _sheet_bar_w
         sheet_poly = [(0, 0), (L, 0), (L, W), (0, W)]
         _add_lwpolyline(msp, sheet_poly, layer="Plate", closed=True)
 
+    if not solo_cobre:
         material = sheet.get("material", sheet.get("Material", ""))
         thickness = sheet.get("thickness", sheet.get("Thickness", ""))
         arga_code = sheet.get("arga_code", sheet.get("Arga Code", ""))
@@ -1472,7 +1534,7 @@ def export_nest_to_dxf(
         header = f"{title} | {arga_code} | {material} | THK:{thickness} | {L:.1f}x{W:.1f} mm"
         msp.add_text(
             header,
-            dxfattribs={"layer": "Plate_Text", "height": label_height} 
+            dxfattribs={"layer": "Plate_Text", "height": label_height}
         ).set_placement((0, W + margin_text))
 
     if solo_cobre and _sheet_bar_w > TOL_GEOM_MM:

@@ -4,7 +4,8 @@ Nesting 1D para largos de cobre (CU).
 - Orientación nativa del DXF (sin rotar).
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = línea vertical inicio barra.
+- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = contorno completo de pieza
+  (+ marcador vertical inicio barra en export de hoja).
 
 Cortes CUT_OUTER (láser):
   1. Pieza rectangular a ancho exacto de tira (ej. 4" en barra 4"): solo guillotinas verticales.
@@ -29,6 +30,8 @@ from .efficiency_metrics import calcular_eficiencias_grupo
 TOL_ANCHO_IN_MIN = 0.02
 TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
+# Separación por defecto entre piezas en el eje del largo (solo cobre largos).
+DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40
 RELIEF_BAND_MIN_MM = 10.0
@@ -593,6 +596,8 @@ def _normalizar_barras(placas_ok: List[dict]) -> List[dict]:
 def empaquetar_largos_cu(
     piezas: List[dict],
     placas_ok: List[dict],
+    *,
+    separacion_in: float = DEFAULT_SEPARACION_CU_IN,
 ) -> Tuple[List[dict], List[dict]]:
     catalogo = _normalizar_barras(placas_ok)
     if not catalogo:
@@ -624,6 +629,7 @@ def empaquetar_largos_cu(
 
     items.sort(key=lambda x: (x["barra_objetivo_in"], -x["len_mm"]))
 
+    gap_mm = max(0.0, float(separacion_in or 0.0)) * 25.4
     barras_abiertas: List[dict] = []
 
     for item in items:
@@ -632,10 +638,13 @@ def empaquetar_largos_cu(
             if abs(barra["ancho_in"] - item["barra_objetivo_in"]) > TOL_ANCHO_IN_MIN:
                 continue
             restante = barra["largo_mm"] - barra["cursor_x"]
-            if item["len_mm"] > restante + 0.5:
+            gap_before = gap_mm if barra["colocados"] else 0.0
+            needed = gap_before + item["len_mm"]
+            if needed > restante + 0.5:
                 continue
-            barra["colocados"].append((item, barra["cursor_x"], 0.0))
-            barra["cursor_x"] += item["len_mm"]
+            x_pos = barra["cursor_x"] + gap_before
+            barra["colocados"].append((item, x_pos, 0.0))
+            barra["cursor_x"] = x_pos + item["len_mm"]
             colocado = True
             break
 
@@ -749,6 +758,7 @@ def empaquetar_largos_cu(
                 "es_retazo": False,
                 "origen_placa": stock.get("origen", "EMPRESA"),
                 "modo_largos_cu": True,
+                "separacion_cu_in": max(0.0, float(separacion_in or 0.0)),
                 "requiere_corte_superior": requiere_corte_sup,
                 "ignorar_deduccion": True,
             }
@@ -764,14 +774,19 @@ def procesar_grupo_largos_cu(
     wo_name: str = "PENDIENTE",
     dbg_fn: Optional[Callable[[str], None]] = None,
     exigir_colocacion_total: bool = False,
+    separacion_in: float = DEFAULT_SEPARACION_CU_IN,
 ) -> Tuple[str, dict]:
     _log = dbg_fn or (lambda _msg: None)
-    _log(f"[CU-LARGOS] clave={clave} | piezas={len(piezas)} | wo={wo_name}")
+    sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
+    _log(
+        f"[CU-LARGOS] clave={clave} | piezas={len(piezas)} | wo={wo_name} | "
+        f"separacion={sep_in:.4f}in"
+    )
 
     if not placas_ok:
         return clave, {"error": "Sin inventario CU disponible para largos."}
 
-    hojas, sin_colocar = empaquetar_largos_cu(piezas, placas_ok)
+    hojas, sin_colocar = empaquetar_largos_cu(piezas, placas_ok, separacion_in=sep_in)
     if sin_colocar:
         detalle = []
         for p in sin_colocar:
@@ -819,6 +834,7 @@ def procesar_grupo_largos_cu(
         "costo_proveedor": costo_proveedor,
         "reporte": "Nesting 1D largos de cobre (orientación DXF, sin tolerancia de ancho).",
         "modo_largos_cu": True,
+        "separacion_cu_in": sep_in,
         "ignorar_deduccion_cu": True,
         **efi_grupo,
     }
