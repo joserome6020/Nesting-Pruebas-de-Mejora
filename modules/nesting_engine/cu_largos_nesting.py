@@ -4,6 +4,8 @@ Nesting 1D para largos de cobre (CU).
 - Orientación nativa del DXF (sin rotar).
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
+- Separación 3/8" entre piezas ≤15" de largo (eje X del DXF); piezas >15" siempre sin separación
+  (incluso al renestear con otra distancia).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = contorno completo de pieza
   (+ marcador vertical inicio barra en export de hoja).
 
@@ -32,6 +34,8 @@ TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
+# Piezas con largo DXF (eje X) mayor a este umbral van siempre sin separación (renest no aplica).
+LARGO_SIN_SEPARACION_CU_IN = 15.0
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40
 RELIEF_BAND_MIN_MM = 10.0
@@ -162,6 +166,8 @@ def _colocar_pieza_nativa(
         "y_corte_superior_mm": y_corte,
         "x_inicio_mm": float(x_mm),
         "largo_mm": float(p_data.get("len_mm") or 0.0),
+        "largo_cu_in": _largo_pieza_cu_in(p_data),
+        "cu_sin_separacion": _pieza_cu_exime_separacion(p_data),
     }
 
 
@@ -569,6 +575,38 @@ def _linea_corte_vertical(x_mm: float, alto_mm: float, indice: int) -> dict:
     }
 
 
+def _largo_pieza_cu_in(item: dict) -> float:
+    """Largo nativo del DXF en el eje X (avance de barra), en pulgadas."""
+    if item is None:
+        return 0.0
+    len_mm = item.get("len_mm")
+    if len_mm is None:
+        dims = _dims_pieza_nativo_mm(item.get("poly"))
+        if dims:
+            len_mm = dims[0]
+    try:
+        return max(0.0, float(len_mm or 0.0) / 25.4)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pieza_cu_exime_separacion(item: dict) -> bool:
+    """True si el largo DXF supera el umbral: siempre gap 0 con vecinos."""
+    return _largo_pieza_cu_in(item) > LARGO_SIN_SEPARACION_CU_IN
+
+
+def _gap_entre_piezas_cu(prev_item: dict, next_item: dict, separacion_in: float) -> float:
+    """
+    Separación en mm entre dos piezas consecutivas en la barra.
+    Piezas >15\" (largo DXF) fuerzan gap 0; el resto usa separacion_in (p. ej. 3/8\").
+    """
+    if prev_item is None or next_item is None:
+        return 0.0
+    if _pieza_cu_exime_separacion(prev_item) or _pieza_cu_exime_separacion(next_item):
+        return 0.0
+    return max(0.0, float(separacion_in or 0.0)) * 25.4
+
+
 def _normalizar_barras(placas_ok: List[dict]) -> List[dict]:
     barras = []
     for placa in placas_ok or []:
@@ -629,7 +667,6 @@ def empaquetar_largos_cu(
 
     items.sort(key=lambda x: (x["barra_objetivo_in"], -x["len_mm"]))
 
-    gap_mm = max(0.0, float(separacion_in or 0.0)) * 25.4
     barras_abiertas: List[dict] = []
 
     for item in items:
@@ -638,7 +675,12 @@ def empaquetar_largos_cu(
             if abs(barra["ancho_in"] - item["barra_objetivo_in"]) > TOL_ANCHO_IN_MIN:
                 continue
             restante = barra["largo_mm"] - barra["cursor_x"]
-            gap_before = gap_mm if barra["colocados"] else 0.0
+            prev_item = barra["colocados"][-1][0] if barra["colocados"] else None
+            gap_before = (
+                _gap_entre_piezas_cu(prev_item, item, separacion_in)
+                if barra["colocados"]
+                else 0.0
+            )
             needed = gap_before + item["len_mm"]
             if needed > restante + 0.5:
                 continue
@@ -759,6 +801,7 @@ def empaquetar_largos_cu(
                 "origen_placa": stock.get("origen", "EMPRESA"),
                 "modo_largos_cu": True,
                 "separacion_cu_in": max(0.0, float(separacion_in or 0.0)),
+                "largo_sin_separacion_cu_in": LARGO_SIN_SEPARACION_CU_IN,
                 "requiere_corte_superior": requiere_corte_sup,
                 "ignorar_deduccion": True,
             }
@@ -835,6 +878,7 @@ def procesar_grupo_largos_cu(
         "reporte": "Nesting 1D largos de cobre (orientación DXF, sin tolerancia de ancho).",
         "modo_largos_cu": True,
         "separacion_cu_in": sep_in,
+        "largo_sin_separacion_cu_in": LARGO_SIN_SEPARACION_CU_IN,
         "ignorar_deduccion_cu": True,
         **efi_grupo,
     }

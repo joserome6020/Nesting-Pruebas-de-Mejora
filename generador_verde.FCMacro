@@ -132,9 +132,22 @@ def _collect_edges(obj):
 def _wire_signature(w):
     try:
         bb = w.BoundBox
+        area = 0.0
+        cx = (bb.XMin + bb.XMax) * 0.5
+        cy = (bb.YMin + bb.YMax) * 0.5
+        try:
+            f = Part.Face(w)
+            if not f.isNull():
+                area = abs(float(f.Area))
+                cm = f.CenterOfMass
+                cx, cy = float(cm.x), float(cm.y)
+        except Exception:
+            pass
         return (
             round(bb.XMin, 2), round(bb.YMin, 2),
             round(bb.XMax, 2), round(bb.YMax, 2),
+            round(area, 2),
+            round(cx, 2), round(cy, 2),
         )
     except Exception:
         return None
@@ -180,7 +193,7 @@ def _filter_cu_bar_marker_edges(edges):
         kept.append(e)
     return kept
 
-def _collect_closed_wires_merged(objects):
+def _collect_closed_wires_merged(objects, isolate_per_object=False):
     """Une LINE/ARC sueltos del export nest (1:1) en wires cerrados vía Part.sortEdges."""
     objs = [o for o in (objects or []) if o is not None]
     if not objs:
@@ -189,6 +202,23 @@ def _collect_closed_wires_merged(objects):
     merged = []
     for obj in objs:
         merged.extend(_collect_closed_wires(obj))
+
+    if isolate_per_object:
+        for obj in objs:
+            edges = _filter_cu_bar_marker_edges(_collect_edges(obj))
+            if not edges:
+                continue
+            try:
+                for group in Part.sortEdges(edges):
+                    try:
+                        w = Part.Wire(group)
+                        if w.isClosed():
+                            merged.append(w)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return _dedupe_wires(merged)
 
     all_edges = []
     for obj in objs:
@@ -252,6 +282,29 @@ def _iter_geometry_objects(doc):
             continue
         yield obj
 
+def _iter_cut_cu_objects(doc, perfil):
+    """Objetos con geometría CUT_CU, incluyendo INSERT/block refs importados."""
+    if perfil.get("name") != "ARGA_COBRE_LARGOS":
+        yield from _iter_geometry_objects(doc)
+        return
+    seen = set()
+    for obj in getattr(doc, "Objects", []):
+        if not hasattr(obj, "Shape") or obj.Shape.isNull():
+            continue
+        lbl = _layer_label_for_obj(obj)
+        if not _label_matches_any(lbl, {"CUT_CU"}):
+            continue
+        oid = id(obj)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        if hasattr(obj, "Group") and obj.Group:
+            for child in obj.Group:
+                if hasattr(child, "Shape") and not child.Shape.isNull():
+                    yield child
+            continue
+        yield obj
+
 def _bucket_add(bucket: list, seen: set, obj) -> None:
     if obj is None:
         return
@@ -286,13 +339,14 @@ def _collect_contours_from_doc(doc, perfil):
             classified_names.add(getattr(child, "Name", None))
             _classify_obj(child, lbl, perfil, outer_objs, inner_objs, plate_objs, mixed_objs, mark_e, seen)
 
-    for obj in _iter_geometry_objects(doc):
+    for obj in _iter_cut_cu_objects(doc, perfil) if perfil.get("name") == "ARGA_COBRE_LARGOS" else _iter_geometry_objects(doc):
         if id(obj) in from_groups or getattr(obj, "Name", None) in classified_names:
             continue
         lbl = _layer_label_for_obj(obj)
         _classify_obj(obj, lbl, perfil, outer_objs, inner_objs, plate_objs, mixed_objs, mark_e, seen)
 
-    outer_w = _collect_closed_wires_merged(outer_objs)
+    isolate_cu = perfil.get("name") == "ARGA_COBRE_LARGOS"
+    outer_w = _collect_closed_wires_merged(outer_objs, isolate_per_object=isolate_cu)
     inner_w = _collect_closed_wires_merged(inner_objs)
     plate_w = _collect_closed_wires_merged(plate_objs)
     mixed_contours = _collect_closed_wires_merged(mixed_objs)
@@ -714,6 +768,21 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
                 parts.append(piece)
 
         if not parts:
+            App.closeDocument(doc.Name)
+            return
+
+        n_outer_eff = 0
+        for ow in outer_w_m:
+            if plate_sig and _wire_signature(ow) == plate_sig:
+                continue
+            n_outer_eff += 1
+
+        print(f"[{name}] Piezas solidas en STEP: {len(parts)} (contornos OUTER: {len(outer_w_m)}, efectivos: {n_outer_eff})")
+        if n_outer_eff > 0 and len(parts) < n_outer_eff:
+            print(
+                f"[{name}] ERROR CRITICO: perdida de piezas en STEP "
+                f"({len(parts)}/{n_outer_eff}). No se exporta STEP incompleto."
+            )
             App.closeDocument(doc.Name)
             return
 

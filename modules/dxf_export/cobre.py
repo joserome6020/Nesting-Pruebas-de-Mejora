@@ -42,7 +42,7 @@ def export_piece(
         )
     else:
         if not _export_placed_geometry(
-            msp, p, draw_holes=draw_holes, draw_marks=draw_marks
+            msp, p, doc=doc, draw_holes=draw_holes, draw_marks=draw_marks
         ):
             if strict:
                 _fail_export(label, "cobre: sin contorno colocado exportable en el nest")

@@ -907,6 +907,8 @@ def exportar_resultados_a_dxf(
                     "cu_slice_count": int(pz.get("cu_slice_count", 1) or 1),
                     "cu_bar_w_mm": _cu_bar_w if es_cu_hoja else 0.0,
                     "cu_bar_l_mm": _cu_bar_l if es_cu_hoja else 0.0,
+                    "cu_sin_separacion": bool(pz.get("cu_sin_separacion")),
+                    "largo_cu_in": float(pz.get("largo_cu_in") or 0.0),
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
                     "shift_x": pz.get("shift_x", 0.0),

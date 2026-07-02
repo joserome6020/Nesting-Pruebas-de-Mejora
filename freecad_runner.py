@@ -395,6 +395,21 @@ def ejecutar_macro_freecad(
                     proc.returncode == 0
                     and (nuevos or actualizados or len(after_snapshot) > 0)
                 )
+                if ok and str(material or "").strip().upper() in ("CU", "COBRE", "COPPER"):
+                    try:
+                        from modules.cobre_step_audit import audit_macro_log_for_losses
+
+                        macro_log = env.get("FREECAD_LOG_PATH") or os.path.join(
+                            log_dir, "freecad_macro.log"
+                        )
+                        issues = audit_macro_log_for_losses(macro_log, material=material)
+                        for issue in issues:
+                            _log(f"ERROR AUDIT COBRE: {issue}\n")
+                        if issues:
+                            ok = False
+                    except Exception as e:
+                        _log(f"[WARN] No se pudo auditar piezas STEP cobre: {e}\n")
+
                 if ok:
                     _log("RESULTADO FINAL: OK\n")
                     return True

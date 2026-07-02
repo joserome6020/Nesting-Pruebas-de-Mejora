@@ -20,6 +20,7 @@ ALIGN_TOL_MM = 8.0
 SHEET_MARGIN_MM = 2.0
 PRODUCTION_LAYERS = frozenset({"CUT_OUTER", "CUT_INNER", "CUT_CU"})
 NATIVE_PROD_TYPES = frozenset({"LINE", "ARC", "CIRCLE"})
+COBRE_CUT_CU_TYPES = frozenset({"LWPOLYLINE"})
 
 
 class DxfExportValidationError(RuntimeError):
@@ -104,6 +105,13 @@ def _validate_production_entities(
     label = _piece_label(p)
     for ent in prod:
         typ = ent.dxftype()
+        layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
+        if solo_cobre and layer_u == "CUT_CU" and typ == "LWPOLYLINE":
+            if not bool(getattr(ent, "closed", False) or ent.closed):
+                raise DxfExportValidationError(
+                    f"{label}: CUT_CU debe ser LWPOLYLINE cerrada (1 por pieza para STEP)."
+                )
+            continue
         if typ not in NATIVE_PROD_TYPES:
             raise DxfExportValidationError(
                 f"{label}: geometría de corte no nativa ({typ} en {ent.dxf.layer}). "
@@ -140,9 +148,18 @@ def _validate_full_sheet(
             "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER/CUT_CU)."
         )
     for ent in prod:
-        if ent.dxftype() not in NATIVE_PROD_TYPES:
+        typ = ent.dxftype()
+        layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
+        if solo_cobre and layer_u == "CUT_CU":
+            if typ not in COBRE_CUT_CU_TYPES:
+                raise DxfExportValidationError(
+                    f"CUT_CU no aislado por pieza ({typ}). "
+                    f"Se requiere INSERT o LWPOLYLINE cerrada por pieza."
+                )
+            continue
+        if typ not in NATIVE_PROD_TYPES:
             raise DxfExportValidationError(
-                f"Geometría de corte no nativa en capa {ent.dxf.layer} ({ent.dxftype()})."
+                f"Geometría de corte no nativa en capa {ent.dxf.layer} ({typ})."
             )
     bbox = _entities_bbox(prod)
     if bbox and not _inside_sheet_bounds(bbox, sheet_len, sheet_w):
@@ -972,44 +989,18 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
     return added
 
 
-def _export_cu_full_contour_cut_cu_native(msp, doc, part_doc, m, p: dict) -> int:
-    """Contorno exterior completo de la pieza en CUT_CU (1:1 desde DXF fuente)."""
-    added = 0
-    layers_used: set[str] = set()
-    for entity in part_doc.modelspace():
-        if entity.dxftype() not in (
-            "LINE",
-            "LWPOLYLINE",
-            "POLYLINE",
-            "ARC",
-            "CIRCLE",
-            "ELLIPSE",
-            "SPLINE",
-        ):
-            continue
-        if _clasificar_capa(str(entity.dxf.layer)) != "outer":
-            continue
-        try:
-            new_e = entity.copy()
-            if not new_e.transform(m):
-                continue
-            added += _write_native_entity(msp, new_e, "CUT_CU")
-            layers_used.add("CUT_CU")
-        except Exception:
-            continue
-    if layers_used:
-        _import_layers_from_source(part_doc, doc, layers_used)
-    return added
-
-
-def _export_cu_full_contour_cut_cu_from_ring(msp, ring: list) -> int:
-    """Respaldo: contorno colocado completo en CUT_CU."""
+def _export_cu_full_contour_cut_cu_from_ring(msp, doc, ring: list) -> int:
+    """
+    Contorno colocado en CUT_CU: una LWPOLYLINE cerrada por pieza en modelspace.
+    FreeCAD importDXF no expone geometría CUT_CU dentro de BLOCK+INSERT; esta
+    forma garantiza 1 wire independiente por pieza (sin fusiones entre vecinas).
+    """
+    del doc  # reservado por firma estable del exportador
     pts = normalize_ring(ring, closed=True)
     if len(pts) < 3:
         return 0
-    if _export_ring_exact(msp, pts, "CUT_CU", closed=True):
-        return 1
-    return 0
+    _add_lwpolyline(msp, pts, "CUT_CU", closed=True)
+    return 1
 
 
 def _export_cu_full_contour_cut_cu(
@@ -1020,11 +1011,13 @@ def _export_cu_full_contour_cut_cu(
     p: dict,
     outer: list,
 ) -> int:
-    """CUT_CU: geometría exterior completa de la pieza (independiente del láser CUT_OUTER)."""
-    added = _export_cu_full_contour_cut_cu_native(msp, doc, part_doc, m, p)
-    if added <= 0 and outer:
-        added = _export_cu_full_contour_cut_cu_from_ring(msp, outer)
-    return added
+    """CUT_CU: una polilínea cerrada por pieza — nunca LINE/ARC sueltos en modelspace."""
+    if not outer:
+        label = _piece_label(p)
+        raise DxfExportValidationError(
+            f"{label}: sin contorno outer colocado para CUT_CU (STEP requiere 1 isla/pieza)."
+        )
+    return _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer)
 
 
 def _layer_for_exported_entity(clase: str, entity, p: dict) -> str:
@@ -1294,7 +1287,9 @@ def _add_lwpolyline(msp, points, layer, closed=True):
     msp.add_lwpolyline(points, dxfattribs={"layer": layer, "closed": bool(closed)})
 
 
-def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool:
+def _export_placed_geometry(
+    msp, p, *, doc=None, draw_holes=True, draw_marks=True
+) -> bool:
     """
     Exporta contorno/marcas en coordenadas de placa (mm), 1:1 con el visor de nesting.
     Fuente de verdad: poligonos/marcas ya colocados por el motor.
@@ -1311,7 +1306,10 @@ def _export_placed_geometry(msp, p, *, draw_holes=True, draw_marks=True) -> bool
             if p.get("cu_largos_piece"):
                 _export_cu_contour_cuts_from_ring(msp, outer_t, p)
                 if not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__"):
-                    _export_cu_full_contour_cut_cu_from_ring(msp, outer_t)
+                    if doc is not None:
+                        _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer_t)
+                    else:
+                        _add_lwpolyline(msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True)
             else:
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
@@ -1444,6 +1442,7 @@ def _setup_layers(doc, *, solo_cobre: bool = False):
     ensure("CUT_CU", 1)
     ensure("Plate", 3)
     ensure("BAR_START", 8)
+    ensure("ARGA_META", 8)
     if not solo_cobre:
         ensure("Plate_Text", 7)
         ensure("RTZ_LABEL", 4)
@@ -1640,6 +1639,22 @@ def export_nest_to_dxf(
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
+            from modules.cobre_step_audit import (
+                validate_cut_cu_piece_count,
+                write_cu_piece_meta,
+            )
+
+            expected_cu = validate_cut_cu_piece_count(
+                msp,
+                placements,
+                sheet_label=str(title or out_path),
+                strict=strict,
+            )
+            write_cu_piece_meta(
+                msp,
+                expected_pieces=expected_cu,
+                sheet_label=os.path.basename(out_path),
+            )
 
         if strict:
             _validate_full_sheet(
