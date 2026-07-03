@@ -32,6 +32,7 @@ except ImportError:
 
 from .geometry_parser import (
     recuperar_geometria_robusta,
+    recuperar_geometria_robusta_detalle,
     reconstruir_poly_seguro,
     reconstruir_marks,
     generar_texto_vectorial,
@@ -65,6 +66,7 @@ DEFAULT_KERF_IN = 0.3
 DEFAULT_MARGIN_IN = 0.15
 THICKNESS_TOLERANCE_PCT = 0.15
 SLIDE_STEP_MM = 4.0
+TRANSFER_GRID_STEP_MM = 12.0
 TRANSFER_ROTATIONS = (0, 90, 180, 270)
 
 
@@ -1208,7 +1210,7 @@ class MotorNesting:
                 f"[PRE-PARSER] clave={clave} | pieza={pieza} | qty={qty} | status={st} | ruta={ruta}"
             )
 
-            poly, marks = recuperar_geometria_robusta(ruta)
+            poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta)
 
             if es_material_cobre(mat):
                 rot_deg = int(
@@ -1231,11 +1233,19 @@ class MotorNesting:
                         )
 
             if poly is None:
+                motivo = err_geom or "recuperar_geometria_robusta devolvió None"
                 _dbg_nesting(
                     f"[PARSER-FAIL] clave={clave} | pieza={pieza} | ruta={ruta} | "
-                    f"motivo=recuperar_geometria_robusta devolvió None"
+                    f"motivo={motivo}"
                 )
-                piezas_parser_fallidas.append(f"{pieza} ({ruta})")
+                piezas_parser_fallidas.append(
+                    {
+                        "pieza": pieza,
+                        "ruta": ruta,
+                        "archivo": os.path.basename(str(ruta or "")),
+                        "error": motivo,
+                    }
+                )
                 continue
 
             n_mark_segs = 0
@@ -1299,7 +1309,14 @@ class MotorNesting:
                 _dbg_nesting(
                     f"[GEOM-EMPTY-EXACT] clave={clave} | pieza={pieza} | ruta={ruta}"
                 )
-                piezas_parser_fallidas.append(f"{pieza} ({ruta})")
+                piezas_parser_fallidas.append(
+                    {
+                        "pieza": pieza,
+                        "ruta": ruta,
+                        "archivo": os.path.basename(str(ruta or "")),
+                        "error": "Geometría exacta vacía tras normalizar el DXF.",
+                    }
+                )
                 continue
 
             if poly_nesting is None or poly_nesting.is_empty:
@@ -1349,8 +1366,22 @@ class MotorNesting:
             )
             return {"error": "No se obtuvo ninguna geometría válida después del parser."}
 
+        self._ultima_auditoria_dxf = {
+            "total": total_dxf,
+            "ok": max(0, total_dxf - len(piezas_parser_fallidas)),
+            "omitidos": list(piezas_parser_fallidas),
+        }
+
         if piezas_parser_fallidas:
-            det = ", ".join(piezas_parser_fallidas[:8])
+            det_items = []
+            for item in piezas_parser_fallidas[:8]:
+                if isinstance(item, dict):
+                    det_items.append(
+                        f"{item.get('pieza', '?')}: {item.get('error', 'sin detalle')}"
+                    )
+                else:
+                    det_items.append(str(item))
+            det = "; ".join(det_items)
             if len(piezas_parser_fallidas) > 8:
                 det += f" (+{len(piezas_parser_fallidas) - 8} más)"
             _dbg_nesting(f"[ABORT] Piezas sin geometría válida: {det}")
@@ -1358,7 +1389,8 @@ class MotorNesting:
                 "error": (
                     f"No se pudo leer la geometría de {len(piezas_parser_fallidas)} pieza(s). "
                     f"Revise los DXF antes de nestear: {det}"
-                )
+                ),
+                "dxf_audit": self._ultima_auditoria_dxf,
             }
         
         resultados = {}
@@ -1430,6 +1462,11 @@ class MotorNesting:
                 notificar(f"Lotes procesados: {i + 1}/{total_lotes_reales}", progreso_actual)
 
         notificar("Construyendo modelos visuales...", 1.0)
+        self._ultima_auditoria_dxf = {
+            "total": total_dxf,
+            "ok": total_dxf,
+            "omitidos": [],
+        }
         return resultados
 
     def _procesar_grupo_parallel(
@@ -2978,6 +3015,136 @@ class MotorNesting:
             "material": pieza_orig.get("material", ""),
         }
 
+    def _evaluar_posicion_transfer(
+        self,
+        px,
+        py,
+        var,
+        *,
+        margin_mm,
+        w,
+        h,
+        limite_prep,
+        l_bounds,
+        fijas_bounds,
+        fijas_preps,
+        zonas_rtz,
+        clearance_rtz,
+        rechazos=None,
+    ):
+        """Valida una posición candidata (con slide) para transferencia incremental."""
+        if (
+            px + var["b_minx"] < margin_mm - 0.1
+            or py + var["b_miny"] < margin_mm - 0.1
+            or px + var["b_maxx"] > w - margin_mm + 0.1
+            or py + var["b_maxy"] > h - margin_mm + 0.1
+        ):
+            if rechazos is not None:
+                rechazos["limite"] += 1
+            return None
+        if self._comprobar_colision_transfer(
+            px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+        ):
+            if rechazos is not None:
+                rechazos["colision"] += 1
+            return None
+
+        hubo_movimiento = True
+        while hubo_movimiento:
+            hubo_movimiento = False
+            test_px = px - SLIDE_STEP_MM
+            if test_px + var["b_minx"] >= margin_mm:
+                if not self._comprobar_colision_transfer(
+                    test_px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+                ):
+                    px = test_px
+                    hubo_movimiento = True
+            test_py = py - SLIDE_STEP_MM
+            if test_py + var["b_miny"] >= margin_mm:
+                if not self._comprobar_colision_transfer(
+                    px, test_py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
+                ):
+                    py = test_py
+                    hubo_movimiento = True
+
+        poly_test = affinity.translate(var["poly"], px, py)
+        if self._poly_invade_zonas_rtz_transfer(poly_test, zonas_rtz, clearance_rtz):
+            if rechazos is not None:
+                rechazos["rtz"] += 1
+            return None
+        return (px * px) + (py * py), var, px, py
+
+    def _barrido_grid_colocacion_transfer(
+        self,
+        variaciones,
+        *,
+        margin_mm,
+        w,
+        h,
+        limite_prep,
+        l_bounds,
+        fijas_bounds,
+        fijas_preps,
+        zonas_rtz,
+        clearance_rtz,
+        rechazos=None,
+    ):
+        """
+        Fallback cuando las anclas no alcanzan huecos aislados (p. ej. franja libre
+        lateral en placas ya anidadas). Devuelve la primera posición válida encontrada.
+        """
+        step = max(SLIDE_STEP_MM, float(TRANSFER_GRID_STEP_MM))
+        max_fija_x = margin_mm
+        max_fija_y = margin_mm
+        for b in fijas_bounds:
+            max_fija_x = max(max_fija_x, float(b[2]))
+            max_fija_y = max(max_fija_y, float(b[3]))
+
+        for var in variaciones:
+            span_x = var["b_maxx"] - var["b_minx"]
+            span_y = var["b_maxy"] - var["b_miny"]
+            if span_x <= 0 or span_y <= 0:
+                continue
+
+            # Priorizar franja derecha y banda superior (huecos típicos tras nesting).
+            ax_min = margin_mm
+            ax_max = w - margin_mm - span_x
+            ay_min = margin_mm
+            ay_max = h - margin_mm - span_y
+            x_starts = [ax_min]
+            if max_fija_x + step < ax_max:
+                x_starts.append(min(max_fija_x, ax_max))
+            y_starts = [ay_min]
+            if max_fija_y + step < ay_max:
+                y_starts.append(min(max_fija_y, ay_max))
+
+            for ax0 in x_starts:
+                ax = ax0
+                while ax <= ax_max + 0.1:
+                    for ay0 in y_starts:
+                        ay = ay0
+                        while ay <= ay_max + 0.1:
+                            candidato = self._evaluar_posicion_transfer(
+                                ax - var["b_minx"],
+                                ay - var["b_miny"],
+                                var,
+                                margin_mm=margin_mm,
+                                w=w,
+                                h=h,
+                                limite_prep=limite_prep,
+                                l_bounds=l_bounds,
+                                fijas_bounds=fijas_bounds,
+                                fijas_preps=fijas_preps,
+                                zonas_rtz=zonas_rtz,
+                                clearance_rtz=clearance_rtz,
+                                rechazos=rechazos,
+                            )
+                            if candidato is not None:
+                                return candidato
+                            ay += step
+                    ax += step
+        return None
+
     def _intentar_colocacion_incremental(
         self, hoja_destino, pieza_mover, hojas_grupo=None, excluir_rtz_ids=None
     ):
@@ -3052,50 +3219,41 @@ class MotorNesting:
 
         mejor = None
         rechazos = {"colision": 0, "rtz": 0, "limite": 0}
+        ctx_eval = {
+            "margin_mm": margin_mm,
+            "w": w,
+            "h": h,
+            "limite_prep": limite_prep,
+            "l_bounds": l_bounds,
+            "fijas_bounds": fijas_bounds,
+            "fijas_preps": fijas_preps,
+            "zonas_rtz": zonas_rtz,
+            "clearance_rtz": clearance_rtz,
+            "rechazos": rechazos,
+        }
         for var in variaciones:
             for anchor_x, anchor_y in anclajes:
-                px = anchor_x - var["b_minx"]
-                py = anchor_y - var["b_miny"]
-                if (
-                    px + var["b_minx"] < margin_mm - 0.1
-                    or py + var["b_miny"] < margin_mm - 0.1
-                    or px + var["b_maxx"] > w - margin_mm + 0.1
-                    or py + var["b_maxy"] > h - margin_mm + 0.1
+                candidato = self._evaluar_posicion_transfer(
+                    anchor_x - var["b_minx"],
+                    anchor_y - var["b_miny"],
+                    var,
+                    **ctx_eval,
+                )
+                if candidato is not None and (
+                    mejor is None or candidato[0] < mejor[0]
                 ):
-                    rechazos["limite"] += 1
-                    continue
-                if self._comprobar_colision_transfer(
-                    px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
-                ):
-                    rechazos["colision"] += 1
-                    continue
+                    mejor = candidato
 
-                hubo_movimiento = True
-                while hubo_movimiento:
-                    hubo_movimiento = False
-                    test_px = px - SLIDE_STEP_MM
-                    if test_px + var["b_minx"] >= margin_mm:
-                        if not self._comprobar_colision_transfer(
-                            test_px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
-                        ):
-                            px = test_px
-                            hubo_movimiento = True
-                    test_py = py - SLIDE_STEP_MM
-                    if test_py + var["b_miny"] >= margin_mm:
-                        if not self._comprobar_colision_transfer(
-                            px, test_py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
-                        ):
-                            py = test_py
-                            hubo_movimiento = True
-
-                poly_test = affinity.translate(var["poly"], px, py)
-                if self._poly_invade_zonas_rtz_transfer(poly_test, zonas_rtz, clearance_rtz):
-                    rechazos["rtz"] += 1
-                    continue
-
-                score = (px * px) + (py * py)
-                if mejor is None or score < mejor[0]:
-                    mejor = (score, var, px, py)
+        if mejor is None:
+            mejor = self._barrido_grid_colocacion_transfer(
+                variaciones,
+                **ctx_eval,
+            )
+            if mejor is not None:
+                _dbg_nesting(
+                    f"[TRANSFER] colocación por grilla en "
+                    f"{hoja_destino.get('placa_id')} para {pieza_mover.get('nombre')}"
+                )
 
         if mejor is None:
             libera = (

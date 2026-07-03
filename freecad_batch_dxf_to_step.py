@@ -45,6 +45,97 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
+def _export_format() -> str:
+    return _env("FREECAD_EXPORT_FORMAT", "step").strip().lower()
+
+def _export_extension() -> str:
+    fmt = _export_format()
+    return ".iges" if fmt in ("iges", "igs") else ".step"
+
+def _export_label() -> str:
+    return "IGES" if _export_extension() == ".iges" else "STEP"
+
+def _cad_base_from_dxf_name(name: str) -> str:
+    step_base = name
+    idx = name.upper().find("W.O.")
+    if idx != -1:
+        step_base = name[idx:].strip()
+    return step_base
+
+def _configure_export_units():
+    unit = _env("FREECAD_EXPORT_LINEAR_UNIT", "").strip().upper()
+    fmt = _export_format()
+    is_iges = fmt in ("iges", "igs")
+    if not unit:
+        unit = "MM" if is_iges else "IN"
+    occt_unit = "MM" if unit == "MM" else "IN"
+    try:
+        h_part = App.ParamGet("User parameter:BaseApp/Preferences/Mod/Part")
+        if is_iges:
+            h_part.SetInt("UnitIges", 0)
+            try:
+                h_part.GetGroup("IGES").SetInt("Unit", 0)
+            except Exception:
+                pass
+        else:
+            h_part.SetInt("Unit", 2)
+            try:
+                h_part.SetInt("UnitStep", 2)
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"WARN Part unit prefs: {exc}")
+
+    key = f"write.{'iges' if is_iges else 'step'}.unit"
+    ok = False
+    for static in _interface_static_candidates():
+        for val in ([occt_unit] + (["INCH"] if occt_unit == "IN" else [])):
+            try:
+                static.SetCVal(key, val)
+                print(f"OCCT {key}={val}")
+                ok = True
+                break
+            except Exception:
+                continue
+        if ok:
+            break
+    if not ok:
+        try:
+            from OCC.Core.Interface import Interface_Static as OccStatic
+
+            for val in ([occt_unit] + (["INCH"] if occt_unit == "IN" else [])):
+                try:
+                    OccStatic.SetCVal(key, val)
+                    print(f"OCCT {key}={val}")
+                    ok = True
+                    break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    if not ok:
+        print(f"WARN: no se pudo fijar {key}={occt_unit}")
+    print(f"Unidades export {('IGES' if is_iges else 'STEP')}: {unit}")
+
+def _interface_static_candidates():
+    out = []
+    try:
+        from OCC.Core.Interface import Interface_Static as OccStatic
+        out.append(OccStatic)
+    except Exception:
+        pass
+    try:
+        if hasattr(Part, "Interface_Static"):
+            out.append(Part.Interface_Static)
+    except Exception:
+        pass
+    try:
+        from Part.App import Interface
+        out.append(Interface.Interface_Static)
+    except Exception:
+        pass
+    return out
+
 def _normalize_material_kind(raw: str) -> str:
     u = str(raw or "").strip().upper()
     if u in ("CU", "COBRE", "COPPER"):
@@ -133,7 +224,19 @@ def _wires_to_solids(wires, thk_mm: float, scale: float):
 
 def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, off_x: float, off_y: float, off_z: float) -> None:
     name = os.path.splitext(os.path.basename(dxf_path))[0]
-    out_step = os.path.join(out_dir, f"{name}.step")
+    cad_ext = _export_extension()
+    cad_label = _export_label()
+    cad_base = _cad_base_from_dxf_name(name)
+    out_cad = os.path.join(out_dir, f"{cad_base}{cad_ext}")
+
+    if os.getenv("FREECAD_SKIP_EXISTING", "1").strip().lower() not in ("0", "false", "no"):
+        try:
+            if os.path.isfile(out_cad) and os.path.getsize(out_cad) > 512:
+                if os.path.getmtime(out_cad) >= os.path.getmtime(dxf_path):
+                    print(f"[SKIP] {name}: {cad_label} vigente -> {out_cad}")
+                    return
+        except Exception:
+            pass
 
     doc = App.newDocument(f"DXF_{name}")
     importDXF.insert(dxf_path, doc.Name)
@@ -227,8 +330,8 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
         _apply_part_appearance(feat_parts.ViewObject, material_kind)
         objects_to_export.append(feat_parts)
 
-    # 4. INYECCIÓN DE MARCAS EN 3D SUPERFICIAL
-    if mark_edges:
+    # 4. INYECCIÓN DE MARCAS EN 3D SUPERFICIAL (solo STEP; IGES no soporta wire marks)
+    if mark_edges and cad_ext != ".iges":
         comp_marks = Part.makeCompound(mark_edges)
         
         if abs(scale - 1.0) > 1e-9:
@@ -252,8 +355,9 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
     FreeCADGui.updateGui() 
 
     # 5. EXPORTACIÓN FINAL
-    ImportGui.export(objects_to_export, out_step)
-    print(f"[OK] {name}: STEP Creado exitosamente CON color y marcas 3D.")
+    _configure_export_units()
+    ImportGui.export(objects_to_export, out_cad)
+    print(f"[OK] {name}: {cad_label} creado exitosamente.")
 
     App.closeDocument(doc.Name)
 
@@ -267,8 +371,13 @@ def main():
     off_y = _env_float("FREECAD_OFFSET_Y", 0.0)
     off_z = _env_float("FREECAD_OFFSET_Z", 0.0)
 
-    print(f"Buscando DXF en: {dxf_in}")
-    files = sorted(glob.glob(os.path.join(dxf_in, "*.dxf")))
+    single = os.getenv("FREECAD_DXF_SINGLE", "").strip()
+    if single and os.path.isfile(single):
+        files = [os.path.normpath(single)]
+        print(f"Procesando 1 archivo (FREECAD_DXF_SINGLE): {files[0]}")
+    else:
+        files = sorted(glob.glob(os.path.join(dxf_in, "*.dxf")))
+        print(f"Buscando DXF en: {dxf_in} ({len(files)} archivo(s))")
     
     for dxf in files:
         try:

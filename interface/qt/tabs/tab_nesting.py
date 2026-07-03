@@ -14,6 +14,7 @@ from datetime import datetime
 
 import ezdxf
 from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -106,6 +107,10 @@ from modules.nesting_engine.rtz_overlays import (
     sincronizar_overlays_resultados,
 )
 from modules.nesting_engine.sheet_integrity import deduplicar_resultados_nesting
+from modules.nesting_engine.sheet_numbering import (
+    asignar_numeracion_global_hojas,
+    numeracion_hojas_es_consistente,
+)
 
 COLOR_TARJETA = "#FFFFFF"
 COLOR_BORDE = "#CBD5E1"
@@ -1731,6 +1736,7 @@ class TabNesting(QWidget, TimerHost):
         self._sync_kerf_widget()
         self._actualizar_panel_placa(hoja, clave)
         self._actualizar_seccion_pieza_seleccionada()
+        self._actualizar_seleccion_lista_hojas()
 
     # =========================================================
     # LÓGICA DEL MENÚ DESPLEGABLE (EL MES EN ACCIÓN)
@@ -1846,6 +1852,19 @@ class TabNesting(QWidget, TimerHost):
         orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
         self.app.motor_nesting.orientacion_cobre_por_ruta = dict(orientaciones)
 
+    def _propagar_auditoria_dxf_a_parts(self, resultado=None):
+        audit = None
+        if isinstance(resultado, dict):
+            audit = resultado.get("dxf_audit")
+        if not audit:
+            audit = getattr(self.app.motor_nesting, "_ultima_auditoria_dxf", None)
+        if not isinstance(audit, dict):
+            return
+        self.app.dxf_nesting_audit = dict(audit)
+        parts = getattr(self.app, "vista_parts", None)
+        if parts is not None and hasattr(parts, "actualizar_resumen_dxf"):
+            self.app.after(0, lambda a=dict(audit): parts.actualizar_resumen_dxf(a))
+
     def ejecutar_nesting(self):
         if not self.app.datos_partes_actuales:
             return QMessageBox.warning(self, "Atención", "No hay piezas importadas.")
@@ -1941,6 +1960,8 @@ class TabNesting(QWidget, TimerHost):
                     self.app.after(0, self.restaurar_controles_tras_cancelacion)
                     return
 
+                self._propagar_auditoria_dxf_a_parts(res)
+
                 self.app.tiempo_calculo = time.time() - tiempo_inicio
                 lista_unica = [{"lote_k": T, "data": res}]
                 self._preparar_resultados_nesting_pesado(
@@ -1979,6 +2000,7 @@ class TabNesting(QWidget, TimerHost):
                     config_opt=opt_val,
                     wo_name=wo_act,
                 )
+                self._propagar_auditoria_dxf_a_parts(nestings_precalculados[k])
                 if _abortar_si_cancelado():
                     return
 
@@ -2255,6 +2277,126 @@ class TabNesting(QWidget, TimerHost):
                 preserve_view=True,
             )
         return madre
+
+    def _etiqueta_hoja_lista(self, hoja) -> str:
+        try:
+            seq = hoja.get("sheet_seq")
+            if seq is not None:
+                return f"H{int(seq)}"
+        except (TypeError, ValueError):
+            pass
+        return ""
+
+    def _hoja_es_la_seleccionada(self, hoja, clave) -> bool:
+        if not hoja or clave != self.clave_actual:
+            return False
+        actual = self.hoja_actual_data
+        if hoja is actual:
+            return True
+        if isinstance(hoja, dict) and isinstance(actual, dict):
+            uid = str(hoja.get("sheet_uid") or "").strip()
+            uid_actual = str(actual.get("sheet_uid") or "").strip()
+            if uid and uid_actual and uid == uid_actual:
+                return True
+        return False
+
+    def _ss_btn_placa_nesting(
+        self,
+        bg: str,
+        fg: str,
+        *,
+        hover_bg: str | None = None,
+        padding: str = "8px 10px",
+        radius: int = 8,
+        font_size: int = 12,
+        align: str = "",
+    ) -> str:
+        from interface.qt.theme import COLOR_ACENTO, _shade
+
+        border = "#CBD5E1" if fg == COLOR_TEXTO_TITULO else _shade(bg, -0.2)
+        hover = hover_bg or _shade(bg, 0.12 if fg == "#FFFFFF" else -0.06)
+        hover_border = "#94A3B8" if fg == COLOR_TEXTO_TITULO else _shade(bg, 0.05)
+        pressed = _shade(bg, -0.1)
+        base = (
+            f"background-color:{bg};color:{fg};border:1px solid {border};"
+            f"border-radius:{radius}px;padding:{padding};font-weight:600;"
+            f"font-size:{font_size}px;{align}"
+        )
+        hover_rule = (
+            f"background-color:{hover};color:{fg};border:1px solid {hover_border};"
+            f"border-radius:{radius}px;"
+        )
+        return (
+            f"QPushButton{{{base}}}"
+            f"QPushButton:hover{{{hover_rule}}}"
+            f"QPushButton:pressed{{background-color:{pressed};color:{fg};"
+            f"border:1px solid {hover_border};border-radius:{radius}px;}}"
+            f"QPushButton:focus{{color:{fg};border-color:{COLOR_ACENTO};"
+            f"border-radius:{radius}px;outline:none;}}"
+        )
+
+    def _aplicar_estilo_btn_placa(self, btn, *, seleccionada: bool = False, **estilo) -> None:
+        padding = "8px 10px"
+        radius = 8
+        font_size = 12
+        es_retazo = bool(estilo.get("es_retazo"))
+        align = "text-align:left;" if es_retazo else ""
+
+        if seleccionada:
+            bg, fg, hover = "#FFFFFF", COLOR_TEXTO_TITULO, "#F1F5F9"
+        else:
+            btn.setObjectName("")
+            es_rtzc = bool(estilo.get("es_rtzc"))
+            es_sobrante_rtz = bool(estilo.get("es_sobrante_rtz"))
+            ignorada = bool(estilo.get("ignorada"))
+            origen_str = str(estilo.get("origen_str") or "")
+
+            if es_rtzc:
+                bg, fg, hover = "#1C1917", "#FB923C", "#292524"
+            elif es_sobrante_rtz or es_retazo:
+                bg, fg, hover = "#0F172A", "#38BDF8", "#1E293B"
+            elif ignorada:
+                bg, fg, hover = "#1F2937", "#94A3B8", "#374151"
+            elif origen_str:
+                bg, fg, hover = "#323741", "#FCA5A5", "#3F4854"
+            else:
+                bg, fg, hover = "#323741", "#FFFFFF", "#3F4854"
+
+        btn.setStyleSheet(
+            self._ss_btn_placa_nesting(
+                bg,
+                fg,
+                hover_bg=hover,
+                padding=padding,
+                radius=radius,
+                font_size=font_size,
+                align=align,
+            )
+        )
+        pal = btn.palette()
+        pal.setColor(QPalette.ColorRole.ButtonText, QColor(fg))
+        btn.setPalette(pal)
+        btn.setAutoFillBackground(False)
+
+    def _actualizar_seleccion_lista_hojas(self):
+        layout = getattr(self, "_lista_hojas_layout", None)
+        if layout is None:
+            return
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            contenedor = item.widget() if item else None
+            if contenedor is None:
+                continue
+            for btn in contenedor.findChildren(QPushButton):
+                meta = getattr(btn, "_nest_meta", None)
+                if not isinstance(meta, dict):
+                    continue
+                seleccionada = self._hoja_es_la_seleccionada(meta.get("hoja"), meta.get("clave"))
+                self._aplicar_estilo_btn_placa(
+                    btn,
+                    seleccionada=seleccionada,
+                    **meta.get("estilo", {}),
+                )
         
     def procesar_lista_hojas(self, resultados):
         deduplicar_resultados_nesting(resultados, kerf_global=self._kerf_efectivo())
@@ -2267,6 +2409,9 @@ class TabNesting(QWidget, TimerHost):
         for clave in (resultados or {}):
             if isinstance((resultados or {}).get(clave), dict):
                 self._recalcular_costos_grupo(clave)
+        wo_label = self._order_label_para_rtz()
+        if not numeracion_hojas_es_consistente(resultados, wo_label):
+            asignar_numeracion_global_hojas(resultados, wo_label, sobrescribir=True)
         scroll_clear(self.lista_hojas)
 
         from interface.nesting_costos import calcular_reporte_costos, aplicar_totales_a_tab
@@ -2351,30 +2496,28 @@ class TabNesting(QWidget, TimerHost):
                         if es_retazo else
                         f"{prefijo_ign}{nombre_placa}{sufijo}{origen_str} | {efi_txt}"
                     )
-                    if es_rtzc:
-                        color_fondo = "#1C1917"
-                        color_texto = "#FB923C"
-                    elif es_sobrante_rtz:
-                        color_fondo = "#0F172A"
-                        color_texto = "#38BDF8"
-                    elif es_retazo:
-                        color_fondo = "#0F172A"
-                        color_texto = "#38BDF8"
-                    else:
-                        color_fondo = "#1F2937" if ignorada else "#323741"
-                        color_texto = "#94A3B8" if ignorada else ("#FCA5A5" if origen_str else "white")
+                    hoja_tag = self._etiqueta_hoja_lista(hoja)
+                    if hoja_tag:
+                        texto_btn = f"{texto_btn}  {hoja_tag}"
+                    estilo_params = dict(
+                        es_retazo=es_retazo,
+                        es_rtzc=es_rtzc,
+                        es_sobrante_rtz=es_sobrante_rtz,
+                        ignorada=ignorada,
+                        origen_str=origen_str,
+                    )
+                    seleccionada = self._hoja_es_la_seleccionada(hoja, clave)
 
                     fila_placa = QWidget()
                     fila_lay = QVBoxLayout(fila_placa)
                     fila_lay.setContentsMargins(20 if es_retazo else 0, 1, 0, 1)
 
                     btn = QPushButton(texto_btn)
-                    btn.setStyleSheet(
-                        f"background:{color_fondo};color:{color_texto};border:none;border-radius:8px;"
-                        f"text-align:left;padding:8px 10px;font-weight:600;"
-                        if es_retazo else
-                        f"background:{color_fondo};color:{color_texto};border:none;border-radius:8px;"
-                        f"padding:8px 10px;font-weight:600;"
+                    btn._nest_meta = {"hoja": hoja, "clave": clave, "estilo": estilo_params}
+                    self._aplicar_estilo_btn_placa(
+                        btn,
+                        seleccionada=seleccionada,
+                        **estilo_params,
                     )
                     btn.clicked.connect(lambda checked=False, h=hoja, c=clave: self.dibujar_hoja_full(h, c))
                     fila_lay.addWidget(btn)
@@ -2397,6 +2540,7 @@ class TabNesting(QWidget, TimerHost):
         self._actualizar_piezas_totales_label(resultados)
         if self.hoja_actual_data and self.clave_actual:
             self._actualizar_panel_placa(self.hoja_actual_data, self.clave_actual)
+        self._actualizar_seleccion_lista_hojas()
 
     def _ctx_tiene_resultados(self, clave=None) -> bool:
         res = getattr(self.app, "resultados_nesting", None) or {}
@@ -6527,10 +6671,17 @@ class TabNesting(QWidget, TimerHost):
                         for fam, counts in sorted(step_resumen.items()):
                             n_dxf = int(counts.get("dxf") or 0)
                             n_step = int(counts.get("step") or 0)
+                            n_iges = int(counts.get("iges") or 0)
                             if n_dxf > 0:
-                                lineas_step.append(f"  • {fam}: {n_step}/{n_dxf} STEP")
+                                partes = []
+                                if n_step:
+                                    partes.append(f"{n_step} STEP")
+                                if n_iges:
+                                    partes.append(f"{n_iges} IGES")
+                                detalle = ", ".join(partes) if partes else "0 3D"
+                                lineas_step.append(f"  • {fam}: {detalle} / {n_dxf} DXF")
                         if lineas_step:
-                            mensaje_final += "\n\nArchivos 3D (STEP):\n" + "\n".join(lineas_step)
+                            mensaje_final += "\n\nArchivos 3D:\n" + "\n".join(lineas_step)
                     except Exception:
                         pass
 

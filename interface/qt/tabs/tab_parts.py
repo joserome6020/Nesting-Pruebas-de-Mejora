@@ -138,6 +138,19 @@ class TabParts(QWidget, TimerHost):
         self.btn_aplicar_tanques.clicked.connect(self.aplicar_cantidad_tanques)
         hdr.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
+
+        self.lbl_dxf_conteo = QLabel("DXF NESTEO: —")
+        self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        hdr.addWidget(self.lbl_dxf_conteo)
+
+        self.btn_dxf_omitidos = QPushButton("VER OMITIDOS")
+        apply_push_button(self.btn_dxf_omitidos, ARGB_BTN_4, font_size=10)
+        self.btn_dxf_omitidos.setEnabled(False)
+        self.btn_dxf_omitidos.clicked.connect(self.abrir_dialogo_dxf_omitidos)
+        hdr.addWidget(self.btn_dxf_omitidos)
+
+        self._dxf_audit_token = 0
+        self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
         hdr.addStretch()
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
@@ -315,7 +328,153 @@ class TabParts(QWidget, TimerHost):
 
         if thumbnails_async and thumb_queue:
             self._iniciar_thumbnails_async(thumb_queue)
+        self._iniciar_auditoria_dxf_async(datos)
         QTimer.singleShot(0, self._sync_parts_header_scrollbar)
+
+    def _iniciar_auditoria_dxf_async(self, datos):
+        self._dxf_audit_token = int(getattr(self, "_dxf_audit_token", 0)) + 1
+        token = self._dxf_audit_token
+        snapshot = [tuple(x) for x in (datos or [])]
+        self.lbl_dxf_conteo.setText("DXF NESTEO: validando…")
+        self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        self.btn_dxf_omitidos.setEnabled(False)
+        threading.Thread(
+            target=self._thread_auditar_dxfs,
+            args=(token, snapshot),
+            daemon=True,
+        ).start()
+
+    def _thread_auditar_dxfs(self, token: int, datos: list):
+        audit = {"total": 0, "ok": 0, "omitidos": []}
+        try:
+            from modules.nesting_engine.dxf_nesting_audit import auditar_lista_partes
+
+            audit = auditar_lista_partes(datos)
+        except Exception as exc:
+            audit = {
+                "total": len(datos),
+                "ok": 0,
+                "omitidos": [
+                    {
+                        "pieza": "(auditoría)",
+                        "ruta": "",
+                        "archivo": "",
+                        "error": f"No se pudo auditar DXF: {exc}",
+                    }
+                ],
+            }
+        call_on_main(self._aplicar_auditoria_dxf, token, audit)
+
+    def _aplicar_auditoria_dxf(self, token: int, audit: dict):
+        if token != getattr(self, "_dxf_audit_token", 0):
+            return
+        self._dxf_audit_actual = {
+            "total": int(audit.get("total", 0) or 0),
+            "ok": int(audit.get("ok", 0) or 0),
+            "omitidos": list(audit.get("omitidos") or []),
+        }
+        self.app.dxf_nesting_audit = dict(self._dxf_audit_actual)
+        self._actualizar_widget_resumen_dxf()
+
+    def actualizar_resumen_dxf(self, audit: dict | None = None):
+        """Actualiza contador desde auditoría externa (p. ej. tras intento de nesting)."""
+        if audit is not None:
+            self._dxf_audit_actual = {
+                "total": int(audit.get("total", 0) or 0),
+                "ok": int(audit.get("ok", 0) or 0),
+                "omitidos": list(audit.get("omitidos") or []),
+            }
+        self._actualizar_widget_resumen_dxf()
+
+    def _estilo_lbl_dxf_conteo(self) -> str:
+        return f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:13px;padding:0 8px;"
+
+    def _actualizar_widget_resumen_dxf(self):
+        total = int(self._dxf_audit_actual.get("total", 0) or 0)
+        ok = int(self._dxf_audit_actual.get("ok", 0) or 0)
+        omitidos = list(self._dxf_audit_actual.get("omitidos") or [])
+        n_omit = len(omitidos)
+
+        if total <= 0:
+            self.lbl_dxf_conteo.setText("DXF NESTEO: —")
+            self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
+            self.btn_dxf_omitidos.setEnabled(False)
+            self.btn_dxf_omitidos.setText("VER OMITIDOS")
+            return
+
+        self.lbl_dxf_conteo.setText(f"DXF NESTEO: {ok}/{total}")
+        self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        self.btn_dxf_omitidos.setText(
+            f"VER OMITIDOS ({n_omit})" if n_omit else "VER OMITIDOS"
+        )
+        self.btn_dxf_omitidos.setEnabled(n_omit > 0)
+
+    def abrir_dialogo_dxf_omitidos(self):
+        omitidos = list(self._dxf_audit_actual.get("omitidos") or [])
+        if not omitidos:
+            QMessageBox.information(
+                self,
+                "DXF para nesteo",
+                "Todos los DXF del listado tienen geometría válida para nestear.",
+            )
+            return
+        self._mostrar_dialogo_dxf_omitidos(omitidos)
+
+    def _mostrar_dialogo_dxf_omitidos(self, omitidos: list):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("DXF omitidos del nesteo")
+        dlg.resize(1100, 560)
+        dlg.setModal(True)
+        lay = QVBoxLayout(dlg)
+        card = make_herinox_card()
+        card_lay = QVBoxLayout(card)
+
+        tit = QLabel("DXF NO TOMADOS EN CUENTA PARA EL NESTEO")
+        tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:16px;")
+        card_lay.addWidget(tit)
+
+        total = int(self._dxf_audit_actual.get("total", 0) or 0)
+        ok = int(self._dxf_audit_actual.get("ok", 0) or 0)
+        card_lay.addWidget(
+            QLabel(
+                f"Procesados para nesteo: {ok}/{total}   |   "
+                f"Omitidos: {len(omitidos)}"
+            )
+        )
+
+        table = QTableWidget(len(omitidos), 3)
+        table.setHorizontalHeaderLabels(["PIEZA / REF", "ARCHIVO DXF", "MOTIVO"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(True)
+        table.setStyleSheet(
+            "QTableWidget{background:#FFFFFF;color:#0F172A;alternate-background-color:#F8FAFC;"
+            "gridline-color:#E2E8F0;border:1px solid #E2E8F0;border-radius:8px;}"
+            "QTableWidget::item{color:#0F172A;padding:4px;}"
+            "QHeaderView::section{background:#F1F5F9;color:#475569;font-weight:700;border:none;"
+            "border-bottom:1px solid #E2E8F0;padding:6px;}"
+        )
+        hdr_tbl = table.horizontalHeader()
+        hdr_tbl.resizeSection(0, 220)
+        hdr_tbl.resizeSection(1, 320)
+        hdr_tbl.setStretchLastSection(True)
+
+        for ri, item in enumerate(omitidos):
+            pieza = str(item.get("pieza") or "(sin nombre)")
+            archivo = str(item.get("archivo") or os.path.basename(str(item.get("ruta") or "")))
+            error = str(item.get("error") or "Sin detalle")
+            table.setItem(ri, 0, QTableWidgetItem(pieza))
+            table.setItem(ri, 1, QTableWidgetItem(archivo))
+            err_item = QTableWidgetItem(error)
+            err_item.setToolTip(error)
+            table.setItem(ri, 2, err_item)
+
+        table.resizeRowsToContents()
+        card_lay.addWidget(table, 1)
+        lay.addWidget(card)
+        dlg.exec()
 
     def _iniciar_thumbnails_async(self, thumb_queue: list[tuple]):
         self._thumb_gen_token = int(getattr(self, "_thumb_gen_token", 0)) + 1

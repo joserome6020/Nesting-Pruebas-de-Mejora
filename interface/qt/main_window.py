@@ -90,6 +90,7 @@ class SistemaNestingPro(QMainWindow):
         self.motor_nesting = MotorNesting()
         self.datos_placas_empresa, self.datos_placas_proveedor = self.plates_manager.obtener_datos_placas_divididos()
         self.datos_partes_actuales = []
+        self.dxf_nesting_audit = {"total": 0, "ok": 0, "omitidos": []}
         self.orientacion_cobre_por_ruta = {}
         self._parts_ui_pendiente = None
         self.resultados_nesting = {}

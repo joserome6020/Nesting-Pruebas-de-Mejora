@@ -169,7 +169,7 @@ def _resolve_macro_script(*, prefer_verde: bool = False) -> str | None:
     return None
 
 
-def _step_base_from_dxf(dxf_path: str) -> str:
+def _cad_base_from_dxf(dxf_path: str) -> str:
     name = os.path.splitext(os.path.basename(dxf_path))[0]
     idx = name.upper().find("W.O.")
     if idx != -1:
@@ -177,19 +177,37 @@ def _step_base_from_dxf(dxf_path: str) -> str:
     return name
 
 
+def _cad_extension(export_format: str = "step") -> str:
+    fmt = str(export_format or "step").strip().lower()
+    return ".iges" if fmt in ("iges", "igs") else ".step"
+
+
+def _cad_path_for_dxf(dxf_path: str, out_folder: str, export_format: str = "step") -> str:
+    ext = _cad_extension(export_format)
+    return os.path.join(out_folder, f"{_cad_base_from_dxf(dxf_path)}{ext}")
+
+
+def _step_base_from_dxf(dxf_path: str) -> str:
+    return _cad_base_from_dxf(dxf_path)
+
+
 def _step_path_for_dxf(dxf_path: str, step_folder: str) -> str:
-    return os.path.join(step_folder, f"{_step_base_from_dxf(dxf_path)}.step")
+    return _cad_path_for_dxf(dxf_path, step_folder, "step")
+
+
+def _cad_is_current(dxf_path: str, cad_path: str) -> bool:
+    if not os.path.isfile(cad_path):
+        return False
+    try:
+        if os.path.getsize(cad_path) < 512:
+            return False
+        return os.path.getmtime(cad_path) >= os.path.getmtime(dxf_path)
+    except OSError:
+        return False
 
 
 def _step_is_current(dxf_path: str, step_path: str) -> bool:
-    if not os.path.isfile(step_path):
-        return False
-    try:
-        if os.path.getsize(step_path) < 512:
-            return False
-        return os.path.getmtime(step_path) >= os.path.getmtime(dxf_path)
-    except OSError:
-        return False
+    return _cad_is_current(dxf_path, step_path)
 
 
 def _timeout_for_dxf(dxf_path: str) -> float:
@@ -202,13 +220,21 @@ def _timeout_for_dxf(dxf_path: str) -> float:
     return max(900.0, min(10800.0, 300.0 + kb * 4.0))
 
 
-def _pendientes_step(dxf_files: list[str], step_folder: str) -> list[str]:
+def _pendientes_cad(
+    dxf_files: list[str],
+    out_folder: str,
+    export_format: str = "step",
+) -> list[str]:
     pending: list[str] = []
     for dxf_path in dxf_files:
-        step_path = _step_path_for_dxf(dxf_path, step_folder)
-        if not _step_is_current(dxf_path, step_path):
+        cad_path = _cad_path_for_dxf(dxf_path, out_folder, export_format)
+        if not _cad_is_current(dxf_path, cad_path):
             pending.append(dxf_path)
     return pending
+
+
+def _pendientes_step(dxf_files: list[str], step_folder: str) -> list[str]:
+    return _pendientes_cad(dxf_files, step_folder, "step")
 
 
 def _resolve_log_path(step_folder: str) -> str:
@@ -237,15 +263,24 @@ def ejecutar_macro_freecad(
     prefer_verde: bool = False,
     max_intentos: int = 2,
     material: str = "",
+    export_format: str = "step",
+    dxf_filter=None,
 ) -> bool:
+    cad_fmt = str(export_format or "step").strip().lower()
+    cad_ext = _cad_extension(cad_fmt)
+    cad_label = "IGES" if cad_ext == ".iges" else "STEP"
+    from freecad_export_units import resolve_export_linear_unit, resolve_geometry_scale
 
-    def snapshot_steps(folder: str):
+    linear_unit = resolve_export_linear_unit(cad_fmt)
+    geom_scale = resolve_geometry_scale(float(getattr(config, "FREECAD_SCALE", 1.0)), cad_fmt, linear_unit)
+
+    def snapshot_cad(folder: str):
         data = {}
         folder = os.path.normpath(folder)
         if not folder or not os.path.isdir(folder):
             return data
 
-        for path in glob.glob(os.path.join(folder, "*.step")):
+        for path in glob.glob(os.path.join(folder, f"*{cad_ext}")):
             try:
                 data[os.path.normpath(path)] = os.path.getmtime(path)
             except Exception:
@@ -347,21 +382,24 @@ def ejecutar_macro_freecad(
             except Exception as e:
                 return False, f"EXCEPCIÓN: {e}"
 
-            step_path = _step_path_for_dxf(dxf_path, step_resuelta)
-            if _step_is_current(dxf_path, step_path):
+            cad_path = _cad_path_for_dxf(dxf_path, step_resuelta, cad_fmt)
+            if _cad_is_current(dxf_path, cad_path):
                 return True, f"OK (rc={proc.returncode})"
             if proc.returncode != 0:
                 return False, f"FreeCAD rc={proc.returncode}"
-            return False, "sin STEP válido al terminar"
+            return False, f"sin {cad_label} válido al terminar"
 
-        _log(f"\n--- INICIANDO CONVERSIÓN STEP ({origen}) ---\n")
+        _log(f"\n--- INICIANDO CONVERSIÓN {cad_label} ({origen}) ---\n")
         f.write(f"Ejecutable: {ruta_exe}\n")
         f.write(f"Macro: {ruta_macro}\n")
-        f.write(f"Modo: 1 FreeCAD por DXF (reanuda STEP existentes)\n")
+        f.write(f"Modo: 1 FreeCAD por DXF (reanuda {cad_label} existentes)\n")
+        f.write(f"Formato 3D: {cad_fmt}\n")
+        f.write(f"Unidades export: {linear_unit}\n")
+        f.write(f"FREECAD_SCALE: {geom_scale}\n")
         f.write(f"DXF folder (solicitado): {dxf_folder}\n")
         f.write(f"DXF folder (resuelto): {dxf_resuelta}\n")
-        f.write(f"STEP folder (solicitado): {step_folder}\n")
-        f.write(f"STEP folder (resuelto): {step_resuelta}\n")
+        f.write(f"{cad_label} folder (solicitado): {step_folder}\n")
+        f.write(f"{cad_label} folder (resuelto): {step_resuelta}\n")
 
         if not ruta_exe or not os.path.exists(ruta_exe):
             f.write("ERROR FATAL: No se encontró ejecutable de FreeCAD.\n")
@@ -406,23 +444,25 @@ def ejecutar_macro_freecad(
         try:
             if not os.path.isdir(step_resuelta):
                 os.makedirs(step_resuelta, exist_ok=True)
-                f.write("STEP folder asegurada/creada desde Python.\n")
+                f.write(f"{cad_label} folder asegurada/creada desde Python.\n")
             else:
-                f.write("STEP folder ya existe.\n")
+                f.write(f"{cad_label} folder ya existe.\n")
         except Exception as e:
-            f.write(f"[WARN] No se pudo asegurar la carpeta STEP desde Python: {e}\n")
+            f.write(f"[WARN] No se pudo asegurar la carpeta {cad_label} desde Python: {e}\n")
             f.write("[WARN] Se continuará y se dejará que FreeCAD intente escribir directamente.\n")
 
-        before_snapshot = snapshot_steps(step_resuelta)
-        f.write(f"STEP antes: {len(before_snapshot)}\n")
+        before_snapshot = snapshot_cad(step_resuelta)
+        f.write(f"{cad_label} antes: {len(before_snapshot)}\n")
 
         env_base = os.environ.copy()
         env_base["FREECAD_DXF_IN"] = dxf_resuelta
         env_base["FREECAD_STEP_OUT"] = step_resuelta
+        env_base["FREECAD_EXPORT_FORMAT"] = cad_fmt
+        env_base["FREECAD_EXPORT_LINEAR_UNIT"] = linear_unit
+        env_base["FREECAD_SCALE"] = str(geom_scale)
         env_base["FREECAD_LOG_DIR"] = log_dir
         env_base["FREECAD_LOG_PATH"] = os.path.join(log_dir, "freecad_macro.log")
         env_base["FREECAD_THK_MM"] = str(thickness_mm)
-        env_base["FREECAD_SCALE"] = str(getattr(config, "FREECAD_SCALE", 1.0))
         env_base["FREECAD_ORIGIN"] = origen
         env_base["FREECAD_OFFSET_X"] = str(off_x)
         env_base["FREECAD_OFFSET_Y"] = str(off_y)
@@ -432,9 +472,13 @@ def ejecutar_macro_freecad(
 
         _log(f"Comando lanzado: {' '.join(cmd)}\n")
 
-        ya_vigentes = n_dxf - len(_pendientes_step(dxf_files, step_resuelta))
+        candidatos = list(dxf_files)
+        if callable(dxf_filter):
+            candidatos = [p for p in candidatos if dxf_filter(p)]
+        n_candidatos = len(candidatos)
+        ya_vigentes = n_candidatos - len(_pendientes_cad(candidatos, step_resuelta, cad_fmt))
         if ya_vigentes:
-            _log(f"STEP vigentes (se omiten): {ya_vigentes}/{n_dxf}\n")
+            _log(f"{cad_label} vigentes (se omiten): {ya_vigentes}/{n_candidatos}\n")
 
         macro_append = ya_vigentes > 0 or os.path.isfile(
             env_base.get("FREECAD_LOG_PATH", "")
@@ -442,14 +486,17 @@ def ejecutar_macro_freecad(
         fallidos: list[str] = []
 
         for intento in range(1, max(1, int(max_intentos)) + 1):
-            pending = _pendientes_step(dxf_files, step_resuelta)
+            pending = _pendientes_cad(candidatos, step_resuelta, cad_fmt)
             if not pending:
                 break
             if intento > 1:
-                _log(f"\n--- REINTENTO STEP {intento}/{max_intentos} ({len(pending)} pendientes) ---\n")
+                _log(
+                    f"\n--- REINTENTO {cad_label} {intento}/{max_intentos} "
+                    f"({len(pending)} pendientes) ---\n"
+                )
                 time.sleep(1.0)
             else:
-                _log(f"Pendientes de convertir: {len(pending)}/{n_dxf}\n")
+                _log(f"Pendientes de convertir: {len(pending)}/{n_candidatos}\n")
 
             for idx, dxf_path in enumerate(pending):
                 nombre = os.path.basename(dxf_path)
@@ -478,20 +525,20 @@ def ejecutar_macro_freecad(
                     if dxf_path not in fallidos:
                         fallidos.append(dxf_path)
 
-        pending_final = _pendientes_step(dxf_files, step_resuelta)
-        after_snapshot = snapshot_steps(step_resuelta)
+        pending_final = _pendientes_cad(candidatos, step_resuelta, cad_fmt)
+        after_snapshot = snapshot_cad(step_resuelta)
         nuevos, actualizados = diff_steps(before_snapshot, after_snapshot)
 
-        _log(f"\nSTEP después: {len(after_snapshot)}/{n_dxf}\n")
-        _log(f"STEP nuevos: {len(nuevos)}\n")
-        _log(f"STEP actualizados: {len(actualizados)}\n")
+        _log(f"\n{cad_label} después: {len(after_snapshot)}/{n_candidatos}\n")
+        _log(f"{cad_label} nuevos: {len(nuevos)}\n")
+        _log(f"{cad_label} actualizados: {len(actualizados)}\n")
         if pending_final:
-            _log(f"STEP faltantes ({len(pending_final)}):\n")
+            _log(f"{cad_label} faltantes ({len(pending_final)}):\n")
             for dxf_path in pending_final:
                 _log(f" - {os.path.basename(dxf_path)}\n")
 
         ok = len(pending_final) == 0
-        if ok and str(material or "").strip().upper() in ("CU", "COBRE", "COPPER"):
+        if ok and cad_fmt == "step" and str(material or "").strip().upper() in ("CU", "COBRE", "COPPER"):
             try:
                 from modules.cobre_step_audit import audit_macro_log_for_losses
 
@@ -511,7 +558,7 @@ def ejecutar_macro_freecad(
             return True
 
         if pending_final:
-            _log("RESULTADO FINAL: FAIL (STEP incompletos tras reintentos)\n")
+            _log(f"RESULTADO FINAL: FAIL ({cad_label} incompletos tras reintentos)\n")
         else:
-            _log("RESULTADO FINAL: FAIL (auditoría o conteo STEP)\n")
+            _log(f"RESULTADO FINAL: FAIL (auditoría o conteo {cad_label})\n")
         return False

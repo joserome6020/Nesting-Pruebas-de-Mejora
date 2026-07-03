@@ -318,13 +318,28 @@ def _ensamblar_pieza(shell_poly: Polygon, holes: list[Polygon]) -> Polygon | Non
     return pieza
 
 
-def recuperar_geometria_robusta(ruta_dxf):
+def recuperar_geometria_robusta_detalle(ruta_dxf):
+    """
+    Igual que recuperar_geometria_robusta pero devuelve (poly, marks, error).
+    error es None cuando la geometría es válida.
+    """
+    ruta = str(ruta_dxf or "").strip()
+    if not ruta:
+        return None, None, "Ruta DXF vacía."
+    if not os.path.isfile(ruta):
+        return None, None, f"Archivo no encontrado: {ruta}"
+
     try:
-        doc = ezdxf.readfile(ruta_dxf)
+        doc = ezdxf.readfile(ruta)
+    except Exception as e:
+        return None, None, f"No se pudo leer el DXF: {e}"
+
+    try:
         msp = doc.modelspace()
         lines_outer, lines_inner, lines_mark = [], [], []
         anillos_outer_directos: list[list[tuple[float, float]]] = []
         anillos_inner_directos: list[list[tuple[float, float]]] = []
+        entidades_corte = 0
 
         for entity in msp:
             if entity.dxftype() not in [
@@ -347,6 +362,7 @@ def recuperar_geometria_robusta(ruta_dxf):
                 lines_mark.extend(entidad_a_lineas(entity))
                 continue
 
+            entidades_corte += 1
             anillos = _anillos_cerrados_entidad(entity)
             if clase == "inner":
                 anillos_inner_directos.extend(anillos)
@@ -369,7 +385,17 @@ def recuperar_geometria_robusta(ruta_dxf):
             anillos_inner_directos = []
 
         if not lines_outer:
-            return None, None
+            if entidades_corte == 0:
+                return (
+                    None,
+                    None,
+                    "Sin entidades de corte en capas CUT/OUTER/INNER reconocidas.",
+                )
+            return (
+                None,
+                None,
+                "No se formó contorno exterior cerrado a partir del DXF.",
+            )
 
         candidatos_outer = _poligonos_cerrados_de_lineas(lines_outer)
         for ring in anillos_outer_directos:
@@ -377,7 +403,11 @@ def recuperar_geometria_robusta(ruta_dxf):
             if p is not None:
                 candidatos_outer.append(p)
         if not candidatos_outer:
-            return None, None
+            return (
+                None,
+                None,
+                "Hay geometría de corte pero no se pudo cerrar el contorno exterior.",
+            )
 
         shell_poly = max(candidatos_outer, key=lambda x: x.area)
         islas_outer = _filtrar_islas_outer(candidatos_outer, shell_poly)
@@ -388,14 +418,19 @@ def recuperar_geometria_robusta(ruta_dxf):
 
         pieza_final = _ensamblar_pieza(shell_poly, holes)
         if pieza_final is None:
-            return None, None
+            return None, None, "Geometría vacía o demasiado pequeña tras ensamblar la pieza."
 
         marcas_final = MultiLineString(lines_mark) if lines_mark else MultiLineString()
-        return pieza_final, marcas_final
+        return pieza_final, marcas_final, None
 
     except Exception as e:
-        print(f"Error procesando DXF {ruta_dxf}: {e}")
-        return None, None
+        print(f"Error procesando DXF {ruta}: {e}")
+        return None, None, f"Error al procesar geometría: {e}"
+
+
+def recuperar_geometria_robusta(ruta_dxf):
+    poly, marks, _err = recuperar_geometria_robusta_detalle(ruta_dxf)
+    return poly, marks
 
 
 def _normalizar_a_polygon(poly):

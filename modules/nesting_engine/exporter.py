@@ -69,13 +69,39 @@ def _es_export_swo(
     return bn.startswith("SWO") or "S.W.O" in wl
 
 
+def _hoja_cobre_export_iges(hoja: dict) -> bool:
+    """Cobre largos sin separación (modo sin_gap) → IGES en lugar de STEP."""
+    if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
+        return False
+    return str(hoja.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+
+
+def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
+    formato: dict[str, str] = {}
+    for data in (resultados or {}).values():
+        if not isinstance(data, dict) or not data.get("modo_largos_cu"):
+            continue
+        for hoja in data.get("hojas") or []:
+            if not isinstance(hoja, dict):
+                continue
+            for item in hoja.get("pqart_exports") or []:
+                if not isinstance(item, dict):
+                    continue
+                nombre = str(item.get("nombre_dxf") or os.path.basename(str(item.get("ruta") or ""))).strip()
+                if not nombre:
+                    continue
+                formato[nombre] = str(item.get("export_3d_format") or "step").strip().lower()
+    return formato
+
+
 def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
-    """Copia STEP generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
+    """Copia STEP/IGES generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
     dest = os.path.join(out_dir, "3D NESTING")
     os.makedirs(dest, exist_ok=True)
     copiados = 0
     step_dirs = [
         rutas.get("cama_laser_step"),
+        rutas.get("cama_laser_iges"),
         rutas.get("cama_laser_12kw_step"),
         rutas.get("robot_laser_step_A"),
         rutas.get("robot_laser_step_B"),
@@ -85,13 +111,16 @@ def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
     for step_dir in step_dirs:
         if not step_dir or not os.path.isdir(step_dir):
             continue
-        for step_path in glob.glob(os.path.join(step_dir, "*.step")):
-            dest_path = os.path.join(dest, os.path.basename(step_path))
-            try:
-                shutil.copy2(step_path, dest_path)
-                copiados += 1
-            except Exception as exc:
-                print(f"[STEP][WARN] No se pudo copiar {step_path} -> {dest_path}: {exc}")
+        for pattern in ("*.step", "*.iges", "*.igs"):
+            for cad_path in glob.glob(os.path.join(step_dir, pattern)):
+                dest_path = os.path.join(dest, os.path.basename(cad_path))
+                try:
+                    shutil.copy2(cad_path, dest_path)
+                    copiados += 1
+                except Exception as exc:
+                    print(
+                        f"[3D][WARN] No se pudo copiar {cad_path} -> {dest_path}: {exc}"
+                    )
     return copiados
 
 
@@ -103,7 +132,11 @@ def obtener_resumen_step_ultimo_export() -> dict[str, dict[str, int]]:
     return dict(_ULTIMO_RESUMEN_STEP)
 
 
-def _auditar_steps_en_rutas(rutas: dict) -> dict[str, dict[str, int]]:
+def _auditar_steps_en_rutas(
+    rutas: dict,
+    *,
+    cu_formato_por_dxf: dict[str, str] | None = None,
+) -> dict[str, dict[str, int]]:
     familias = [
         ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
         ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
@@ -111,29 +144,64 @@ def _auditar_steps_en_rutas(rutas: dict) -> dict[str, dict[str, int]]:
         ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
     ]
     resumen: dict[str, dict[str, int]] = {}
+    fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
     for etiqueta, dxf_key, step_key in familias:
         dxf_dir = os.path.normpath(str(rutas.get(dxf_key) or "").strip())
         step_dir = os.path.normpath(str(rutas.get(step_key) or "").strip())
+        iges_dir = os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
         n_dxf = len(_listar_dxfs_en_carpeta(dxf_dir)) if dxf_dir else 0
         n_step = 0
-        if step_dir and os.path.isdir(step_dir):
-            n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
-        if n_dxf > 0 or n_step > 0:
-            resumen[etiqueta] = {"dxf": n_dxf, "step": n_step}
+        n_iges = 0
+        if dxf_dir and fmt_map and etiqueta == "CAMA LASER":
+            try:
+                from freecad_runner import _cad_path_for_dxf
+
+                for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
+                    nombre = os.path.basename(dxf_path)
+                    fmt = fmt_map.get(nombre, "step")
+                    out_dir = iges_dir if fmt == "iges" else step_dir
+                    cad_path = _cad_path_for_dxf(
+                        dxf_path,
+                        out_dir,
+                        "iges" if fmt == "iges" else "step",
+                    )
+                    if os.path.isfile(cad_path) and os.path.getsize(cad_path) > 512:
+                        if fmt == "iges":
+                            n_iges += 1
+                        else:
+                            n_step += 1
+            except Exception:
+                pass
+        else:
+            if step_dir and os.path.isdir(step_dir):
+                n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
+        if n_dxf > 0 or n_step > 0 or n_iges > 0:
+            resumen[etiqueta] = {"dxf": n_dxf, "step": n_step, "iges": n_iges}
     return resumen
 
 
-def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[str, int]]:
-    """Falla el export si había DXF de cobre/láser y no se generó ningún STEP."""
+def _validar_steps_tras_export(
+    rutas: dict,
+    *,
+    log_fn=None,
+    cu_formato_por_dxf: dict[str, str] | None = None,
+) -> dict[str, dict[str, int]]:
+    """Falla el export si había DXF de cobre/láser y no se generó el 3D esperado."""
     _log = log_fn or (lambda _msg: None)
-    resumen = _auditar_steps_en_rutas(rutas)
+    fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
+    resumen = _auditar_steps_en_rutas(rutas, cu_formato_por_dxf=cu_formato_por_dxf)
     for etiqueta, counts in resumen.items():
         n_dxf = int(counts.get("dxf") or 0)
         n_step = int(counts.get("step") or 0)
+        n_iges = int(counts.get("iges") or 0)
+        n_3d = n_step + n_iges
         if n_dxf <= 0:
             continue
-        _log(f"STEP audit [{etiqueta}]: {n_step}/{n_dxf} archivos")
-        if n_step <= 0:
+        detalle_3d = f"{n_step} STEP"
+        if n_iges:
+            detalle_3d += f", {n_iges} IGES"
+        _log(f"3D audit [{etiqueta}]: {detalle_3d} / {n_dxf} DXF")
+        if n_3d <= 0:
             step_dir = rutas.get(
                 {
                     "CAMA LASER": "cama_laser_step",
@@ -145,10 +213,10 @@ def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[st
             )
             log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
             raise RuntimeError(
-                f"FreeCAD no generó STEP en {etiqueta} ({n_dxf} DXF, 0 STEP). "
+                f"FreeCAD no generó archivos 3D en {etiqueta} ({n_dxf} DXF, 0 STEP/IGES). "
                 f"Revisa el log: {log_hint}"
             )
-        if n_step < n_dxf:
+        if n_3d < n_dxf:
             step_dir = os.path.normpath(
                 str(
                     rutas.get(
@@ -178,14 +246,27 @@ def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[st
                 ).strip()
             )
             faltantes: list[str] = []
-            if dxf_dir and step_dir:
+            if dxf_dir:
                 try:
-                    from freecad_runner import _pendientes_step
+                    from freecad_runner import _cad_path_for_dxf, _cad_is_current
 
-                    faltantes = [
-                        os.path.basename(p)
-                        for p in _pendientes_step(_listar_dxfs_en_carpeta(dxf_dir), step_dir)
-                    ]
+                    for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
+                        nombre = os.path.basename(dxf_path)
+                        if fmt_map and etiqueta == "CAMA LASER":
+                            fmt = fmt_map.get(nombre, "step")
+                            out_dir = (
+                                os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
+                                if fmt == "iges"
+                                else step_dir
+                            )
+                        else:
+                            fmt = "step"
+                            out_dir = step_dir
+                        if not out_dir:
+                            continue
+                        cad_path = _cad_path_for_dxf(dxf_path, out_dir, fmt)
+                        if not _cad_is_current(dxf_path, cad_path):
+                            faltantes.append(nombre)
                 except Exception:
                     pass
             detalle_faltantes = (
@@ -195,9 +276,9 @@ def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[st
                 else ""
             )
             _log(
-                f"WARN [{etiqueta}]: STEP incompletos ({n_step}/{n_dxf})."
+                f"WARN [{etiqueta}]: 3D incompletos ({detalle_3d} / {n_dxf})."
                 f"{detalle_faltantes} "
-                "Re-exportar STEP reanuda solo los pendientes."
+                "Re-exportar reanuda solo los pendientes."
             )
     return resumen
 
@@ -568,6 +649,7 @@ def _registrar_exportacion_pqart_hoja(
         "sheet_uid": str(hoja.get("sheet_uid") or "").strip(),
         "sheet_code": str(hoja.get("sheet_code") or "").strip(),
         "sheet_display_name": str(hoja.get("sheet_display_name") or "").strip(),
+        "export_3d_format": str(hoja.get("export_3d_format") or "step").strip().lower(),
     }
 
     ruta_cmp = os.path.normcase(ruta_normalizada)
@@ -594,13 +676,29 @@ def lanzar_freecad_robotica(
     job_root_dir: str | None = None,
     *,
     es_cobre: bool = False,
+    cu_formato_por_dxf: dict[str, str] | None = None,
 ):
     from freecad_runner import ejecutar_macro_freecad
 
     job_root = os.path.normpath(str(job_root_dir or "").strip())
     resultados = []
+    fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
 
-    def _convertir(etiqueta, dxf_key, step_key, origen, ox, oy, oz, *, prefer_verde=False, material="STEEL"):
+    def _convertir(
+        etiqueta,
+        dxf_key,
+        step_key,
+        origen,
+        ox,
+        oy,
+        oz,
+        *,
+        prefer_verde=False,
+        material="STEEL",
+        export_format="step",
+        out_key=None,
+        dxf_filter=None,
+    ):
         dxf_dir = _localizar_carpeta_dxf(
             rutas.get(dxf_key, ""),
             job_root,
@@ -611,40 +709,74 @@ def lanzar_freecad_robotica(
                 "robot_plasma_dxf": RUTA_ROBOT_PLASMA,
             }.get(dxf_key, ""),
         )
-        step_dir = os.path.normpath(str(rutas.get(step_key, "") or "").strip())
-        if not _hay_dxfs(dxf_dir):
-            print(f"[STEP][SKIP] {etiqueta}: sin DXF en {dxf_dir}")
-            resultados.append((etiqueta, False, "sin DXF"))
+        out_dir = os.path.normpath(str(rutas.get(out_key or step_key, "") or "").strip())
+        cad_label = "IGES" if str(export_format).lower() in ("iges", "igs") else "STEP"
+        candidatos = _listar_dxfs_en_carpeta(dxf_dir)
+        if callable(dxf_filter):
+            candidatos = [p for p in candidatos if dxf_filter(p)]
+        if not candidatos:
+            print(f"[{cad_label}][SKIP] {etiqueta}: sin DXF aplicables en {dxf_dir}")
+            resultados.append((etiqueta, True, dxf_dir))
             return
 
-        os.makedirs(step_dir, exist_ok=True)
-        n_dxfs = len(_listar_dxfs_en_carpeta(dxf_dir))
-        print(f"[STEP] {etiqueta}: {n_dxfs} DXF -> {step_dir}")
+        os.makedirs(out_dir, exist_ok=True)
+        print(f"[{cad_label}] {etiqueta}: {len(candidatos)} DXF -> {out_dir}")
         ok = ejecutar_macro_freecad(
             dxf_dir,
-            step_dir,
+            out_dir,
             thk,
             origen,
             ox, oy, oz,
             prefer_verde=prefer_verde,
             max_intentos=2,
             material=material,
+            export_format=export_format,
+            dxf_filter=dxf_filter,
         )
         resultados.append((etiqueta, ok, dxf_dir))
         if not ok:
-            print(f"[STEP][WARN] {etiqueta}: FreeCAD no generó STEP (ver _logs/freecad_runner.log)")
+            print(
+                f"[{cad_label}][WARN] {etiqueta}: FreeCAD no generó {cad_label} "
+                f"(ver _logs/freecad_runner.log)"
+            )
+
+    def _fmt_for_dxf(path: str) -> str:
+        return fmt_map.get(os.path.basename(path), "step")
 
     # CAMA LASER (incluye largos de cobre CU)
     if rutas.get("cama_laser_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        _convertir(
-            "CAMA LASER",
-            "cama_laser_dxf",
-            "cama_laser_step",
-            "TR",
-            0.0, 0.0, 0.0,
-            material="CU" if es_cobre else "STEEL",
-        )
+        if es_cobre and fmt_map:
+            _convertir(
+                "CAMA LASER STEP",
+                "cama_laser_dxf",
+                "cama_laser_step",
+                "TR",
+                0.0, 0.0, 0.0,
+                material="CU",
+                export_format="step",
+                dxf_filter=lambda p: _fmt_for_dxf(p) != "iges",
+            )
+            _convertir(
+                "CAMA LASER IGES",
+                "cama_laser_dxf",
+                "cama_laser_step",
+                "TR",
+                0.0, 0.0, 0.0,
+                material="CU",
+                export_format="iges",
+                out_key="cama_laser_iges",
+                dxf_filter=lambda p: _fmt_for_dxf(p) == "iges",
+            )
+        else:
+            _convertir(
+                "CAMA LASER",
+                "cama_laser_dxf",
+                "cama_laser_step",
+                "TR",
+                0.0, 0.0, 0.0,
+                material="CU" if es_cobre else "STEEL",
+            )
 
     if rutas.get("cama_laser_12kw_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
@@ -748,6 +880,7 @@ def exportar_resultados_a_dxf(
         "robot_plasma_step_A": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"),
         "robot_plasma_step_B": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"),
         "cama_laser_step": os.path.join(job_root_dir, RUTA_CAMA_LASER, "STEP"),
+        "cama_laser_iges": os.path.join(job_root_dir, RUTA_CAMA_LASER, "IGES"),
         "cama_laser_12kw_step": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "STEP"),
     }
 
@@ -1031,6 +1164,14 @@ def exportar_resultados_a_dxf(
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
+            if bool(hoja.get("modo_largos_cu")):
+                hoja["export_3d_format"] = "iges" if _hoja_cobre_export_iges(hoja) else "step"
+                if hoja["export_3d_format"] == "iges":
+                    log(
+                        f"hoja {sheet_code}: cobre sin separación (sin_gap) "
+                        f"→ conversión 3D IGES"
+                    )
+
             from .efficiency_metrics import hoja_export_solo_plasma
 
             solo_plasma = hoja_export_solo_plasma(hoja)
@@ -1162,19 +1303,27 @@ def exportar_resultados_a_dxf(
                     exportados_principales.append(path_plasma)
 
     if generar_step:
-        log("Iniciando conversión STEP (FreeCAD)...")
+        log("Iniciando conversión 3D (FreeCAD)...")
         import time
         time.sleep(0.35)
+        cu_formato_por_dxf = _build_cu_formato_por_dxf(resultados)
         lanzar_freecad_robotica(
             rutas,
             thickness_para_step,
             plasma_offset_job,
             job_root_dir=job_root_dir,
             es_cobre=_job_tiene_cobre(resultados),
+            cu_formato_por_dxf=cu_formato_por_dxf,
         )
         _generar_steps_cobre_fuentes_in_place(resultados, job_root_dir, log_fn=log)
         _ULTIMO_RESUMEN_STEP.clear()
-        _ULTIMO_RESUMEN_STEP.update(_validar_steps_tras_export(rutas, log_fn=log))
+        _ULTIMO_RESUMEN_STEP.update(
+            _validar_steps_tras_export(
+                rutas,
+                log_fn=log,
+                cu_formato_por_dxf=cu_formato_por_dxf,
+            )
+        )
         n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
         if n_step:
             etiqueta = "SWO" if es_swo_export else "WO"
