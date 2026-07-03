@@ -2667,17 +2667,27 @@ class TabNesting(QWidget, TimerHost):
             if comp is None or comp.is_empty:
                 continue
             try:
-                from shapely.geometry import MultiPolygon
+                from shapely.geometry import GeometryCollection, MultiPolygon
 
                 if isinstance(comp, MultiPolygon):
                     comp = max(comp.geoms, key=lambda g: float(g.area))
+                elif isinstance(comp, GeometryCollection):
+                    polys = [
+                        g for g in comp.geoms
+                        if getattr(g, "geom_type", "") == "Polygon" and not g.is_empty
+                    ]
+                    if polys:
+                        comp = max(polys, key=lambda g: float(g.area))
             except Exception:
                 pass
-            outer = list(comp.exterior.coords)
+            try:
+                outer = list(comp.exterior.coords)
+            except Exception:
+                continue
             if outer and outer[0] == outer[-1]:
                 outer = outer[:-1]
             holes = []
-            for interior in comp.interiors:
+            for interior in getattr(comp, "interiors", []):
                 ring = list(interior.coords)
                 if ring and ring[0] == ring[-1]:
                     ring = ring[:-1]

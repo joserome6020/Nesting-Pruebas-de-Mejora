@@ -36,6 +36,7 @@ from .geometry_parser import (
     reconstruir_marks,
     generar_texto_vectorial,
     poligonos_desde_shapely,
+    interiores_poly,
 )
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .efficiency_metrics import (
@@ -1829,18 +1830,17 @@ class MotorNesting:
             for p in list(hoja_ganadora['piezas']):
                 if "REMANENTE__" in p['nombre']: continue
                 poly = reconstruir_poly_seguro(p['poligonos'])
-                if poly and len(poly.interiors) > 0:
-                    for interior in poly.interiors:
-                        hole_poly = Polygon(interior)
-                        minx, miny, maxx, maxy = hole_poly.bounds
-                        w_r, h_r = maxx - minx, maxy - miny
-                        if _retazo_cumple_tamano_minimo(w_r, h_r):
-                            id_retazo = nombre_rtz_para_placa(
-                                contador_rtz, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
-                            )
-                            poly_local = affinity.translate(hole_poly, -minx, -miny)
-                            retazos_virtuales.append({"id": id_retazo, "w": w_r, "h": h_r, "poly_borde": poly_local, "tipo": "HOLE", "global_x": minx, "global_y": miny})
-                            contador_rtz += 1
+                for interior in interiores_poly(poly):
+                    hole_poly = Polygon(interior)
+                    minx, miny, maxx, maxy = hole_poly.bounds
+                    w_r, h_r = maxx - minx, maxy - miny
+                    if _retazo_cumple_tamano_minimo(w_r, h_r):
+                        id_retazo = nombre_rtz_para_placa(
+                            contador_rtz, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
+                        )
+                        poly_local = affinity.translate(hole_poly, -minx, -miny)
+                        retazos_virtuales.append({"id": id_retazo, "w": w_r, "h": h_r, "poly_borde": poly_local, "tipo": "HOLE", "global_x": minx, "global_y": miny})
+                        contador_rtz += 1
                             
             max_x, max_y = 0, 0
             for p in list(hoja_ganadora['piezas']):

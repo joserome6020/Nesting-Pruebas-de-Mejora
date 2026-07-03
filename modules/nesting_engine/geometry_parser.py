@@ -398,6 +398,60 @@ def recuperar_geometria_robusta(ruta_dxf):
         return None, None
 
 
+def _normalizar_a_polygon(poly):
+    """Reduce Polygon / MultiPolygon / GeometryCollection a un Polygon útil."""
+    if poly is None:
+        return None
+    try:
+        if poly.is_empty:
+            return None
+    except Exception:
+        return None
+
+    try:
+        gt = poly.geom_type
+    except Exception:
+        return None
+
+    if gt == "Polygon":
+        if not poly.is_valid:
+            try:
+                from shapely.validation import make_valid
+
+                return _normalizar_a_polygon(make_valid(poly))
+            except Exception:
+                try:
+                    return _normalizar_a_polygon(poly.buffer(0))
+                except Exception:
+                    return None
+        return poly
+
+    if gt == "MultiPolygon":
+        polys = [g for g in poly.geoms if g.geom_type == "Polygon" and not g.is_empty]
+        if not polys:
+            return None
+        return max(polys, key=lambda g: g.area)
+
+    if gt == "GeometryCollection":
+        polys = [g for g in poly.geoms if g.geom_type == "Polygon" and not g.is_empty]
+        if not polys:
+            return None
+        return max(polys, key=lambda g: g.area)
+
+    return None
+
+
+def interiores_poly(poly) -> list:
+    """Huecos interiores de un polígono, tolerante a GeometryCollection."""
+    poly_n = _normalizar_a_polygon(poly)
+    if poly_n is None:
+        return []
+    try:
+        return list(poly_n.interiors)
+    except Exception:
+        return []
+
+
 def reconstruir_poly_seguro(lista_poligonos):
     if not lista_poligonos:
         return None
@@ -405,16 +459,7 @@ def reconstruir_poly_seguro(lista_poligonos):
     holes = lista_poligonos[1:] if len(lista_poligonos) > 1 else []
     try:
         poly = Polygon(outer, holes)
-        if not poly.is_valid:
-            try:
-                from shapely.validation import make_valid
-
-                poly = make_valid(poly)
-                if poly.geom_type == "MultiPolygon":
-                    poly = max(poly.geoms, key=lambda g: g.area)
-            except Exception:
-                poly = poly.buffer(0)
-        return poly
+        return _normalizar_a_polygon(poly)
     except Exception:
         return None
 
@@ -489,27 +534,20 @@ def reconstruir_marks(lista_coords_marcas):
 
 def poligonos_desde_shapely(poly):
     """Serializa Polygon shapely → lista de anillos para el visor / export."""
+    poly = _normalizar_a_polygon(poly)
     if poly is None or poly.is_empty:
         return []
-    if not poly.is_valid:
+    try:
+        return [list(poly.exterior.coords)] + [list(h.coords) for h in poly.interiors]
+    except Exception:
         try:
-            from shapely.validation import make_valid
-
-            poly = make_valid(poly)
-            if poly.geom_type == "MultiPolygon":
-                poly = max(poly.geoms, key=lambda g: g.area)
+            return [list(poly.exterior.coords)]
         except Exception:
-            poly = poly.buffer(0)
-    return [list(poly.exterior.coords)] + [list(h.coords) for h in poly.interiors]
+            return []
 
 
 def contar_huecos_poly(poly) -> int:
-    if poly is None:
-        return 0
-    try:
-        return len(poly.interiors)
-    except Exception:
-        return 0
+    return len(interiores_poly(poly))
 
 
 def generar_texto_vectorial(texto, cx, cy, rw, rh):
