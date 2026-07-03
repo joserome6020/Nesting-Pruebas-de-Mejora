@@ -596,9 +596,12 @@ def _largo_pieza_cu_in(item: dict) -> float:
         return 0.0
 
 
-def _pieza_cu_exime_separacion(item: dict) -> bool:
-    """True si el largo DXF es ≤15\"."""
-    return _largo_pieza_cu_in(item) <= LARGO_SIN_SEPARACION_CU_IN
+def _pieza_cu_exime_separacion(
+    item: dict,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> bool:
+    """True si el largo DXF está dentro del umbral sin separación."""
+    return _largo_pieza_cu_in(item) <= max(0.0, float(largo_sin_separacion_in))
 
 
 def _cu_sin_separacion_efectiva(item: dict, modo_barra: str) -> bool:
@@ -606,18 +609,23 @@ def _cu_sin_separacion_efectiva(item: dict, modo_barra: str) -> bool:
     return modo == "sin_gap"
 
 
-def _modo_separacion_barra(items: List[dict]) -> str:
+def _modo_separacion_barra(
+    items: List[dict],
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> str:
     """
     Mayoría ≥80% en la barra:
-    - cortas (≤15\") → sin_gap en toda la barra
-    - largas (>15\") → con_gap (3/8\") entre todas las piezas
-    - si no hay mayoría → separación 3/8\" entre todas las piezas (incl. larga+corta)
+    - cortas (≤ umbral) → sin_gap en toda la barra
+    - largas (> umbral) → con_gap entre todas las piezas
+    - si no hay mayoría → separación entre todas las piezas (incl. larga+corta)
     """
     n = len(items or [])
     if n <= 0:
         return "hibrido"
     umbral = max(1, math.ceil(n * MAYORIA_BARRA_CU_FRACCION))
-    n_cortas = sum(1 for it in items if _pieza_cu_exime_separacion(it))
+    n_cortas = sum(
+        1 for it in items if _pieza_cu_exime_separacion(it, largo_sin_separacion_in)
+    )
     n_largas = n - n_cortas
     if n_cortas >= umbral:
         return "sin_gap"
@@ -641,14 +649,24 @@ def _gap_mm_segun_modo(
     return max(0.0, float(separacion_in or 0.0)) * 25.4
 
 
-def _categoria_pieza_cu(item: dict) -> str:
-    return "corta" if _pieza_cu_exime_separacion(item) else "larga"
+def _categoria_pieza_cu(
+    item: dict,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> str:
+    return (
+        "corta"
+        if _pieza_cu_exime_separacion(item, largo_sin_separacion_in)
+        else "larga"
+    )
 
 
-def _categoria_barra_abierta(colocados: List[tuple]) -> str | None:
+def _categoria_barra_abierta(
+    colocados: List[tuple],
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> str | None:
     if not colocados:
         return None
-    cats = {_categoria_pieza_cu(c[0]) for c in colocados}
+    cats = {_categoria_pieza_cu(c[0], largo_sin_separacion_in) for c in colocados}
     if len(cats) == 1:
         return next(iter(cats))
     return "mixta"
@@ -658,6 +676,7 @@ def _simular_encaje_en_barra(
     barra: dict,
     item: dict,
     separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> tuple[bool, float, float, float]:
     """Prueba colocación con el mismo recálculo final de posiciones/gaps."""
     trial = list(barra["colocados"]) + [(item, 0.0, 0.0)]
@@ -665,6 +684,7 @@ def _simular_encaje_en_barra(
         trial,
         separacion_in=separacion_in,
         largo_mm=float(barra["largo_mm"]),
+        largo_sin_separacion_in=largo_sin_separacion_in,
     )
     if cursor > float(barra["largo_mm"]) + 0.5:
         return False, 0.0, 0.0, cursor
@@ -677,8 +697,15 @@ def _simular_encaje_en_barra(
     return True, gap_before, x_pos, cursor
 
 
-def _aplicar_pieza_en_barra(barra: dict, item: dict, separacion_in: float) -> bool:
-    ok, _gap, _x, cursor = _simular_encaje_en_barra(barra, item, separacion_in)
+def _aplicar_pieza_en_barra(
+    barra: dict,
+    item: dict,
+    separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> bool:
+    ok, _gap, _x, cursor = _simular_encaje_en_barra(
+        barra, item, separacion_in, largo_sin_separacion_in
+    )
     if not ok:
         return False
     trial = list(barra["colocados"]) + [(item, 0.0, 0.0)]
@@ -686,6 +713,7 @@ def _aplicar_pieza_en_barra(barra: dict, item: dict, separacion_in: float) -> bo
         trial,
         separacion_in=separacion_in,
         largo_mm=float(barra["largo_mm"]),
+        largo_sin_separacion_in=largo_sin_separacion_in,
     )
     barra["colocados"] = nuevos
     barra["cursor_x"] = cursor
@@ -697,24 +725,34 @@ def _encaje_en_barra(
     barra: dict,
     item: dict,
     separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> tuple[bool, float, float]:
-    ok, gap_before, x_pos, _cursor = _simular_encaje_en_barra(barra, item, separacion_in)
+    ok, gap_before, x_pos, _cursor = _simular_encaje_en_barra(
+        barra, item, separacion_in, largo_sin_separacion_in
+    )
     if not ok:
         return False, 0.0, 0.0
     return True, gap_before, x_pos
 
 
-def _score_barra_para_item(barra: dict, item: dict, separacion_in: float) -> float | None:
+def _score_barra_para_item(
+    barra: dict,
+    item: dict,
+    separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> float | None:
     """
     Mayor puntaje = preferir barra homogénea (solo cortas o solo largas).
     Penalizar fuertemente crear mezcla corta+larga si hay alternativa.
     """
-    cabe, gap_before, x_pos = _encaje_en_barra(barra, item, separacion_in)
+    cabe, gap_before, x_pos = _encaje_en_barra(
+        barra, item, separacion_in, largo_sin_separacion_in
+    )
     if not cabe:
         return None
 
-    cat_barra = _categoria_barra_abierta(barra["colocados"])
-    cat_item = _categoria_pieza_cu(item)
+    cat_barra = _categoria_barra_abierta(barra["colocados"], largo_sin_separacion_in)
+    cat_item = _categoria_pieza_cu(item, largo_sin_separacion_in)
     if cat_barra is None:
         score = 500.0
     elif cat_barra == cat_item:
@@ -734,12 +772,13 @@ def _gap_proyectado_en_barra(
     colocados: List[tuple],
     next_item: dict,
     separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> float:
     """Gap antes de colocar next_item según modo proyectado de la barra (+ pieza nueva)."""
     if not colocados:
         return 0.0
     items = [c[0] for c in colocados] + [next_item]
-    modo = _modo_separacion_barra(items)
+    modo = _modo_separacion_barra(items, largo_sin_separacion_in)
     return _gap_mm_segun_modo(modo, colocados[-1][0], next_item, separacion_in)
 
 
@@ -748,13 +787,14 @@ def _recalcular_colocados_barra(
     *,
     separacion_in: float,
     largo_mm: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[List[tuple], float, str]:
     """Recalcula posiciones X según mayoría 80% o separación uniforme en barra mixta."""
     if not colocados:
         return colocados, 0.0, "hibrido"
 
     items = [c[0] for c in colocados]
-    modo = _modo_separacion_barra(items)
+    modo = _modo_separacion_barra(items, largo_sin_separacion_in)
     nuevos: List[tuple] = []
     cursor = 0.0
     for i, item in enumerate(items):
@@ -795,16 +835,72 @@ def _normalizar_barras(placas_ok: List[dict]) -> List[dict]:
     return barras
 
 
+def _elegir_candidato_barra(candidatos: dict) -> tuple | None:
+    for bucket in ("homogenea", "mixta", "vacia", "contamina"):
+        cand = candidatos.get(bucket)
+        if cand is not None:
+            return cand
+    return None
+
+
+def _consolidar_barras_con_pieza_sola(
+    barras_abiertas: List[dict],
+    *,
+    separacion_in: float,
+    largo_sin_separacion_in: float,
+    max_uso_frac: float = 0.20,
+) -> None:
+    """Reubica piezas que quedaron solas en otra barra del mismo ancho si cabe."""
+    cambiado = True
+    while cambiado:
+        cambiado = False
+        for i, barra in enumerate(list(barras_abiertas)):
+            colocados = barra.get("colocados") or []
+            if len(colocados) != 1:
+                continue
+            item = colocados[0][0]
+            largo_mm = float(barra.get("largo_mm") or 0.0)
+            if largo_mm <= 0:
+                continue
+            uso_frac = float(item.get("len_mm") or 0.0) / largo_mm
+            if uso_frac > max_uso_frac:
+                continue
+            for j, dest in enumerate(barras_abiertas):
+                if j == i:
+                    continue
+                if abs(float(dest.get("ancho_in", 0.0)) - float(barra.get("ancho_in", 0.0))) > TOL_ANCHO_IN_MIN:
+                    continue
+                if not dest.get("colocados"):
+                    continue
+                ok, _, _, _ = _simular_encaje_en_barra(
+                    dest, item, separacion_in, largo_sin_separacion_in
+                )
+                if not ok:
+                    continue
+                if _aplicar_pieza_en_barra(
+                    dest, item, separacion_in, largo_sin_separacion_in
+                ):
+                    barra["colocados"] = []
+                    barra["cursor_x"] = 0.0
+                    cambiado = True
+                    break
+            if cambiado:
+                break
+        barras_abiertas[:] = [b for b in barras_abiertas if b.get("colocados")]
+
+
 def empaquetar_largos_cu(
     piezas: List[dict],
     placas_ok: List[dict],
     *,
     separacion_in: float = DEFAULT_SEPARACION_CU_IN,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[List[dict], List[dict]]:
     catalogo = _normalizar_barras(placas_ok)
     if not catalogo:
         return [], list(piezas or [])
 
+    largo_umbral = max(0.0, float(largo_sin_separacion_in or LARGO_SIN_SEPARACION_CU_IN))
     items = []
     sin_colocar: List[dict] = []
     for p in piezas or []:
@@ -833,7 +929,7 @@ def empaquetar_largos_cu(
     items.sort(
         key=lambda x: (
             x["barra_objetivo_in"],
-            0 if _pieza_cu_exime_separacion(x) else 1,
+            0 if _pieza_cu_exime_separacion(x, largo_umbral) else 1,
             -x["len_mm"],
         )
     )
@@ -846,10 +942,14 @@ def empaquetar_largos_cu(
         for barra in barras_abiertas:
             if abs(barra["ancho_in"] - item["barra_objetivo_in"]) > TOL_ANCHO_IN_MIN:
                 continue
-            score = _score_barra_para_item(barra, item, separacion_in)
+            score = _score_barra_para_item(
+                barra, item, separacion_in, largo_umbral
+            )
             if score is None:
                 continue
-            cabe, gap_before, x_pos = _encaje_en_barra(barra, item, separacion_in)
+            cabe, gap_before, x_pos = _encaje_en_barra(
+                barra, item, separacion_in, largo_umbral
+            )
             if score >= 1500.0:
                 bucket = "homogenea"
             elif score >= 500.0:
@@ -862,7 +962,7 @@ def empaquetar_largos_cu(
             if prev is None or score > prev[3]:
                 candidatos[bucket] = (barra, gap_before, x_pos, score)
 
-        elegido = candidatos.get("homogenea") or candidatos.get("mixta")
+        elegido = _elegir_candidato_barra(candidatos)
 
         stock = next(
             (b for b in catalogo if abs(b["ancho_in"] - item["barra_objetivo_in"]) <= TOL_ANCHO_IN_MIN),
@@ -871,7 +971,7 @@ def empaquetar_largos_cu(
 
         if elegido is not None:
             barra, _gap_before, _x_pos, _score = elegido
-            if _aplicar_pieza_en_barra(barra, item, separacion_in):
+            if _aplicar_pieza_en_barra(barra, item, separacion_in, largo_umbral):
                 continue
 
         if stock is not None:
@@ -883,27 +983,19 @@ def empaquetar_largos_cu(
                     "ancho_in": stock["ancho_in"],
                     "cursor_x": item["len_mm"],
                     "colocados": [(item, 0.0, 0.0)],
-                    "cu_modo_separacion": _modo_separacion_barra([item]),
+                    "cu_modo_separacion": _modo_separacion_barra([item], largo_umbral),
                 }
             )
             continue
 
-        if candidatos.get("contamina"):
-            barra, _gap_before, _x_pos, _score = candidatos["contamina"]
-            if not _aplicar_pieza_en_barra(barra, item, separacion_in):
-                if item not in sin_colocar:
-                    sin_colocar.append(item)
-            continue
-
-        if candidatos.get("vacia"):
-            barra, _gap_before, _x_pos, _score = candidatos["vacia"]
-            if not _aplicar_pieza_en_barra(barra, item, separacion_in):
-                if item not in sin_colocar:
-                    sin_colocar.append(item)
-            continue
-
         if item not in sin_colocar:
             sin_colocar.append(item)
+
+    _consolidar_barras_con_pieza_sola(
+        barras_abiertas,
+        separacion_in=separacion_in,
+        largo_sin_separacion_in=largo_umbral,
+    )
 
     hojas: List[dict] = []
     for barra in barras_abiertas:
@@ -911,6 +1003,7 @@ def empaquetar_largos_cu(
             barra["colocados"],
             separacion_in=separacion_in,
             largo_mm=float(barra["largo_mm"]),
+            largo_sin_separacion_in=largo_umbral,
         )
         barra["colocados"] = colocados
         barra["cursor_x"] = cursor_x
@@ -1006,7 +1099,7 @@ def empaquetar_largos_cu(
                 "origen_placa": stock.get("origen", "EMPRESA"),
                 "modo_largos_cu": True,
                 "separacion_cu_in": max(0.0, float(separacion_in or 0.0)),
-                "largo_sin_separacion_cu_in": LARGO_SIN_SEPARACION_CU_IN,
+                "largo_sin_separacion_cu_in": largo_umbral,
                 "mayoria_barra_cu_frac": MAYORIA_BARRA_CU_FRACCION,
                 "cu_modo_separacion_barra": barra.get("cu_modo_separacion", "hibrido"),
                 "requiere_corte_superior": requiere_corte_sup,
@@ -1025,18 +1118,32 @@ def procesar_grupo_largos_cu(
     dbg_fn: Optional[Callable[[str], None]] = None,
     exigir_colocacion_total: bool = False,
     separacion_in: float = DEFAULT_SEPARACION_CU_IN,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[str, dict]:
     _log = dbg_fn or (lambda _msg: None)
     sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
+    largo_umbral = max(
+        0.0,
+        float(
+            largo_sin_separacion_in
+            if largo_sin_separacion_in is not None
+            else LARGO_SIN_SEPARACION_CU_IN
+        ),
+    )
     _log(
         f"[CU-LARGOS] clave={clave} | piezas={len(piezas)} | wo={wo_name} | "
-        f"separacion={sep_in:.4f}in"
+        f"separacion={sep_in:.4f}in | largo_sin_gap={largo_umbral:.2f}in"
     )
 
     if not placas_ok:
         return clave, {"error": "Sin inventario CU disponible para largos."}
 
-    hojas, sin_colocar = empaquetar_largos_cu(piezas, placas_ok, separacion_in=sep_in)
+    hojas, sin_colocar = empaquetar_largos_cu(
+        piezas,
+        placas_ok,
+        separacion_in=sep_in,
+        largo_sin_separacion_in=largo_umbral,
+    )
     if sin_colocar:
         detalle = []
         for p in sin_colocar:
@@ -1085,7 +1192,7 @@ def procesar_grupo_largos_cu(
         "reporte": "Nesting 1D largos de cobre (orientación DXF, sin tolerancia de ancho).",
         "modo_largos_cu": True,
         "separacion_cu_in": sep_in,
-        "largo_sin_separacion_cu_in": LARGO_SIN_SEPARACION_CU_IN,
+        "largo_sin_separacion_cu_in": largo_umbral,
         "ignorar_deduccion_cu": True,
         **efi_grupo,
     }

@@ -1446,6 +1446,7 @@ class MotorNesting:
         cu_routing_override=None,
         sin_rtz=False,
         cu_separacion_in=None,
+        cu_largo_sin_separacion_in=None,
     ):
         partes_clave = clave.split('_', 1) 
         req_cal = partes_clave[0]
@@ -1535,6 +1536,11 @@ class MotorNesting:
                 separacion_in=(
                     float(cu_separacion_in)
                     if cu_separacion_in is not None
+                    else None
+                ),
+                largo_sin_separacion_in=(
+                    float(cu_largo_sin_separacion_in)
+                    if cu_largo_sin_separacion_in is not None
                     else None
                 ),
             )

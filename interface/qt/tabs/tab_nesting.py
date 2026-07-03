@@ -3251,20 +3251,26 @@ class TabNesting(QWidget, TimerHost):
             )
         es_cobre = self._es_grupo_cobre(clave)
         cu_separacion_in = None
+        cu_largo_sin_separacion_in = None
         if es_cobre:
             from interface.qt.dialogs.nesting_modals import preguntar_separacion_cobre_renest
-            from modules.nesting_engine.cu_largos_nesting import DEFAULT_SEPARACION_CU_IN
+            from modules.nesting_engine.cu_largos_nesting import (
+                DEFAULT_SEPARACION_CU_IN,
+                LARGO_SIN_SEPARACION_CU_IN,
+            )
 
             grp_act = (self.app.resultados_nesting or {}).get(clave) or {}
             valor_sep = float(grp_act.get("separacion_cu_in", DEFAULT_SEPARACION_CU_IN))
-            cu_separacion_in = preguntar_separacion_cobre_renest(self, valor_sep)
-            if cu_separacion_in is None:
+            valor_largo = float(
+                grp_act.get("largo_sin_separacion_cu_in", LARGO_SIN_SEPARACION_CU_IN)
+            )
+            opts_cu = preguntar_separacion_cobre_renest(self, valor_sep, valor_largo)
+            if opts_cu is None:
                 return
+            cu_separacion_in, cu_largo_sin_separacion_in = opts_cu
             detalle = (
-                f"Se volverá a optimizar el calibre {clave} usando barras largo CU "
-                f"(144\" × 2–6\") con separación {cu_separacion_in:g}\". "
-                f"Solo barras con ≥80% piezas ≤15\" quedan sin gap; el resto con gap. "
-                f"Se priorizan barras homogéneas (cortas o largas separadas)."
+                f"Se volverá a optimizar el calibre {clave} en barras largo CU "
+                f"(gap {cu_separacion_in:g}\", piezas ≤{cu_largo_sin_separacion_in:g}\" sin gap)."
                 f"{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear cobre en largos"
@@ -3290,6 +3296,7 @@ class TabNesting(QWidget, TimerHost):
             self.app.abrir_ventana_carga("Renesteando calibre completo...")
 
         sep_cu = cu_separacion_in
+        largo_sin_cu = cu_largo_sin_separacion_in
 
         def worker():
             backup_grp = copy.deepcopy((self.app.resultados_nesting or {}).get(clave))
@@ -3307,6 +3314,7 @@ class TabNesting(QWidget, TimerHost):
                     self._work_order_label_lote_activo(),
                     cu_routing_override="largos" if es_cobre else None,
                     cu_separacion_in=sep_cu if es_cobre else None,
+                    cu_largo_sin_separacion_in=largo_sin_cu if es_cobre else None,
                 )
                 resultado = raw[1] if isinstance(raw, tuple) and len(raw) == 2 else raw
                 if not isinstance(resultado, dict) or resultado.get("error"):

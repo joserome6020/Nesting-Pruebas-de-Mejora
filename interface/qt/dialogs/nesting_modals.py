@@ -43,15 +43,19 @@ def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
     dlg.move(fg.topLeft())
 
 
-def preguntar_separacion_cobre_renest(parent, valor_actual: float = 0.375) -> float | None:
+def preguntar_separacion_cobre_renest(
+    parent,
+    valor_sep: float = 0.375,
+    valor_largo_sin: float = 15.0,
+) -> tuple[float, float] | None:
     """
-    Panel de separación entre piezas CU antes de renestear calibre completo.
-    Retorna pulgadas (0 = sin separación) o None si el usuario cancela.
+    Opciones de separación CU antes de renestear calibre completo.
+    Retorna (separacion_in, largo_sin_separacion_in) o None si cancela.
     """
     dlg = QDialog(parent)
     dlg.setWindowTitle("Separación entre piezas de cobre")
     dlg.setModal(True)
-    dlg.setFixedSize(420, 210)
+    dlg.setFixedSize(360, 175)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -59,28 +63,29 @@ def preguntar_separacion_cobre_renest(parent, valor_actual: float = 0.375) -> fl
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
 
-    hint = QLabel(
-        "Distancia en el eje del largo entre piezas consecutivas en la barra.\n"
-        "Predeterminado: 3/8\". Use 0 para piezas sin separación.\n"
-        "Nota: ≥80% piezas ≤15\" en una barra → sin separación en toda la barra. "
-        "En cualquier otro caso → 3/8\" entre piezas. "
-        "El nesteo agrupa cortas y largas en barras distintas cuando cabe.",
-        wordWrap=True,
-    )
-    hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
-    lay.addWidget(hint)
+    row_sep = QHBoxLayout()
+    row_sep.addWidget(QLabel("Separación entre piezas (in):"))
+    spin_sep = QDoubleSpinBox()
+    spin_sep.setRange(0.0, 24.0)
+    spin_sep.setDecimals(4)
+    spin_sep.setSingleStep(0.0625)
+    spin_sep.setValue(max(0.0, float(valor_sep or 0.375)))
+    spin_sep.setFixedWidth(100)
+    row_sep.addWidget(spin_sep)
+    row_sep.addStretch(1)
+    lay.addLayout(row_sep)
 
-    row = QHBoxLayout()
-    row.addWidget(QLabel("Separación (in):"))
-    spin = QDoubleSpinBox()
-    spin.setRange(0.0, 24.0)
-    spin.setDecimals(4)
-    spin.setSingleStep(0.0625)
-    spin.setValue(max(0.0, float(valor_actual or 0.375)))
-    spin.setFixedWidth(110)
-    row.addWidget(spin)
-    row.addStretch(1)
-    lay.addLayout(row)
+    row_lim = QHBoxLayout()
+    row_lim.addWidget(QLabel("Piezas ≤ este largo (in) sin gap:"))
+    spin_lim = QDoubleSpinBox()
+    spin_lim.setRange(0.0, 144.0)
+    spin_lim.setDecimals(2)
+    spin_lim.setSingleStep(0.5)
+    spin_lim.setValue(max(0.0, float(valor_largo_sin or 15.0)))
+    spin_lim.setFixedWidth(100)
+    row_lim.addWidget(spin_lim)
+    row_lim.addStretch(1)
+    lay.addLayout(row_lim)
 
     btns = QHBoxLayout()
     btn_cancel = QPushButton("Cancelar")
@@ -98,7 +103,7 @@ def preguntar_separacion_cobre_renest(parent, valor_actual: float = 0.375) -> fl
 
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
-    return float(spin.value())
+    return float(spin_sep.value()), float(spin_lim.value())
 
 
 def abrir_modal_configuracion(parent):
