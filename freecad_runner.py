@@ -301,6 +301,15 @@ def ejecutar_macro_freecad(
             f.write(msg)
             f.flush()
 
+        def _prepare_import_paths(dxf_path: str) -> tuple[str, str | None, str]:
+            try:
+                from modules.dxf_slim_for_freecad import prepare_dxf_for_freecad
+
+                import_path, mark_json, note = prepare_dxf_for_freecad(dxf_path, log_dir)
+                return import_path, mark_json, note
+            except Exception as exc:
+                return dxf_path, None, f"slim omitido: {exc}"
+
         def _run_single_dxf(
             dxf_path: str,
             env_base: dict,
@@ -309,7 +318,15 @@ def ejecutar_macro_freecad(
             timeout_sec: float,
         ) -> tuple[bool, str]:
             env = dict(env_base)
+            import_path, mark_json, slim_note = _prepare_import_paths(dxf_path)
             env["FREECAD_DXF_SINGLE"] = dxf_path
+            env["FREECAD_DXF_IMPORT"] = import_path
+            if mark_json:
+                env["FREECAD_MARK_JSON"] = mark_json
+                env["FREECAD_PHASE_MODE"] = "PER_PIECE"
+            else:
+                env.pop("FREECAD_MARK_JSON", None)
+                env.pop("FREECAD_PHASE_MODE", None)
             env["FREECAD_SKIP_EXISTING"] = "1"
             env["FREECAD_LOG_APPEND"] = "1" if append_log else "0"
             stdout_log = os.path.join(log_dir, "freecad_stdout.log")
@@ -437,10 +454,16 @@ def ejecutar_macro_freecad(
             for idx, dxf_path in enumerate(pending):
                 nombre = os.path.basename(dxf_path)
                 timeout_sec = _timeout_for_dxf(dxf_path)
+                import_path, mark_json, slim_note = _prepare_import_paths(dxf_path)
+                slim_info = f" | import={os.path.basename(import_path)}"
+                if mark_json:
+                    slim_info += f" | marks_json={os.path.basename(mark_json)}"
                 _log(
                     f"\n[{idx + 1}/{len(pending)}] {nombre} "
-                    f"(timeout {int(timeout_sec)} s)\n"
+                    f"(timeout {int(timeout_sec)} s){slim_info}\n"
                 )
+                if slim_note:
+                    _log(f"  slim: {slim_note}\n")
                 ok_one, detalle = _run_single_dxf(
                     dxf_path,
                     env_base,

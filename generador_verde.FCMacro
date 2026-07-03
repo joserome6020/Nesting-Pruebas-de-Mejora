@@ -47,9 +47,114 @@ def silenciar_ventanas_emergentes():
 
 silenciar_ventanas_emergentes()
 
+try:
+    _main_win = FreeCADGui.getMainWindow()
+    if _main_win:
+        _main_win.hide()
+except Exception:
+    pass
+
+def _load_mark_edges_from_json(json_path):
+    """Segmentos MARK desde sidecar (DXF slim); evita importar miles de líneas en FreeCAD."""
+    import json
+
+    edges = []
+    with open(json_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+    for seg in payload.get("segments", []):
+        if not seg or len(seg) < 4:
+            continue
+        try:
+            p1 = App.Vector(float(seg[0]), float(seg[1]), 0.0)
+            p2 = App.Vector(float(seg[2]), float(seg[3]), 0.0)
+            line = Part.makeLine(p1, p2)
+            if line and not line.isNull():
+                edges.extend(list(line.Edges))
+        except Exception:
+            pass
+    return edges
+
+PER_PIECE_MARK_THRESHOLD = 6000
+
+
+def _should_imprint_per_piece(mark_count: int) -> bool:
+    """Modo C: sólidos primero, marcas por pieza (hojas densas / DXF slim)."""
+    mode = _env_str("FREECAD_PHASE_MODE", "AUTO").strip().upper()
+    if mode in ("PER_PIECE", "PIECE", "SOLIDS_THEN_MARKS"):
+        return True
+    if mode in ("PLATE", "LEGACY"):
+        return False
+    if os.getenv("FREECAD_MARK_JSON", "").strip():
+        return True
+    return int(mark_count) >= PER_PIECE_MARK_THRESHOLD
+
+
+def _build_mark_ribbons(mark_edges_m, vector_marcas_z, vec_up, mark_mode):
+    ribbons = []
+    if not mark_edges_m or mark_mode != "IMPRINT":
+        return ribbons
+    for edge in mark_edges_m:
+        try:
+            e_rib = edge.copy()
+            e_rib.translate(vector_marcas_z)
+            rib = e_rib.extrude(vec_up)
+            if rib and not rib.isNull():
+                ribbons.append(rib)
+        except Exception:
+            pass
+    return ribbons
+
+
+def _apply_imprint_ribbons_on_solid(solid, ribbons, *, chunk=100):
+    if not ribbons or solid is None or solid.isNull():
+        return solid
+    out = solid
+    for i in range(0, len(ribbons), chunk):
+        bloque = ribbons[i : i + chunk]
+        try:
+            comp_rib = Part.makeCompound(bloque)
+            temp_shape = out.generalFuse([comp_rib])[0]
+            temp_shape = _solo_solidos(temp_shape)
+            if temp_shape and not temp_shape.isNull():
+                out = temp_shape
+        except Exception:
+            for rib in bloque:
+                try:
+                    temp_shape = out.generalFuse([rib])[0]
+                    temp_shape = _solo_solidos(temp_shape)
+                    if temp_shape and not temp_shape.isNull():
+                        out = temp_shape
+                except Exception:
+                    pass
+    return _solo_solidos(out)
+
+
+def _marks_for_piece(mark_edges_m, piece_bbox, margin=1.0):
+    """Asigna marcas a la pieza cuyo bbox contiene el centro de cada arista."""
+    if not mark_edges_m or piece_bbox is None:
+        return []
+    out = []
+    xmin = float(piece_bbox.XMin) - margin
+    xmax = float(piece_bbox.XMax) + margin
+    ymin = float(piece_bbox.YMin) - margin
+    ymax = float(piece_bbox.YMax) + margin
+    for edge in mark_edges_m:
+        try:
+            bb = edge.BoundBox
+            cx = (float(bb.XMin) + float(bb.XMax)) * 0.5
+            cy = (float(bb.YMin) + float(bb.YMax)) * 0.5
+            if xmin <= cx <= xmax and ymin <= cy <= ymax:
+                out.append(edge)
+        except Exception:
+            pass
+    return out
+
+
 def _env_float(name: str, default: float) -> float:
-    try: return float(os.getenv(name, str(default)))
-    except: return default
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
 
 def _env_str(name: str, default: str) -> str:
     try:
@@ -597,13 +702,34 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
             pass
 
     doc = App.newDocument(f"DXF_{name}")
-    importDXF.insert(dxf_path, doc.Name)
+    import_path = os.getenv("FREECAD_DXF_IMPORT", dxf_path).strip() or dxf_path
+    if import_path != dxf_path:
+        print(f"[{name}] Import DXF slim (sin MARK): {import_path}")
+    importDXF.insert(import_path, doc.Name)
     doc.recompute()
 
     labels_doc = _collect_labels_from_doc(doc)
     perfil = _resolver_perfil_desde_labels(labels_doc)
     print(f"[{name}] Perfil de capas activo: {perfil['name']}")
     outer_w, inner_w, plate_w, mark_e, mixed_contours = _collect_contours_from_doc(doc, perfil)
+    mark_json = os.getenv("FREECAD_MARK_JSON", "").strip()
+    if mark_json and os.path.isfile(mark_json):
+        import json as _json
+        with open(mark_json, "r", encoding="utf-8") as _mj:
+            _mark_payload = _json.load(_mj)
+        expected_segments = int(_mark_payload.get("segment_count") or 0)
+        mark_e = _load_mark_edges_from_json(mark_json)
+        print(
+            f"[{name}] Marcas sidecar 1:1: {len(mark_e)} aristas "
+            f"(esperadas {expected_segments}, entidades MARK {_mark_payload.get('mark_entities', '?')})"
+        )
+        if expected_segments and len(mark_e) < expected_segments:
+            print(
+                f"[{name}] ERROR: pérdida de marcas en sidecar "
+                f"({len(mark_e)}/{expected_segments}). No se exporta STEP incompleto."
+            )
+            App.closeDocument(doc.Name)
+            return
 
     if mixed_contours:
         mats, cuts = _clasificar_wires_paridad(mixed_contours)
@@ -690,56 +816,28 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         print(f"[{name}] ERROR cortando INNER: {e}")
 
     # ==========================================================
-    # PASO 2: TU LÓGICA DE MARCAJE (IMPRINT generalFuse)
+    # PASO 2: MARCAJE — placa entera (legacy) o diferido por pieza (modo C)
     # ==========================================================
-    try:
-        mark_mode = _env_str("FREECAD_MARK_MODE", "IMPRINT").strip().upper()
-        mark_z_offset = _env_float("FREECAD_MARK_Z_OFFSET", -0.5)
-        rib_h = _env_float("FREECAD_MARK_RIB_H", 1.0)
-        
-        vector_marcas_z = App.Vector(0, 0, dz_final + thk_mm + mark_z_offset)
-        vec_up = App.Vector(0, 0, rib_h)
-        ribbons = []
+    mark_mode = _env_str("FREECAD_MARK_MODE", "IMPRINT").strip().upper()
+    mark_z_offset = _env_float("FREECAD_MARK_Z_OFFSET", -0.5)
+    rib_h = _env_float("FREECAD_MARK_RIB_H", 1.0)
+    vector_marcas_z = App.Vector(0, 0, dz_final + thk_mm + mark_z_offset)
+    vec_up = App.Vector(0, 0, rib_h)
+    per_piece_marks = _should_imprint_per_piece(len(mark_e_m))
 
-        if mark_e_m:
-            for edge in mark_e_m:
-                try:
-                    e_rib = edge.copy()
-                    e_rib.translate(vector_marcas_z)
-                    if mark_mode == "IMPRINT":
-                        rib = e_rib.extrude(vec_up) # Tu lógica de sheet/surface
-                        if not rib.isNull():
-                            ribbons.append(rib)
-                except: pass
-            
+    if per_piece_marks:
+        print(
+            f"[{name}] FASE=C (sólidos->marcas por pieza) | "
+            f"marcas={len(mark_e_m)} | modo={mark_mode}"
+        )
+    elif mark_e_m:
+        try:
+            ribbons = _build_mark_ribbons(mark_e_m, vector_marcas_z, vec_up, mark_mode)
             print(f"[{name}] MARK MODE = {mark_mode} | Ribbons a fusionar: {len(ribbons)}")
-            
             if ribbons:
-                # Chunking de ribbons para no colapsar generalFuse
-                chunk = 100
-                for i in range(0, len(ribbons), chunk):
-                    bloque = ribbons[i:i+chunk]
-                    try:
-                        comp_rib = Part.makeCompound(bloque)
-                        # Tu Imprint booleano exacto
-                        temp_shape = plate_solid.generalFuse([comp_rib])[0]
-                        temp_shape = _solo_solidos(temp_shape) 
-                        if temp_shape and not temp_shape.isNull():
-                            plate_solid = temp_shape
-                    except:
-                        # Fallback uno por uno como lo tenías
-                        for rib in bloque:
-                            try:
-                                temp_shape = plate_solid.generalFuse([rib])[0]
-                                temp_shape = _solo_solidos(temp_shape)
-                                if temp_shape and not temp_shape.isNull():
-                                    plate_solid = temp_shape
-                            except: pass
-                            
-                # Limpieza final del Plate marcado
-                plate_solid = _solo_solidos(plate_solid)
-    except Exception as e:
-        print(f"[{name}] ERROR en proceso IMPRINT: {e}")
+                plate_solid = _apply_imprint_ribbons_on_solid(plate_solid, ribbons, chunk=100)
+        except Exception as e:
+            print(f"[{name}] ERROR en proceso IMPRINT (placa): {e}")
 
     # ==========================================================
     # PASO 3: EXTRACCIÓN CON EL CORTADOR DE GALLETAS (OUTER)
@@ -752,6 +850,10 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
 
         if not outer_w_m:
             piece = _solo_solidos(plate_solid)
+            if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+                piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
+                ribbons = _build_mark_ribbons(piece_marks, vector_marcas_z, vec_up, mark_mode)
+                piece = _apply_imprint_ribbons_on_solid(piece, ribbons, chunk=50)
             if hasattr(piece, "Volume") and piece.Volume > 1e-6:
                 parts.append(piece)
         else:
@@ -768,6 +870,16 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
                     # Obligamos a que la pieza final no tenga basura superficial
                     piece = _solo_solidos(piece)
 
+                    if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+                        piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
+                        if piece_marks:
+                            ribbons = _build_mark_ribbons(
+                                piece_marks, vector_marcas_z, vec_up, mark_mode
+                            )
+                            piece = _apply_imprint_ribbons_on_solid(
+                                piece, ribbons, chunk=50
+                            )
+
                     if hasattr(piece, "Volume") and piece.Volume > 1e-6:
                         parts.append(piece)
                 except Exception:
@@ -776,6 +888,10 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         if not parts:
             # Pieza única (DXF fuente) o plate = único contorno: exportar el plate ya perforado.
             piece = _solo_solidos(plate_solid)
+            if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+                piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
+                ribbons = _build_mark_ribbons(piece_marks, vector_marcas_z, vec_up, mark_mode)
+                piece = _apply_imprint_ribbons_on_solid(piece, ribbons, chunk=50)
             if hasattr(piece, "Volume") and piece.Volume > 1e-6:
                 parts.append(piece)
 
