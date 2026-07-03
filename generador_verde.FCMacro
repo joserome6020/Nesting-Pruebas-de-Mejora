@@ -5,8 +5,11 @@ _log_dir = os.getenv("FREECAD_LOG_DIR") or os.path.join(
 )
 os.makedirs(_log_dir, exist_ok=True)
 log_path = os.getenv("FREECAD_LOG_PATH") or os.path.join(_log_dir, "freecad_log.txt")
-log_file = open(log_path, "w", encoding="utf-8")
+_log_mode = "a" if os.getenv("FREECAD_LOG_APPEND", "").strip() in ("1", "true", "yes") else "w"
+log_file = open(log_path, _log_mode, encoding="utf-8")
 sys.stdout, sys.stderr = log_file, log_file
+if _log_mode == "a":
+    print("\n--- FREECAD sesión (append) ---\n")
 
 import FreeCAD as App
 import FreeCADGui
@@ -584,6 +587,15 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
     out_step = os.path.join(step_out_dir, f"{step_base}.step")
     print(f"[{name}] Nombre STEP usado: {step_base}.step")
 
+    if os.getenv("FREECAD_SKIP_EXISTING", "1").strip().lower() not in ("0", "false", "no"):
+        try:
+            if os.path.isfile(out_step) and os.path.getsize(out_step) > 512:
+                if os.path.getmtime(out_step) >= os.path.getmtime(dxf_path):
+                    print(f"[{name}] SKIP: STEP vigente ya existe -> {out_step}")
+                    return
+        except Exception:
+            pass
+
     doc = App.newDocument(f"DXF_{name}")
     importDXF.insert(dxf_path, doc.Name)
     doc.recompute()
@@ -833,8 +845,13 @@ try:
     oy = _env_float("FREECAD_OFFSET_Y", 0.0)
     oz = _env_float("FREECAD_OFFSET_Z", 0.0)
 
-    files = sorted(glob.glob(os.path.join(dxf_in, "*.dxf")))
-    print(f"Procesando {len(files)} archivos...")
+    single = os.getenv("FREECAD_DXF_SINGLE", "").strip()
+    if single and os.path.isfile(single):
+        files = [os.path.normpath(single)]
+        print(f"Procesando 1 archivo (FREECAD_DXF_SINGLE): {files[0]}")
+    else:
+        files = sorted(glob.glob(os.path.join(dxf_in, "*.dxf")))
+        print(f"Procesando {len(files)} archivos...")
     for f in files:
         procesar_dxf(f, step_out, thk, scl, ori, ox, oy, oz)
 

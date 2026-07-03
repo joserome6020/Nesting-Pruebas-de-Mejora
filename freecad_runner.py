@@ -169,6 +169,48 @@ def _resolve_macro_script(*, prefer_verde: bool = False) -> str | None:
     return None
 
 
+def _step_base_from_dxf(dxf_path: str) -> str:
+    name = os.path.splitext(os.path.basename(dxf_path))[0]
+    idx = name.upper().find("W.O.")
+    if idx != -1:
+        return name[idx:].strip()
+    return name
+
+
+def _step_path_for_dxf(dxf_path: str, step_folder: str) -> str:
+    return os.path.join(step_folder, f"{_step_base_from_dxf(dxf_path)}.step")
+
+
+def _step_is_current(dxf_path: str, step_path: str) -> bool:
+    if not os.path.isfile(step_path):
+        return False
+    try:
+        if os.path.getsize(step_path) < 512:
+            return False
+        return os.path.getmtime(step_path) >= os.path.getmtime(dxf_path)
+    except OSError:
+        return False
+
+
+def _timeout_for_dxf(dxf_path: str) -> float:
+    """Timeout por DXF según tamaño (barras cobre densas pueden tardar >30 min)."""
+    try:
+        kb = max(1.0, os.path.getsize(dxf_path) / 1024.0)
+    except OSError:
+        kb = 100.0
+    # Mín 15 min; ~4 s/KB; tope 3 h por archivo.
+    return max(900.0, min(10800.0, 300.0 + kb * 4.0))
+
+
+def _pendientes_step(dxf_files: list[str], step_folder: str) -> list[str]:
+    pending: list[str] = []
+    for dxf_path in dxf_files:
+        step_path = _step_path_for_dxf(dxf_path, step_folder)
+        if not _step_is_current(dxf_path, step_path):
+            pending.append(dxf_path)
+    return pending
+
+
 def _resolve_log_path(step_folder: str) -> str:
     candidates = [
         os.path.join(step_folder, "_logs"),
@@ -252,17 +294,53 @@ def ejecutar_macro_freecad(
 
     dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta)
     n_dxf = len(dxf_files)
-    # Cobre / nests grandes: un FreeCAD por lote; ~2 min/archivo, tope 6 h.
-    timeout_sec = max(1800.0, min(21600.0, n_dxf * 120.0))
+    cmd: list[str] = []
 
     with open(log_path, "a", encoding="utf-8") as f:
         def _log(msg: str) -> None:
             f.write(msg)
             f.flush()
 
+        def _run_single_dxf(
+            dxf_path: str,
+            env_base: dict,
+            *,
+            append_log: bool,
+            timeout_sec: float,
+        ) -> tuple[bool, str]:
+            env = dict(env_base)
+            env["FREECAD_DXF_SINGLE"] = dxf_path
+            env["FREECAD_SKIP_EXISTING"] = "1"
+            env["FREECAD_LOG_APPEND"] = "1" if append_log else "0"
+            stdout_log = os.path.join(log_dir, "freecad_stdout.log")
+            stderr_log = os.path.join(log_dir, "freecad_stderr.log")
+            try:
+                with open(stdout_log, "w", encoding="utf-8") as out_f, open(
+                    stderr_log, "w", encoding="utf-8"
+                ) as err_f:
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=out_f,
+                        stderr=err_f,
+                        env=env,
+                        timeout=timeout_sec,
+                    )
+            except subprocess.TimeoutExpired as e:
+                return False, f"TIMEOUT tras {int(timeout_sec)}s: {e}"
+            except Exception as e:
+                return False, f"EXCEPCIÓN: {e}"
+
+            step_path = _step_path_for_dxf(dxf_path, step_resuelta)
+            if _step_is_current(dxf_path, step_path):
+                return True, f"OK (rc={proc.returncode})"
+            if proc.returncode != 0:
+                return False, f"FreeCAD rc={proc.returncode}"
+            return False, "sin STEP válido al terminar"
+
         _log(f"\n--- INICIANDO CONVERSIÓN STEP ({origen}) ---\n")
         f.write(f"Ejecutable: {ruta_exe}\n")
         f.write(f"Macro: {ruta_macro}\n")
+        f.write(f"Modo: 1 FreeCAD por DXF (reanuda STEP existentes)\n")
         f.write(f"DXF folder (solicitado): {dxf_folder}\n")
         f.write(f"DXF folder (resuelto): {dxf_resuelta}\n")
         f.write(f"STEP folder (solicitado): {step_folder}\n")
@@ -287,6 +365,8 @@ def ejecutar_macro_freecad(
             )
             return False
 
+        cmd = [ruta_exe, ruta_macro]
+
         if not os.path.isdir(dxf_resuelta):
             f.write("ERROR FATAL: La carpeta DXF no existe o no es accesible.\n")
             f.write("Variantes probadas:\n")
@@ -297,7 +377,6 @@ def ejecutar_macro_freecad(
         dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta)
         n_dxf = len(dxf_files)
         _log(f"DXF detectados: {n_dxf}\n")
-        _log(f"Timeout FreeCAD: {int(timeout_sec)} s\n")
         for path in dxf_files[:20]:
             f.write(f" - {path}\n")
         if len(dxf_files) > 20:
@@ -307,7 +386,6 @@ def ejecutar_macro_freecad(
             f.write("ERROR FATAL: No se encontraron DXF para procesar.\n")
             return False
 
-        # 3) Asegurar carpeta STEP sin abortar duro.
         try:
             if not os.path.isdir(step_resuelta):
                 os.makedirs(step_resuelta, exist_ok=True)
@@ -321,110 +399,96 @@ def ejecutar_macro_freecad(
         before_snapshot = snapshot_steps(step_resuelta)
         f.write(f"STEP antes: {len(before_snapshot)}\n")
 
-        env = os.environ.copy()
-        env["FREECAD_DXF_IN"] = dxf_resuelta
-        env["FREECAD_STEP_OUT"] = step_resuelta
-        env["FREECAD_LOG_DIR"] = log_dir
-        env["FREECAD_LOG_PATH"] = os.path.join(log_dir, "freecad_macro.log")
-        env["FREECAD_THK_MM"] = str(thickness_mm)
-        env["FREECAD_SCALE"] = str(getattr(config, 'FREECAD_SCALE', 1.0))
-        env["FREECAD_ORIGIN"] = origen
-        env["FREECAD_OFFSET_X"] = str(off_x)
-        env["FREECAD_OFFSET_Y"] = str(off_y)
-        env["FREECAD_OFFSET_Z"] = str(off_z)
+        env_base = os.environ.copy()
+        env_base["FREECAD_DXF_IN"] = dxf_resuelta
+        env_base["FREECAD_STEP_OUT"] = step_resuelta
+        env_base["FREECAD_LOG_DIR"] = log_dir
+        env_base["FREECAD_LOG_PATH"] = os.path.join(log_dir, "freecad_macro.log")
+        env_base["FREECAD_THK_MM"] = str(thickness_mm)
+        env_base["FREECAD_SCALE"] = str(getattr(config, "FREECAD_SCALE", 1.0))
+        env_base["FREECAD_ORIGIN"] = origen
+        env_base["FREECAD_OFFSET_X"] = str(off_x)
+        env_base["FREECAD_OFFSET_Y"] = str(off_y)
+        env_base["FREECAD_OFFSET_Z"] = str(off_z)
         if material:
-            env["FREECAD_MATERIAL"] = str(material).strip().upper()
+            env_base["FREECAD_MATERIAL"] = str(material).strip().upper()
 
-        cmd = [ruta_exe, ruta_macro]
         _log(f"Comando lanzado: {' '.join(cmd)}\n")
 
+        ya_vigentes = n_dxf - len(_pendientes_step(dxf_files, step_resuelta))
+        if ya_vigentes:
+            _log(f"STEP vigentes (se omiten): {ya_vigentes}/{n_dxf}\n")
+
+        macro_append = ya_vigentes > 0 or os.path.isfile(
+            env_base.get("FREECAD_LOG_PATH", "")
+        )
+        fallidos: list[str] = []
+
         for intento in range(1, max(1, int(max_intentos)) + 1):
+            pending = _pendientes_step(dxf_files, step_resuelta)
+            if not pending:
+                break
             if intento > 1:
-                _log(f"\n--- REINTENTO STEP {intento}/{max_intentos} ---\n")
+                _log(f"\n--- REINTENTO STEP {intento}/{max_intentos} ({len(pending)} pendientes) ---\n")
                 time.sleep(1.0)
-                dxf_files = _esperar_dxfs_en_carpeta(dxf_resuelta, timeout_sec=5.0)
-                _log(f"DXF detectados (reintento): {len(dxf_files)}\n")
+            else:
+                _log(f"Pendientes de convertir: {len(pending)}/{n_dxf}\n")
 
-            try:
-                timeout_sec = max(1800.0, min(21600.0, len(dxf_files) * 120.0))
-                _log(f"Timeout FreeCAD (intento {intento}): {int(timeout_sec)} s\n")
-                stdout_log = os.path.join(log_dir, "freecad_stdout.log")
-                stderr_log = os.path.join(log_dir, "freecad_stderr.log")
-                with open(stdout_log, "w", encoding="utf-8") as out_f, open(
-                    stderr_log, "w", encoding="utf-8"
-                ) as err_f:
-                    proc = subprocess.run(
-                        cmd,
-                        stdout=out_f,
-                        stderr=err_f,
-                        env=env,
-                        timeout=timeout_sec,
-                    )
-
-                try:
-                    with open(stdout_log, "r", encoding="utf-8", errors="replace") as out_f:
-                        stdout_text = out_f.read()
-                except Exception:
-                    stdout_text = ""
-                try:
-                    with open(stderr_log, "r", encoding="utf-8", errors="replace") as err_f:
-                        stderr_text = err_f.read()
-                except Exception:
-                    stderr_text = ""
-
-                _log("=== SALIDA DE FREECAD ===\n")
-                _log((stdout_text or "") + "\n")
-                _log("=== ERRORES DE FREECAD ===\n")
-                _log((stderr_text or "") + "\n")
-                _log(f"Return code: {proc.returncode}\n")
-
-                after_snapshot = snapshot_steps(step_resuelta)
-                nuevos, actualizados = diff_steps(before_snapshot, after_snapshot)
-
-                _log(f"STEP después: {len(after_snapshot)}\n")
-                _log(f"STEP nuevos: {len(nuevos)}\n")
-                _log(f"STEP actualizados: {len(actualizados)}\n")
-
-                for path in nuevos:
-                    _log(f"STEP NUEVO -> {path}\n")
-
-                for path in actualizados:
-                    _log(f"STEP ACTUALIZADO -> {path}\n")
-
-                ok = (
-                    proc.returncode == 0
-                    and (nuevos or actualizados or len(after_snapshot) > 0)
+            for idx, dxf_path in enumerate(pending):
+                nombre = os.path.basename(dxf_path)
+                timeout_sec = _timeout_for_dxf(dxf_path)
+                _log(
+                    f"\n[{idx + 1}/{len(pending)}] {nombre} "
+                    f"(timeout {int(timeout_sec)} s)\n"
                 )
-                if ok and str(material or "").strip().upper() in ("CU", "COBRE", "COPPER"):
-                    try:
-                        from modules.cobre_step_audit import audit_macro_log_for_losses
-
-                        macro_log = env.get("FREECAD_LOG_PATH") or os.path.join(
-                            log_dir, "freecad_macro.log"
-                        )
-                        issues = audit_macro_log_for_losses(macro_log, material=material)
-                        for issue in issues:
-                            _log(f"ERROR AUDIT COBRE: {issue}\n")
-                        if issues:
-                            ok = False
-                    except Exception as e:
-                        _log(f"[WARN] No se pudo auditar piezas STEP cobre: {e}\n")
-
-                if ok:
-                    _log("RESULTADO FINAL: OK\n")
-                    return True
-
-                if proc.returncode != 0:
-                    _log("RESULTADO: FAIL (FreeCAD devolvió código distinto de 0)\n")
-                elif not nuevos and not actualizados and len(after_snapshot) == 0:
-                    _log("RESULTADO: FAIL (no se detectó ningún STEP en la carpeta destino)\n")
+                ok_one, detalle = _run_single_dxf(
+                    dxf_path,
+                    env_base,
+                    append_log=macro_append,
+                    timeout_sec=timeout_sec,
+                )
+                macro_append = True
+                if ok_one:
+                    _log(f"  -> {detalle}\n")
                 else:
-                    _log("RESULTADO: FAIL (FreeCAD terminó pero no dejó STEP nuevos ni actualizados)\n")
+                    _log(f"  -> FAIL: {detalle}\n")
+                    if dxf_path not in fallidos:
+                        fallidos.append(dxf_path)
 
-            except subprocess.TimeoutExpired as e:
-                _log(f"TIMEOUT FreeCAD tras {int(timeout_sec)}s: {e}\n")
+        pending_final = _pendientes_step(dxf_files, step_resuelta)
+        after_snapshot = snapshot_steps(step_resuelta)
+        nuevos, actualizados = diff_steps(before_snapshot, after_snapshot)
+
+        _log(f"\nSTEP después: {len(after_snapshot)}/{n_dxf}\n")
+        _log(f"STEP nuevos: {len(nuevos)}\n")
+        _log(f"STEP actualizados: {len(actualizados)}\n")
+        if pending_final:
+            _log(f"STEP faltantes ({len(pending_final)}):\n")
+            for dxf_path in pending_final:
+                _log(f" - {os.path.basename(dxf_path)}\n")
+
+        ok = len(pending_final) == 0
+        if ok and str(material or "").strip().upper() in ("CU", "COBRE", "COPPER"):
+            try:
+                from modules.cobre_step_audit import audit_macro_log_for_losses
+
+                macro_log = env_base.get("FREECAD_LOG_PATH") or os.path.join(
+                    log_dir, "freecad_macro.log"
+                )
+                issues = audit_macro_log_for_losses(macro_log, material=material)
+                for issue in issues:
+                    _log(f"ERROR AUDIT COBRE: {issue}\n")
+                if issues:
+                    ok = False
             except Exception as e:
-                _log(f"EXCEPCIÓN DE WINDOWS: {e}\n")
+                _log(f"[WARN] No se pudo auditar piezas STEP cobre: {e}\n")
 
-        _log("RESULTADO FINAL: FAIL (agotados reintentos)\n")
+        if ok:
+            _log("RESULTADO FINAL: OK\n")
+            return True
+
+        if pending_final:
+            _log("RESULTADO FINAL: FAIL (STEP incompletos tras reintentos)\n")
+        else:
+            _log("RESULTADO FINAL: FAIL (auditoría o conteo STEP)\n")
         return False

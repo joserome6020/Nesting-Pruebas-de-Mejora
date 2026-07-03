@@ -149,9 +149,55 @@ def _validar_steps_tras_export(rutas: dict, *, log_fn=None) -> dict[str, dict[st
                 f"Revisa el log: {log_hint}"
             )
         if n_step < n_dxf:
+            step_dir = os.path.normpath(
+                str(
+                    rutas.get(
+                        {
+                            "CAMA LASER": "cama_laser_step",
+                            "CAMA LASER 12KW": "cama_laser_12kw_step",
+                            "ROBOT LASER": "robot_laser_step_A",
+                            "ROBOT PLASMA": "robot_plasma_step_A",
+                        }.get(etiqueta, ""),
+                        "",
+                    )
+                    or ""
+                ).strip()
+            )
+            dxf_dir = os.path.normpath(
+                str(
+                    rutas.get(
+                        {
+                            "CAMA LASER": "cama_laser_dxf",
+                            "CAMA LASER 12KW": "cama_laser_12kw_dxf",
+                            "ROBOT LASER": "robot_laser_dxf",
+                            "ROBOT PLASMA": "robot_plasma_dxf",
+                        }.get(etiqueta, ""),
+                        "",
+                    )
+                    or ""
+                ).strip()
+            )
+            faltantes: list[str] = []
+            if dxf_dir and step_dir:
+                try:
+                    from freecad_runner import _pendientes_step
+
+                    faltantes = [
+                        os.path.basename(p)
+                        for p in _pendientes_step(_listar_dxfs_en_carpeta(dxf_dir), step_dir)
+                    ]
+                except Exception:
+                    pass
+            detalle_faltantes = (
+                f" Faltan: {', '.join(faltantes[:12])}"
+                + (f" (+{len(faltantes) - 12} más)" if len(faltantes) > 12 else "")
+                if faltantes
+                else ""
+            )
             _log(
-                f"WARN [{etiqueta}]: STEP incompletos ({n_step}/{n_dxf}). "
-                "Puede ser timeout o DXF sin contorno CUT_CU/Plate."
+                f"WARN [{etiqueta}]: STEP incompletos ({n_step}/{n_dxf})."
+                f"{detalle_faltantes} "
+                "Re-exportar STEP reanuda solo los pendientes."
             )
     return resumen
 
