@@ -128,11 +128,15 @@ def cargar_snapshot_largos() -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
 
 def _normalizar_filas_placa(filas: list | None) -> list[list]:
+    """Conserva columnas extendidas (origen, precio_usd) además del bloque legacy de 9."""
     out: list[list] = []
     for row in filas or []:
         if not isinstance(row, (list, tuple)):
             continue
-        out.append([row[i] if i < len(row) else "" for i in range(9)])
+        items = [row[i] if i < len(row) else "" for i in range(len(row))]
+        while len(items) < 9:
+            items.append("")
+        out.append(items)
     return out
 
 

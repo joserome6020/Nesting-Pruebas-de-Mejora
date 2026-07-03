@@ -51,6 +51,18 @@ class PlatesManager:
         resultado = self._sync.refresh()
         if resultado.ok:
             self._datos_empresa, self._datos_proveedor = self._sync.get_sheet_rows()
+            disp = sum(
+                1
+                for p in (self._datos_empresa or [])
+                if isinstance(p, (list, tuple))
+                and len(p) > 8
+                and self._stock_permite_nesting(p[8])
+            )
+            print(
+                f"[PLATES] Sync Herinox OK | empresa={len(self._datos_empresa or [])} "
+                f"| proveedor={len(self._datos_proveedor or [])} "
+                f"| disponibles_nesting={disp}"
+            )
         return resultado
 
     def obtener_datos_placas_divididos(self):
@@ -74,20 +86,51 @@ class PlatesManager:
             return 0.0
 
     @staticmethod
+    def normalizar_estado_stock(valor_stock) -> str:
+        """Misma semántica que HerinoxPlateSync._to_disponibilidad (default seguro: NO DISPONIBLE)."""
+        if isinstance(valor_stock, bool):
+            return "DISPONIBLE" if valor_stock else "NO DISPONIBLE"
+        txt = str(valor_stock or "").strip().upper()
+        if txt in {"DISPONIBLE", "1", "TRUE", "SI", "YES"}:
+            return "DISPONIBLE"
+        if txt in {"NO DISPONIBLE", "NO_DISPONIBLE", "0", "FALSE", "NO"}:
+            return "NO DISPONIBLE"
+        if txt in {"NO EXISTENTE", "N/A", "NA"}:
+            return "NO EXISTENTE"
+        return "NO DISPONIBLE"
+
+    @staticmethod
+    def stock_de_fila(placa) -> str:
+        if not isinstance(placa, (list, tuple)) or len(placa) <= 8:
+            return "NO DISPONIBLE"
+        return PlatesManager.normalizar_estado_stock(placa[8])
+
+    @staticmethod
     def _stock_permite_nesting(valor_stock) -> bool:
-        estado = str(valor_stock or "").strip().upper()
-        return estado == "DISPONIBLE"
+        return PlatesManager.normalizar_estado_stock(valor_stock) == "DISPONIBLE"
+
+    def filtrar_placas_para_nesting(self, placas):
+        """Solo placas EMPRESA con stock Herinox = DISPONIBLE."""
+        disponibles = []
+        for placa in placas or []:
+            if not isinstance(placa, (list, tuple)) or len(placa) <= 8:
+                continue
+            if self._stock_permite_nesting(placa[8]):
+                disponibles.append(placa)
+        return disponibles
 
     def obtener_datos_placas(self):
         """
         Función puente: El motor de Nesting y otras pestañas llaman a esta función por defecto.
         """
-        datos_empresa, datos_proveedor = self.obtener_datos_placas_divididos()
-        datos_empresa_disponibles = [
-            placa
-            for placa in (datos_empresa or [])
-            if len(placa) > 8 and self._stock_permite_nesting(placa[8])
-        ]
-
+        datos_empresa, _datos_proveedor = self.obtener_datos_placas_divididos()
+        total = len(datos_empresa or [])
+        datos_empresa_disponibles = self.filtrar_placas_para_nesting(datos_empresa)
+        excluidas = total - len(datos_empresa_disponibles)
+        if total:
+            print(
+                f"[PLATES] Nesting: {len(datos_empresa_disponibles)}/{total} placas EMPRESA "
+                f"DISPONIBLE ({excluidas} excluidas por stock Herinox)"
+            )
         # MODO ESTRICTO: solo stock físico de Grupo Arga (DISPONIBLE en hoja EMPRESA).
         return datos_empresa_disponibles

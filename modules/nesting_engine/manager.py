@@ -1491,6 +1491,8 @@ class MotorNesting:
 
         placas_empresa = []
         placas_proveedor = []
+        from modules.sheets_manager import PlatesManager
+
         _dbg_nesting(
             f"[GRUPO-START] clave={clave} | piezas={len(piezas)} | "
             f"kerf={config_kerf} | margin={config_margin} | "
@@ -1507,6 +1509,10 @@ class MotorNesting:
             )
 
         for placa in datos_placas:
+            if not PlatesManager._stock_permite_nesting(
+                placa[8] if isinstance(placa, (list, tuple)) and len(placa) > 8 else ""
+            ):
+                continue
             p_cal = placa[0]
             p_mat = placa[1]
             if self._coinciden(req_cal, p_cal) and self._coinciden(req_mat, p_mat):
