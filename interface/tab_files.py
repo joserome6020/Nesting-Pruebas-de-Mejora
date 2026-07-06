@@ -407,7 +407,6 @@ class TabFiles(ctk.CTkFrame):
                 items_procesados.append((arch, "?", str(1 * multiplicador), "?", "LISTO", ruta_out_real))
 
         self.app.cargar_datos_parts(items_procesados)
-        self.app.guardar_historial(job_info.get('ruta_job_root', ruta_root))
         self.app.tabview.set("PARTS")
 
     # ==========================================

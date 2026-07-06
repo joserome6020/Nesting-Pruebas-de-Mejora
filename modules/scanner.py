@@ -1,13 +1,7 @@
 import os
 
 import config
-
-
-def _norm_ruta(ruta: str) -> str:
-    try:
-        return os.path.normcase(os.path.normpath(str(ruta or "")))
-    except Exception:
-        return str(ruta or "")
+from modules.historial_jobs import norm_job_name
 
 
 class EscanerServidor:
@@ -20,7 +14,7 @@ class EscanerServidor:
         Retorna: (lista_jobs, mensaje_error)
         """
         jobs_encontrados = []
-        historial = {_norm_ruta(p) for p in (jobs_ya_procesados or [])}
+        historial = {norm_job_name(p) for p in (jobs_ya_procesados or [])}
 
         if not os.path.exists(self.ruta_base):
             return [], "No se encuentra la ruta del servidor.\nVerifique VPN o conexión LAN."
@@ -55,7 +49,7 @@ class EscanerServidor:
                         if not os.path.isdir(ruta_autodxf):
                             continue
 
-                        if _norm_ruta(job.path) in historial:
+                        if norm_job_name(job.name) in historial:
                             continue
 
                         jobs_encontrados.append(

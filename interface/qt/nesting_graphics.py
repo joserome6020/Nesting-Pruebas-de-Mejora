@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 from interface.qt.curve_refine import refine_enabled, refine_ring
 from interface.material_colors import CAD_VIEW_BG, es_contexto_cobre, paleta_pieza_nesting
+from reporte_pdf_nesting import _resolve_piece_meta
 
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -609,7 +610,10 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
         item = nom if len(nom) <= 34 else (nom[:31] + "…")
         if dim.get("plasma"):
             item = f"{item} (PLASMA)"
-        rows.append((data["id"], job_cell, item, f"{L_in:.2f}", f"{W_in:.2f}", int(data["qty"])))
+        job_val = str(data.get("job") or job_cell or "-").strip()
+        if len(job_val) > 30:
+            job_val = job_val[:27] + "…"
+        rows.append((data["id"], job_val, item, f"{L_in:.2f}", f"{W_in:.2f}", int(data["qty"])))
 
     nrows = len(rows)
     gap_mm = max(10.0, min(32.0, h_mm * 0.022))
@@ -722,6 +726,14 @@ def populate_nesting_scene(
     mostrar_etiquetas_rtz = _debe_mostrar_etiqueta_rtz(hoja)
     es_rtz_hoja = _es_vista_mini_retazo(hoja)
 
+    meta_por_ruta = {}
+    job_fallback = "-"
+    if params.app is not None:
+        meta_por_ruta = getattr(params.app, "meta_pdf_por_ruta", {}) or {}
+        job_activo = str(getattr(params.app, "job_activo", "") or "").strip()
+        if job_activo and not job_activo.upper().startswith("SWO"):
+            job_fallback = job_activo
+
     for idx_pieza, p in enumerate(hoja.get("piezas", [])):
         gfx_items: list = []
         nom = p.get("nombre", "DXF")
@@ -734,8 +746,13 @@ def populate_nesting_scene(
         compensada = bool(p.get("plasma_compensada_manual"))
 
         if not (es_rem or es_ref or es_guill or es_tat):
+            piece_meta = _resolve_piece_meta(p, meta_por_ruta, job_fallback)
             if nom not in resumen:
-                resumen[nom] = {"id": len(resumen) + 1, "qty": 0}
+                resumen[nom] = {
+                    "id": len(resumen) + 1,
+                    "qty": 0,
+                    "job": piece_meta["job"],
+                }
             resumen[nom]["qty"] += 1
             pols = p.get("poligonos") or []
             if pols and pols[0] and len(pols[0]) >= 2:
@@ -889,7 +906,18 @@ def populate_nesting_scene(
 
         job_raw = ""
         if params.app is not None:
-            job_raw = str(getattr(params.app, "job_activo", "") or "").strip() or "-"
+            job_activo = str(getattr(params.app, "job_activo", "") or "").strip()
+            if job_activo and not job_activo.upper().startswith("SWO"):
+                job_raw = job_activo
+        if not job_raw and resumen:
+            jobs_tabla = sorted(
+                {str(v.get("job") or "").strip() for v in resumen.values() if str(v.get("job") or "").strip()}
+            )
+            if len(jobs_tabla) == 1:
+                job_raw = jobs_tabla[0]
+            elif len(jobs_tabla) > 1:
+                job_raw = "VARIOS"
+        job_raw = job_raw or "-"
         if len(job_raw) > 30:
             job_raw = job_raw[:27] + "…"
         tbl_meta = _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_raw)

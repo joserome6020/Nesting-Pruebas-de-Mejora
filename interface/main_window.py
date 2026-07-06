@@ -285,11 +285,9 @@ class SistemaNestingPro(ctk.CTk):
             sys.exit(0)
 
     def cargar_historial(self):
-        if os.path.exists(config.DB_HISTORIAL):
-            try:
-                with open(config.DB_HISTORIAL, 'r') as f: return json.load(f)
-            except: return []
-        return []
+        from modules.historial_jobs import cargar_nombres_jobs
+
+        return cargar_nombres_jobs()
 
     def _intentar_sync_placas_react_herinox(self):
         try:
@@ -318,12 +316,13 @@ class SistemaNestingPro(ctk.CTk):
         except Exception as e:
             print(f"[HERINOX SYNC] ERROR inesperado: {e}")
 
-    def guardar_historial(self, job_path):
-        if job_path not in self.jobs_procesados:
-            self.jobs_procesados.append(job_path)
-            try:
-                with open(config.DB_HISTORIAL, 'w') as f: json.dump(self.jobs_procesados, f)
-            except: pass
+    def guardar_historial(self, job_ref=None):
+        from modules.historial_jobs import registrar_job_nesteado
+
+        ref = job_ref if job_ref is not None else getattr(self, "job_activo", None)
+        if not ref:
+            return
+        self.jobs_procesados = registrar_job_nesteado(self.jobs_procesados, ref)
 
     def setup_ui(self):
         # Navbar

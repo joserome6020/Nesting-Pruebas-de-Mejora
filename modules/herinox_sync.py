@@ -9,9 +9,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 import config
 
 
@@ -373,6 +370,9 @@ class HerinoxPlateSync:
         conn = None
         cur = None
         try:
+            import psycopg2
+            from psycopg2.extras import RealDictCursor
+
             conn = psycopg2.connect(**self.db_config)
             cur = conn.cursor(cursor_factory=RealDictCursor)
             cur.execute(

@@ -11,6 +11,12 @@ for _p in (_ROOT, _IFACE):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    try:
+        from modules.win_dll_bootstrap import bootstrap_proceso_nesting
+
+        bootstrap_proceso_nesting()
+    except Exception:
+        pass
     # Log de export DXF y diagnósticos visibles en terminal sin esperar al final del buffer.
     try:
         sys.stdout.reconfigure(line_buffering=True)

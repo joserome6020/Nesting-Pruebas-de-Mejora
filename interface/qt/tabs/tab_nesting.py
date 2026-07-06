@@ -957,7 +957,7 @@ class TabNesting(QWidget, TimerHost):
             ruta_processed_destino
         )
 
-    def _registrar_meta_pdf_lote(self, ruta_dxf_final, item_nombre):
+    def _registrar_meta_pdf_lote(self, ruta_dxf_final, item_nombre, *, ruta_origen=None):
         """
         Mantiene alineado el nuevo DXF con el mismo sistema de metadata por ruta
         que usa el PDF y otros flujos.
@@ -969,8 +969,22 @@ class TabNesting(QWidget, TimerHost):
         job_actual = str(getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
         work_order = self._work_order_label_lote_activo()
 
+        meta_prev = (getattr(self.app, "meta_pdf_por_ruta", None) or {}).get(ruta_norm) or {}
+        if ruta_origen:
+            meta_prev = meta_prev or (
+                (getattr(self.app, "meta_pdf_por_ruta", None) or {}).get(
+                    self._normalizar_ruta_meta_lote(ruta_origen)
+                )
+                or {}
+            )
+        job_meta = str(meta_prev.get("job") or "").strip()
+        if job_actual.upper().startswith("SWO") and job_meta:
+            job_display = job_meta
+        else:
+            job_display = job_actual
+
         self.app.meta_pdf_por_ruta[ruta_norm] = {
-            "job": job_actual,
+            "job": job_display,
             "item": str(item_nombre).strip() or os.path.splitext(os.path.basename(str(ruta_dxf_final)))[0],
             "work_order": work_order,
         }
@@ -1127,7 +1141,7 @@ class TabNesting(QWidget, TimerHost):
         multiplicador_lote = self._multiplicador_lote_activo()
         qty_final = metadata["qty_base"] * multiplicador_lote
 
-        self._registrar_meta_pdf_lote(ruta_final_proyecto, metadata["nombre"])
+        self._registrar_meta_pdf_lote(ruta_final_proyecto, metadata["nombre"], ruta_origen=ruta_dxf)
 
         return (
             str(metadata["nombre"]),
@@ -1235,7 +1249,7 @@ class TabNesting(QWidget, TimerHost):
             str(ruta_final_proyecto),
         )
 
-        self._registrar_meta_pdf_lote(ruta_final_proyecto, metadata["nombre"])
+        self._registrar_meta_pdf_lote(ruta_final_proyecto, metadata["nombre"], ruta_origen=ruta_dxf)
         self._actualizar_lote_editable_en_memoria(actuales)
     def _primer_hoja_disponible(self, resultados):
         if not isinstance(resultados, dict):
@@ -1625,7 +1639,16 @@ class TabNesting(QWidget, TimerHost):
     def panel_renestear_calibre(self):
         if not self._ctx_tiene_resultados(self.clave_actual):
             return
-        self.renestear_calibre_completo_ui(self.clave_actual)
+        self._iniciar_renest_calibre_con_seleccion_placa(self.clave_actual)
+
+    def _iniciar_renest_calibre_con_seleccion_placa(self, clave, *, candidata_placa=None):
+        if candidata_placa is not None or self._es_grupo_cobre(clave):
+            self.renestear_calibre_completo_ui(clave, candidata_placa=candidata_placa)
+            return
+        candidata = self._mostrar_dialogo_placa_renest_calibre(clave)
+        if candidata is False:
+            return
+        self.renestear_calibre_completo_ui(clave, candidata_placa=candidata)
 
     def panel_mudar_todas_piezas(self):
         if not self._ctx_tiene_resultados(self.clave_actual):
@@ -2087,6 +2110,9 @@ class TabNesting(QWidget, TimerHost):
     def finalizar(self, resultados_list):
         # Guardamos la lista completa de Work Orders
         self.app.resultados_multilote = resultados_list
+
+        if hasattr(self.app, "guardar_historial"):
+            self.app.guardar_historial()
 
         # NUEVO: construir inputs editables por lote
         self._reconstruir_editables_por_resultado(resultados_list)
@@ -2754,13 +2780,11 @@ class TabNesting(QWidget, TimerHost):
             if not self._ctx_tiene_resultados(clave):
                 return
             menu = QMenu(self)
-            menu.addAction(
-                "Renestear calibre completo",
-                self._safe_ctx(
-                    "Renestear calibre",
-                    lambda c=clave: self.renestear_calibre_completo_ui(c),
-                ),
+            sub_renest = QMenu("Renestear calibre completo", menu)
+            sub_renest.aboutToShow.connect(
+                lambda sm=sub_renest, c=clave: self._rellenar_submenu_renest_calibre(sm, c)
             )
+            menu.addMenu(sub_renest)
             menu.addAction(
                 "Compensar calibre completo (Plasma)",
                 self._safe_ctx(
@@ -3354,7 +3378,7 @@ class TabNesting(QWidget, TimerHost):
         }
         return piezas_out
 
-    def renestear_calibre_completo_ui(self, clave):
+    def renestear_calibre_completo_ui(self, clave, *, candidata_placa=None):
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
         if clave not in self.app.resultados_nesting:
@@ -3419,9 +3443,15 @@ class TabNesting(QWidget, TimerHost):
             )
             titulo = "Renestear cobre en largos"
         else:
+            placa_txt = ""
+            if candidata_placa:
+                placa_txt = (
+                    f"\n\nPlaca seleccionada:\n"
+                    f"  {self._etiqueta_placa_inventario(candidata_placa)}"
+                )
             detalle = (
                 f"Se volverá a optimizar todo el calibre {clave} desde cero."
-                f"{aviso_cantidad}\n\n¿Continuar?"
+                f"{placa_txt}{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear calibre completo"
         if QMessageBox.question(self, titulo, detalle) != QMessageBox.StandardButton.Yes:
@@ -3447,6 +3477,14 @@ class TabNesting(QWidget, TimerHost):
             inv_esperado = self._conteo_piezas_job_grupo(clave) or self._inventario_piezas_grupo(clave)
             try:
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
+                if candidata_placa:
+                    datos_placas = self._filtrar_datos_placas_para_candidata(
+                        datos_placas, candidata_placa
+                    )
+                    if not datos_placas:
+                        raise RuntimeError(
+                            "La placa seleccionada ya no está disponible en inventario."
+                        )
                 raw = self.app.motor_nesting._procesar_grupo_parallel(
                     clave,
                     piezas_pack,
@@ -3617,6 +3655,134 @@ class TabNesting(QWidget, TimerHost):
                 )
             )
         return out
+
+    def _obtener_candidatas_placa_renest_calibre(self, clave):
+        """Placas Herinox compatibles con el calibre/material (renesteo completo)."""
+        return self._obtener_candidatas_placa(clave, None)
+
+    def _filtrar_datos_placas_para_candidata(self, datos_placas, candidata):
+        if not candidata or not datos_placas:
+            return list(datos_placas or [])
+        pid = str(candidata.get("id", "") or "").strip()
+        w_in = float(candidata.get("w_in", 0) or 0)
+        h_in = float(candidata.get("h_in", 0) or 0)
+        if not pid or w_in <= 0 or h_in <= 0:
+            return list(datos_placas or [])
+        filtradas = []
+        for placa in datos_placas:
+            try:
+                if str(placa[2]).strip() != pid:
+                    continue
+                pw = self.app.motor_nesting._extraer_numero(placa[3])
+                ph = self.app.motor_nesting._extraer_numero(placa[4])
+                if abs(pw - w_in) > 0.05 or abs(ph - h_in) > 0.05:
+                    continue
+                filtradas.append(placa)
+            except Exception:
+                continue
+        return filtradas
+
+    def _rellenar_submenu_renest_calibre(self, sub_menu, clave):
+        sub_menu.clear()
+        if self._es_grupo_cobre(clave):
+            sub_menu.addAction(
+                "COBRE (automático)",
+                self._safe_ctx(
+                    "Renestear calibre cobre",
+                    lambda c=clave: self.renestear_calibre_completo_ui(c),
+                ),
+            )
+            return
+
+        candidatas = self._obtener_candidatas_placa_renest_calibre(clave)
+        if not candidatas:
+            na = sub_menu.addAction("Sin placas compatibles en Herinox")
+            na.setEnabled(False)
+            return
+
+        sub_menu.addAction(
+            "AUTOMÁTICO (mejor placa)",
+            self._safe_ctx(
+                "Renestear calibre",
+                lambda c=clave: self.renestear_calibre_completo_ui(c),
+            ),
+        )
+        sub_menu.addSeparator()
+        for cand in candidatas[:30]:
+            sub_menu.addAction(
+                self._etiqueta_placa_inventario(cand),
+                self._safe_ctx(
+                    "Renestear calibre",
+                    lambda c=clave, p=cand: self.renestear_calibre_completo_ui(
+                        c, candidata_placa=p
+                    ),
+                ),
+            )
+
+    def _mostrar_dialogo_placa_renest_calibre(self, clave):
+        """
+        Diálogo para elegir placa al renestear calibre completo.
+        Retorna False si cancela, None para automático, o dict candidata.
+        """
+        candidatas = self._obtener_candidatas_placa_renest_calibre(clave)
+        if not candidatas:
+            QMessageBox.information(
+                self,
+                "Renestear calibre completo",
+                "No hay placas de este calibre/material en el inventario Herinox (stock DISPONIBLE).",
+            )
+            return False
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Renestear calibre completo")
+        dlg.setModal(True)
+        dlg.resize(560, 500)
+        dlg.setStyleSheet("background:#F8FAFC;")
+        lay = QVBoxLayout(dlg)
+
+        lbl = QLabel(
+            f"Seleccione con qué placa desea renestear el calibre {clave}.\n"
+            "AUTOMÁTICO deja que el motor elija la mejor opción."
+        )
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#475569;font-size:11px;")
+        lay.addWidget(lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(6)
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
+
+        seleccion = {"cand": None}
+        from interface.qt.theme import apply_push_button
+
+        def _pick(cand_item):
+            seleccion["cand"] = cand_item
+            dlg.accept()
+
+        btn_auto = QPushButton("AUTOMÁTICO (mejor placa)")
+        apply_push_button(btn_auto, COLOR_GRIS_DARK, font_size=10, padding="8px 10px")
+        btn_auto.clicked.connect(lambda: _pick(None))
+        inner_lay.addWidget(btn_auto)
+
+        for cand in candidatas[:40]:
+            b = QPushButton(self._etiqueta_placa_inventario(cand))
+            apply_push_button(b, COLOR_GRIS_DARK, font_size=10, padding="8px 10px")
+            b.clicked.connect(lambda _checked=False, cand_item=cand: _pick(cand_item))
+            inner_lay.addWidget(b)
+        inner_lay.addStretch()
+
+        btn_cerrar = QPushButton("CANCELAR")
+        apply_push_button(btn_cerrar, "#FFFFFF", font_size=11)
+        btn_cerrar.clicked.connect(dlg.reject)
+        lay.addWidget(btn_cerrar)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return False
+        return seleccion["cand"]
 
     def _mostrar_dialogo_placa_inventario(
         self,

@@ -8,6 +8,8 @@ import time
 import os
 from collections import Counter
 from datetime import datetime
+
+from modules.plate_stock import stock_permite_nesting
 from shapely.geometry import box, Polygon, LineString
 from shapely import affinity
 from shapely.ops import unary_union
@@ -1415,7 +1417,10 @@ class MotorNesting:
         nucleos_totales = multiprocessing.cpu_count()
         nucleos_a_usar = max(1, min(nucleos_totales - 2, total_lotes_reales))
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=nucleos_a_usar) as executor:
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=nucleos_a_usar,
+            initializer=_nesting_worker_bootstrap,
+        ) as executor:
             futuros = {
                 executor.submit(
                     _procesar_grupo_parallel_worker,
@@ -1491,7 +1496,6 @@ class MotorNesting:
 
         placas_empresa = []
         placas_proveedor = []
-        from modules.sheets_manager import PlatesManager
 
         _dbg_nesting(
             f"[GRUPO-START] clave={clave} | piezas={len(piezas)} | "
@@ -1509,7 +1513,7 @@ class MotorNesting:
             )
 
         for placa in datos_placas:
-            if not PlatesManager._stock_permite_nesting(
+            if not stock_permite_nesting(
                 placa[8] if isinstance(placa, (list, tuple)) and len(placa) > 8 else ""
             ):
                 continue
@@ -3985,6 +3989,15 @@ class MotorNesting:
             swo_id=swo_id,
             datos_partes=datos_partes,
         )
+
+
+def _nesting_worker_bootstrap():
+    try:
+        from modules.win_dll_bootstrap import bootstrap_proceso_nesting
+
+        bootstrap_proceso_nesting()
+    except Exception:
+        pass
 
 
 def _procesar_grupo_parallel_worker(job):

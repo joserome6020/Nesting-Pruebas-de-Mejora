@@ -40,7 +40,14 @@ from interface.qt.layout_helpers import (
     make_scroll_content,
 )
 
-from interface.qt.theme import COLOR_BORDE, COLOR_GRIS_DARK, COLOR_GRIS_MED, COLOR_TEXTO_TITULO, apply_push_button
+from interface.qt.theme import (
+    COLOR_BORDE,
+    COLOR_GRIS_DARK,
+    COLOR_GRIS_MED,
+    COLOR_TEXTO_SUBTITULO,
+    COLOR_TEXTO_TITULO,
+    apply_push_button,
+)
 
 COLOR_TARJETA = "#FFFFFF"
 COLOR_HOVER = "#E2E8F0"
@@ -152,6 +159,12 @@ class TabParts(QWidget, TimerHost):
         self._dxf_audit_token = 0
         self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
         hdr.addStretch()
+        self.lbl_piezas_nestear = QLabel("PIEZAS A NESTEAR: —")
+        self.lbl_piezas_nestear.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        self.lbl_piezas_nestear.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        hdr.addWidget(self.lbl_piezas_nestear)
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
@@ -205,6 +218,11 @@ class TabParts(QWidget, TimerHost):
         tit = QLabel("DETALLE DE PIEZA")
         tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:14px;")
         hdr_row.addWidget(tit)
+        self.lbl_job_activo = QLabel("—")
+        self.lbl_job_activo.setStyleSheet(
+            f"font-weight:600;color:{COLOR_TEXTO_SUBTITULO};font-size:13px;padding-left:6px;"
+        )
+        hdr_row.addWidget(self.lbl_job_activo)
         hdr_row.addStretch()
         lbl_sub = QLabel("VISTA CAD CON COTAS INTERACTIVAS")
         lbl_sub.setStyleSheet(f"color:{COLOR_GRIS_MED};font-size:11px;")
@@ -251,10 +269,23 @@ class TabParts(QWidget, TimerHost):
 
     def _al_mostrar_pestana(self):
         self._sync_parts_header_scrollbar()
+        self._actualizar_lbl_job_activo()
+
+    def _actualizar_lbl_job_activo(self):
+        if not hasattr(self, "lbl_job_activo"):
+            return
+        job = str(getattr(self.app, "job_activo", "") or "").strip()
+        if not job or job.upper() in ("NESTING", "PENDIENTE", "JOB"):
+            self.lbl_job_activo.setText("—")
+            self.lbl_job_activo.setToolTip("")
+            return
+        self.lbl_job_activo.setText(f"· {job}")
+        self.lbl_job_activo.setToolTip(job)
 
     def refrescar_tabla(self, datos, *, thumbnails_async: bool = False):
         multiplicador = getattr(self.app, "multiplicador_tanques", 1)
         self.lbl_tanques.setText("TANQUES DEL PROYECTO:")
+        self._actualizar_lbl_job_activo()
         try:
             self.ent_tanques.setText(f"X{int(multiplicador)}")
         except Exception:
@@ -328,6 +359,7 @@ class TabParts(QWidget, TimerHost):
 
         if thumbnails_async and thumb_queue:
             self._iniciar_thumbnails_async(thumb_queue)
+        self._actualizar_lbl_piezas_nestear(datos)
         self._iniciar_auditoria_dxf_async(datos)
         QTimer.singleShot(0, self._sync_parts_header_scrollbar)
 
@@ -389,6 +421,40 @@ class TabParts(QWidget, TimerHost):
     def _estilo_lbl_dxf_conteo(self) -> str:
         return f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:13px;padding:0 8px;"
 
+    def _claves_omitidas_dxf(self) -> set[tuple[str, str]]:
+        claves: set[tuple[str, str]] = set()
+        for item in self._dxf_audit_actual.get("omitidos") or []:
+            pieza = str(item.get("pieza") or "").strip()
+            ruta = str(item.get("ruta") or "").strip()
+            claves.add((pieza, ruta))
+        return claves
+
+    def _calcular_piezas_nestear(self, datos, *, excluir_omitidos: bool = False) -> int:
+        omitidas = self._claves_omitidas_dxf() if excluir_omitidos else set()
+        total = 0
+        for item in datos or []:
+            try:
+                pieza, _mat, qty_total, _cal, _st, ruta = item
+                if excluir_omitidos and (
+                    str(pieza or "").strip(),
+                    str(ruta or "").strip(),
+                ) in omitidas:
+                    continue
+                total += max(0, int(str(qty_total).strip()))
+            except Exception:
+                pass
+        return total
+
+    def _actualizar_lbl_piezas_nestear(self, datos=None, *, excluir_omitidos: bool = False):
+        if not hasattr(self, "lbl_piezas_nestear"):
+            return
+        datos = datos if datos is not None else getattr(self.app, "datos_partes_actuales", []) or []
+        if not datos:
+            self.lbl_piezas_nestear.setText("PIEZAS A NESTEAR: —")
+            return
+        total = self._calcular_piezas_nestear(datos, excluir_omitidos=excluir_omitidos)
+        self.lbl_piezas_nestear.setText(f"PIEZAS A NESTEAR: {total}")
+
     def _actualizar_widget_resumen_dxf(self):
         total = int(self._dxf_audit_actual.get("total", 0) or 0)
         ok = int(self._dxf_audit_actual.get("ok", 0) or 0)
@@ -408,6 +474,7 @@ class TabParts(QWidget, TimerHost):
             f"VER OMITIDOS ({n_omit})" if n_omit else "VER OMITIDOS"
         )
         self.btn_dxf_omitidos.setEnabled(n_omit > 0)
+        self._actualizar_lbl_piezas_nestear(excluir_omitidos=True)
 
     def abrir_dialogo_dxf_omitidos(self):
         omitidos = list(self._dxf_audit_actual.get("omitidos") or [])

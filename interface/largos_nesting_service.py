@@ -4,9 +4,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 import config
 from lista_largos_material_requerido import (
     asegurar_tabla_material_requerido_ldg,
@@ -23,6 +20,13 @@ def _db_config() -> dict:
         "port": getattr(config, "NESTING_DB_PORT", "5433"),
         "connect_timeout": int(getattr(config, "NESTING_DB_CONNECT_TIMEOUT", 5)),
     }
+
+
+def _conexion_bd():
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+
+    return psycopg2.connect(**_db_config()), RealDictCursor
 
 
 def _factor_lote(tab) -> int:
@@ -501,8 +505,8 @@ def cargar_plan_largos(orden_id: str, tipo_orden: str) -> dict[str, Any]:
     conexion = None
     cursor = None
     try:
-        conexion = psycopg2.connect(**_db_config())
-        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
         plan_json, _row = _ll_obtener_o_generar_plan(
             cursor, str(orden_id).strip(), str(tipo_orden).strip().upper(), reservar=False
         )
@@ -801,8 +805,8 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
     conexion = None
     cursor = None
     try:
-        conexion = psycopg2.connect(**_db_config())
-        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
 
         for idx, orden_obj in enumerate(resultados_list or []):
             try:
@@ -884,8 +888,8 @@ def cargar_plan_largos_contexto(app, tab) -> tuple[dict[str, Any], dict[str, Any
     conexion = None
     cursor = None
     try:
-        conexion = psycopg2.connect(**_db_config())
-        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
 
         if contexto["modo"] == "orden":
             plan = cargar_plan_largos(contexto["orden_id"], contexto["tipo_orden"])
@@ -952,8 +956,8 @@ def enviar_pedido_largos_filtrado(
     conexion = None
     cursor = None
     try:
-        conexion = psycopg2.connect(**_db_config())
-        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
         ok, msg = reconstruir_pedido_desde_plan(
             cursor,
             str(orden_id).strip(),
@@ -992,8 +996,8 @@ def obtener_filas_demanda_contexto(app, tab) -> list[dict]:
     conexion = None
     cursor = None
     try:
-        conexion = psycopg2.connect(**_db_config())
-        cursor = conexion.cursor(cursor_factory=RealDictCursor)
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
         rows, _origen = _obtener_filas_demanda_lote(app, cursor, job, factor)
         return list(rows or [])
     except Exception:

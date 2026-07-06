@@ -224,26 +224,17 @@ class SistemaNestingPro(QMainWindow):
         QApplication.processEvents()
 
     def cargar_historial(self):
-        if os.path.exists(config.DB_HISTORIAL):
-            try:
-                with open(config.DB_HISTORIAL, "r") as f:
-                    return json.load(f)
-            except Exception:
-                return []
-        return []
+        from modules.historial_jobs import cargar_nombres_jobs
 
-    def guardar_historial(self, job_path):
-        import os
+        return cargar_nombres_jobs()
 
-        ruta = os.path.normcase(os.path.normpath(str(job_path or "")))
-        historial = {os.path.normcase(os.path.normpath(str(p))) for p in self.jobs_procesados}
-        if ruta and ruta not in historial:
-            self.jobs_procesados.append(job_path)
-            try:
-                with open(config.DB_HISTORIAL, "w") as f:
-                    json.dump(self.jobs_procesados, f)
-            except Exception:
-                pass
+    def guardar_historial(self, job_ref=None):
+        from modules.historial_jobs import registrar_job_nesteado
+
+        ref = job_ref if job_ref is not None else getattr(self, "job_activo", None)
+        if not ref:
+            return
+        self.jobs_procesados = registrar_job_nesteado(self.jobs_procesados, ref)
 
     def _intentar_sync_placas_react_herinox_async(self):
         threading.Thread(target=self._worker_sync_herinox, daemon=True).start()

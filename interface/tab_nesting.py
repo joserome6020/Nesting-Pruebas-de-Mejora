@@ -1543,6 +1543,9 @@ class TabNesting(ctk.CTkFrame):
         # Guardamos la lista completa de Work Orders
         self.app.resultados_multilote = resultados_list
 
+        if hasattr(self.app, "guardar_historial"):
+            self.app.guardar_historial()
+
         # NUEVO: construir inputs editables por lote
         self._reconstruir_editables_por_resultado(resultados_list)
 

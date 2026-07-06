@@ -1,6 +1,7 @@
 import re
 
 from modules.herinox_sync import HerinoxPlateSync
+from modules import plate_stock as _plate_stock
 
 
 class PlatesManager:
@@ -87,27 +88,15 @@ class PlatesManager:
 
     @staticmethod
     def normalizar_estado_stock(valor_stock) -> str:
-        """Misma semántica que HerinoxPlateSync._to_disponibilidad (default seguro: NO DISPONIBLE)."""
-        if isinstance(valor_stock, bool):
-            return "DISPONIBLE" if valor_stock else "NO DISPONIBLE"
-        txt = str(valor_stock or "").strip().upper()
-        if txt in {"DISPONIBLE", "1", "TRUE", "SI", "YES"}:
-            return "DISPONIBLE"
-        if txt in {"NO DISPONIBLE", "NO_DISPONIBLE", "0", "FALSE", "NO"}:
-            return "NO DISPONIBLE"
-        if txt in {"NO EXISTENTE", "N/A", "NA"}:
-            return "NO EXISTENTE"
-        return "NO DISPONIBLE"
+        return _plate_stock.normalizar_estado_stock(valor_stock)
 
     @staticmethod
     def stock_de_fila(placa) -> str:
-        if not isinstance(placa, (list, tuple)) or len(placa) <= 8:
-            return "NO DISPONIBLE"
-        return PlatesManager.normalizar_estado_stock(placa[8])
+        return _plate_stock.stock_de_fila(placa)
 
     @staticmethod
     def _stock_permite_nesting(valor_stock) -> bool:
-        return PlatesManager.normalizar_estado_stock(valor_stock) == "DISPONIBLE"
+        return _plate_stock.stock_permite_nesting(valor_stock)
 
     def filtrar_placas_para_nesting(self, placas):
         """Solo placas EMPRESA con stock Herinox = DISPONIBLE."""

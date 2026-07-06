@@ -603,7 +603,6 @@ class TabFiles(QWidget):
         self.app.multiplicador_tanques = payload["multiplicador"]
         self.app.meta_pdf_por_ruta = payload["meta_pdf"]
         self.app.cargar_datos_parts(payload["items"])
-        self.app.guardar_historial(payload.get("ruta_root"))
         self.app.ir_a_tab("PARTS")
 
     def buscar_swos_pendientes(self):
