@@ -66,22 +66,54 @@ def cargar_nombres_jobs(path: str | None = None) -> list[str]:
 def guardar_nombres_jobs(nombres: list[str], path: str | None = None) -> None:
     ruta = path or config.DB_HISTORIAL
     lista = _deduplicar_nombres(nombres)
+    carpeta = os.path.dirname(ruta)
+    if carpeta:
+        os.makedirs(carpeta, exist_ok=True)
+    tmp = f"{ruta}.tmp"
     try:
-        with open(ruta, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(lista, f, ensure_ascii=False, indent=2)
             f.write("\n")
-    except Exception:
-        pass
+        os.replace(tmp, ruta)
+    except Exception as exc:
+        print(f"[HISTORIAL] WARN: no se pudo guardar {ruta}: {exc}")
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
 
 
 def registrar_job_nesteado(nombres_actuales: list[str], job_ref: str) -> list[str]:
     """Agrega un job al historial si aún no está; retorna la lista actualizada."""
     nombre = extraer_nombre_job(job_ref)
     if not nombre:
-        return list(nombres_actuales or [])
-    historial = _deduplicar_nombres(nombres_actuales or [])
+        return cargar_nombres_jobs()
+    # Disco manda: respeta borrados manuales en historial_jobs.json.
+    historial = _deduplicar_nombres(cargar_nombres_jobs())
     if norm_job_name(nombre) in {norm_job_name(n) for n in historial}:
         return historial
     historial.append(nombre)
     guardar_nombres_jobs(historial)
+    return historial
+
+
+def eliminar_jobs_del_historial(
+    jobs_a_quitar: Iterable[str],
+    path: str | None = None,
+) -> list[str]:
+    """Quita jobs del historial para que vuelvan a aparecer en IMPORTAR."""
+    quitar = {
+        norm_job_name(extraer_nombre_job(str(j)))
+        for j in jobs_a_quitar
+        if str(j or "").strip()
+    }
+    if not quitar:
+        return cargar_nombres_jobs(path)
+    historial = [
+        n
+        for n in cargar_nombres_jobs(path)
+        if norm_job_name(n) not in quitar
+    ]
+    guardar_nombres_jobs(historial, path)
     return historial

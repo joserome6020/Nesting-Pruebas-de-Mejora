@@ -17,6 +17,16 @@ if __name__ == "__main__":
         bootstrap_proceso_nesting()
     except Exception:
         pass
+    try:
+        import faulthandler
+        from pathlib import Path
+
+        _crash_log = Path(_ROOT) / "_logs" / "crash.log"
+        _crash_log.parent.mkdir(parents=True, exist_ok=True)
+        _crash_fh = open(_crash_log, "a", encoding="utf-8")
+        faulthandler.enable(file=_crash_fh, all_threads=True)
+    except Exception:
+        pass
     # Log de export DXF y diagnósticos visibles en terminal sin esperar al final del buffer.
     try:
         sys.stdout.reconfigure(line_buffering=True)

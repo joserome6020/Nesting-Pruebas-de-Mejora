@@ -79,6 +79,7 @@ class SistemaNestingPro(QMainWindow):
         self._build_ui()
         QTimer.singleShot(200, self._mostrar_maximizado)
         QTimer.singleShot(300, self._intentar_sync_placas_react_herinox_async)
+        QTimer.singleShot(3500, self._intentar_auto_update_async)
 
     def _init_estado(self):
         self.jobs_procesados = self.cargar_historial()
@@ -236,6 +237,16 @@ class SistemaNestingPro(QMainWindow):
             return
         self.jobs_procesados = registrar_job_nesteado(self.jobs_procesados, ref)
 
+    def recargar_historial_jobs(self):
+        self.jobs_procesados = self.cargar_historial()
+        return list(self.jobs_procesados)
+
+    def eliminar_jobs_del_historial(self, jobs):
+        from modules.historial_jobs import eliminar_jobs_del_historial
+
+        self.jobs_procesados = eliminar_jobs_del_historial(jobs)
+        return list(self.jobs_procesados)
+
     def _intentar_sync_placas_react_herinox_async(self):
         threading.Thread(target=self._worker_sync_herinox, daemon=True).start()
 
@@ -380,6 +391,107 @@ class SistemaNestingPro(QMainWindow):
     def closeEvent(self, event):
         self.cancelar_tarea_actual()
         event.accept()
+
+    def _intentar_auto_update_async(self):
+        threading.Thread(target=self._worker_buscar_actualizacion, daemon=True).start()
+
+    def _worker_buscar_actualizacion(self):
+        try:
+            from modules.app_auto_update import check_for_updates, entry_mode
+
+            mode = entry_mode()
+            print(f"[AUTO-UPDATE] Modo arranque: {mode}")
+            info = check_for_updates()
+        except Exception as exc:
+            print(f"[AUTO-UPDATE] WARN: {exc}")
+            return
+        if not info.has_update:
+            if info.reason_blocked and "Sin acceso" not in info.reason_blocked:
+                print(f"[AUTO-UPDATE] {info.reason_blocked}")
+            return
+        call_on_main(self._mostrar_dialogo_actualizacion, info)
+
+    def _mostrar_dialogo_actualizacion(self, info):
+        from PySide6.QtWidgets import QMessageBox
+
+        if not info.can_apply:
+            QMessageBox.information(
+                self,
+                "Actualización disponible",
+                f"Hay una versión nueva en GitHub ({info.remote_commit}).\n\n"
+                f"{info.remote_summary}\n\n"
+                f"{info.reason_blocked}",
+            )
+            return
+
+        extra = ""
+        if info.needs_bootstrap:
+            extra = (
+                "\n\n(Esta PC aún no tiene el proyecto clonado; "
+                "se descargará automáticamente en la primera actualización.)"
+            )
+
+        resp = QMessageBox.question(
+            self,
+            "Actualización disponible",
+            f"Se encontró una actualización en GitHub.\n\n"
+            f"Local: {info.local_commit}\n"
+            f"Remoto: {info.remote_commit}\n"
+            f"{info.remote_summary}\n\n"
+            "¿Actualizar proyecto, compilar el .exe e instalar ahora?"
+            f"{extra}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+        self.abrir_ventana_carga("Actualizando ARGA Nesting Suite…")
+        threading.Thread(
+            target=self._worker_aplicar_actualizacion,
+            args=(info,),
+            daemon=True,
+        ).start()
+
+    def _worker_aplicar_actualizacion(self, info):
+        from modules.app_auto_update import apply_update
+
+        def _prog(msg, pct):
+            self.actualizar_progreso(str(msg), float(pct))
+
+        result = apply_update(info, progress=_prog, parent_pid=os.getpid())
+        call_on_main(self._finalizar_actualizacion, result)
+
+    def _finalizar_actualizacion(self, result):
+        from PySide6.QtWidgets import QMessageBox
+
+        self.cerrar_ventana_carga()
+        if not result.ok:
+            QMessageBox.critical(self, "Actualización fallida", result.message)
+            return
+
+        if result.quit_app:
+            QMessageBox.information(
+                self,
+                "Actualización en curso",
+                result.message,
+            )
+            QApplication.quit()
+            return
+
+        QMessageBox.information(self, "Actualización correcta", result.message)
+        if result.needs_restart:
+            resp = QMessageBox.question(
+                self,
+                "Reiniciar",
+                "¿Reiniciar la aplicación ahora para usar la versión nueva?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if resp == QMessageBox.StandardButton.Yes:
+                from modules.app_auto_update import launch_restart
+
+                launch_restart(result)
+                QApplication.quit()
 
     def _extractor_numerico(self, valor):
         try:

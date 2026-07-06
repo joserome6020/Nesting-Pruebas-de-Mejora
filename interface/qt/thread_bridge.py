@@ -16,7 +16,10 @@ class MainThreadBridge(QObject):
         try:
             fn(*args)
         except Exception as exc:
+            import traceback
+
             print(f"[UI bridge] Error en callback: {exc}")
+            traceback.print_exc()
 
 
 _bridge: MainThreadBridge | None = None

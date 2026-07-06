@@ -547,9 +547,26 @@ def seed_persistent_sidecars(exe_path: Path):
 
 
 def write_build_manifest(exe_path: Path, cpp_pyd: Path | None) -> Path:
+    git_commit = ""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if out.returncode == 0:
+            git_commit = str(out.stdout or "").strip()
+    except Exception:
+        pass
+
     manifest = {
         "app": "ARGA NESTING SUITE",
         "built_at_utc": datetime.now(timezone.utc).isoformat(),
+        "git_commit": git_commit,
+        "git_branch": "main",
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "exe": str(exe_path.resolve()),

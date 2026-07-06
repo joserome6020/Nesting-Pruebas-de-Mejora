@@ -255,6 +255,8 @@ class TabFiles(ctk.CTkFrame):
 
     def thread_escaneo(self):
         try:
+            if hasattr(self.app, "recargar_historial_jobs"):
+                self.app.recargar_historial_jobs()
             jobs, err = self.escaner.buscar_nuevos_jobs(self.app.jobs_procesados)
             self.after(0, lambda: self.after_escaneo(jobs, err))
         except Exception as e:

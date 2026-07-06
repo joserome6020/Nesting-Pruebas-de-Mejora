@@ -1750,7 +1750,11 @@ class TabNesting(QWidget, TimerHost):
             self._desactivar_edicion_libre_si_cambia_contexto()
             self.visor.limpiar_seleccion_piezas()
             self.on_piece_selected()
-        self.visor.dibujar_hoja_full(hoja, clave)
+        try:
+            self.visor.dibujar_hoja_full(hoja, clave)
+        except Exception as exc:
+            print(f"[NESTING][VISOR][WARN] dibujar_hoja_full: {exc}")
+            raise
         self.frame_ajuste_container.show()
         if not self.ajuste_desplegado:
             self.panel_ajuste_contenido.hide()
@@ -2046,12 +2050,21 @@ class TabNesting(QWidget, TimerHost):
             self.app.after(0, lambda: mostrar_modal_escenarios(self, escenarios_resultados))
 
         except Exception as e:
+            import traceback
+
+            err_detail = traceback.format_exc()
+            print(f"[NESTING][WORKER][ERROR]\n{err_detail}")
+
             def throw_err(err=str(e)):
                 if hasattr(self.app, 'cerrar_ventana_carga'):
                     self.app.cerrar_ventana_carga()
                 self.btn_run_nest.setEnabled(True)
                 self.btn_ver_lotes.setEnabled(True)
-                QMessageBox.critical(self, "Error Interno", err)
+                QMessageBox.critical(
+                    self,
+                    "Error Interno",
+                    f"{err}\n\nRevise la terminal o C:\\NEST_EXPORTS\\nesting_debug_geometry.txt",
+                )
 
             self.app.after(0, throw_err)
 
@@ -2122,9 +2135,6 @@ class TabNesting(QWidget, TimerHost):
 
         self.btn_run_nest.setEnabled(True)
 
-        # Desplegamos el menú de lotes
-        self.actualizar_dropdown_lotes()
-
         # =========================================================
         # FORMATO DE TIEMPO PARA EL POP-UP
         # =========================================================
@@ -2174,6 +2184,29 @@ class TabNesting(QWidget, TimerHost):
             )
         else:
             QMessageBox.information(self, "Cálculo Terminado", mensaje)
+
+        # Dibujar la primera hoja después del diálogo (jobs grandes pueden tumbar Qt aquí).
+        QTimer.singleShot(0, self._poblar_ui_tras_nesting_completado)
+
+    def _poblar_ui_tras_nesting_completado(self):
+        try:
+            self.actualizar_dropdown_lotes()
+        except Exception as exc:
+            import traceback
+
+            print(f"[NESTING][FINALIZAR][WARN] No se pudo cargar la vista: {exc}")
+            traceback.print_exc()
+            try:
+                self.btn_ver_lotes.setEnabled(True)
+            except Exception:
+                pass
+            QMessageBox.warning(
+                self,
+                "Vista parcial",
+                "El cálculo terminó correctamente, pero no se pudo dibujar la primera hoja.\n\n"
+                f"Detalle: {exc}\n\n"
+                "Use el selector de Work Order o elige otra hoja en la lista lateral.",
+            )
 
     def _obtener_tipo_cambio_dof(self):
         """
