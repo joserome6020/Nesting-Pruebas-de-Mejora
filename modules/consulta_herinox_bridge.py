@@ -236,7 +236,12 @@ def normalize_material(raw: str) -> str:
         return "A 36"
     if ("A 36" in m and "GALV" in m) or "GALVAN" in m:
         return "A 36 GALV"
-    if ("SSTL" in m and "304" in m) or "INOX" in m or "INOXIDABLE" in m or "STAINLESS" in m:
+    # Inoxidable: piezas DXF (INOXIDABLE), Herinox (SSTL / SSTL 304) y variantes comunes.
+    if "SSTL" in m:
+        if "316" in m:
+            return "SSTL 316"
+        return "SSTL 304"
+    if "INOX" in m or "INOXIDABLE" in m or "STAINLESS" in m:
         return "SSTL 304"
     if "ALUMIN" in m:
         return "Aluminio"

@@ -1150,6 +1150,17 @@ class MotorNesting:
                 return True
             return abs(n1 - n2) <= (mayor * THICKNESS_TOLERANCE_PCT)
 
+        # Piezas DXF usan "INOXIDABLE"; Herinox cataloga "SSTL 304" (misma familia).
+        try:
+            from modules.consulta_herinox_bridge import normalize_material
+
+            m1 = normalize_material(v1).strip().upper()
+            m2 = normalize_material(v2).strip().upper()
+            if m1 and m2 and m1 == m2:
+                return True
+        except Exception:
+            pass
+
         tiene_numeros = any(char.isdigit() for char in v1) or any(char.isdigit() for char in v2)
         if not tiene_numeros:
             if v1 in v2 or v2 in v1:
