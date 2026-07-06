@@ -1,6 +1,7 @@
 # modules/nest_exporter.py
 import os
 import math
+import time
 import uuid
 from functools import lru_cache
 
@@ -85,6 +86,20 @@ def _placement_origin_mm(p: dict) -> tuple[float, float]:
     )
 
 
+def _sheet_omits_cut_cu(sheet: dict | None, p: dict | None = None) -> bool:
+    """Barras pegadas (sin_gap): DXF láser sin contorno CUT_CU por pieza."""
+    if isinstance(p, dict) and p.get("omit_cut_cu") is not None:
+        return bool(p.get("omit_cut_cu"))
+    if not isinstance(sheet, dict):
+        return False
+    fmt = str(sheet.get("export_3d_format") or "").strip().lower()
+    if fmt in ("dxf", "none", "2d"):
+        return True
+    return (
+        str(sheet.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+    )
+
+
 def _validate_production_entities(
     entities,
     p: dict,
@@ -145,7 +160,7 @@ def _validate_full_sheet(
     ]
     if not prod:
         raise DxfExportValidationError(
-            "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER/CUT_CU)."
+            "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER)."
         )
     for ent in prod:
         typ = ent.dxftype()
@@ -193,6 +208,42 @@ def _msp_count(msp) -> int:
 
 def _fail_export(part_name: str, reason: str) -> None:
     raise DxfExportValidationError(f"{part_name}: {reason}")
+
+
+def _save_dxf_atomic(doc, out_path: str) -> None:
+    """Escribe DXF vía temporal + reemplazo atómico (tolerante a locks breves)."""
+    out_path = os.path.abspath(str(out_path))
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = os.path.join(
+        out_dir,
+        f".__arga_export_{os.getpid()}_{uuid.uuid4().hex[:8]}.dxf",
+    )
+    try:
+        doc.saveas(tmp_path)
+        last_err: OSError | None = None
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, out_path)
+                return
+            except OSError as exc:
+                last_err = exc
+                if exc.errno in (13, 16) or getattr(exc, "winerror", None) in (5, 32):
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                break
+        nombre = os.path.basename(out_path)
+        raise DxfExportValidationError(
+            f"No se pudo guardar {nombre}: {last_err}. "
+            "El archivo está en uso — cierra Inventor, AutoCAD o FreeCAD si lo tienen abierto "
+            "y espera a que OneDrive termine de sincronizar."
+        ) from last_err
+    finally:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 # =========================================================
 # NEST DXF EXPORTER
@@ -1169,7 +1220,7 @@ def _export_cu_largos_from_source(
         if strict:
             _fail_export(label, "marcaje no exportable desde el DXF fuente")
 
-    if not str(label).startswith("CU_CORTE__"):
+    if not str(label).startswith("CU_CORTE__") and not _sheet_omits_cut_cu(None, p):
         _export_cu_full_contour_cut_cu(msp, doc, part_doc, m, p, outer)
 
 
@@ -1288,7 +1339,7 @@ def _add_lwpolyline(msp, points, layer, closed=True):
 
 
 def _export_placed_geometry(
-    msp, p, *, doc=None, draw_holes=True, draw_marks=True
+    msp, p, *, doc=None, draw_holes=True, draw_marks=True, sheet=None
 ) -> bool:
     """
     Exporta contorno/marcas en coordenadas de placa (mm), 1:1 con el visor de nesting.
@@ -1305,11 +1356,16 @@ def _export_placed_geometry(
         if outer_t and not p.get("cu_largos_holes_only"):
             if p.get("cu_largos_piece"):
                 _export_cu_contour_cuts_from_ring(msp, outer_t, p)
-                if not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__"):
+                if (
+                    not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__")
+                    and not _sheet_omits_cut_cu(sheet, p)
+                ):
                     if doc is not None:
                         _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer_t)
                     else:
-                        _add_lwpolyline(msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True)
+                        _add_lwpolyline(
+                            msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True
+                        )
             else:
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
@@ -1428,7 +1484,7 @@ def _export_cu_bar_inicio_marker(msp, bar_w: float) -> None:
     msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "BAR_START"})
 
 
-def _setup_layers(doc, *, solo_cobre: bool = False):
+def _setup_layers(doc, *, solo_cobre: bool = False, omit_plate: bool = False):
     layers = doc.layers
     def ensure(name, color_index):
         if name not in layers:
@@ -1439,8 +1495,10 @@ def _setup_layers(doc, *, solo_cobre: bool = False):
     ensure("CUT_OUTER", 1)
     ensure("CUT_INNER", 2)
     ensure("MARK", 4)
-    ensure("CUT_CU", 1)
-    ensure("Plate", 3)
+    if not solo_cobre:
+        ensure("CUT_CU", 1)
+    if not omit_plate:
+        ensure("Plate", 3)
     ensure("BAR_START", 8)
     ensure("ARGA_META", 8)
     if not solo_cobre:
@@ -1496,11 +1554,6 @@ def export_nest_to_dxf(
     )
     out_dir = os.path.dirname(out_path) or "."
     os.makedirs(out_dir, exist_ok=True)
-    if os.path.isfile(out_path):
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
 
     solo_cobre = bool(
         modo_largos_cu
@@ -1512,15 +1565,16 @@ def export_nest_to_dxf(
     sheet_w = float(sheet.get("width", sheet.get("Width", 0)) or 0)
 
     doc = ezdxf.new(dxfversion="R2010")
-    doc.header["$INSUNITS"] = 4  
-    _setup_layers(doc, solo_cobre=solo_cobre)
+    doc.header["$INSUNITS"] = 4
+    omit_plate = solo_cobre and _sheet_omits_cut_cu(sheet)
+    _setup_layers(doc, solo_cobre=solo_cobre, omit_plate=omit_plate)
 
     msp = doc.modelspace()
 
     _sheet_bar_l = sheet_len
     _sheet_bar_w = sheet_w
 
-    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM:
+    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM and not omit_plate:
         L, W = sheet_len, _sheet_bar_w
         sheet_poly = [(0, 0), (L, 0), (L, W), (0, W)]
         _add_lwpolyline(msp, sheet_poly, layer="Plate", closed=True)
@@ -1639,22 +1693,23 @@ def export_nest_to_dxf(
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
-            from modules.cobre_step_audit import (
-                validate_cut_cu_piece_count,
-                write_cu_piece_meta,
-            )
+            if not _sheet_omits_cut_cu(sheet):
+                from modules.cobre_step_audit import (
+                    validate_cut_cu_piece_count,
+                    write_cu_piece_meta,
+                )
 
-            expected_cu = validate_cut_cu_piece_count(
-                msp,
-                placements,
-                sheet_label=str(title or out_path),
-                strict=strict,
-            )
-            write_cu_piece_meta(
-                msp,
-                expected_pieces=expected_cu,
-                sheet_label=os.path.basename(out_path),
-            )
+                expected_cu = validate_cut_cu_piece_count(
+                    msp,
+                    placements,
+                    sheet_label=str(title or out_path),
+                    strict=strict,
+                )
+                write_cu_piece_meta(
+                    msp,
+                    expected_pieces=expected_cu,
+                    sheet_label=os.path.basename(out_path),
+                )
 
         if strict:
             _validate_full_sheet(
@@ -1665,7 +1720,7 @@ def export_nest_to_dxf(
             )
             _validate_dxf_document(doc)
 
-        doc.saveas(out_path)
+        _save_dxf_atomic(doc, out_path)
         log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
     except DxfExportValidationError as exc:
         log_export_error(out_path, exc, canal=canal_tag)

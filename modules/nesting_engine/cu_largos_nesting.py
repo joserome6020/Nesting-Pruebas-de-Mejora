@@ -8,7 +8,9 @@ Nesting 1D para largos de cobre (CU).
   salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
   sin gap o con gap para toda la barra. El empaquetado prioriza barras homogéneas para reducir
   hibridaciones cuando el inventario lo permite.
-- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = contorno completo de pieza
+- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
+- sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
+- con_gap: CUT_CU por pieza + STEP
   (+ marcador vertical inicio barra en export de hoja).
 
 Cortes CUT_OUTER (láser):

@@ -1,4 +1,4 @@
-"""Canal cobre largos — CUT_OUTER láser + CUT_CU contorno completo + inner/marks."""
+"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + MARK + BAR_START (sin Plate/CUT_CU/3D)."""
 from __future__ import annotations
 
 import os
@@ -22,6 +22,7 @@ def export_piece(
     draw_holes: bool = True,
     draw_marks: bool = True,
     strict: bool = True,
+    sheet: dict | None = None,
 ) -> bool:
     """
     Cobre largos: DXF fuente 1:1 si hay ruta; si no, contorno del nest.
@@ -42,7 +43,7 @@ def export_piece(
         )
     else:
         if not _export_placed_geometry(
-            msp, p, doc=doc, draw_holes=draw_holes, draw_marks=draw_marks
+            msp, p, doc=doc, draw_holes=draw_holes, draw_marks=draw_marks, sheet=sheet
         ):
             if strict:
                 _fail_export(label, "cobre: sin contorno colocado exportable en el nest")

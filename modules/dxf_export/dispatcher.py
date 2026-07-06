@@ -70,6 +70,7 @@ def export_piece(
             draw_holes=draw_holes,
             draw_marks=draw_marks,
             strict=strict,
+            sheet=sheet,
         )
         return mode, ok
 

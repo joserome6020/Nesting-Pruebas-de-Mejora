@@ -50,10 +50,13 @@ def _export_format() -> str:
 
 def _export_extension() -> str:
     fmt = _export_format()
-    return ".iges" if fmt in ("iges", "igs") else ".step"
+    return ".igs" if fmt in ("iges", "igs") else ".step"
 
 def _export_label() -> str:
-    return "IGES" if _export_extension() == ".iges" else "STEP"
+    return "IGES" if _export_extension() == ".igs" else "STEP"
+
+def _is_iges_export() -> bool:
+    return _export_format() in ("iges", "igs")
 
 def _cad_base_from_dxf_name(name: str) -> str:
     step_base = name
@@ -222,6 +225,182 @@ def _wires_to_solids(wires, thk_mm: float, scale: float):
         except Exception: pass
     return solids
 
+def _scale_shape_xy(shape, scale: float):
+    if shape is None or shape.isNull() or abs(scale - 1.0) < 1e-9:
+        return shape
+    m = App.Matrix()
+    m.A11 = m.A22 = scale
+    m.A33 = 1.0
+    return shape.transformGeometry(m)
+
+def _scale_wires(wires, scale: float):
+    out = []
+    for w in wires or []:
+        try:
+            out.append(_scale_shape_xy(w, scale))
+        except Exception:
+            pass
+    return out
+
+def _scale_edges(edges, scale: float):
+    out = []
+    for e in edges or []:
+        try:
+            out.append(_scale_shape_xy(e, scale))
+        except Exception:
+            pass
+    return out
+
+def _bbox_of_shapes(shapes):
+    bb = None
+    for sh in shapes or []:
+        if sh is None or sh.isNull():
+            continue
+        try:
+            b = sh.BoundBox
+        except Exception:
+            continue
+        if bb is None:
+            bb = b
+        else:
+            bb.add(b)
+    return bb
+
+def _collect_open_cut_edges_from_obj(obj):
+    """Aristas abiertas de corte (guillotinas, relieves) no incluidas en wires cerrados."""
+    edges = []
+    if not hasattr(obj, "Shape") or obj.Shape.isNull():
+        return edges
+    closed = set()
+    try:
+        for w in obj.Shape.Wires:
+            if w and w.isClosed():
+                for e in w.Edges:
+                    closed.add(e.hashCode())
+    except Exception:
+        pass
+    try:
+        for e in obj.Shape.Edges:
+            if e.hashCode() not in closed:
+                edges.append(e)
+    except Exception:
+        pass
+    return edges
+
+def _normalize_shape_to_origin(shape):
+    bb = shape.BoundBox
+    shape.translate(App.Vector(-bb.XMin, -bb.YMin, -bb.ZMin))
+    return shape
+
+def _cyptube_rotate_length_to_z(shape, pivot):
+    shape.rotate(pivot, App.Vector(0, 1, 0), 90)
+    return shape
+
+def _build_cyptube_flatbar_iges(
+    doc,
+    outer_wires,
+    inner_wires,
+    plate_wires,
+    cut_open_edges,
+    thk_mm: float,
+    scale: float,
+    off_x: float,
+    off_y: float,
+    off_z: float,
+    material_kind: str,
+):
+    """IGES CypTube: sólido + largo en +Z + contornos láser."""
+    ow = _scale_wires(outer_wires, scale)
+    iw = _scale_wires(inner_wires, scale)
+    pw = _scale_wires(plate_wires, scale)
+    oe = _scale_edges(cut_open_edges, scale)
+
+    ref = list(pw or ow or iw)
+    if not ref and not oe:
+        return []
+
+    bb = _bbox_of_shapes(ref + oe)
+    if bb is None or bb.XLength < 0.5 or bb.YLength < 0.5:
+        print("[WARN] IGES CypTube: bbox inválido, sin stock.")
+        return []
+
+    shift = App.Vector(-bb.XMin + float(off_x), -bb.YMin + float(off_y), float(off_z))
+    pivot = App.Vector(shift.x, shift.y, shift.z)
+    bar_len = float(bb.XLength)
+    bar_wid = float(bb.YLength)
+    bar_thk = float(thk_mm)
+
+    print(
+        f" -> IGES CypTube: stock {bar_len:.2f}×{bar_wid:.2f}×{bar_thk:.2f} mm, "
+        f"eje largo→+Z | cortes: {len(ow)} outer, {len(iw)} inner, {len(oe)} abiertos"
+    )
+
+    stock = Part.makeBox(bar_len, bar_wid, bar_thk)
+    stock.translate(shift)
+    result = stock
+
+    hole_tools = []
+    for iw in iw:
+        try:
+            iw2 = iw.copy()
+            iw2.translate(shift)
+            tool = Part.Face(iw2).extrude(App.Vector(0, 0, bar_thk + 0.4))
+            tool.translate(App.Vector(0, 0, -0.2))
+            hole_tools.append(tool)
+        except Exception:
+            pass
+    if hole_tools:
+        try:
+            result = result.cut(Part.makeCompound(hole_tools))
+        except Exception:
+            pass
+
+    _cyptube_rotate_length_to_z(result, pivot)
+
+    cut_parts = []
+    top = shift + App.Vector(0, 0, bar_thk)
+    for w in list(ow) + list(iw):
+        try:
+            w2 = w.copy()
+            w2.translate(top)
+            _cyptube_rotate_length_to_z(w2, pivot)
+            cut_parts.append(w2)
+        except Exception:
+            pass
+    for e in oe:
+        try:
+            e2 = e.copy()
+            e2.translate(top)
+            _cyptube_rotate_length_to_z(e2, pivot)
+            cut_parts.append(e2)
+        except Exception:
+            pass
+
+    all_shapes = [result] + cut_parts
+    bb_out = _bbox_of_shapes(all_shapes)
+    if bb_out is not None:
+        delta = App.Vector(-bb_out.XMin, -bb_out.YMin, -bb_out.ZMin)
+        result.translate(delta)
+        for sh in cut_parts:
+            try:
+                sh.translate(delta)
+            except Exception:
+                pass
+
+    export_parts = [result]
+    if cut_parts:
+        export_parts.append(Part.makeCompound(cut_parts))
+
+    export_shape = Part.makeCompound(export_parts) if len(export_parts) > 1 else export_parts[0]
+
+    objects = []
+    feat = doc.addObject("Part::Feature", "CYPTUBE_FLATBAR")
+    feat.Label = "CypTube_Barra"
+    feat.Shape = export_shape
+    _apply_part_appearance(feat.ViewObject, material_kind)
+    objects.append(feat)
+    return objects
+
 def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, off_x: float, off_y: float, off_z: float) -> None:
     name = os.path.splitext(os.path.basename(dxf_path))[0]
     cad_ext = _export_extension()
@@ -242,8 +421,9 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
     importDXF.insert(dxf_path, doc.Name)
     doc.recompute()
 
-    outer_wires, inner_wires, plate_wires, mark_edges = [], [], [], []
+    outer_wires, inner_wires, plate_wires, mark_edges, cut_open_edges = [], [], [], [], []
     has_cut_cu = False
+    cyptube_iges = _is_iges_export()
 
     print(f"\n--- Analizando DXF: {name} ---")
 
@@ -280,76 +460,100 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
             or layer_str == "CUT"
         ):
             outer_wires.extend(_collect_closed_wires_from_obj(obj))
+            if cyptube_iges:
+                cut_open_edges.extend(_collect_open_cut_edges_from_obj(obj))
         else:
             # Salvavidas: si la capa es rara, asumimos que es corte externo para no perderla
             outer_wires.extend(_collect_closed_wires_from_obj(obj))
+            if cyptube_iges:
+                cut_open_edges.extend(_collect_open_cut_edges_from_obj(obj))
 
     print(f" -> Resultados: {len(outer_wires)} OUTER, {len(inner_wires)} INNER, {len(mark_edges)} LÍNEAS DE MARCAJE.")
+    if cyptube_iges:
+        print(f" -> Cortes abiertos (guillotina/relieve): {len(cut_open_edges)}")
 
-    if not outer_wires:
+    if not outer_wires and not cut_open_edges:
         print(f"[WARN] {name}: Sin piezas de corte. Saltando...")
         App.closeDocument(doc.Name)
         return
-
-    # 2. CONVERSIÓN A SÓLIDOS Y BOOLEANOS
-    outer_solids = _wires_to_solids(outer_wires, thk_mm, scale)
-    inner_solids = _wires_to_solids(inner_wires, thk_mm, scale)
-    plate_solids = _wires_to_solids(plate_wires, thk_mm, scale)
-
-    final_parts_solids = []
-    if inner_solids:
-        inner_compound = Part.makeCompound(inner_solids)
-        for osol in outer_solids:
-            try:
-                final_parts_solids.append(osol.cut(inner_compound))
-            except Exception:
-                final_parts_solids.append(osol)
-    else:
-        final_parts_solids = outer_solids
 
     objects_to_export = []
     material_kind = "copper" if has_cut_cu else _material_kind_for_export()
     mark_color = (0.55, 0.55, 0.58, 0.0)  # grabado sutil
 
-    # 3. ENSAMBLAJE (PLACAS Y PIEZAS)
-    if plate_solids:
-        comp_plate = Part.makeCompound(plate_solids)
-        comp_plate.translate(App.Vector(off_x, off_y, off_z))
-        feat_plate = doc.addObject("Part::Feature", "JADE_REFERENCE_PLATE")
-        feat_plate.Label = "Jade_Plate"
-        feat_plate.Shape = comp_plate
-        _apply_part_appearance(feat_plate.ViewObject, material_kind)
-        objects_to_export.append(feat_plate)
+    if cyptube_iges:
+        objects_to_export = _build_cyptube_flatbar_iges(
+            doc,
+            outer_wires,
+            inner_wires,
+            plate_wires,
+            cut_open_edges,
+            thk_mm,
+            scale,
+            off_x,
+            off_y,
+            off_z,
+            material_kind,
+        )
+        if not objects_to_export:
+            print(f"[WARN] {name}: IGES CypTube sin geometría exportable.")
+            App.closeDocument(doc.Name)
+            return
+    else:
+        # 2. CONVERSIÓN A SÓLIDOS Y BOOLEANOS (STEP / visualización 3D)
+        outer_solids = _wires_to_solids(outer_wires, thk_mm, scale)
+        inner_solids = _wires_to_solids(inner_wires, thk_mm, scale)
+        plate_solids = _wires_to_solids(plate_wires, thk_mm, scale)
 
-    if final_parts_solids:
-        comp_parts = Part.makeCompound(final_parts_solids)
-        comp_parts.translate(App.Vector(off_x, off_y, off_z))
-        feat_parts = doc.addObject("Part::Feature", "JADE_NESTED_PARTS")
-        feat_parts.Label = "Jade_Parts"
-        feat_parts.Shape = comp_parts
-        _apply_part_appearance(feat_parts.ViewObject, material_kind)
-        objects_to_export.append(feat_parts)
+        final_parts_solids = []
+        if inner_solids:
+            inner_compound = Part.makeCompound(inner_solids)
+            for osol in outer_solids:
+                try:
+                    final_parts_solids.append(osol.cut(inner_compound))
+                except Exception:
+                    final_parts_solids.append(osol)
+        else:
+            final_parts_solids = outer_solids
 
-    # 4. INYECCIÓN DE MARCAS EN 3D SUPERFICIAL (solo STEP; IGES no soporta wire marks)
-    if mark_edges and cad_ext != ".iges":
-        comp_marks = Part.makeCompound(mark_edges)
-        
-        if abs(scale - 1.0) > 1e-9:
-            m = App.Matrix()
-            m.A11 = m.A22 = scale; m.A33 = 1.0
-            comp_marks = comp_marks.transformGeometry(m)
-            
-        # ELEVAR LÍNEAS A LA SUPERFICIE (thk_mm)
-        comp_marks.translate(App.Vector(off_x, off_y, off_z + thk_mm))
-        
-        feat_marks = doc.addObject("Part::Feature", "YELLOW_MARKS")
-        feat_marks.Label = "Marcas_Grabado"
-        feat_marks.Shape = comp_marks
-        if feat_marks.ViewObject:
-            feat_marks.ViewObject.LineColor = mark_color
-            feat_marks.ViewObject.PointColor = mark_color
-            feat_marks.ViewObject.LineWidth = 3.0 # Más gruesas para el visualizador
-        objects_to_export.append(feat_marks)
+        # 3. ENSAMBLAJE (PLACAS Y PIEZAS)
+        if plate_solids:
+            comp_plate = Part.makeCompound(plate_solids)
+            comp_plate.translate(App.Vector(off_x, off_y, off_z))
+            feat_plate = doc.addObject("Part::Feature", "JADE_REFERENCE_PLATE")
+            feat_plate.Label = "Jade_Plate"
+            feat_plate.Shape = comp_plate
+            _apply_part_appearance(feat_plate.ViewObject, material_kind)
+            objects_to_export.append(feat_plate)
+
+        if final_parts_solids:
+            comp_parts = Part.makeCompound(final_parts_solids)
+            comp_parts.translate(App.Vector(off_x, off_y, off_z))
+            feat_parts = doc.addObject("Part::Feature", "JADE_NESTED_PARTS")
+            feat_parts.Label = "Jade_Parts"
+            feat_parts.Shape = comp_parts
+            _apply_part_appearance(feat_parts.ViewObject, material_kind)
+            objects_to_export.append(feat_parts)
+
+        # 4. INYECCIÓN DE MARCAS EN 3D SUPERFICIAL (solo STEP)
+        if mark_edges:
+            comp_marks = Part.makeCompound(mark_edges)
+
+            if abs(scale - 1.0) > 1e-9:
+                m = App.Matrix()
+                m.A11 = m.A22 = scale; m.A33 = 1.0
+                comp_marks = comp_marks.transformGeometry(m)
+
+            comp_marks.translate(App.Vector(off_x, off_y, off_z + thk_mm))
+
+            feat_marks = doc.addObject("Part::Feature", "YELLOW_MARKS")
+            feat_marks.Label = "Marcas_Grabado"
+            feat_marks.Shape = comp_marks
+            if feat_marks.ViewObject:
+                feat_marks.ViewObject.LineColor = mark_color
+                feat_marks.ViewObject.PointColor = mark_color
+                feat_marks.ViewObject.LineWidth = 3.0
+            objects_to_export.append(feat_marks)
 
     doc.recompute()
     FreeCADGui.updateGui() 
