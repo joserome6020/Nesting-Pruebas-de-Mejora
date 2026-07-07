@@ -46,7 +46,7 @@ def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
 def preguntar_separacion_cobre_renest(
     parent,
     valor_sep: float = 0.375,
-    valor_largo_sin: float = 15.0,
+    valor_largo_sin: float = 10.0,
 ) -> tuple[float, float] | None:
     """
     Opciones de separación CU antes de renestear calibre completo.
@@ -81,7 +81,7 @@ def preguntar_separacion_cobre_renest(
     spin_lim.setRange(0.0, 144.0)
     spin_lim.setDecimals(2)
     spin_lim.setSingleStep(0.5)
-    spin_lim.setValue(max(0.0, float(valor_largo_sin or 15.0)))
+    spin_lim.setValue(max(0.0, float(valor_largo_sin or 10.0)))
     spin_lim.setFixedWidth(100)
     row_lim.addWidget(spin_lim)
     row_lim.addStretch(1)

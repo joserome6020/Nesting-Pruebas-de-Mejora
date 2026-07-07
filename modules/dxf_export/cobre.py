@@ -1,4 +1,4 @@
-"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + MARK + BAR_START (sin Plate/CUT_CU/3D)."""
+"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + BAR_START (sin MARK/Plate/CUT_CU/3D; MARK rompe CyPTube)."""
 from __future__ import annotations
 
 import os

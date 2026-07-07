@@ -38,9 +38,9 @@ TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
-# Piezas con largo DXF (eje X) hasta este umbral van siempre sin separación (renest no aplica).
-LARGO_SIN_SEPARACION_CU_IN = 15.0
-# Si ≥ este % de piezas de una barra son cortas (≤15") o largas (>15"), aplica ese modo a toda la barra.
+# Piezas con largo DXF (eje X) hasta este umbral van sin separación por defecto (el usuario puede renestear con otro valor).
+LARGO_SIN_SEPARACION_CU_IN = 10.0
+# Si ≥ este % de piezas de una barra son cortas (≤umbral) o largas (>umbral), aplica ese modo a toda la barra.
 MAYORIA_BARRA_CU_FRACCION = 0.80
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40

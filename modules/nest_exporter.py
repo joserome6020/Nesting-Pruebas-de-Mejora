@@ -1216,6 +1216,9 @@ def _export_cu_inner_and_marks(
     """Inner/marks cobre largos desde polígonos del nest (mm placa, 1:1 con visor)."""
     added = False
     bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
+    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    if _sheet_is_sin_gap(sheet):
+        draw_marks = False
     if draw_holes:
         for h in p.get("holes") or p.get("inner") or []:
             h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
@@ -1253,6 +1256,10 @@ def _export_cu_largos_from_source(
         _segmentos_corte_laser_pieza,
         _solo_cortes_guillotina_vertical,
     )
+
+    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    if _sheet_is_sin_gap(sheet):
+        draw_marks = False
 
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
@@ -1499,6 +1506,9 @@ def _export_placed_geometry(
                 else:
                     _export_ring_exact(msp, h_t, hole_layer, closed=True)
 
+        # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+        if draw_marks and _sheet_is_sin_gap(sheet):
+            draw_marks = False
         if draw_marks:
             part_name = str(p.get("part_name") or p.get("name") or "")
             marks_layer = str(
