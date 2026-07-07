@@ -1097,17 +1097,45 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
 
     # SELECCIÓN Y CREACIÓN DEL PLATE (Cortador de Galletas)
     plate_wire = _pick_biggest_wire(plate_w)
-    if not plate_wire: plate_wire = _pick_biggest_wire(outer_w)
-    if not plate_wire:
+    plate_solid = None
+    try:
+        if plate_wire:
+            # Placa explícita: cortador de galletas clásico.
+            plate_solid = _solo_solidos(
+                Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
+            )
+        elif len(outer_w) > 1:
+            # Sin capa Plate (p.ej. CAMA LASER cobre): la "placa" es el COMPOUND
+            # de TODAS las piezas, no solo la mayor. Con solo la mayor, el
+            # intersect posterior perdía las demás piezas y se rechazaba el STEP.
+            piece_solids = []
+            for ow in outer_w:
+                try:
+                    piece_solids.append(
+                        _solo_solidos(Part.Face(ow).extrude(App.Vector(0, 0, thk_mm)))
+                    )
+                except Exception:
+                    pass
+            if piece_solids:
+                plate_solid = (
+                    piece_solids[0]
+                    if len(piece_solids) == 1
+                    else Part.makeCompound(piece_solids)
+                )
+            plate_wire = None  # sin marco de placa: no se descarta ningún contorno
+        else:
+            # Una sola pieza sin Plate: usar su propio contorno como placa.
+            plate_wire = _pick_biggest_wire(outer_w)
+            if plate_wire:
+                plate_solid = _solo_solidos(
+                    Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
+                )
+    except Exception as e:
+        print(f"[{name}] ERROR construyendo PLATE: {e}")
         App.closeDocument(doc.Name)
         return
 
-    try:
-        # Construye la placa y la limpia a sólido puro
-        plate_solid = Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
-        plate_solid = _solo_solidos(plate_solid)
-    except Exception as e:
-        print(f"[{name}] ERROR construyendo PLATE: {e}")
+    if plate_solid is None or getattr(plate_solid, "isNull", lambda: True)():
         App.closeDocument(doc.Name)
         return
 
