@@ -152,6 +152,7 @@ def _validate_full_sheet(
     sheet_len: float,
     sheet_w: float,
     solo_cobre: bool,
+    skip_bounds: bool = False,
 ) -> None:
     prod = [
         e
@@ -177,7 +178,11 @@ def _validate_full_sheet(
                 f"Geometría de corte no nativa en capa {ent.dxf.layer} ({typ})."
             )
     bbox = _entities_bbox(prod)
-    if bbox and not _inside_sheet_bounds(bbox, sheet_len, sheet_w):
+    if (
+        not skip_bounds
+        and bbox
+        and not _inside_sheet_bounds(bbox, sheet_len, sheet_w)
+    ):
         raise DxfExportValidationError(
             f"Geometría de corte fuera de la "
             f"{'barra' if solo_cobre else 'placa'} "
@@ -1478,14 +1483,14 @@ def _is_cu_corte_fin_bar(p: dict, placements: list) -> bool:
 
 
 def _export_cu_bar_inicio_marker(msp, bar_w: float) -> None:
-    """Marcador visual de inicio de barra (no participa en sólidos STEP)."""
+    """Marcador visual de inicio de barra horizontal (no participa en sólidos STEP)."""
     if bar_w <= TOL_GEOM_MM:
         return
     msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "BAR_START"})
 
 
-def _export_cu_bar_inicio_marker_sin_gap(msp, bar_width_mm: float) -> None:
-    """Marcador al inicio de barra vertical (sin_gap, tras rotar 90°)."""
+def _export_cu_bar_inicio_marker_vertical(msp, bar_width_mm: float) -> None:
+    """Inicio de barra tras rotar sin_gap: ancho real de la barra en X, en y=0."""
     if bar_width_mm <= TOL_GEOM_MM:
         return
     msp.add_line(
@@ -1544,36 +1549,27 @@ def _apply_sin_gap_vertical_orientation(
     bar_w: float,
 ) -> tuple[float, float]:
     """
-    Rota 90° CCW el DXF sin_gap para dejar soleras en vertical (eje Y).
-    Devuelve (nuevo_largo_X, nuevo_ancho_Y) de la barra en mm (dimensiones intercambiadas).
+    Rota 90° CCW las piezas sin_gap (sin BAR_START) para vertical (eje Y).
+    y=0 queda como cara de inicio de barra; BAR_START se dibuja después.
     """
     if bar_len <= TOL_GEOM_MM or bar_w <= TOL_GEOM_MM:
         return float(bar_len), float(bar_w)
 
-    from ezdxf import bbox as ezb
-
     msp = doc.modelspace()
     rot = Matrix44.z_rotate(math.pi / 2.0)
-    for ent in list(msp):
+    shift = Matrix44.translate(float(bar_w), 0.0, 0.0)
+    m = shift @ rot
+
+    targets = [
+        e
+        for e in list(msp)
+        if str(getattr(e.dxf, "layer", "") or "").strip().upper() != "BAR_START"
+    ]
+    for ent in targets:
         try:
-            ent.transform(rot)
+            ent.transform(m)
         except Exception:
             pass
-
-    try:
-        ext = ezb.extents(msp)
-        dx = -float(ext.extmin.x)
-        dy = -float(ext.extmin.y)
-    except Exception:
-        return float(bar_w), float(bar_len)
-
-    if abs(dx) > 1e-9 or abs(dy) > 1e-9:
-        shift = Matrix44.translate(dx, dy, 0.0)
-        for ent in list(msp):
-            try:
-                ent.transform(shift)
-            except Exception:
-                pass
 
     return float(bar_w), float(bar_len)
 
@@ -1813,8 +1809,7 @@ def export_nest_to_dxf(
             _sheet_bar_l = sheet_len
             _sheet_bar_w = sheet_w
             if solo_cobre:
-                _purge_entities_on_layers(msp, {"BAR_START"})
-                _export_cu_bar_inicio_marker_sin_gap(msp, sheet_len)
+                _export_cu_bar_inicio_marker_vertical(msp, sheet_len)
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
@@ -1842,6 +1837,7 @@ def export_nest_to_dxf(
                 sheet_len=sheet_len,
                 sheet_w=sheet_w,
                 solo_cobre=solo_cobre,
+                skip_bounds=_sheet_is_sin_gap(sheet) and solo_cobre,
             )
             _validate_dxf_document(doc)
 

@@ -84,6 +84,19 @@ def test_sin_gap_vertical():
         assert "PLATE_TEXT" not in layers, layers
         w, h = _extents(out)
         assert h > w, f"sin_gap debe quedar vertical: {w:.1f}x{h:.1f}"
+        doc = ezdxf.readfile(out)
+        bar_lines = [
+            e
+            for e in doc.modelspace()
+            if str(e.dxf.layer).upper() == "BAR_START" and e.dxftype() == "LINE"
+        ]
+        assert len(bar_lines) == 1, "debe haber una sola linea BAR_START"
+        ln = bar_lines[0]
+        y0 = float(ln.dxf.start.y)
+        y1 = float(ln.dxf.end.y)
+        xspan = abs(float(ln.dxf.end.x) - float(ln.dxf.start.x))
+        assert abs(y0) < 0.05 and abs(y1) < 0.05, f"BAR_START debe estar en y=0: {y0},{y1}"
+        assert abs(xspan - 40.0) < 0.5, f"BAR_START debe abarcar ancho de barra: {xspan}"
     print("OK sin_gap vertical sin Plate")
 
 
