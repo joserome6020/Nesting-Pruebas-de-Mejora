@@ -1917,8 +1917,10 @@ class TabNesting(QWidget, TimerHost):
         self.cantidad_tanques = str(T)
         self.lbl_cantidad.setText(f"CANTIDAD: {self.cantidad_tanques}")
 
+        # Cobre 100%: se nestea aparte (sin análisis de lotes), aunque T>=4.
+        analiza_lotes = T >= 4 and not self._wo_solo_cobre()
         self.app.abrir_ventana_carga(
-            "Optimizando Lotes..." if T >= 4 else "Ejecutando Nesting"
+            "Optimizando Lotes..." if analiza_lotes else "Ejecutando Nesting"
         )
 
         try:
@@ -1963,7 +1965,10 @@ class TabNesting(QWidget, TimerHost):
 
             datos_placas = self.app.plates_manager.obtener_datos_placas()
 
-            if T < 4:
+            # Cobre 100%: barras largas deterministas -> nesteo directo, sin
+            # análisis de lotes MES (los escenarios optimizan costo de placa,
+            # que no aplica al cobre). La cantidad se coloca tal cual.
+            if T < 4 or self._wo_solo_cobre():
                 datos_base = self._clonar_datos_partes_edicion(
                     getattr(self.app, "datos_partes_actuales", [])
                 )
@@ -2643,6 +2648,30 @@ class TabNesting(QWidget, TimerHost):
             if mat in ("CU", "COBRE", "COPPER") or "COBRE" in mat or "COPPER" in mat:
                 return True
         return False
+
+    def _wo_solo_cobre(self) -> bool:
+        """True si TODAS las piezas importadas son cobre (work order 100% CU).
+
+        El cobre se nestea aparte (barras largas deterministas), así que no debe
+        entrar al análisis de lotes MES (escenarios de placa) aunque T>=4: se
+        nestea directo con la cantidad tal cual.
+        """
+        datos = getattr(self.app, "datos_partes_actuales", []) or []
+        if not datos:
+            return False
+        for item in datos:
+            try:
+                mat = str(item[1] or "").strip().upper()
+            except (IndexError, TypeError):
+                return False
+            es_cu = (
+                mat in ("CU", "COBRE", "COPPER")
+                or "COBRE" in mat
+                or "COPPER" in mat
+            )
+            if not es_cu:
+                return False
+        return True
 
     def _inventario_desde_resultado(self, resultado) -> dict:
         inventario = {}
