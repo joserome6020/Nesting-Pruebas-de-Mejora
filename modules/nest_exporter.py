@@ -1484,7 +1484,107 @@ def _export_cu_bar_inicio_marker(msp, bar_w: float) -> None:
     msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "BAR_START"})
 
 
-def _setup_layers(doc, *, solo_cobre: bool = False, omit_plate: bool = False):
+def _export_cu_bar_inicio_marker_sin_gap(msp, bar_width_mm: float) -> None:
+    """Marcador al inicio de barra vertical (sin_gap, tras rotar 90°)."""
+    if bar_width_mm <= TOL_GEOM_MM:
+        return
+    msp.add_line(
+        (0.0, 0.0),
+        (float(bar_width_mm), 0.0),
+        dxfattribs={"layer": "BAR_START"},
+    )
+
+
+def _canal_es_cama_laser(canal: str | None) -> bool:
+    """DXF destinado a carpeta CAMA LASER (no Robot Láser / plasma)."""
+    u = str(canal or "").strip().upper()
+    return bool(u) and "CAMA LASER" in u and "ROBOT" not in u
+
+
+def _sheet_is_sin_gap(sheet: dict | None) -> bool:
+    if not isinstance(sheet, dict):
+        return False
+    return (
+        str(sheet.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+    )
+
+
+def _purge_entities_on_layers(msp, layer_names: set[str]) -> None:
+    targets = {str(n).strip().upper() for n in layer_names if str(n or "").strip()}
+    if not targets:
+        return
+    for ent in list(msp):
+        layer_u = str(getattr(ent.dxf, "layer", "") or "").strip().upper()
+        if layer_u in targets:
+            try:
+                msp.delete_entity(ent)
+            except Exception:
+                pass
+
+
+def _purge_unused_layers(doc, keep: set[str] | None = None) -> None:
+    msp = doc.modelspace()
+    used = {str(e.dxf.layer) for e in msp if getattr(e.dxf, "layer", None)}
+    if keep:
+        used |= set(keep)
+    for layer in list(doc.layers):
+        name = str(layer.dxf.name)
+        if name in used or name == "0":
+            continue
+        try:
+            doc.layers.remove(name)
+        except Exception:
+            pass
+
+
+def _apply_sin_gap_vertical_orientation(
+    doc,
+    *,
+    bar_len: float,
+    bar_w: float,
+) -> tuple[float, float]:
+    """
+    Rota 90° CCW el DXF sin_gap para dejar soleras en vertical (eje Y).
+    Devuelve (nuevo_largo_X, nuevo_ancho_Y) de la barra en mm (dimensiones intercambiadas).
+    """
+    if bar_len <= TOL_GEOM_MM or bar_w <= TOL_GEOM_MM:
+        return float(bar_len), float(bar_w)
+
+    from ezdxf import bbox as ezb
+
+    msp = doc.modelspace()
+    rot = Matrix44.z_rotate(math.pi / 2.0)
+    for ent in list(msp):
+        try:
+            ent.transform(rot)
+        except Exception:
+            pass
+
+    try:
+        ext = ezb.extents(msp)
+        dx = -float(ext.extmin.x)
+        dy = -float(ext.extmin.y)
+    except Exception:
+        return float(bar_w), float(bar_len)
+
+    if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+        shift = Matrix44.translate(dx, dy, 0.0)
+        for ent in list(msp):
+            try:
+                ent.transform(shift)
+            except Exception:
+                pass
+
+    return float(bar_w), float(bar_len)
+
+
+def _setup_layers(
+    doc,
+    *,
+    solo_cobre: bool = False,
+    omit_plate: bool = False,
+    omit_plate_text: bool = False,
+):
     layers = doc.layers
     def ensure(name, color_index):
         if name not in layers:
@@ -1501,8 +1601,10 @@ def _setup_layers(doc, *, solo_cobre: bool = False, omit_plate: bool = False):
         ensure("Plate", 3)
     ensure("BAR_START", 8)
     ensure("ARGA_META", 8)
-    if not solo_cobre:
+    if not solo_cobre and not omit_plate_text:
         ensure("Plate_Text", 7)
+        ensure("RTZ_LABEL", 4)
+    elif not solo_cobre:
         ensure("RTZ_LABEL", 4)
 
 
@@ -1566,23 +1668,30 @@ def export_nest_to_dxf(
 
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"] = 4
-    omit_plate = solo_cobre and _sheet_omits_cut_cu(sheet)
-    _setup_layers(doc, solo_cobre=solo_cobre, omit_plate=omit_plate)
+    # Cama láser: sin contorno Plate ni título (máquina cobre + láser compartida).
+    omit_plate_frame = _canal_es_cama_laser(canal_tag)
+    _setup_layers(
+        doc,
+        solo_cobre=solo_cobre,
+        omit_plate=omit_plate_frame,
+        omit_plate_text=omit_plate_frame,
+    )
 
     msp = doc.modelspace()
 
     _sheet_bar_l = sheet_len
     _sheet_bar_w = sheet_w
 
-    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM and not omit_plate:
+    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM and not omit_plate_frame:
         L, W = sheet_len, _sheet_bar_w
         sheet_poly = [(0, 0), (L, 0), (L, W), (0, W)]
         _add_lwpolyline(msp, sheet_poly, layer="Plate", closed=True)
 
-    if not solo_cobre:
+    if not solo_cobre and not omit_plate_frame:
         material = sheet.get("material", sheet.get("Material", ""))
         thickness = sheet.get("thickness", sheet.get("Thickness", ""))
         arga_code = sheet.get("arga_code", sheet.get("Arga Code", ""))
+        L, W = sheet_len, _sheet_bar_w
 
         header = f"{title} | {arga_code} | {material} | THK:{thickness} | {L:.1f}x{W:.1f} mm"
         msp.add_text(
@@ -1590,7 +1699,7 @@ def export_nest_to_dxf(
             dxfattribs={"layer": "Plate_Text", "height": label_height}
         ).set_placement((0, W + margin_text))
 
-    if solo_cobre and _sheet_bar_w > TOL_GEOM_MM:
+    if solo_cobre and _sheet_bar_w > TOL_GEOM_MM and not _sheet_is_sin_gap(sheet):
         _export_cu_bar_inicio_marker(msp, _sheet_bar_w)
 
     cache_blocks = {} 
@@ -1690,6 +1799,22 @@ def export_nest_to_dxf(
             raise DxfExportValidationError(
                 "La hoja no exportó ninguna pieza con geometría de corte válida."
             )
+
+        if omit_plate_frame:
+            _purge_entities_on_layers(msp, {"Plate", "Plate_Text"})
+            _purge_unused_layers(doc)
+
+        if _sheet_is_sin_gap(sheet):
+            sheet_len, sheet_w = _apply_sin_gap_vertical_orientation(
+                doc,
+                bar_len=sheet_len,
+                bar_w=sheet_w,
+            )
+            _sheet_bar_l = sheet_len
+            _sheet_bar_w = sheet_w
+            if solo_cobre:
+                _purge_entities_on_layers(msp, {"BAR_START"})
+                _export_cu_bar_inicio_marker_sin_gap(msp, sheet_len)
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
