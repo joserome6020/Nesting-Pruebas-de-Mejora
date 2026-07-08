@@ -167,10 +167,13 @@ def _export_format() -> str:
 
 def _export_extension() -> str:
     fmt = _export_format()
-    return ".iges" if fmt in ("iges", "igs") else ".step"
+    return ".igs" if fmt in ("iges", "igs") else ".step"
 
 def _export_label() -> str:
-    return "IGES" if _export_extension() == ".iges" else "STEP"
+    return "IGES" if _export_extension() == ".igs" else "STEP"
+
+def _is_iges_export() -> bool:
+    return _export_format() in ("iges", "igs")
 
 def _cad_base_from_dxf_name(name: str) -> str:
     step_base = name
@@ -769,6 +772,206 @@ def _solo_solidos(shape):
         return sols[0]
 
 
+def _bbox_of_shapes(shapes):
+    bb = None
+    for sh in shapes or []:
+        if sh is None or getattr(sh, "isNull", lambda: True)():
+            continue
+        try:
+            b = sh.BoundBox
+        except Exception:
+            continue
+        if bb is None:
+            bb = b
+        else:
+            bb.add(b)
+    return bb
+
+
+def _cyptube_rotate_length_to_z(shape, pivot):
+    """Nest (largo en X) → CypTube (largo en +Z, sección en XY)."""
+    out = shape.rotate(pivot, App.Vector(0, 1, 0), 90)
+    return out if out is not None else shape
+
+
+def _normalize_shape_to_origin(shape):
+    bb = shape.BoundBox
+    delta = App.Vector(-bb.XMin, -bb.YMin, -bb.ZMin)
+    out = shape.translate(delta)
+    return out if out is not None else shape
+
+
+def _edges_from_wires(wires):
+    edges = []
+    for w in wires or []:
+        try:
+            for e in w.Edges:
+                edges.append(e)
+        except Exception:
+            pass
+    return edges
+
+
+def _imprint_edges_on_bar(solid, edges, shift, top_z, rib_h_mm, *, chunk=100):
+    """Graba aristas en la cara superior del sólido (contornos / marcas)."""
+    if not edges or solid is None or solid.isNull():
+        return solid
+    shifted = []
+    for e in edges:
+        try:
+            ec = e.copy()
+            ec.translate(shift)
+            shifted.append(ec)
+        except Exception:
+            pass
+    if not shifted:
+        return solid
+    vector_marcas_z = App.Vector(0, 0, float(top_z))
+    vec_up = App.Vector(0, 0, float(rib_h_mm))
+    ribbons = _build_mark_ribbons(shifted, vector_marcas_z, vec_up, "IMPRINT")
+    if not ribbons:
+        return solid
+    try:
+        out = _apply_imprint_ribbons_on_solid(solid, ribbons, chunk=chunk)
+        return _solo_solidos(out)
+    except Exception:
+        return solid
+
+
+def _build_cyptube_flatbar_iges(
+    doc,
+    name,
+    outer_w,
+    inner_w,
+    plate_w,
+    laser_edges,
+    mark_edges,
+    thk_mm,
+    off_x,
+    off_y,
+    off_z,
+    material_kind,
+):
+    """
+    IGES para CypTube (barra plana) — un solo sólido extruido:
+    - Largo en +Z; sección ancho×espesor en XY.
+    - Agujeros interiores: corte booleano.
+    - Contornos láser y marcas: imprint en cara superior (no wires sueltos).
+    CypTube/Inventor fallan si el IGES es compound de sólido + curvas flotantes.
+    """
+    ref = list(plate_w or outer_w or inner_w)
+    if not ref and not laser_edges:
+        print(f"[{name}] IGES CypTube: sin geometría de referencia.")
+        return []
+
+    bb = _bbox_of_shapes(ref + list(laser_edges or []))
+    if bb is None or bb.XLength < 0.5 or bb.YLength < 0.5:
+        print(f"[{name}] IGES CypTube: bbox inválido.")
+        return []
+
+    shift = App.Vector(
+        -bb.XMin + float(off_x),
+        -bb.YMin + float(off_y),
+        float(off_z),
+    )
+    pivot = App.Vector(shift.x, shift.y, shift.z)
+    bar_len = float(bb.XLength)
+    bar_wid = float(bb.YLength)
+    bar_thk = float(thk_mm)
+    mark_z_offset = _env_float("FREECAD_MARK_Z_OFFSET", -0.5)
+    mark_top_z = shift.z + bar_thk + mark_z_offset
+    cut_rib_h = _env_float("FREECAD_CYPTUBE_CUT_RIB_H", 0.25)
+    mark_rib_h = _env_float("FREECAD_MARK_RIB_H", 1.0)
+
+    n_marks = len(mark_edges or [])
+    cut_edges = _edges_from_wires(list(outer_w) + list(inner_w)) + list(laser_edges or [])
+    print(
+        f"[{name}] IGES CypTube: stock {bar_len:.2f}×{bar_wid:.2f}×{bar_thk:.2f} mm, "
+        f"eje largo→+Z | sólido único | {len(cut_edges)} aristas corte, {n_marks} marcas"
+    )
+
+    stock = Part.makeBox(bar_len, bar_wid, bar_thk)
+    stock.translate(shift)
+    result = stock
+
+    hole_tools = []
+    for iw in inner_w or []:
+        try:
+            iw2 = iw.copy()
+            iw2.translate(shift)
+            tool = Part.Face(iw2).extrude(App.Vector(0, 0, bar_thk + 0.4))
+            tool.translate(App.Vector(0, 0, -0.2))
+            hole_tools.append(tool)
+        except Exception:
+            pass
+    if hole_tools:
+        try:
+            result = result.cut(Part.makeCompound(hole_tools))
+            result = _solo_solidos(result)
+        except Exception as exc:
+            print(f"[{name}] WARN IGES CypTube: perforado inner omitido ({exc})")
+
+    if cut_edges:
+        print(f"[{name}] IGES CypTube: imprint {len(cut_edges)} aristas de corte...")
+        result = _imprint_edges_on_bar(
+            result, cut_edges, shift, mark_top_z, cut_rib_h, chunk=150
+        )
+
+    if mark_edges:
+        if n_marks <= PER_PIECE_MARK_THRESHOLD:
+            print(f"[{name}] IGES CypTube: imprint {n_marks} marcas...")
+            result = _imprint_edges_on_bar(
+                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=100
+            )
+        else:
+            print(
+                f"[{name}] IGES CypTube: {n_marks} marcas → imprint por bloques "
+                f"(umbral {PER_PIECE_MARK_THRESHOLD})"
+            )
+            result = _imprint_edges_on_bar(
+                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=80
+            )
+
+    result = _cyptube_rotate_length_to_z(result, pivot)
+    bb_rot = result.BoundBox
+    print(
+        f"[{name}] IGES CypTube bbox post-rot: "
+        f"X={bb_rot.XLength:.2f} Y={bb_rot.YLength:.2f} Z={bb_rot.ZLength:.2f} mm"
+    )
+    result = _normalize_shape_to_origin(result)
+    try:
+        result = result.removeSplitter()
+    except Exception:
+        pass
+    result = _solo_solidos(result)
+
+    feat = doc.addObject("Part::Feature", "CYPTUBE_FLATBAR")
+    feat.Label = "CypTube_Barra"
+    feat.Shape = result
+    _apply_part_appearance(feat.ViewObject, material_kind)
+
+    return [feat]
+
+
+def _collect_cut_outer_edges(doc):
+    """Aristas de capa CUT_OUTER (guillotinas y cortes láser abiertos en cobre)."""
+    edges = []
+    for obj in getattr(doc, "Objects", []):
+        lbl = _layer_label_for_obj(obj)
+        targets = []
+        if hasattr(obj, "Group") and obj.Group:
+            for child in obj.Group:
+                if hasattr(child, "Shape") and not child.Shape.isNull():
+                    targets.append(child)
+        elif hasattr(obj, "Shape") and not obj.Shape.isNull():
+            targets.append(obj)
+        for target in targets:
+            tlbl = _layer_label_for_obj(target)
+            if _label_matches_any(tlbl, {"CUT_OUTER"}) or _label_matches_any(lbl, {"CUT_OUTER"}):
+                edges.extend(_collect_edges(target))
+    return edges
+
+
 def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_y, off_z):
     name = os.path.splitext(os.path.basename(dxf_path))[0]
 
@@ -848,19 +1051,91 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         plate_w = [w.transformGeometry(m) for w in plate_w]
         mark_e = [e.transformGeometry(m) for e in mark_e]
 
-    # SELECCIÓN Y CREACIÓN DEL PLATE (Cortador de Galletas)
-    plate_wire = _pick_biggest_wire(plate_w)
-    if not plate_wire: plate_wire = _pick_biggest_wire(outer_w)
-    if not plate_wire:
+    if _is_iges_export():
+        laser_e = _collect_cut_outer_edges(doc)
+        if abs(scale - 1.0) > 1e-9:
+            laser_e = [e.transformGeometry(m) for e in laser_e]
+
+        material_kind = _material_kind_for_export(perfil)
+        cyptube_objs = _build_cyptube_flatbar_iges(
+            doc,
+            name,
+            outer_w,
+            inner_w,
+            plate_w,
+            laser_e,
+            mark_e,
+            thk_mm,
+            off_x,
+            off_y,
+            off_z,
+            material_kind,
+        )
+        if not cyptube_objs:
+            print(f"[{name}] ERROR: IGES CypTube sin objetos exportables.")
+            App.closeDocument(doc.Name)
+            return
+
+        doc.recompute()
+        FreeCADGui.updateGui()
+        print(f"[{name}] {cad_label} destino final: {out_step}")
+        try:
+            test_file = out_step + ".write_test"
+            with open(test_file, "wb") as tf:
+                tf.write(b"ok")
+            os.remove(test_file)
+            print(f"[{name}] WRITE TEST OK en carpeta {cad_label}")
+        except Exception as e:
+            print(f"[{name}] WRITE TEST FAIL en carpeta {cad_label}: {e}")
+
+        _configure_export_units()
+        ImportGui.export(cyptube_objs, out_step)
+        print(f"[{name}] {cad_label} CYPTUBE FLATBAR EXPORTADO -> {out_step}")
+        print(f"==========================================================\n")
         App.closeDocument(doc.Name)
         return
 
+    # SELECCIÓN Y CREACIÓN DEL PLATE (Cortador de Galletas)
+    plate_wire = _pick_biggest_wire(plate_w)
+    plate_solid = None
     try:
-        # Construye la placa y la limpia a sólido puro
-        plate_solid = Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
-        plate_solid = _solo_solidos(plate_solid)
+        if plate_wire:
+            # Placa explícita: cortador de galletas clásico.
+            plate_solid = _solo_solidos(
+                Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
+            )
+        elif len(outer_w) > 1:
+            # Sin capa Plate (p.ej. CAMA LASER cobre): la "placa" es el COMPOUND
+            # de TODAS las piezas, no solo la mayor. Con solo la mayor, el
+            # intersect posterior perdía las demás piezas y se rechazaba el STEP.
+            piece_solids = []
+            for ow in outer_w:
+                try:
+                    piece_solids.append(
+                        _solo_solidos(Part.Face(ow).extrude(App.Vector(0, 0, thk_mm)))
+                    )
+                except Exception:
+                    pass
+            if piece_solids:
+                plate_solid = (
+                    piece_solids[0]
+                    if len(piece_solids) == 1
+                    else Part.makeCompound(piece_solids)
+                )
+            plate_wire = None  # sin marco de placa: no se descarta ningún contorno
+        else:
+            # Una sola pieza sin Plate: usar su propio contorno como placa.
+            plate_wire = _pick_biggest_wire(outer_w)
+            if plate_wire:
+                plate_solid = _solo_solidos(
+                    Part.Face(plate_wire).extrude(App.Vector(0, 0, thk_mm))
+                )
     except Exception as e:
         print(f"[{name}] ERROR construyendo PLATE: {e}")
+        App.closeDocument(doc.Name)
+        return
+
+    if plate_solid is None or getattr(plate_solid, "isNull", lambda: True)():
         App.closeDocument(doc.Name)
         return
 

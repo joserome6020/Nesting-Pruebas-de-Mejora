@@ -324,6 +324,16 @@ class SistemaNestingPro(ctk.CTk):
             return
         self.jobs_procesados = registrar_job_nesteado(self.jobs_procesados, ref)
 
+    def recargar_historial_jobs(self):
+        self.jobs_procesados = self.cargar_historial()
+        return list(self.jobs_procesados)
+
+    def eliminar_jobs_del_historial(self, jobs):
+        from modules.historial_jobs import eliminar_jobs_del_historial
+
+        self.jobs_procesados = eliminar_jobs_del_historial(jobs)
+        return list(self.jobs_procesados)
+
     def setup_ui(self):
         # Navbar
         self.navbar = ctk.CTkFrame(self, height=95, fg_color=COLOR_TARJETA, border_color=COLOR_BORDE, border_width=1)

@@ -80,6 +80,12 @@ class TabFiles(QWidget):
         self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
         lay.addWidget(self.btn_swo_web, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        self.btn_historial = QPushButton("GESTIONAR HISTORIAL\n(JOBS YA IMPORTADOS)")
+        self.btn_historial.setFixedSize(450, 56)
+        apply_push_button(self.btn_historial, "#FFFFFF", font_size=12, padding="8px 16px")
+        self.btn_historial.clicked.connect(self.mostrar_gestion_historial)
+        lay.addWidget(self.btn_historial, alignment=Qt.AlignmentFlag.AlignCenter)
+
         self.lbl_status = QLabel(f"Ruta Objetivo: {config.RUTA_SERVIDOR_RAIZ}")
         self.lbl_status.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
         self.lbl_status.setWordWrap(True)
@@ -308,6 +314,8 @@ class TabFiles(QWidget):
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         jobs, err = [], None
         try:
+            if hasattr(self.app, "recargar_historial_jobs"):
+                self.app.recargar_historial_jobs()
             fut = pool.submit(self.escaner.buscar_nuevos_jobs, self.app.jobs_procesados)
             try:
                 jobs, err = fut.result(timeout=120)
@@ -541,6 +549,79 @@ class TabFiles(QWidget):
         btn_volver.clicked.connect(volver_clientes)
         ent_buscar.textChanged.connect(lambda _t: refrescar())
         refrescar()
+        dlg.exec()
+
+    def mostrar_gestion_historial(self):
+        from interface.qt.dialogs.password_prompt import solicitar_contrasena
+        from modules.historial_auth import verificar_clave_historial
+
+        clave = solicitar_contrasena(
+            self,
+            titulo="Historial de jobs",
+            mensaje=(
+                "Acceso restringido.\n\n"
+                "Ingrese la contraseña para ver o quitar jobs del historial de importación."
+            ),
+        )
+        if clave is None:
+            return
+        if not verificar_clave_historial(clave):
+            QMessageBox.warning(self, "Acceso denegado", "Contraseña incorrecta.")
+            return
+
+        if hasattr(self.app, "recargar_historial_jobs"):
+            self.app.recargar_historial_jobs()
+
+        dlg, lay = self._dialogo_lista("HISTORIAL DE JOBS IMPORTADOS", 720, 520)
+        hdr = QLabel("Jobs ocultos del listado IMPORTAR (ya nesteados o importados)")
+        hdr.setStyleSheet(f"font-size:15px;font-weight:700;color:{COLOR_TEXTO_TITULO};")
+        hdr.setWordWrap(True)
+        lay.addWidget(hdr)
+        hint = QLabel(
+            "Quitar un job aquí lo vuelve a mostrar en IMPORTAR JOB INDIVIDUAL. "
+            f"Archivo: {config.DB_HISTORIAL}"
+        )
+        hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        lista_wrap = QVBoxLayout()
+
+        def refrescar_historial_ui():
+            TabFiles._limpiar_layout(lista_wrap)
+            items = list(getattr(self.app, "jobs_procesados", []) or [])
+            if not items:
+                vacio = QLabel("El historial está vacío — todos los jobs aparecen al importar.")
+                vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:12px;")
+                lista_wrap.addWidget(vacio)
+                return
+            for nombre in items:
+                row = QFrame()
+                row.setObjectName("HerinoxCard")
+                rl = QHBoxLayout(row)
+                lbl = QLabel(str(nombre))
+                lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:600;font-size:13px;")
+                rl.addWidget(lbl, 1)
+                btn = QPushButton("QUITAR")
+                apply_push_button(btn, COLOR_GRIS_MED, font_size=11, padding="6px 12px")
+
+                def quitar(_c=False, job=nombre):
+                    if hasattr(self.app, "eliminar_jobs_del_historial"):
+                        self.app.eliminar_jobs_del_historial([job])
+                    else:
+                        from modules.historial_jobs import eliminar_jobs_del_historial
+
+                        self.app.jobs_procesados = eliminar_jobs_del_historial([job])
+                    refrescar_historial_ui()
+
+                btn.clicked.connect(quitar)
+                rl.addWidget(btn)
+                lista_wrap.addWidget(row)
+
+        container = QWidget()
+        container.setLayout(lista_wrap)
+        lay.addWidget(container)
+        refrescar_historial_ui()
         dlg.exec()
 
     def procesar_seleccion(self, job_info):

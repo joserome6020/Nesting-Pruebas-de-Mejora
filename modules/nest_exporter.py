@@ -1,6 +1,7 @@
 # modules/nest_exporter.py
 import os
 import math
+import time
 import uuid
 from functools import lru_cache
 
@@ -85,6 +86,20 @@ def _placement_origin_mm(p: dict) -> tuple[float, float]:
     )
 
 
+def _sheet_omits_cut_cu(sheet: dict | None, p: dict | None = None) -> bool:
+    """Barras pegadas (sin_gap): DXF láser sin contorno CUT_CU por pieza."""
+    if isinstance(p, dict) and p.get("omit_cut_cu") is not None:
+        return bool(p.get("omit_cut_cu"))
+    if not isinstance(sheet, dict):
+        return False
+    fmt = str(sheet.get("export_3d_format") or "").strip().lower()
+    if fmt in ("dxf", "none", "2d"):
+        return True
+    return (
+        str(sheet.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+    )
+
+
 def _validate_production_entities(
     entities,
     p: dict,
@@ -137,6 +152,7 @@ def _validate_full_sheet(
     sheet_len: float,
     sheet_w: float,
     solo_cobre: bool,
+    skip_bounds: bool = False,
 ) -> None:
     prod = [
         e
@@ -145,7 +161,7 @@ def _validate_full_sheet(
     ]
     if not prod:
         raise DxfExportValidationError(
-            "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER/CUT_CU)."
+            "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER)."
         )
     for ent in prod:
         typ = ent.dxftype()
@@ -162,7 +178,11 @@ def _validate_full_sheet(
                 f"Geometría de corte no nativa en capa {ent.dxf.layer} ({typ})."
             )
     bbox = _entities_bbox(prod)
-    if bbox and not _inside_sheet_bounds(bbox, sheet_len, sheet_w):
+    if (
+        not skip_bounds
+        and bbox
+        and not _inside_sheet_bounds(bbox, sheet_len, sheet_w)
+    ):
         raise DxfExportValidationError(
             f"Geometría de corte fuera de la "
             f"{'barra' if solo_cobre else 'placa'} "
@@ -193,6 +213,42 @@ def _msp_count(msp) -> int:
 
 def _fail_export(part_name: str, reason: str) -> None:
     raise DxfExportValidationError(f"{part_name}: {reason}")
+
+
+def _save_dxf_atomic(doc, out_path: str) -> None:
+    """Escribe DXF vía temporal + reemplazo atómico (tolerante a locks breves)."""
+    out_path = os.path.abspath(str(out_path))
+    out_dir = os.path.dirname(out_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    tmp_path = os.path.join(
+        out_dir,
+        f".__arga_export_{os.getpid()}_{uuid.uuid4().hex[:8]}.dxf",
+    )
+    try:
+        doc.saveas(tmp_path)
+        last_err: OSError | None = None
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, out_path)
+                return
+            except OSError as exc:
+                last_err = exc
+                if exc.errno in (13, 16) or getattr(exc, "winerror", None) in (5, 32):
+                    time.sleep(0.4 * (attempt + 1))
+                    continue
+                break
+        nombre = os.path.basename(out_path)
+        raise DxfExportValidationError(
+            f"No se pudo guardar {nombre}: {last_err}. "
+            "El archivo está en uso — cierra Inventor, AutoCAD o FreeCAD si lo tienen abierto "
+            "y espera a que OneDrive termine de sincronizar."
+        ) from last_err
+    finally:
+        if os.path.isfile(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 # =========================================================
 # NEST DXF EXPORTER
@@ -333,20 +389,23 @@ def _resolve_placement(p: dict) -> dict:
     return out
 
 
-def _refine_placement_matrix(part_doc, outer_bounds, m, *, tol: float = 3.0) -> Matrix44:
+def _refine_placement_matrix(
+    part_doc, outer_bounds, m, *, tol: float = 3.0, sheet: dict | None = None
+) -> Matrix44:
     """
     Ajusta solo traslación para que el bbox del DXF fuente coincida con el nest.
     El nest define posición; el DXF fuente conserva arcos/círculos nativos.
     """
     if not outer_bounds:
         return m
+    align_bounds = _nest_bounds_for_matrix_check(outer_bounds, sheet)
     src_bounds = _transformed_outer_bounds(part_doc, m)
     if not src_bounds:
         return m
-    if _position_close(outer_bounds, src_bounds, tol=max(tol, ALIGN_TOL_MM)):
+    if _position_close(align_bounds, src_bounds, tol=max(tol, ALIGN_TOL_MM)):
         return m
-    dx = float(outer_bounds[0]) - float(src_bounds[0])
-    dy = float(outer_bounds[1]) - float(src_bounds[1])
+    dx = float(align_bounds[0]) - float(src_bounds[0])
+    dy = float(align_bounds[1]) - float(src_bounds[1])
     if abs(dx) < 1e-9 and abs(dy) < 1e-9:
         return m
     m2 = m.copy()
@@ -385,23 +444,28 @@ def _size_ratio_sane(outer_bounds, src_bounds, *, max_ratio: float = 1.2) -> boo
     return (ow / max_ratio <= sw <= ow * max_ratio) and (oh / max_ratio <= sh <= oh * max_ratio)
 
 
-def _matrix_maps_nest_bounds(part_doc, m, outer_bounds, *, tol: float = 5.0) -> bool:
+def _matrix_maps_nest_bounds(
+    part_doc, m, outer_bounds, *, tol: float = 5.0, sheet: dict | None = None
+) -> bool:
     src_bounds = _transformed_outer_bounds(part_doc, m)
     if not outer_bounds or not src_bounds:
         return False
-    if not _position_close(outer_bounds, src_bounds, tol=tol):
+    align_bounds = _nest_bounds_for_matrix_check(outer_bounds, sheet)
+    if not _position_close(align_bounds, src_bounds, tol=tol):
         return False
-    return _size_ratio_sane(outer_bounds, src_bounds)
+    return _size_ratio_sane(align_bounds, src_bounds)
 
 
-def _resolve_placement_matrix(part_doc, p: dict) -> Matrix44:
+def _resolve_placement_matrix(
+    part_doc, p: dict, sheet: dict | None = None
+) -> Matrix44:
     """Elige la transformación que alinea el DXF fuente con el contorno colocado en el nest."""
     outer_bounds = _poly_bounds(p.get("outer") or p.get("outer_poly"))
     resolved = _resolve_placement(p)
     candidates: list[Matrix44] = []
 
     def _add_candidate(placement: dict) -> None:
-        candidates.append(_build_placement_matrix(placement))
+        candidates.append(_build_placement_matrix(placement, sheet))
 
     ruta = str(resolved.get("ruta") or p.get("ruta") or "").strip()
     if outer_bounds and ruta:
@@ -425,23 +489,26 @@ def _resolve_placement_matrix(part_doc, p: dict) -> Matrix44:
             _add_candidate(_resolve_placement(raw))
 
     seen: set[tuple] = set()
-    best = candidates[0] if candidates else _build_placement_matrix(resolved)
+    best = candidates[0] if candidates else _build_placement_matrix(resolved, sheet)
+    align_bounds = _nest_bounds_for_matrix_check(outer_bounds, sheet) if outer_bounds else None
     for m in candidates:
-        m2 = _refine_placement_matrix(part_doc, outer_bounds, m)
+        m2 = _refine_placement_matrix(part_doc, outer_bounds, m, sheet=sheet)
         src_bounds = _transformed_outer_bounds(part_doc, m2)
         sig = tuple(round(float(v), 2) for v in (src_bounds or (0.0, 0.0, 0.0, 0.0)))
         if sig in seen:
             continue
         seen.add(sig)
-        if outer_bounds and src_bounds:
-            oh = float(outer_bounds[3]) - float(outer_bounds[1])
+        if align_bounds and src_bounds:
+            oh = float(align_bounds[3]) - float(align_bounds[1])
             sh = float(src_bounds[3]) - float(src_bounds[1])
             if oh > 1.0 and sh > oh * 2.5:
                 continue
-        if not outer_bounds or _matrix_maps_nest_bounds(part_doc, m2, outer_bounds, tol=ALIGN_TOL_MM):
+        if not outer_bounds or _matrix_maps_nest_bounds(
+            part_doc, m2, outer_bounds, tol=ALIGN_TOL_MM, sheet=sheet
+        ):
             return m2
         best = m2
-    m_final = _refine_placement_matrix(part_doc, outer_bounds, best)
+    m_final = _refine_placement_matrix(part_doc, outer_bounds, best, sheet=sheet)
     return m_final
 
 
@@ -523,7 +590,7 @@ def _write_native_entity(msp, entity, layer: str) -> int:
         return 0
 
 
-def _build_placement_matrix(p) -> Matrix44:
+def _build_placement_matrix(p, sheet: dict | None = None) -> Matrix44:
     """Misma cadena que el visor/nesting: pulgadas→mm, normalizar, rotar en centroide, colocar en placa."""
     p = _resolve_placement(p)
     ox, oy = _placement_origin_mm(p)
@@ -544,7 +611,7 @@ def _build_placement_matrix(p) -> Matrix44:
         m @= Matrix44.z_rotate(rot)
         m @= Matrix44.translate(-rcx, -rcy, 0)
     m @= Matrix44.translate(sx, sy, 0)
-    return m
+    return _compose_sin_gap_vertical(m, sheet)
 
 
 def _circle_signature(ent, *, decimals: int = 2) -> tuple[float, float, float] | None:
@@ -651,6 +718,7 @@ def _edge_on_bar_exterior(
     piece_bounds=None,
     idx: int = 0,
     n_total: int = 1,
+    bar_vertical: bool = False,
 ) -> bool:
     """True si la arista es cara exterior del stock (no se corta con láser)."""
     from modules.nesting_engine.cu_largos_nesting import (
@@ -660,6 +728,36 @@ def _edge_on_bar_exterior(
 
     if math.hypot(x2 - x1, y2 - y1) <= tol:
         return True
+
+    if bar_vertical:
+        # sin_gap: largo en Y, ancho en X; inicio de barra en y=0.
+        if _es_arista_horizontal(x1, y1, x2, y2, tol) and y1 <= tol and y2 <= tol:
+            return True
+        if piece_bounds and _es_arista_horizontal(x1, y1, x2, y2, tol):
+            minx, miny, maxx, maxy = piece_bounds
+            ancho = maxx - minx
+            if ancho > tol:
+                span = abs(float(x2) - float(x1))
+                if span >= ancho - max(tol, ancho * 0.05):
+                    y_mid = (y1 + y2) / 2.0
+                    if idx > 0 and abs(y_mid - miny) <= tol:
+                        return True
+                    if abs(y_mid - maxy) <= tol:
+                        return True
+        if _es_arista_vertical(x1, y1, x2, y2, tol) and x1 <= tol and x2 <= tol:
+            return True
+        if (
+            _es_arista_vertical(x1, y1, x2, y2, tol)
+            and bar_w > tol
+            and x1 >= bar_w - tol
+            and x2 >= bar_w - tol
+        ):
+            return True
+        if _es_arista_horizontal(x1, y1, x2, y2, tol):
+            ymid = (y1 + y2) / 2.0
+            if bar_len > tol and abs(ymid - bar_len) <= tol:
+                return True
+        return False
 
     # Cara izquierda del stock (inicio de barra → marcador CUT_CU, no láser)
     if _es_arista_vertical(x1, y1, x2, y2, tol) and x1 <= tol and x2 <= tol:
@@ -702,6 +800,7 @@ def _edge_is_bar_interior_laser_cut(
     piece_bounds=None,
     idx: int = 0,
     n_total: int = 1,
+    bar_vertical: bool = False,
 ) -> bool:
     """
     Corte láser si la arista queda dentro de la barra y no es cara exterior del stock.
@@ -720,12 +819,19 @@ def _edge_is_bar_interior_laser_cut(
         piece_bounds=piece_bounds,
         idx=idx,
         n_total=n_total,
+        bar_vertical=bar_vertical,
     ):
         return False
     mx = (x1 + x2) / 2.0
     my = (y1 + y2) / 2.0
     if mx < -tol or my < -tol:
         return False
+    if bar_vertical:
+        if bar_w > tol and mx > bar_w + tol:
+            return False
+        if bar_len > tol and my > bar_len + tol:
+            return False
+        return True
     if bar_len > tol and mx > bar_len + tol:
         return False
     if bar_w > tol and my > bar_w + tol:
@@ -834,16 +940,26 @@ def _emit_cut_outer_segment(
     return True
 
 
-def _export_cu_contour_cuts_from_ring(msp, ring, p: dict) -> int:
+def _export_cu_contour_cuts_from_ring(
+    msp,
+    ring,
+    p: dict,
+    sheet: dict | None = None,
+    *,
+    coords_vertical: bool = False,
+) -> int:
     """Respaldo: aristas del contorno colocado que son corte interior a la barra."""
     bar_w = float(p.get("cu_bar_w_mm") or 0.0)
     bar_l = float(p.get("cu_bar_l_mm") or 0.0)
     idx = int(p.get("cu_slice_idx", 0) or 0)
     n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
+    if not coords_vertical:
+        ring = _ring_for_sin_gap_export(ring, sheet, p)
     pts = normalize_ring(ring, closed=True)
     if len(pts) < 2:
         return 0
     piece_bounds = _poly_bounds(pts)
+    bar_vertical = _sheet_is_sin_gap(sheet) or coords_vertical
     seen_lines: set = set()
     seen_arcs: set = set()
     added = 0
@@ -862,6 +978,7 @@ def _export_cu_contour_cuts_from_ring(msp, ring, p: dict) -> int:
             piece_bounds=piece_bounds,
             idx=idx,
             n_total=n_total,
+            bar_vertical=bar_vertical,
         ):
             if _emit_cut_outer_segment(msp, p1, p2, None, seen_lines=seen_lines, seen_arcs=seen_arcs):
                 added += 1
@@ -874,6 +991,7 @@ def _export_cu_laser_outer_for_piece(
     m,
     p: dict,
     outer: list,
+    sheet: dict | None = None,
 ) -> int:
     """
     CUT_OUTER cobre largos: DXF nativo 1:1; respaldo contorno nest.
@@ -884,9 +1002,9 @@ def _export_cu_laser_outer_for_piece(
         _solo_cortes_guillotina_vertical,
     )
 
-    laser_added = _export_cu_laser_outer_cuts_native(msp, part_doc, m, p)
+    laser_added = _export_cu_laser_outer_cuts_native(msp, part_doc, m, p, sheet=sheet)
     if laser_added <= 0:
-        laser_added = _export_cu_contour_cuts_from_ring(msp, outer, p)
+        laser_added = _export_cu_contour_cuts_from_ring(msp, outer, p, sheet=sheet)
 
     if laser_added > 0 or _solo_cortes_guillotina_vertical(outer):
         return laser_added
@@ -914,7 +1032,9 @@ def _export_cu_laser_outer_for_piece(
     return laser_added
 
 
-def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
+def _export_cu_laser_outer_cuts_native(
+    msp, part_doc, m, p: dict, sheet: dict | None = None
+) -> int:
     """
     Aristas del contorno DXF dentro de la barra → CUT_OUTER (LINE/ARC nativos, 1:1).
     """
@@ -923,7 +1043,8 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
     idx = int(p.get("cu_slice_idx", 0) or 0)
     n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
     outer = p.get("outer") or p.get("outer_poly") or []
-    piece_bounds = _poly_bounds(outer)
+    outer_work = _ring_for_sin_gap_export(outer, sheet, p)
+    piece_bounds = _poly_bounds(outer_work)
     if not piece_bounds and (bar_w <= 0 or bar_l <= 0):
         return 0
     if bar_w <= 0 and piece_bounds:
@@ -931,6 +1052,7 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
     if bar_l <= 0 and piece_bounds:
         bar_l = piece_bounds[2] - piece_bounds[0]
 
+    bar_vertical = _sheet_is_sin_gap(sheet)
     seen_lines: set = set()
     seen_arcs: set = set()
     added = 0
@@ -953,6 +1075,7 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
                     piece_bounds=piece_bounds,
                     idx=idx,
                     n_total=n_total,
+                    bar_vertical=bar_vertical,
                 ):
                     keep_arc = True
                     break
@@ -979,6 +1102,7 @@ def _export_cu_laser_outer_cuts_native(msp, part_doc, m, p: dict) -> int:
             piece_bounds=piece_bounds,
             idx=idx,
             n_total=n_total,
+            bar_vertical=bar_vertical,
         ):
             continue
         if _emit_cut_outer_segment(
@@ -1010,14 +1134,16 @@ def _export_cu_full_contour_cut_cu(
     m,
     p: dict,
     outer: list,
+    sheet: dict | None = None,
 ) -> int:
     """CUT_CU: una polilínea cerrada por pieza — nunca LINE/ARC sueltos en modelspace."""
-    if not outer:
+    outer_work = _ring_for_sin_gap_export(outer, sheet, p)
+    if not outer_work:
         label = _piece_label(p)
         raise DxfExportValidationError(
             f"{label}: sin contorno outer colocado para CUT_CU (STEP requiere 1 isla/pieza)."
         )
-    return _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer)
+    return _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer_work)
 
 
 def _layer_for_exported_entity(clase: str, entity, p: dict) -> str:
@@ -1085,12 +1211,19 @@ def _export_cu_inner_and_marks(
     *,
     draw_holes: bool = True,
     draw_marks: bool = True,
+    sheet: dict | None = None,
 ) -> bool:
     """Inner/marks cobre largos desde polígonos del nest (mm placa, 1:1 con visor)."""
     added = False
+    bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
+    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    if _sheet_is_sin_gap(sheet):
+        draw_marks = False
     if draw_holes:
         for h in p.get("holes") or p.get("inner") or []:
             h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
+            if _sheet_is_sin_gap(sheet):
+                h_t = _transform_poly_sin_gap_vertical(h_t, bw)
             if not h_t:
                 continue
             export_ring_native(msp, h_t, "CUT_INNER", closed=True, prefer_circle=True)
@@ -1100,6 +1233,8 @@ def _export_cu_inner_and_marks(
             if not mk:
                 continue
             mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
+            if _sheet_is_sin_gap(sheet):
+                mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
             if mk_t:
                 _add_lwpolyline(msp, mk_t, layer="MARK", closed=False)
                 added = True
@@ -1114,12 +1249,17 @@ def _export_cu_largos_from_source(
     draw_holes: bool = True,
     draw_marks: bool = True,
     strict: bool = True,
+    sheet: dict | None = None,
 ) -> None:
     """Cobre largos: cortes CUT_OUTER nativos + inner/marks 1:1 desde DXF fuente."""
     from modules.nesting_engine.cu_largos_nesting import (
         _segmentos_corte_laser_pieza,
         _solo_cortes_guillotina_vertical,
     )
+
+    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    if _sheet_is_sin_gap(sheet):
+        draw_marks = False
 
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
@@ -1134,8 +1274,10 @@ def _export_cu_largos_from_source(
     except Exception as e:
         _fail_export(label, f"DXF fuente ilegible: {e}")
 
-    m = _resolve_placement_matrix(part_doc, _resolve_placement(p))
-    laser_added = _export_cu_laser_outer_for_piece(msp, part_doc, m, p, outer)
+    m = _resolve_placement_matrix(part_doc, _resolve_placement(p), sheet=sheet)
+    laser_added = _export_cu_laser_outer_for_piece(
+        msp, part_doc, m, p, outer, sheet=sheet
+    )
     if laser_added <= 0 and not _solo_cortes_guillotina_vertical(outer):
         idx = int(p.get("cu_slice_idx", 0) or 0)
         n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
@@ -1157,6 +1299,7 @@ def _export_cu_largos_from_source(
             p,
             draw_holes=draw_holes,
             draw_marks=draw_marks,
+            sheet=sheet,
         )
     if not inner_ok and holes and draw_holes:
         _fail_export(
@@ -1169,8 +1312,10 @@ def _export_cu_largos_from_source(
         if strict:
             _fail_export(label, "marcaje no exportable desde el DXF fuente")
 
-    if not str(label).startswith("CU_CORTE__"):
-        _export_cu_full_contour_cut_cu(msp, doc, part_doc, m, p, outer)
+    if not str(label).startswith("CU_CORTE__") and not _sheet_omits_cut_cu(None, p):
+        _export_cu_full_contour_cut_cu(
+            msp, doc, part_doc, m, p, outer, sheet=sheet
+        )
 
 
 def _export_source_dxf_at_placement(
@@ -1288,7 +1433,7 @@ def _add_lwpolyline(msp, points, layer, closed=True):
 
 
 def _export_placed_geometry(
-    msp, p, *, doc=None, draw_holes=True, draw_marks=True
+    msp, p, *, doc=None, draw_holes=True, draw_marks=True, sheet=None
 ) -> bool:
     """
     Exporta contorno/marcas en coordenadas de placa (mm), 1:1 con el visor de nesting.
@@ -1302,14 +1447,29 @@ def _export_placed_geometry(
 
     if has_outer:
         outer_t = _transform_poly(outer, tx=0.0, ty=0.0, rot_deg=0.0)
+        if _sheet_is_sin_gap(sheet):
+            outer_t = _transform_poly_sin_gap_vertical(
+                outer_t, _bar_width_mm(sheet)
+            )
         if outer_t and not p.get("cu_largos_holes_only"):
             if p.get("cu_largos_piece"):
-                _export_cu_contour_cuts_from_ring(msp, outer_t, p)
-                if not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__"):
+                _export_cu_contour_cuts_from_ring(
+                    msp,
+                    outer_t,
+                    p,
+                    sheet=None,
+                    coords_vertical=_sheet_is_sin_gap(sheet),
+                )
+                if (
+                    not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__")
+                    and not _sheet_omits_cut_cu(sheet, p)
+                ):
                     if doc is not None:
                         _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer_t)
                     else:
-                        _add_lwpolyline(msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True)
+                        _add_lwpolyline(
+                            msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True
+                        )
             else:
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
@@ -1324,12 +1484,17 @@ def _export_placed_geometry(
                     _export_ring_exact(msp, outer_t, layer_destino, closed=closed_destino)
 
     if p.get("cu_largos_piece"):
-        _export_cu_inner_and_marks(msp, p, draw_holes=draw_holes, draw_marks=draw_marks)
+        _export_cu_inner_and_marks(
+            msp, p, draw_holes=draw_holes, draw_marks=draw_marks, sheet=sheet
+        )
     else:
         if draw_holes and has_outer:
             holes = p.get("holes") or p.get("inner") or []
+            bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
             for h in holes:
                 h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
+                if _sheet_is_sin_gap(sheet):
+                    h_t = _transform_poly_sin_gap_vertical(h_t, bw)
                 if not h_t:
                     continue
                 hole_layer = str(p.get("inner_layer_override") or "CUT_INNER")
@@ -1341,6 +1506,9 @@ def _export_placed_geometry(
                 else:
                     _export_ring_exact(msp, h_t, hole_layer, closed=True)
 
+        # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+        if draw_marks and _sheet_is_sin_gap(sheet):
+            draw_marks = False
         if draw_marks:
             part_name = str(p.get("part_name") or p.get("name") or "")
             marks_layer = str(
@@ -1348,10 +1516,13 @@ def _export_placed_geometry(
                 or p.get("marks_layer_override")
                 or ("RTZ_LABEL" if part_name.startswith("TATUAJE") else "MARK")
             )
+            bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
             for mk in marks:
                 if not mk:
                     continue
                 mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
+                if _sheet_is_sin_gap(sheet):
+                    mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
                 if mk_t:
                     _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
 
@@ -1422,13 +1593,135 @@ def _is_cu_corte_fin_bar(p: dict, placements: list) -> bool:
 
 
 def _export_cu_bar_inicio_marker(msp, bar_w: float) -> None:
-    """Marcador visual de inicio de barra (no participa en sólidos STEP)."""
+    """Marcador visual de inicio de barra horizontal (no participa en sólidos STEP)."""
     if bar_w <= TOL_GEOM_MM:
         return
     msp.add_line((0.0, 0.0), (0.0, float(bar_w)), dxfattribs={"layer": "BAR_START"})
 
 
-def _setup_layers(doc, *, solo_cobre: bool = False):
+def _export_cu_bar_inicio_marker_vertical(msp, bar_width_mm: float) -> None:
+    """Inicio de barra tras rotar sin_gap: ancho real de la barra en X, en y=0."""
+    if bar_width_mm <= TOL_GEOM_MM:
+        return
+    msp.add_line(
+        (0.0, 0.0),
+        (float(bar_width_mm), 0.0),
+        dxfattribs={"layer": "BAR_START"},
+    )
+
+
+def _canal_es_cama_laser(canal: str | None) -> bool:
+    """DXF destinado a carpeta CAMA LASER (no Robot Láser / plasma)."""
+    u = str(canal or "").strip().upper()
+    return bool(u) and "CAMA LASER" in u and "ROBOT" not in u
+
+
+def _sheet_is_sin_gap(sheet: dict | None) -> bool:
+    if not isinstance(sheet, dict):
+        return False
+    return (
+        str(sheet.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+    )
+
+
+def _bar_width_mm(sheet: dict | None, fallback: float = 0.0) -> float:
+    if not isinstance(sheet, dict):
+        return float(fallback or 0.0)
+    return float(sheet.get("width") or sheet.get("Width") or fallback or 0.0)
+
+
+def _sin_gap_vertical_matrix(bar_w_mm: float) -> Matrix44:
+    return Matrix44.translate(float(bar_w_mm), 0.0, 0.0) @ Matrix44.z_rotate(
+        math.pi / 2.0
+    )
+
+
+def _compose_sin_gap_vertical(m: Matrix44, sheet: dict | None) -> Matrix44:
+    if not _sheet_is_sin_gap(sheet):
+        return m
+    bw = _bar_width_mm(sheet)
+    if bw <= TOL_GEOM_MM:
+        return m
+    return _sin_gap_vertical_matrix(bw) @ m
+
+
+def _transform_xy_sin_gap_vertical(
+    x: float, y: float, bar_w_mm: float
+) -> tuple[float, float]:
+    return -float(y) + float(bar_w_mm), float(x)
+
+
+def _transform_poly_sin_gap_vertical(poly, bar_w_mm: float):
+    if not poly:
+        return poly
+    out = []
+    for pt in poly:
+        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+            out.append(_transform_xy_sin_gap_vertical(pt[0], pt[1], bar_w_mm))
+    return out
+
+
+def _nest_bounds_for_matrix_check(
+    outer_bounds: tuple[float, float, float, float] | None,
+    sheet: dict | None,
+) -> tuple[float, float, float, float] | None:
+    """BBox del nest en el mismo espacio que la matriz de export (vertical si sin_gap)."""
+    if not outer_bounds:
+        return outer_bounds
+    if not _sheet_is_sin_gap(sheet):
+        return outer_bounds
+    minx, miny, maxx, maxy = outer_bounds
+    bw = _bar_width_mm(sheet)
+    corners = [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
+    tc = [_transform_xy_sin_gap_vertical(x, y, bw) for x, y in corners]
+    xs = [c[0] for c in tc]
+    ys = [c[1] for c in tc]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _ring_for_sin_gap_export(ring, sheet: dict | None, p: dict | None = None):
+    if not _sheet_is_sin_gap(sheet):
+        return ring
+    bw = _bar_width_mm(
+        sheet, float((p or {}).get("cu_bar_w_mm") or 0.0)
+    )
+    return _transform_poly_sin_gap_vertical(ring, bw)
+
+def _purge_entities_on_layers(msp, layer_names: set[str]) -> None:
+    targets = {str(n).strip().upper() for n in layer_names if str(n or "").strip()}
+    if not targets:
+        return
+    for ent in list(msp):
+        layer_u = str(getattr(ent.dxf, "layer", "") or "").strip().upper()
+        if layer_u in targets:
+            try:
+                msp.delete_entity(ent)
+            except Exception:
+                pass
+
+
+def _purge_unused_layers(doc, keep: set[str] | None = None) -> None:
+    msp = doc.modelspace()
+    used = {str(e.dxf.layer) for e in msp if getattr(e.dxf, "layer", None)}
+    if keep:
+        used |= set(keep)
+    for layer in list(doc.layers):
+        name = str(layer.dxf.name)
+        if name in used or name == "0":
+            continue
+        try:
+            doc.layers.remove(name)
+        except Exception:
+            pass
+
+
+def _setup_layers(
+    doc,
+    *,
+    solo_cobre: bool = False,
+    omit_plate: bool = False,
+    omit_plate_text: bool = False,
+):
     layers = doc.layers
     def ensure(name, color_index):
         if name not in layers:
@@ -1439,12 +1732,16 @@ def _setup_layers(doc, *, solo_cobre: bool = False):
     ensure("CUT_OUTER", 1)
     ensure("CUT_INNER", 2)
     ensure("MARK", 4)
-    ensure("CUT_CU", 1)
-    ensure("Plate", 3)
+    if not solo_cobre:
+        ensure("CUT_CU", 1)
+    if not omit_plate:
+        ensure("Plate", 3)
     ensure("BAR_START", 8)
     ensure("ARGA_META", 8)
-    if not solo_cobre:
+    if not solo_cobre and not omit_plate_text:
         ensure("Plate_Text", 7)
+        ensure("RTZ_LABEL", 4)
+    elif not solo_cobre:
         ensure("RTZ_LABEL", 4)
 
 
@@ -1496,11 +1793,6 @@ def export_nest_to_dxf(
     )
     out_dir = os.path.dirname(out_path) or "."
     os.makedirs(out_dir, exist_ok=True)
-    if os.path.isfile(out_path):
-        try:
-            os.remove(out_path)
-        except OSError:
-            pass
 
     solo_cobre = bool(
         modo_largos_cu
@@ -1512,23 +1804,31 @@ def export_nest_to_dxf(
     sheet_w = float(sheet.get("width", sheet.get("Width", 0)) or 0)
 
     doc = ezdxf.new(dxfversion="R2010")
-    doc.header["$INSUNITS"] = 4  
-    _setup_layers(doc, solo_cobre=solo_cobre)
+    doc.header["$INSUNITS"] = 4
+    # Cama láser: sin contorno Plate ni título (máquina cobre + láser compartida).
+    omit_plate_frame = _canal_es_cama_laser(canal_tag)
+    _setup_layers(
+        doc,
+        solo_cobre=solo_cobre,
+        omit_plate=omit_plate_frame,
+        omit_plate_text=omit_plate_frame,
+    )
 
     msp = doc.modelspace()
 
     _sheet_bar_l = sheet_len
     _sheet_bar_w = sheet_w
 
-    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM:
+    if sheet_len > TOL_GEOM_MM and _sheet_bar_w > TOL_GEOM_MM and not omit_plate_frame:
         L, W = sheet_len, _sheet_bar_w
         sheet_poly = [(0, 0), (L, 0), (L, W), (0, W)]
         _add_lwpolyline(msp, sheet_poly, layer="Plate", closed=True)
 
-    if not solo_cobre:
+    if not solo_cobre and not omit_plate_frame:
         material = sheet.get("material", sheet.get("Material", ""))
         thickness = sheet.get("thickness", sheet.get("Thickness", ""))
         arga_code = sheet.get("arga_code", sheet.get("Arga Code", ""))
+        L, W = sheet_len, _sheet_bar_w
 
         header = f"{title} | {arga_code} | {material} | THK:{thickness} | {L:.1f}x{W:.1f} mm"
         msp.add_text(
@@ -1536,7 +1836,7 @@ def export_nest_to_dxf(
             dxfattribs={"layer": "Plate_Text", "height": label_height}
         ).set_placement((0, W + margin_text))
 
-    if solo_cobre and _sheet_bar_w > TOL_GEOM_MM:
+    if solo_cobre and _sheet_bar_w > TOL_GEOM_MM and not _sheet_is_sin_gap(sheet):
         _export_cu_bar_inicio_marker(msp, _sheet_bar_w)
 
     cache_blocks = {} 
@@ -1637,24 +1937,38 @@ def export_nest_to_dxf(
                 "La hoja no exportó ninguna pieza con geometría de corte válida."
             )
 
+        if omit_plate_frame:
+            _purge_entities_on_layers(msp, {"Plate", "Plate_Text"})
+            _purge_unused_layers(doc)
+
+        if _sheet_is_sin_gap(sheet):
+            if solo_cobre:
+                _export_cu_bar_inicio_marker_vertical(
+                    msp, _bar_width_mm(sheet, _sheet_bar_w)
+                )
+            sheet_len, sheet_w = float(sheet_w), float(sheet_len)
+            _sheet_bar_l = sheet_len
+            _sheet_bar_w = sheet_w
+
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
-            from modules.cobre_step_audit import (
-                validate_cut_cu_piece_count,
-                write_cu_piece_meta,
-            )
+            if not _sheet_omits_cut_cu(sheet):
+                from modules.cobre_step_audit import (
+                    validate_cut_cu_piece_count,
+                    write_cu_piece_meta,
+                )
 
-            expected_cu = validate_cut_cu_piece_count(
-                msp,
-                placements,
-                sheet_label=str(title or out_path),
-                strict=strict,
-            )
-            write_cu_piece_meta(
-                msp,
-                expected_pieces=expected_cu,
-                sheet_label=os.path.basename(out_path),
-            )
+                expected_cu = validate_cut_cu_piece_count(
+                    msp,
+                    placements,
+                    sheet_label=str(title or out_path),
+                    strict=strict,
+                )
+                write_cu_piece_meta(
+                    msp,
+                    expected_pieces=expected_cu,
+                    sheet_label=os.path.basename(out_path),
+                )
 
         if strict:
             _validate_full_sheet(
@@ -1662,10 +1976,11 @@ def export_nest_to_dxf(
                 sheet_len=sheet_len,
                 sheet_w=sheet_w,
                 solo_cobre=solo_cobre,
+                skip_bounds=_sheet_is_sin_gap(sheet) and solo_cobre,
             )
             _validate_dxf_document(doc)
 
-        doc.saveas(out_path)
+        _save_dxf_atomic(doc, out_path)
         log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
     except DxfExportValidationError as exc:
         log_export_error(out_path, exc, canal=canal_tag)

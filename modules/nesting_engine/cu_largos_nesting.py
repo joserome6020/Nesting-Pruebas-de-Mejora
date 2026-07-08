@@ -8,7 +8,9 @@ Nesting 1D para largos de cobre (CU).
   salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
   sin gap o con gap para toda la barra. El empaquetado prioriza barras homogéneas para reducir
   hibridaciones cuando el inventario lo permite.
-- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK; CUT_CU = contorno completo de pieza
+- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
+- sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
+- con_gap: CUT_CU por pieza + STEP
   (+ marcador vertical inicio barra en export de hoja).
 
 Cortes CUT_OUTER (láser):
@@ -36,9 +38,9 @@ TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
-# Piezas con largo DXF (eje X) hasta este umbral van siempre sin separación (renest no aplica).
-LARGO_SIN_SEPARACION_CU_IN = 15.0
-# Si ≥ este % de piezas de una barra son cortas (≤15") o largas (>15"), aplica ese modo a toda la barra.
+# Piezas con largo DXF (eje X) hasta este umbral van sin separación por defecto (el usuario puede renestear con otro valor).
+LARGO_SIN_SEPARACION_CU_IN = 10.0
+# Si ≥ este % de piezas de una barra son cortas (≤umbral) o largas (>umbral), aplica ese modo a toda la barra.
 MAYORIA_BARRA_CU_FRACCION = 0.80
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40

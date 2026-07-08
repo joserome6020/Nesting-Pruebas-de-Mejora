@@ -70,6 +70,7 @@ def export_piece(
             draw_holes=draw_holes,
             draw_marks=draw_marks,
             strict=strict,
+            sheet=sheet,
         )
         return mode, ok
 
@@ -83,5 +84,6 @@ def export_piece(
         draw_marks=draw_marks,
         strict=strict,
         cache_blocks=cache_blocks,
+        sheet=sheet,
     )
     return mode, True

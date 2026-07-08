@@ -69,11 +69,26 @@ def _es_export_swo(
     return bn.startswith("SWO") or "S.W.O" in wl
 
 
-def _hoja_cobre_export_iges(hoja: dict) -> bool:
-    """Cobre largos sin separación (modo sin_gap) → IGES en lugar de STEP."""
+def _hoja_cobre_export_3d(hoja: dict) -> str:
+    """
+    Formato 3D por hoja cobre:
+    - sin_gap (piezas pegadas): solo DXF láser → 'dxf'
+    - con_gap: STEP por pieza → 'step'
+    """
     if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
-        return False
-    return str(hoja.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+        return "step"
+    if str(hoja.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap":
+        return "dxf"
+    return "step"
+
+
+def _hoja_cobre_export_iges(hoja: dict) -> bool:
+    """Compatibilidad tests — IGES ya no se usa en cobre largos."""
+    return False
+
+
+def _cu_dxf_requiere_3d(fmt: str) -> bool:
+    return str(fmt or "step").strip().lower() not in ("dxf", "none", "2d")
 
 
 def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
@@ -90,7 +105,10 @@ def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
                 nombre = str(item.get("nombre_dxf") or os.path.basename(str(item.get("ruta") or ""))).strip()
                 if not nombre:
                     continue
-                formato[nombre] = str(item.get("export_3d_format") or "step").strip().lower()
+                fmt = str(item.get("export_3d_format") or "step").strip().lower()
+                if not _cu_dxf_requiere_3d(fmt):
+                    continue
+                formato[nombre] = fmt
     return formato
 
 
@@ -149,16 +167,26 @@ def _auditar_steps_en_rutas(
         dxf_dir = os.path.normpath(str(rutas.get(dxf_key) or "").strip())
         step_dir = os.path.normpath(str(rutas.get(step_key) or "").strip())
         iges_dir = os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
-        n_dxf = len(_listar_dxfs_en_carpeta(dxf_dir)) if dxf_dir else 0
+        candidatos_dxf = _listar_dxfs_en_carpeta(dxf_dir) if dxf_dir else []
+        n_dxf = len(candidatos_dxf)
+        n_dxf_3d = n_dxf
+        if fmt_map and etiqueta == "CAMA LASER":
+            n_dxf_3d = sum(
+                1
+                for p in candidatos_dxf
+                if _cu_dxf_requiere_3d(fmt_map.get(os.path.basename(p), "step"))
+            )
         n_step = 0
         n_iges = 0
         if dxf_dir and fmt_map and etiqueta == "CAMA LASER":
             try:
                 from freecad_runner import _cad_path_for_dxf
 
-                for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
+                for dxf_path in candidatos_dxf:
                     nombre = os.path.basename(dxf_path)
                     fmt = fmt_map.get(nombre, "step")
+                    if not _cu_dxf_requiere_3d(fmt):
+                        continue
                     out_dir = iges_dir if fmt == "iges" else step_dir
                     cad_path = _cad_path_for_dxf(
                         dxf_path,
@@ -176,7 +204,12 @@ def _auditar_steps_en_rutas(
             if step_dir and os.path.isdir(step_dir):
                 n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
         if n_dxf > 0 or n_step > 0 or n_iges > 0:
-            resumen[etiqueta] = {"dxf": n_dxf, "step": n_step, "iges": n_iges}
+            resumen[etiqueta] = {
+                "dxf": n_dxf,
+                "dxf_3d": n_dxf_3d,
+                "step": n_step,
+                "iges": n_iges,
+            }
     return resumen
 
 
@@ -192,6 +225,7 @@ def _validar_steps_tras_export(
     resumen = _auditar_steps_en_rutas(rutas, cu_formato_por_dxf=cu_formato_por_dxf)
     for etiqueta, counts in resumen.items():
         n_dxf = int(counts.get("dxf") or 0)
+        n_dxf_3d = int(counts.get("dxf_3d") if counts.get("dxf_3d") is not None else n_dxf)
         n_step = int(counts.get("step") or 0)
         n_iges = int(counts.get("iges") or 0)
         n_3d = n_step + n_iges
@@ -200,7 +234,12 @@ def _validar_steps_tras_export(
         detalle_3d = f"{n_step} STEP"
         if n_iges:
             detalle_3d += f", {n_iges} IGES"
-        _log(f"3D audit [{etiqueta}]: {detalle_3d} / {n_dxf} DXF")
+        _log(
+            f"3D audit [{etiqueta}]: {detalle_3d} / {n_dxf_3d} DXF con 3D"
+            + (f" ({n_dxf - n_dxf_3d} solo DXF)" if n_dxf > n_dxf_3d else "")
+        )
+        if n_dxf_3d <= 0:
+            continue
         if n_3d <= 0:
             step_dir = rutas.get(
                 {
@@ -213,10 +252,10 @@ def _validar_steps_tras_export(
             )
             log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
             raise RuntimeError(
-                f"FreeCAD no generó archivos 3D en {etiqueta} ({n_dxf} DXF, 0 STEP/IGES). "
+                f"FreeCAD no generó archivos 3D en {etiqueta} ({n_dxf_3d} DXF con 3D, 0 STEP/IGES). "
                 f"Revisa el log: {log_hint}"
             )
-        if n_3d < n_dxf:
+        if n_3d < n_dxf_3d:
             step_dir = os.path.normpath(
                 str(
                     rutas.get(
@@ -254,6 +293,8 @@ def _validar_steps_tras_export(
                         nombre = os.path.basename(dxf_path)
                         if fmt_map and etiqueta == "CAMA LASER":
                             fmt = fmt_map.get(nombre, "step")
+                            if not _cu_dxf_requiere_3d(fmt):
+                                continue
                             out_dir = (
                                 os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
                                 if fmt == "iges"
@@ -276,7 +317,7 @@ def _validar_steps_tras_export(
                 else ""
             )
             _log(
-                f"WARN [{etiqueta}]: 3D incompletos ({detalle_3d} / {n_dxf})."
+                f"WARN [{etiqueta}]: 3D incompletos ({detalle_3d} / {n_dxf_3d})."
                 f"{detalle_faltantes} "
                 "Re-exportar reanuda solo los pendientes."
             )
@@ -741,33 +782,34 @@ def lanzar_freecad_robotica(
             )
 
     def _fmt_for_dxf(path: str) -> str:
-        return fmt_map.get(os.path.basename(path), "step")
+        nombre = os.path.basename(path)
+        if nombre in fmt_map:
+            return fmt_map[nombre]
+        # sin_gap no entra al manifiesto pqart → no debe caer en STEP por defecto
+        if es_cobre:
+            return "dxf"
+        return "step"
 
     # CAMA LASER (incluye largos de cobre CU)
     if rutas.get("cama_laser_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        if es_cobre and fmt_map:
-            _convertir(
-                "CAMA LASER STEP",
-                "cama_laser_dxf",
-                "cama_laser_step",
-                "TR",
-                0.0, 0.0, 0.0,
-                material="CU",
-                export_format="step",
-                dxf_filter=lambda p: _fmt_for_dxf(p) != "iges",
-            )
-            _convertir(
-                "CAMA LASER IGES",
-                "cama_laser_dxf",
-                "cama_laser_step",
-                "TR",
-                0.0, 0.0, 0.0,
-                material="CU",
-                export_format="iges",
-                out_key="cama_laser_iges",
-                dxf_filter=lambda p: _fmt_for_dxf(p) == "iges",
-            )
+        if es_cobre:
+            if not fmt_map:
+                print(
+                    "[STEP][SKIP] CAMA LASER: cobre solo DXF "
+                    "(todas las barras sin_gap / sin conversión 3D)"
+                )
+            else:
+                _convertir(
+                    "CAMA LASER STEP",
+                    "cama_laser_dxf",
+                    "cama_laser_step",
+                    "TR",
+                    0.0, 0.0, 0.0,
+                    material="CU",
+                    export_format="step",
+                    dxf_filter=lambda p: _cu_dxf_requiere_3d(_fmt_for_dxf(p)),
+                )
         else:
             _convertir(
                 "CAMA LASER",
@@ -965,6 +1007,14 @@ def exportar_resultados_a_dxf(
             )
             hoja["pqart_exports"] = []
 
+            if bool(hoja.get("modo_largos_cu")):
+                hoja["export_3d_format"] = _hoja_cobre_export_3d(hoja)
+                if hoja["export_3d_format"] == "dxf":
+                    log(
+                        f"hoja {hoja.get('sheet_code') or sheet_seq}: cobre sin separación "
+                        f"(sin_gap) → solo DXF (BAR_START; sin Plate, CUT_CU ni 3D)"
+                    )
+
             sheet_info = {
                 "length": float(w_mm),
                 "width": float(h_mm),
@@ -972,6 +1022,10 @@ def exportar_resultados_a_dxf(
                 "thickness": thickness_name or "",
                 "arga_code": hoja["sheet_display_name"],
                 "modo_largos_cu": bool(hoja.get("modo_largos_cu")),
+                "export_3d_format": str(hoja.get("export_3d_format") or "step"),
+                "cu_modo_separacion_barra": str(
+                    hoja.get("cu_modo_separacion_barra") or ""
+                ),
             }
             _cu_bar_w = float(h_mm)
             _cu_bar_l = float(w_mm)
@@ -1087,6 +1141,7 @@ def exportar_resultados_a_dxf(
                     "cu_bar_w_mm": _cu_bar_w if es_cu_hoja else 0.0,
                     "cu_bar_l_mm": _cu_bar_l if es_cu_hoja else 0.0,
                     "cu_sin_separacion": bool(pz.get("cu_sin_separacion")),
+                    "omit_cut_cu": str(hoja.get("export_3d_format") or "") == "dxf",
                     "largo_cu_in": float(pz.get("largo_cu_in") or 0.0),
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
@@ -1163,14 +1218,6 @@ def exportar_resultados_a_dxf(
             sheet_code = hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}"
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
-
-            if bool(hoja.get("modo_largos_cu")):
-                hoja["export_3d_format"] = "iges" if _hoja_cobre_export_iges(hoja) else "step"
-                if hoja["export_3d_format"] == "iges":
-                    log(
-                        f"hoja {sheet_code}: cobre sin separación (sin_gap) "
-                        f"→ conversión 3D IGES"
-                    )
 
             from .efficiency_metrics import hoja_export_solo_plasma
 

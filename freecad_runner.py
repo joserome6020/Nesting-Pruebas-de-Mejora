@@ -179,7 +179,7 @@ def _cad_base_from_dxf(dxf_path: str) -> str:
 
 def _cad_extension(export_format: str = "step") -> str:
     fmt = str(export_format or "step").strip().lower()
-    return ".iges" if fmt in ("iges", "igs") else ".step"
+    return ".igs" if fmt in ("iges", "igs") else ".step"
 
 
 def _cad_path_for_dxf(dxf_path: str, out_folder: str, export_format: str = "step") -> str:
@@ -268,7 +268,7 @@ def ejecutar_macro_freecad(
 ) -> bool:
     cad_fmt = str(export_format or "step").strip().lower()
     cad_ext = _cad_extension(cad_fmt)
-    cad_label = "IGES" if cad_ext == ".iges" else "STEP"
+    cad_label = "IGES" if cad_ext == ".igs" else "STEP"
     from freecad_export_units import resolve_export_linear_unit, resolve_geometry_scale
 
     linear_unit = resolve_export_linear_unit(cad_fmt)

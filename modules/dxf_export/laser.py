@@ -17,6 +17,7 @@ def export_piece(
     draw_marks: bool = True,
     strict: bool = True,
     cache_blocks: dict | None = None,
+    sheet: dict | None = None,
 ) -> None:
     ruta = str(p.get("ruta") or "").strip()
     prefer_source = bool(p.get("prefer_source_dxf"))
@@ -33,5 +34,5 @@ def export_piece(
         _export_block_at_placement(msp, doc, cache_blocks, p)
     else:
         _export_placed_geometry(
-            msp, p, draw_holes=draw_holes, draw_marks=draw_marks
+            msp, p, doc=doc, draw_holes=draw_holes, draw_marks=draw_marks, sheet=sheet
         )
