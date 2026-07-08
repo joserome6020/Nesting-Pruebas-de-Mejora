@@ -1732,12 +1732,12 @@ def _setup_layers(
     ensure("CUT_OUTER", 1)
     ensure("CUT_INNER", 2)
     ensure("MARK", 4)
-    if not solo_cobre:
+    if solo_cobre:
         ensure("CUT_CU", 1)
+        ensure("BAR_START", 8)
+        ensure("ARGA_META", 8)
     if not omit_plate:
         ensure("Plate", 3)
-    ensure("BAR_START", 8)
-    ensure("ARGA_META", 8)
     if not solo_cobre and not omit_plate_text:
         ensure("Plate_Text", 7)
         ensure("RTZ_LABEL", 4)
@@ -1939,7 +1939,6 @@ def export_nest_to_dxf(
 
         if omit_plate_frame:
             _purge_entities_on_layers(msp, {"Plate", "Plate_Text"})
-            _purge_unused_layers(doc)
 
         if _sheet_is_sin_gap(sheet):
             if solo_cobre:
@@ -1952,6 +1951,10 @@ def export_nest_to_dxf(
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
+        else:
+            _purge_unused_layers(doc)
+
+        if solo_cobre:
             if not _sheet_omits_cut_cu(sheet):
                 from modules.cobre_step_audit import (
                     validate_cut_cu_piece_count,

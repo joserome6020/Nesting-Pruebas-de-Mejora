@@ -618,7 +618,7 @@ LAYER_LIBRARY = [
     },
     {
         "name": "ARGA_NESTING_STD",
-        "outer": {"CUT_OUTER", "OUTER", "EXTER", "CUT_CU"},
+        "outer": {"CUT_OUTER", "OUTER", "EXTER"},
         "inner": {"CUT_INNER", "INNER", "INTER"},
         "mark": {"MARK", "ETCH", "TEXT"},
         "plate": {"PLATE"},
@@ -670,7 +670,25 @@ def _collect_labels_from_doc(doc):
             pass
     return labels
 
-def _resolver_perfil_desde_labels(labels):
+def _layer_has_geometry(doc, layer_name: str) -> bool:
+    """True si la capa tiene al menos un objeto con Shape en el documento importado."""
+    target = str(layer_name or "").strip().upper()
+    if not target:
+        return False
+    for group in _iter_layer_group_nodes(doc):
+        lbl = str(group.Label or "").upper()
+        if not _label_matches_any(lbl, {target}):
+            continue
+        for child in group.Group or []:
+            if hasattr(child, "Shape") and not child.Shape.isNull():
+                return True
+    for obj in _iter_geometry_objects(doc):
+        lbl = _layer_label_for_obj(obj)
+        if _label_matches_any(lbl, {target}):
+            return True
+    return False
+
+def _resolver_perfil_desde_labels(labels, doc=None):
     # 1) Forzar perfil numérico cuando aparezcan capas 1/4/6 en etiquetas de FreeCAD.
     has1 = any(_label_matches_any(lbl, {"1"}) for lbl in labels)
     has4 = any(_label_matches_any(lbl, {"4"}) for lbl in labels)
@@ -681,6 +699,8 @@ def _resolver_perfil_desde_labels(labels):
                 return prof
 
     has_cut_cu = any(_label_matches_any(lbl, {"CUT_CU"}) for lbl in labels)
+    if has_cut_cu and doc is not None:
+        has_cut_cu = _layer_has_geometry(doc, "CUT_CU")
     if has_cut_cu:
         for prof in LAYER_LIBRARY:
             if prof["name"] == "ARGA_COBRE_LARGOS":
@@ -1001,7 +1021,7 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
     doc.recompute()
 
     labels_doc = _collect_labels_from_doc(doc)
-    perfil = _resolver_perfil_desde_labels(labels_doc)
+    perfil = _resolver_perfil_desde_labels(labels_doc, doc)
     print(f"[{name}] Perfil de capas activo: {perfil['name']}")
     outer_w, inner_w, plate_w, mark_e, mixed_contours = _collect_contours_from_doc(doc, perfil)
     mark_json = os.getenv("FREECAD_MARK_JSON", "").strip()
