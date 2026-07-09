@@ -22,6 +22,7 @@ SHEET_MARGIN_MM = 2.0
 PRODUCTION_LAYERS = frozenset({"CUT_OUTER", "CUT_INNER", "CUT_CU"})
 NATIVE_PROD_TYPES = frozenset({"LINE", "ARC", "CIRCLE"})
 COBRE_CUT_CU_TYPES = frozenset({"LWPOLYLINE"})
+COBRE_CUT_OUTER_STEP_TYPES = frozenset({"LWPOLYLINE"})
 
 
 class DxfExportValidationError(RuntimeError):
@@ -87,9 +88,11 @@ def _placement_origin_mm(p: dict) -> tuple[float, float]:
 
 
 def _sheet_omits_cut_cu(sheet: dict | None, p: dict | None = None) -> bool:
-    """Barras pegadas (sin_gap): DXF láser sin contorno CUT_CU por pieza."""
+    """DXF nest cobre: contorno en CUT_OUTER (nunca CUT_CU; STEP y CyPTube)."""
     if isinstance(p, dict) and p.get("omit_cut_cu") is not None:
         return bool(p.get("omit_cut_cu"))
+    if isinstance(sheet, dict) and sheet.get("modo_largos_cu"):
+        return True
     if not isinstance(sheet, dict):
         return False
     fmt = str(sheet.get("export_3d_format") or "").strip().lower()
@@ -100,6 +103,18 @@ def _sheet_omits_cut_cu(sheet: dict | None, p: dict | None = None) -> bool:
     )
 
 
+def _sheet_cu_exporta_cortes_segmentados(sheet: dict | None) -> bool:
+    """True solo sin_gap (CyPTube): CUT_OUTER parcial + guillotinas; sin contorno STEP."""
+    return _sheet_is_sin_gap(sheet)
+
+
+def _sheet_cu_allows_closed_cut_outer_poly(sheet: dict | None) -> bool:
+    """con_gap / STEP: 1 LWPOLYLINE cerrada CUT_OUTER por pieza (no segmentos láser)."""
+    if not isinstance(sheet, dict) or not sheet.get("modo_largos_cu"):
+        return False
+    return not _sheet_cu_exporta_cortes_segmentados(sheet)
+
+
 def _validate_production_entities(
     entities,
     p: dict,
@@ -107,6 +122,7 @@ def _validate_production_entities(
     sheet_len: float,
     sheet_w: float,
     solo_cobre: bool,
+    sheet: dict | None = None,
 ) -> None:
     """Solo tipos nativos de corte; sin comparar bbox vs nest (cobre largos exporta segmentos parciales)."""
     prod = [
@@ -118,6 +134,7 @@ def _validate_production_entities(
         return
 
     label = _piece_label(p)
+    allow_outer_poly = solo_cobre and _sheet_cu_allows_closed_cut_outer_poly(sheet)
     for ent in prod:
         typ = ent.dxftype()
         layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
@@ -125,6 +142,16 @@ def _validate_production_entities(
             if not bool(getattr(ent, "closed", False) or ent.closed):
                 raise DxfExportValidationError(
                     f"{label}: CUT_CU debe ser LWPOLYLINE cerrada (1 por pieza para STEP)."
+                )
+            continue
+        if (
+            allow_outer_poly
+            and layer_u == "CUT_OUTER"
+            and typ in COBRE_CUT_OUTER_STEP_TYPES
+        ):
+            if not bool(getattr(ent, "closed", False) or ent.closed):
+                raise DxfExportValidationError(
+                    f"{label}: CUT_OUTER debe ser LWPOLYLINE cerrada (1 por pieza STEP)."
                 )
             continue
         if typ not in NATIVE_PROD_TYPES:
@@ -153,6 +180,7 @@ def _validate_full_sheet(
     sheet_w: float,
     solo_cobre: bool,
     skip_bounds: bool = False,
+    sheet: dict | None = None,
 ) -> None:
     prod = [
         e
@@ -163,6 +191,7 @@ def _validate_full_sheet(
         raise DxfExportValidationError(
             "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER)."
         )
+    allow_outer_poly = solo_cobre and _sheet_cu_allows_closed_cut_outer_poly(sheet)
     for ent in prod:
         typ = ent.dxftype()
         layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
@@ -171,6 +200,16 @@ def _validate_full_sheet(
                 raise DxfExportValidationError(
                     f"CUT_CU no aislado por pieza ({typ}). "
                     f"Se requiere INSERT o LWPOLYLINE cerrada por pieza."
+                )
+            continue
+        if (
+            allow_outer_poly
+            and layer_u == "CUT_OUTER"
+            and typ in COBRE_CUT_OUTER_STEP_TYPES
+        ):
+            if not bool(getattr(ent, "closed", False) or ent.closed):
+                raise DxfExportValidationError(
+                    "CUT_OUTER debe ser LWPOLYLINE cerrada por pieza (STEP cobre)."
                 )
             continue
         if typ not in NATIVE_PROD_TYPES:
@@ -959,7 +998,7 @@ def _export_cu_contour_cuts_from_ring(
     if len(pts) < 2:
         return 0
     piece_bounds = _poly_bounds(pts)
-    bar_vertical = _sheet_is_sin_gap(sheet) or coords_vertical
+    bar_vertical = _sheet_export_sin_gap_vertical(sheet) or coords_vertical
     seen_lines: set = set()
     seen_arcs: set = set()
     added = 0
@@ -1052,7 +1091,7 @@ def _export_cu_laser_outer_cuts_native(
     if bar_l <= 0 and piece_bounds:
         bar_l = piece_bounds[2] - piece_bounds[0]
 
-    bar_vertical = _sheet_is_sin_gap(sheet)
+    bar_vertical = _sheet_export_sin_gap_vertical(sheet)
     seen_lines: set = set()
     seen_arcs: set = set()
     added = 0
@@ -1115,16 +1154,38 @@ def _export_cu_laser_outer_cuts_native(
 
 def _export_cu_full_contour_cut_cu_from_ring(msp, doc, ring: list) -> int:
     """
-    Contorno colocado en CUT_CU: una LWPOLYLINE cerrada por pieza en modelspace.
-    FreeCAD importDXF no expone geometría CUT_CU dentro de BLOCK+INSERT; esta
-    forma garantiza 1 wire independiente por pieza (sin fusiones entre vecinas).
+    Legacy CUT_CU (ya no usado en export nest cobre; conservado por compatibilidad).
     """
-    del doc  # reservado por firma estable del exportador
+    del doc
     pts = normalize_ring(ring, closed=True)
     if len(pts) < 3:
         return 0
     _add_lwpolyline(msp, pts, "CUT_CU", closed=True)
     return 1
+
+
+def _export_cu_full_contour_cut_outer_from_ring(msp, ring: list) -> int:
+    """con_gap / STEP: 1 LWPOLYLINE cerrada CUT_OUTER por pieza (FreeCAD / auditoría)."""
+    pts = normalize_ring(ring, closed=True)
+    if len(pts) < 3:
+        return 0
+    _add_lwpolyline(msp, pts, "CUT_OUTER", closed=True)
+    return 1
+
+
+def _export_cu_outer_completo_desde_fuente(
+    msp,
+    doc,
+    part_doc,
+    m,
+    p: dict,
+    outer: list,
+    sheet: dict | None = None,
+) -> int:
+    """con_gap / STEP: contorno cerrado en CUT_OUTER desde el nest (no LINE/ARC sueltos)."""
+    del doc, part_doc, m  # inner/marks siguen en el canal fuente
+    outer_work = _ring_for_sin_gap_export(outer, sheet, p)
+    return _export_cu_full_contour_cut_outer_from_ring(msp, outer_work)
 
 
 def _export_cu_full_contour_cut_cu(
@@ -1136,7 +1197,7 @@ def _export_cu_full_contour_cut_cu(
     outer: list,
     sheet: dict | None = None,
 ) -> int:
-    """CUT_CU: una polilínea cerrada por pieza — nunca LINE/ARC sueltos en modelspace."""
+    """Legacy CUT_CU — no usar en export nest cobre actual."""
     outer_work = _ring_for_sin_gap_export(outer, sheet, p)
     if not outer_work:
         label = _piece_label(p)
@@ -1222,7 +1283,7 @@ def _export_cu_inner_and_marks(
     if draw_holes:
         for h in p.get("holes") or p.get("inner") or []:
             h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
-            if _sheet_is_sin_gap(sheet):
+            if _sheet_export_sin_gap_vertical(sheet):
                 h_t = _transform_poly_sin_gap_vertical(h_t, bw)
             if not h_t:
                 continue
@@ -1233,7 +1294,7 @@ def _export_cu_inner_and_marks(
             if not mk:
                 continue
             mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
-            if _sheet_is_sin_gap(sheet):
+            if _sheet_export_sin_gap_vertical(sheet):
                 mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
             if mk_t:
                 _add_lwpolyline(msp, mk_t, layer="MARK", closed=False)
@@ -1275,6 +1336,36 @@ def _export_cu_largos_from_source(
         _fail_export(label, f"DXF fuente ilegible: {e}")
 
     m = _resolve_placement_matrix(part_doc, _resolve_placement(p), sheet=sheet)
+
+    if not _sheet_cu_exporta_cortes_segmentados(sheet):
+        outer_added = _export_cu_outer_completo_desde_fuente(
+            msp, doc, part_doc, m, p, outer, sheet=sheet
+        )
+        if outer_added <= 0:
+            _fail_export(
+                label,
+                "sin contorno CUT_OUTER cerrado exportable para STEP (revise DXF fuente)",
+            )
+        inner_ok = _export_cu_inner_and_marks_from_source(
+            msp, doc, part_doc, m, p, draw_marks=draw_marks
+        )
+        holes = p.get("holes") or p.get("inner") or []
+        marks = p.get("marks") or p.get("mark") or []
+        if not inner_ok and ((holes and draw_holes) or (marks and draw_marks)):
+            inner_ok = _export_cu_inner_and_marks(
+                msp,
+                p,
+                draw_holes=draw_holes,
+                draw_marks=draw_marks,
+                sheet=sheet,
+            )
+        if not inner_ok and holes and draw_holes:
+            _fail_export(
+                label,
+                "barrenos/interiores no exportables 1:1 desde el DXF fuente",
+            )
+        return
+
     laser_added = _export_cu_laser_outer_for_piece(
         msp, part_doc, m, p, outer, sheet=sheet
     )
@@ -1311,11 +1402,6 @@ def _export_cu_largos_from_source(
     elif not inner_ok and draw_marks and (p.get("marks") or p.get("mark")):
         if strict:
             _fail_export(label, "marcaje no exportable desde el DXF fuente")
-
-    if not str(label).startswith("CU_CORTE__") and not _sheet_omits_cut_cu(None, p):
-        _export_cu_full_contour_cut_cu(
-            msp, doc, part_doc, m, p, outer, sheet=sheet
-        )
 
 
 def _export_source_dxf_at_placement(
@@ -1447,29 +1533,22 @@ def _export_placed_geometry(
 
     if has_outer:
         outer_t = _transform_poly(outer, tx=0.0, ty=0.0, rot_deg=0.0)
-        if _sheet_is_sin_gap(sheet):
+        if _sheet_export_sin_gap_vertical(sheet):
             outer_t = _transform_poly_sin_gap_vertical(
                 outer_t, _bar_width_mm(sheet)
             )
         if outer_t and not p.get("cu_largos_holes_only"):
             if p.get("cu_largos_piece"):
-                _export_cu_contour_cuts_from_ring(
-                    msp,
-                    outer_t,
-                    p,
-                    sheet=None,
-                    coords_vertical=_sheet_is_sin_gap(sheet),
-                )
-                if (
-                    not str(p.get("part_name", p.get("name", ""))).startswith("CU_CORTE__")
-                    and not _sheet_omits_cut_cu(sheet, p)
-                ):
-                    if doc is not None:
-                        _export_cu_full_contour_cut_cu_from_ring(msp, doc, outer_t)
-                    else:
-                        _add_lwpolyline(
-                            msp, normalize_ring(outer_t, closed=True), "CUT_CU", closed=True
-                        )
+                if _sheet_cu_exporta_cortes_segmentados(sheet):
+                    _export_cu_contour_cuts_from_ring(
+                        msp,
+                        outer_t,
+                        p,
+                        sheet=sheet,
+                        coords_vertical=_sheet_export_sin_gap_vertical(sheet),
+                    )
+                else:
+                    _export_cu_full_contour_cut_outer_from_ring(msp, outer_t)
             else:
                 layer_destino = str(p.get("layer_override") or "CUT_OUTER")
                 closed_destino = bool(p.get("closed", True))
@@ -1493,7 +1572,7 @@ def _export_placed_geometry(
             bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
             for h in holes:
                 h_t = _transform_poly(h, tx=0.0, ty=0.0, rot_deg=0.0)
-                if _sheet_is_sin_gap(sheet):
+                if _sheet_export_sin_gap_vertical(sheet):
                     h_t = _transform_poly_sin_gap_vertical(h_t, bw)
                 if not h_t:
                     continue
@@ -1521,7 +1600,7 @@ def _export_placed_geometry(
                 if not mk:
                     continue
                 mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
-                if _sheet_is_sin_gap(sheet):
+                if _sheet_export_sin_gap_vertical(sheet):
                     mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
                 if mk_t:
                     _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
@@ -1624,6 +1703,17 @@ def _sheet_is_sin_gap(sheet: dict | None) -> bool:
     )
 
 
+def _sheet_export_sin_gap_vertical(sheet: dict | None) -> bool:
+    """Rotación vertical CyPTube en DXF (madre y RTZCU cuando cu_export_vertical)."""
+    if not _sheet_is_sin_gap(sheet):
+        return False
+    if isinstance(sheet, dict) and sheet.get("cu_export_vertical"):
+        return True
+    return not (
+        isinstance(sheet, dict) and sheet.get("cu_rtz_virtual")
+    )
+
+
 def _bar_width_mm(sheet: dict | None, fallback: float = 0.0) -> float:
     if not isinstance(sheet, dict):
         return float(fallback or 0.0)
@@ -1637,7 +1727,7 @@ def _sin_gap_vertical_matrix(bar_w_mm: float) -> Matrix44:
 
 
 def _compose_sin_gap_vertical(m: Matrix44, sheet: dict | None) -> Matrix44:
-    if not _sheet_is_sin_gap(sheet):
+    if not _sheet_export_sin_gap_vertical(sheet):
         return m
     bw = _bar_width_mm(sheet)
     if bw <= TOL_GEOM_MM:
@@ -1668,7 +1758,7 @@ def _nest_bounds_for_matrix_check(
     """BBox del nest en el mismo espacio que la matriz de export (vertical si sin_gap)."""
     if not outer_bounds:
         return outer_bounds
-    if not _sheet_is_sin_gap(sheet):
+    if not _sheet_export_sin_gap_vertical(sheet):
         return outer_bounds
     minx, miny, maxx, maxy = outer_bounds
     bw = _bar_width_mm(sheet)
@@ -1680,7 +1770,7 @@ def _nest_bounds_for_matrix_check(
 
 
 def _ring_for_sin_gap_export(ring, sheet: dict | None, p: dict | None = None):
-    if not _sheet_is_sin_gap(sheet):
+    if not _sheet_export_sin_gap_vertical(sheet):
         return ring
     bw = _bar_width_mm(
         sheet, float((p or {}).get("cu_bar_w_mm") or 0.0)
@@ -1920,6 +2010,7 @@ def export_nest_to_dxf(
                     sheet_len=sheet_len,
                     sheet_w=sheet_w,
                     solo_cobre=solo_cobre,
+                    sheet=sheet,
                 )
                 exported_pieces += 1
             elif new_entities:
@@ -1938,16 +2029,30 @@ def export_nest_to_dxf(
             )
 
         if omit_plate_frame:
-            _purge_entities_on_layers(msp, {"Plate", "Plate_Text"})
+            keep_plate = bool(
+                isinstance(sheet, dict)
+                and (
+                    sheet.get("cu_rtz_virtual")
+                    or any(
+                        str(p.get("part_name") or "").startswith("BORDE_RETAZO_")
+                        for p in (placements or [])
+                    )
+                )
+            )
+            if not keep_plate:
+                _purge_entities_on_layers(msp, {"Plate", "Plate_Text"})
 
         if _sheet_is_sin_gap(sheet):
-            if solo_cobre:
+            if solo_cobre and not (
+                isinstance(sheet, dict) and sheet.get("cu_rtz_virtual")
+            ):
                 _export_cu_bar_inicio_marker_vertical(
                     msp, _bar_width_mm(sheet, _sheet_bar_w)
                 )
-            sheet_len, sheet_w = float(sheet_w), float(sheet_len)
-            _sheet_bar_l = sheet_len
-            _sheet_bar_w = sheet_w
+            if not (isinstance(sheet, dict) and sheet.get("cu_rtz_virtual")):
+                sheet_len, sheet_w = float(sheet_w), float(sheet_len)
+                _sheet_bar_l = sheet_len
+                _sheet_bar_w = sheet_w
 
         if solo_cobre:
             _purge_capas_no_produccion_cobre(doc)
@@ -1955,13 +2060,13 @@ def export_nest_to_dxf(
             _purge_unused_layers(doc)
 
         if solo_cobre:
-            if not _sheet_omits_cut_cu(sheet):
+            if not _sheet_cu_exporta_cortes_segmentados(sheet):
                 from modules.cobre_step_audit import (
-                    validate_cut_cu_piece_count,
+                    validate_cut_outer_piece_count,
                     write_cu_piece_meta,
                 )
 
-                expected_cu = validate_cut_cu_piece_count(
+                expected_cu = validate_cut_outer_piece_count(
                     msp,
                     placements,
                     sheet_label=str(title or out_path),
@@ -1980,6 +2085,7 @@ def export_nest_to_dxf(
                 sheet_w=sheet_w,
                 solo_cobre=solo_cobre,
                 skip_bounds=_sheet_is_sin_gap(sheet) and solo_cobre,
+                sheet=sheet,
             )
             _validate_dxf_document(doc)
 

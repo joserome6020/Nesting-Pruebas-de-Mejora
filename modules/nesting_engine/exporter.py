@@ -7,6 +7,7 @@ from shapely.geometry import Polygon, MultiPolygon
 
 RUTA_CAMA_LASER = "CAMA LASER SIN MINI NEST"
 RUTA_CAMA_LASER_12KW = "CAMA LASER 12 KW SIN MINI NEST"
+RUTA_NESTEOS_COBRE = "NESTEOS DE COBRE"
 RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
@@ -118,6 +119,7 @@ def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
     os.makedirs(dest, exist_ok=True)
     copiados = 0
     step_dirs = [
+        rutas.get("nesteos_cobre_step"),
         rutas.get("cama_laser_step"),
         rutas.get("cama_laser_iges"),
         rutas.get("cama_laser_12kw_step"),
@@ -156,6 +158,7 @@ def _auditar_steps_en_rutas(
     cu_formato_por_dxf: dict[str, str] | None = None,
 ) -> dict[str, dict[str, int]]:
     familias = [
+        ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
         ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
         ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
         ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
@@ -170,7 +173,7 @@ def _auditar_steps_en_rutas(
         candidatos_dxf = _listar_dxfs_en_carpeta(dxf_dir) if dxf_dir else []
         n_dxf = len(candidatos_dxf)
         n_dxf_3d = n_dxf
-        if fmt_map and etiqueta == "CAMA LASER":
+        if fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
             n_dxf_3d = sum(
                 1
                 for p in candidatos_dxf
@@ -178,7 +181,7 @@ def _auditar_steps_en_rutas(
             )
         n_step = 0
         n_iges = 0
-        if dxf_dir and fmt_map and etiqueta == "CAMA LASER":
+        if dxf_dir and fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
             try:
                 from freecad_runner import _cad_path_for_dxf
 
@@ -243,6 +246,7 @@ def _validar_steps_tras_export(
         if n_3d <= 0:
             step_dir = rutas.get(
                 {
+                    "NESTEOS DE COBRE": "nesteos_cobre_step",
                     "CAMA LASER": "cama_laser_step",
                     "CAMA LASER 12KW": "cama_laser_12kw_step",
                     "ROBOT LASER": "robot_laser_step_A",
@@ -274,6 +278,7 @@ def _validar_steps_tras_export(
                 str(
                     rutas.get(
                         {
+                            "NESTEOS DE COBRE": "nesteos_cobre_dxf",
                             "CAMA LASER": "cama_laser_dxf",
                             "CAMA LASER 12KW": "cama_laser_12kw_dxf",
                             "ROBOT LASER": "robot_laser_dxf",
@@ -291,7 +296,7 @@ def _validar_steps_tras_export(
 
                     for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
                         nombre = os.path.basename(dxf_path)
-                        if fmt_map and etiqueta == "CAMA LASER":
+                        if fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
                             fmt = fmt_map.get(nombre, "step")
                             if not _cu_dxf_requiere_3d(fmt):
                                 continue
@@ -337,7 +342,7 @@ def _generar_steps_cobre_fuentes_in_place(resultados: dict, job_root_dir: str, *
     if not fuentes:
         return 0
 
-    dest_manifest = os.path.join(job_root_dir, RUTA_CAMA_LASER)
+    dest_manifest = os.path.join(job_root_dir, RUTA_NESTEOS_COBRE)
     path = escribir_manifest_cobre(dest_manifest, manifest)
     if log_fn:
         log_fn(f"Manifiesto cobre: {path} ({len(fuentes)} DXF fuente)")
@@ -438,11 +443,11 @@ def _has_big_component(hoja):
 
 def _resolver_carpeta_principal(clave, hoja):
     if bool(hoja.get("modo_largos_cu")):
-        return RUTA_CAMA_LASER
+        return RUTA_NESTEOS_COBRE
 
     partes = str(clave or "").split("_", 1)
     if len(partes) > 1 and str(partes[1]).strip().upper() == "CU":
-        return RUTA_CAMA_LASER
+        return RUTA_NESTEOS_COBRE
 
     raw_thk, thk_val = _parse_thickness_from_clave(clave)
     w_in, l_in = _sheet_dims_in(hoja)
@@ -591,6 +596,7 @@ def _normalizar_tipo_corte_pqart(nombre_carpeta: str) -> str:
     carpeta = str(nombre_carpeta or "").strip().upper()
 
     if carpeta in {
+        RUTA_NESTEOS_COBRE.upper(),
         RUTA_CAMA_LASER.upper(),
         RUTA_CAMA_LASER_12KW.upper(),
     }:
@@ -745,6 +751,7 @@ def lanzar_freecad_robotica(
             job_root,
             {
                 "cama_laser_dxf": RUTA_CAMA_LASER,
+                "nesteos_cobre_dxf": RUTA_NESTEOS_COBRE,
                 "cama_laser_12kw_dxf": RUTA_CAMA_LASER_12KW,
                 "robot_laser_dxf": RUTA_ROBOT_LASER,
                 "robot_plasma_dxf": RUTA_ROBOT_PLASMA,
@@ -790,34 +797,36 @@ def lanzar_freecad_robotica(
             return "dxf"
         return "step"
 
-    # CAMA LASER (incluye largos de cobre CU)
-    if rutas.get("cama_laser_dxf"):
+    # CAMA LASER (acero / placas; cobre va a NESTEOS DE COBRE)
+    if rutas.get("cama_laser_dxf") and not es_cobre:
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        if es_cobre:
-            if not fmt_map:
-                print(
-                    "[STEP][SKIP] CAMA LASER: cobre solo DXF "
-                    "(todas las barras sin_gap / sin conversión 3D)"
-                )
-            else:
-                _convertir(
-                    "CAMA LASER STEP",
-                    "cama_laser_dxf",
-                    "cama_laser_step",
-                    "TR",
-                    0.0, 0.0, 0.0,
-                    material="CU",
-                    export_format="step",
-                    dxf_filter=lambda p: _cu_dxf_requiere_3d(_fmt_for_dxf(p)),
-                )
+        _convertir(
+            "CAMA LASER",
+            "cama_laser_dxf",
+            "cama_laser_step",
+            "TR",
+            0.0, 0.0, 0.0,
+            material="STEEL",
+        )
+
+    # NESTEOS DE COBRE (largos CU: madre + RTZCU)
+    if es_cobre and rutas.get("nesteos_cobre_dxf"):
+        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+        if not fmt_map:
+            print(
+                "[STEP][SKIP] NESTEOS DE COBRE: cobre solo DXF "
+                "(todas las barras sin_gap / sin conversión 3D)"
+            )
         else:
             _convertir(
-                "CAMA LASER",
-                "cama_laser_dxf",
-                "cama_laser_step",
+                "NESTEOS DE COBRE STEP",
+                "nesteos_cobre_dxf",
+                "nesteos_cobre_step",
                 "TR",
                 0.0, 0.0, 0.0,
-                material="CU" if es_cobre else "STEEL",
+                material="CU",
+                export_format="step",
+                dxf_filter=lambda p: _cu_dxf_requiere_3d(_fmt_for_dxf(p)),
             )
 
     if rutas.get("cama_laser_12kw_dxf"):
@@ -895,8 +904,10 @@ def exportar_resultados_a_dxf(
 
     try:
         from modules.nest_exporter import export_nest_to_dxf, DxfExportValidationError
+        from modules.dxf_export.cobre_nest import export_cobre_hoja_to_dxf
     except ImportError:
         from nest_exporter import export_nest_to_dxf, DxfExportValidationError
+        from modules.dxf_export.cobre_nest import export_cobre_hoja_to_dxf
 
     import config
 
@@ -912,6 +923,8 @@ def exportar_resultados_a_dxf(
     log(f"generar_step={generar_step} | grupos={len(resultados or {})}")
 
     rutas = {
+        "nesteos_cobre_dxf": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "DXF"),
+        "nesteos_cobre_step": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "STEP"),
         "cama_laser_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER, "DXF"),
         "cama_laser_12kw_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "DXF"),
         "robot_laser_dxf": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "DXF"),
@@ -947,6 +960,9 @@ def exportar_resultados_a_dxf(
         wo_label=wo_label,
     )
     asignar_numeracion_global_hojas(resultados, order_label_global, sobrescribir=True)
+    from .cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids, es_overlay_rtz_cu
+
+    asignar_rtz_cu_sin_gap_ids(resultados)
 
     from .efficiency_metrics import (
         inicializar_contador_rtz_sobrante,
@@ -982,6 +998,8 @@ def exportar_resultados_a_dxf(
             w_mm = hoja.get("placa_w", 2438.4)
             h_mm = hoja.get("placa_h", 1219.2)
             es_retazo = hoja.get("es_retazo", False)
+            es_cu_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
+            es_cu_hoja = bool(hoja.get("modo_largos_cu"))
 
             if es_swo_export and swo_ref.upper().startswith("SWO"):
                 order_label = swo_ref
@@ -1026,6 +1044,7 @@ def exportar_resultados_a_dxf(
                 "cu_modo_separacion_barra": str(
                     hoja.get("cu_modo_separacion_barra") or ""
                 ),
+                "cu_rtz_virtual": bool(hoja.get("cu_rtz_virtual")),
             }
             _cu_bar_w = float(h_mm)
             _cu_bar_l = float(w_mm)
@@ -1054,7 +1073,7 @@ def exportar_resultados_a_dxf(
             placements_principales = []
             placements_plasma = []
 
-            if es_retazo and "poly_borde_retazo" in hoja:
+            if es_retazo and "poly_borde_retazo" in hoja and not es_cu_hoja:
                 placements_principales.append({
                     "part_name": f"BORDE_RETAZO_{hoja['placa_id']}",
                     "outer": hoja["poly_borde_retazo"],
@@ -1073,6 +1092,12 @@ def exportar_resultados_a_dxf(
                 nom = pz.get("nombre", "PART")
 
                 if nom.startswith("REF__"):
+                    continue
+
+                if es_overlay_rtz_cu(nom):
+                    continue
+
+                if es_cu_hoja and not es_cu_rtz_virtual and pz.get("cu_zona_rtz"):
                     continue
 
                 if nom.startswith("TATUAJE_"):
@@ -1097,8 +1122,15 @@ def exportar_resultados_a_dxf(
                 if not pols:
                     continue
 
-                es_cu_hoja = bool(hoja.get("modo_largos_cu"))
-                es_linea_corte = nom.startswith("RETAZO_GUILLOTINA") or nom.startswith("CU_CORTE__")
+                es_linea_corte = (
+                    nom.startswith("RETAZO_GUILLOTINA")
+                    or nom.startswith("CU_CORTE__")
+                )
+                if es_cu_hoja and es_linea_corte:
+                    if es_overlay_rtz_cu(nom):
+                        continue
+                    if str(hoja.get("export_3d_format") or "").strip().lower() == "step":
+                        continue
 
                 # DXF principal (sin compensación)
                 outer_main, holes_main = _clean_profile_for_production(
@@ -1141,7 +1173,7 @@ def exportar_resultados_a_dxf(
                     "cu_bar_w_mm": _cu_bar_w if es_cu_hoja else 0.0,
                     "cu_bar_l_mm": _cu_bar_l if es_cu_hoja else 0.0,
                     "cu_sin_separacion": bool(pz.get("cu_sin_separacion")),
-                    "omit_cut_cu": str(hoja.get("export_3d_format") or "") == "dxf",
+                    "omit_cut_cu": True,
                     "largo_cu_in": float(pz.get("largo_cu_in") or 0.0),
                     "orig_minx": pz.get("orig_minx", 0.0),
                     "orig_miny": pz.get("orig_miny", 0.0),
@@ -1215,7 +1247,12 @@ def exportar_resultados_a_dxf(
                         "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                     })
 
-            sheet_code = hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}"
+            if es_cu_rtz_virtual:
+                sheet_code = str(
+                    hoja.get("sheet_code") or hoja.get("placa_id") or f"{order_label}-H{sheet_seq}"
+                ).strip()
+            else:
+                sheet_code = hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}"
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
@@ -1239,7 +1276,9 @@ def exportar_resultados_a_dxf(
 
             # Exportación principal (omitida en RTZC: solo Robot Plasma)
             if not solo_plasma:
-                if carpeta_principal == RUTA_CAMA_LASER:
+                if carpeta_principal == RUTA_NESTEOS_COBRE:
+                    path_principal = os.path.join(rutas["nesteos_cobre_dxf"], nombre_archivo)
+                elif carpeta_principal == RUTA_CAMA_LASER:
                     path_principal = os.path.join(rutas["cama_laser_dxf"], nombre_archivo)
                 elif carpeta_principal == RUTA_CAMA_LASER_12KW:
                     path_principal = os.path.join(rutas["cama_laser_12kw_dxf"], nombre_archivo)
@@ -1248,15 +1287,24 @@ def exportar_resultados_a_dxf(
 
                 try:
                     log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
-                    export_nest_to_dxf(
-                        path_principal,
-                        sheet_info,
-                        placements_principales,
-                        title=f"{carpeta_principal} | {clave}",
-                        canal=carpeta_principal,
-                        modo_largos_cu=bool(hoja.get("modo_largos_cu")),
-                        strict=True,
-                    )
+                    if es_cu_hoja:
+                        export_cobre_hoja_to_dxf(
+                            path_principal,
+                            sheet_info,
+                            placements_principales,
+                            title=f"{carpeta_principal} | {clave}",
+                            strict=not es_cu_rtz_virtual,
+                        )
+                    else:
+                        export_nest_to_dxf(
+                            path_principal,
+                            sheet_info,
+                            placements_principales,
+                            title=f"{carpeta_principal} | {clave}",
+                            canal=carpeta_principal,
+                            modo_largos_cu=False,
+                            strict=True,
+                        )
                 except DxfExportValidationError as exc:
                     raise DxfExportValidationError(
                         f"Exportación abortada ({nombre_archivo}): {exc}"
@@ -1284,6 +1332,8 @@ def exportar_resultados_a_dxf(
                 for pz in hoja.get("piezas", []):
                     nom = str(pz.get("nombre", "") or "")
                     if nom.startswith("REF__") or nom.startswith("TATUAJE_"):
+                        continue
+                    if nom.startswith("RTZCU_ZONA__") or es_overlay_rtz_cu(nom):
                         continue
                     if nom.startswith("RETAZO_GUILLOTINA") or nom.startswith("CU_CORTE__"):
                         continue

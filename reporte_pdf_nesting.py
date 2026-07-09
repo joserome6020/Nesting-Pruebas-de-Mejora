@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 MM_TO_IN = 1.0 / 25.4
-SPECIAL_PREFIXES = ("REMANENTE", "RETAZO", "TATUAJE", "REF__", "CU_CORTE__")
+SPECIAL_PREFIXES = ("REMANENTE", "RETAZO", "TATUAJE", "REF__", "CU_CORTE__", "RTZCU")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BRANDING_DIR = os.path.join(BASE_DIR, "assets", "branding")
 
@@ -72,17 +72,36 @@ def _is_tatuaje_overlay(piece):
     return _piece_nombre(piece).startswith("TATUAJE__")
 
 
+def _is_cu_rtz_overlay_piece(piece):
+    nom = _piece_nombre(piece)
+    if nom.startswith("RETAZO_GUILLOTINA__") and "RTZCU" in nom.upper():
+        return True
+    if nom.startswith("TATUAJE__") and "RTZCU" in nom.upper():
+        return True
+    return False
+
+
 def _is_rtz_overlay(piece):
-    return _is_ref_overlay(piece) or _is_guillotina_overlay(piece) or _is_tatuaje_overlay(piece)
+    return (
+        _is_ref_overlay(piece)
+        or _is_guillotina_overlay(piece)
+        or _is_tatuaje_overlay(piece)
+        or _is_cu_rtz_overlay_piece(piece)
+    )
 
 
 def _mother_has_rtz_overlays(plate):
-    if (plate or {}).get("es_retazo") or (plate or {}).get("modo_largos_cu"):
+    if (plate or {}).get("es_retazo"):
         return False
+    if (plate or {}).get("modo_largos_cu"):
+        return bool((plate or {}).get("cu_rtz_activo"))
     return any(_is_rtz_overlay(p) for p in ((plate or {}).get("piezas") or []))
 
 
 def _rtz_ids_en_placa(plate):
+    if (plate or {}).get("modo_largos_cu") and (plate or {}).get("cu_rtz_activo"):
+        rid = str((plate or {}).get("cu_rtz_id") or "").strip()
+        return [rid] if rid else []
     ids = []
     for p in (plate or {}).get("piezas") or []:
         nom = _piece_nombre(p)
@@ -95,6 +114,18 @@ def _rtz_ids_en_placa(plate):
             if rid and rid not in ids:
                 ids.append(rid)
     return ids
+
+
+def _texto_retazo_rtz_placa(plate, rtz_ids):
+    ids_txt = ", ".join(rtz_ids) if rtz_ids else "RTZCU asociado"
+    if (plate or {}).get("modo_largos_cu"):
+        largo_in = _to_float((plate or {}).get("cu_rtz_largo_in"), 0.0)
+        extra = f" — tramo no cortable en láser ({largo_in:.2f}\")"
+        return f"Retazo RTZCU de cobre: {ids_txt}{extra}"
+    return (
+        f"Retazo RTZ en uso: {ids_txt}  "
+        "(zona punteada + piezas beige = referencia del mini-nest)"
+    )
 
 
 def _sync_rtz_overlays_para_pdf(resultados_nesting):
@@ -200,9 +231,14 @@ def _build_consolidated_piece_summary(plates, meta_por_ruta=None, job_fallback="
     for plate in plates or []:
         calibre = str((plate or {}).get("calibre") or "-").strip() or "-"
         piezas = (plate or {}).get("piezas") or []
+        es_cu_madre = bool(plate.get("modo_largos_cu")) and not plate.get(
+            "cu_rtz_virtual"
+        ) and not plate.get("es_retazo")
 
         for pieza in piezas:
             if not _is_real_piece(pieza):
+                continue
+            if es_cu_madre and pieza.get("cu_zona_rtz"):
                 continue
 
             meta = _resolve_piece_meta(pieza, meta_por_ruta, job_fallback)
@@ -291,9 +327,15 @@ def _enumerate_plates(resultados_nesting):
     plates = []
 
     try:
-        from modules.nesting_engine.efficiency_metrics import calcular_eficiencias_grupo
+        from modules.nesting_engine.efficiency_metrics import (
+            calcular_eficiencias_grupo,
+            contar_piezas_grupo,
+            contar_piezas_hoja,
+        )
     except ImportError:
         calcular_eficiencias_grupo = None
+        contar_piezas_grupo = None
+        contar_piezas_hoja = None
 
     try:
         from modules.nesting_engine.sheet_numbering import iterar_grupos_nesting_ordenados
@@ -345,7 +387,10 @@ def _enumerate_plates(resultados_nesting):
                 placa_id_final = f"{codigo_base} P{contador_placas[codigo_base]}"
 
             pieces = hoja.get("piezas", [])
-            real_piece_count = len([p for p in pieces if _is_real_piece(p)])
+            if contar_piezas_hoja is not None:
+                real_piece_count = contar_piezas_hoja(hoja)
+            else:
+                real_piece_count = len([p for p in pieces if _is_real_piece(p)])
 
             plates.append(
                 {
@@ -358,6 +403,10 @@ def _enumerate_plates(resultados_nesting):
                     "piezas": pieces,
                     "real_piece_count": real_piece_count,
                     "es_retazo": bool(hoja.get("es_retazo")),
+                    "modo_largos_cu": bool(hoja.get("modo_largos_cu")),
+                    "cu_rtz_activo": bool(hoja.get("cu_rtz_activo")),
+                    "cu_rtz_virtual": bool(hoja.get("cu_rtz_virtual")),
+                    "cu_rtz_largo_in": _to_float(hoja.get("cu_rtz_largo_in"), 0.0),
                     "eficiencia_directa": _to_float(hoja.get("eficiencia_directa", hoja.get("eficiencia")), 0.0),
                     "eficiencia_real": _to_float(hoja.get("eficiencia_real", hoja.get("eficiencia")), 0.0),
                     "area_piezas_mm2": _to_float(hoja.get("area_piezas_mm2"), 0.0),
@@ -474,10 +523,14 @@ def _draw_rtz_overlays(c, pieces, scale, ox, oy):
             _draw_polygon(c, hole, scale, ox, oy, RTZ_REF_STROKE, colors.white, 0.7)
 
     for pieza in overlays:
-        if not _is_guillotina_overlay(pieza):
+        if not _is_guillotina_overlay(pieza) and not _is_cu_rtz_overlay_piece(pieza):
             continue
         polys = pieza.get("poligonos") or []
         if polys:
+            if _is_cu_rtz_overlay_piece(pieza):
+                _draw_polygon(
+                    c, polys[0], scale, ox, oy, RTZ_REF_STROKE, RTZ_REF_FILL, 0.35
+                )
             _draw_dashed_polygon(
                 c, polys[0], scale, ox, oy, RTZ_GUILLOTINA_STROKE, stroke_width=1.6
             )
@@ -520,6 +573,8 @@ def _draw_plate_nesting_geometry(
     )
     if plate.get("modo_largos_cu"):
         _draw_cu_cortes(c, plate.get("piezas") or [], scale, ox, oy)
+        if plate.get("cu_rtz_activo"):
+            _draw_rtz_overlays(c, plate.get("piezas") or [], scale, ox, oy)
     elif not plate.get("es_retazo"):
         _draw_rtz_overlays(c, plate.get("piezas") or [], scale, ox, oy)
 
@@ -558,13 +613,16 @@ def _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_t
     c.drawString(180, leg_y - 3, "Marcaje")
 
 
-def _draw_rtz_legend(c, leg_y, body_text):
+def _draw_rtz_legend(c, leg_y, body_text, *, cobre: bool = False):
     c.setFont("Helvetica", 7.3)
+    ref_label = "Pieza referencia RTZCU" if cobre else "Pieza referencia RTZ"
+    zona_label = "Zona retazo RTZCU" if cobre else "Zona retazo RTZ"
+    etiq_label = "Etiqueta RTZCU" if cobre else "Etiqueta RTZ"
     c.setFillColor(RTZ_REF_FILL)
     c.setStrokeColor(RTZ_REF_STROKE)
     c.rect(18, leg_y - 6, 8, 8, fill=1, stroke=1)
     c.setFillColor(body_text)
-    c.drawString(30, leg_y - 3, "Pieza referencia RTZ")
+    c.drawString(30, leg_y - 3, ref_label)
 
     c.setStrokeColor(RTZ_GUILLOTINA_STROKE)
     c.setLineWidth(1.4)
@@ -578,13 +636,13 @@ def _draw_rtz_legend(c, leg_y, body_text):
     except Exception:
         pass
     c.setFillColor(body_text)
-    c.drawString(157, leg_y - 3, "Zona retazo RTZ")
+    c.drawString(157, leg_y - 3, zona_label)
 
     c.setStrokeColor(RTZ_TATUAJE_MARK)
     c.setLineWidth(1.2)
     c.line(248, leg_y - 2, 256, leg_y - 2)
     c.setFillColor(body_text)
-    c.drawString(260, leg_y - 3, "Etiqueta RTZ")
+    c.drawString(260, leg_y - 3, etiq_label)
 
 
 def _resolve_plate_page_layout(plate, tiene_rtz):
@@ -753,7 +811,7 @@ def _format_work_order_label(work_order_label=None, work_order_num=1):
         return str(work_order_label).strip()
     return f"W.O.{int(work_order_num or 1)}"
 
-def _build_cover_summary(plates):
+def _build_cover_summary(plates, resultados_nesting=None):
     total_plates = sum(1 for p in plates if not p.get("es_retazo"))
     total_plates_deducibles = sum(
         1
@@ -761,7 +819,18 @@ def _build_cover_summary(plates):
         if not p.get("es_retazo") and not p.get("ignorar_deduccion")
     )
     total_sheets = len(plates)
-    total_real_pieces = sum(p.get("real_piece_count", 0) for p in plates)
+    total_real_pieces = 0
+    if resultados_nesting:
+        try:
+            from modules.nesting_engine.efficiency_metrics import contar_piezas_grupo
+
+            for datos in (resultados_nesting or {}).values():
+                if isinstance(datos, dict) and "error" not in datos:
+                    total_real_pieces += contar_piezas_grupo(datos)
+        except ImportError:
+            total_real_pieces = sum(p.get("real_piece_count", 0) for p in plates)
+    else:
+        total_real_pieces = sum(p.get("real_piece_count", 0) for p in plates)
 
     by_calibre = OrderedDict()
     by_plate = OrderedDict()
@@ -914,9 +983,10 @@ def _draw_table(c, x, y_top, col_widths, headers, rows,
 
 
 def _draw_cover_pages(c, width, height, plates, nombre_orden, work_order_label,
-                      title_color, subtitle_color, line_color, table_head, table_line, body_text):
+                      title_color, subtitle_color, line_color, table_head, table_line, body_text,
+                      resultados_nesting=None):
 
-    summary = _build_cover_summary(plates)
+    summary = _build_cover_summary(plates, resultados_nesting=resultados_nesting)
     calibre_rows = summary["calibre_rows"] or [["-", "-", "0", "-", "-", "-"]]
     plate_rows = summary["plate_rows"] or [["-", "-", "-", "0"]]
 
@@ -1272,6 +1342,9 @@ def exportar_pdf_nesting(
 
         if not numeracion_hojas_es_consistente(resultados_nesting, wo_label):
             asignar_numeracion_global_hojas(resultados_nesting, wo_label, sobrescribir=True)
+        from modules.nesting_engine.cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids
+
+        asignar_rtz_cu_sin_gap_ids(resultados_nesting)
     except ImportError:
         pass
 
@@ -1308,6 +1381,7 @@ def exportar_pdf_nesting(
         table_head=table_head,
         table_line=table_line,
         body_text=body_text,
+        resultados_nesting=resultados_nesting,
     )
 
     _draw_consolidated_piece_pages(
@@ -1329,6 +1403,8 @@ def exportar_pdf_nesting(
 
     # ---------------- HOJAS DE PLACA ----------------
     for page_idx, plate in enumerate(plates, start=1):
+        if plate.get("cu_rtz_virtual"):
+            continue
         piezas_reales = [p for p in plate["piezas"] if _is_real_piece(p)]
         rows, ids_map = _build_group_summary(piezas_reales, meta_por_ruta, job_fallback)
         sheet_code = plate.get("sheet_code") or f"{wo_label}-H{page_idx}"
@@ -1364,12 +1440,13 @@ def exportar_pdf_nesting(
         )
         efi_dir = _to_float(plate.get("eficiencia_directa"), 0.0)
         efi_real = _to_float(plate.get("eficiencia_real"), efi_dir)
+        efi_rtz_label = "RTZCU" if plate.get("modo_largos_cu") else "RTZ"
         c.drawString(
             18,
             670,
             (
                 f"Eficiencia placa: Directa {efi_dir:.1f}% (piezas en madre) | "
-                f"Real {efi_real:.1f}% (madre + RTZ)"
+                f"Real {efi_real:.1f}% (madre + {efi_rtz_label})"
             ),
         )
         if plate.get("ignorar_deduccion"):
@@ -1386,14 +1463,14 @@ def exportar_pdf_nesting(
             c.drawString(
                 18,
                 meta_y - 14,
-                f"Retazo RTZ en uso: {ids_txt}  (zona punteada + piezas beige = referencia del mini-nest)",
+                _texto_retazo_rtz_placa(plate, rtz_ids),
             )
 
         # ---------------- LEYENDA ----------------
         leg_y, leg_y_rtz, draw_top = _resolve_plate_page_layout(plate, tiene_rtz)
         _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text)
         if leg_y_rtz is not None:
-            _draw_rtz_legend(c, leg_y_rtz, body_text)
+            _draw_rtz_legend(c, leg_y_rtz, body_text, cobre=bool(plate.get("modo_largos_cu")))
 
         # ---------------- TABLA ----------------
         rows_to_draw = rows or [
@@ -1709,6 +1786,8 @@ def exportar_pdf_radiografia_web(
     )
 
     for page_idx, plate in enumerate(plates, start=1):
+        if plate.get("cu_rtz_virtual"):
+            continue
         piezas_reales = [p for p in plate["piezas"] if _is_real_piece(p)]
         rows, ids_map = _build_group_summary(
             piezas_reales,
@@ -1751,17 +1830,16 @@ def exportar_pdf_radiografia_web(
         if tiene_rtz:
             c.setFillColor(colors.HexColor("#B45309"))
             c.setFont("Helvetica-Bold", 8.0)
-            ids_txt = ", ".join(rtz_ids) if rtz_ids else "RTZ asociado"
             c.drawString(
                 18,
                 670,
-                f"Retazo RTZ en uso: {ids_txt}  (zona punteada + piezas beige = referencia del mini-nest)",
+                _texto_retazo_rtz_placa(plate, rtz_ids),
             )
 
         leg_y, leg_y_rtz, draw_top = _resolve_plate_page_layout(plate, tiene_rtz)
         _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text)
         if leg_y_rtz is not None:
-            _draw_rtz_legend(c, leg_y_rtz, body_text)
+            _draw_rtz_legend(c, leg_y_rtz, body_text, cobre=bool(plate.get("modo_largos_cu")))
 
         rows_to_draw = rows or [
             {

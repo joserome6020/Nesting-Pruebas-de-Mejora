@@ -10,7 +10,7 @@ Nesting 1D para largos de cobre (CU).
   hibridaciones cuando el inventario lo permite.
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
 - sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
-- con_gap: CUT_CU por pieza + STEP
+- con_gap: CUT_OUTER cerrado por pieza + STEP (sin CUT_CU ni líneas divisorias)
   (+ marcador vertical inicio barra en export de hoja).
 
 Cortes CUT_OUTER (láser):

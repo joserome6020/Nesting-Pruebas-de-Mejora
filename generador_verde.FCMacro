@@ -607,7 +607,7 @@ LAYER_LIBRARY = [
         "predicate": lambda layers: bool(layers) and set(layers).issubset({"1", "4", "6"}),
     },
     {
-        # Cobre CU-LARGOS: contorno completo en CUT_CU; CUT_OUTER es solo láser.
+        # Cobre CU-LARGOS legacy: CUT_CU (DXF antiguos). Nest actual usa CUT_OUTER.
         "name": "ARGA_COBRE_LARGOS",
         "outer": {"CUT_CU"},
         "inner": {"CUT_INNER", "INNER", "INTER"},

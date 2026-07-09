@@ -76,6 +76,57 @@ def read_cu_piece_meta(msp) -> int | None:
     return None
 
 
+def count_cut_outer_piece_islands(msp) -> int:
+    """Islas CUT_OUTER cerradas (1 LWPOLYLINE cerrada ≈ 1 pieza STEP)."""
+    closed_polys = 0
+    loose = 0
+    for e in msp:
+        layer = str(getattr(e.dxf, "layer", "") or "").upper()
+        if layer != "CUT_OUTER":
+            continue
+        typ = e.dxftype()
+        if typ == "LWPOLYLINE" and bool(getattr(e, "closed", False) or e.closed):
+            closed_polys += 1
+        elif typ in ("LINE", "ARC", "CIRCLE"):
+            loose += 1
+    if loose and closed_polys == 0:
+        return -loose
+    return closed_polys
+
+
+def validate_cut_outer_piece_count(
+    msp,
+    placements: list,
+    *,
+    sheet_label: str = "",
+    strict: bool = True,
+) -> int:
+    """Falla si el DXF STEP no tiene una isla CUT_OUTER por cada pieza cobre esperada."""
+    expected = expected_cu_solid_pieces(placements)
+    if expected <= 0:
+        return 0
+
+    found = count_cut_outer_piece_islands(msp)
+    if found < 0:
+        loose = -found
+        msg = (
+            f"{sheet_label or 'Hoja cobre'}: CUT_OUTER fragmentado ({loose} LINE/ARC sueltos). "
+            f"Se requiere 1 contorno cerrado por pieza ({expected} esperadas)."
+        )
+        if strict:
+            raise DxfExportValidationError(msg)
+        return expected
+
+    if found != expected:
+        msg = (
+            f"{sheet_label or 'Hoja cobre'}: CUT_OUTER incompleto "
+            f"({found}/{expected} contornos cerrados por pieza)."
+        )
+        if strict:
+            raise DxfExportValidationError(msg)
+    return expected
+
+
 def validate_cut_cu_piece_count(
     msp,
     placements: list,

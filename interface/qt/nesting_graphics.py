@@ -59,6 +59,7 @@ COLOR_REF_FILL = QColor(96, 165, 250, 150)
 COLOR_REF_EDGE = QColor("#1D4ED8")
 COLOR_RTZ_PREVIEW_FILL = QColor(56, 189, 248, 120)
 COLOR_RTZ_PREVIEW_EDGE = QColor("#0369A1")
+COLOR_RTZ_REF_FILL = QColor(189, 176, 126, 220)  # beige RTZ (misma familia que PDF)
 COLOR_REM_EDGE = QColor("#94A3B8")
 COLOR_GUILL = QColor("#EF4444")
 COLOR_DIM = QColor(255, 255, 255, 200)
@@ -170,6 +171,11 @@ def _es_virtual_nombre(nom: str) -> bool:
     )
 
 
+def _es_guillotina_rtz_cu(nom: str) -> bool:
+    n = str(nom or "")
+    return n.startswith("RETAZO_GUILLOTINA__") and "RTZCU" in n.upper()
+
+
 def _debe_mostrar_etiqueta_rtz(hoja) -> bool:
     """
     Etiquetas RTZ (badge) solo en placa madre.
@@ -180,7 +186,7 @@ def _debe_mostrar_etiqueta_rtz(hoja) -> bool:
     if hoja.get("es_retazo"):
         return False
     if hoja.get("modo_largos_cu"):
-        return False
+        return bool(hoja.get("cu_rtz_activo"))
     if hoja.get("poly_borde_retazo"):
         return False
     pid = str(hoja.get("placa_id") or "").strip().upper()
@@ -202,18 +208,18 @@ def _marcas_para_display(nom: str, marcas) -> list:
 
 def _centro_zona_rtz(hoja: dict, rtz_id: str) -> tuple[float, float] | None:
     """Centro del rectángulo guillotina del RTZ (mejor ancla que el dummy 2×2 mm)."""
-    guill_nom = f"RETAZO_GUILLOTINA__{rtz_id}"
-    for p in (hoja or {}).get("piezas") or []:
-        if str(p.get("nombre", "") or "") != guill_nom:
-            continue
-        pols = p.get("poligonos") or []
-        if not pols or not pols[0]:
-            continue
-        xs = [t[0] for t in pols[0]]
-        ys = [t[1] for t in pols[0]]
-        if not xs or not ys:
-            continue
-        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+    for pref in (f"RETAZO_GUILLOTINA__{rtz_id}", f"RTZCU_ZONA__{rtz_id}"):
+        for p in (hoja or {}).get("piezas") or []:
+            if str(p.get("nombre", "") or "") != pref:
+                continue
+            pols = p.get("poligonos") or []
+            if not pols or not pols[0]:
+                continue
+            xs = [t[0] for t in pols[0]]
+            ys = [t[1] for t in pols[0]]
+            if not xs or not ys:
+                continue
+            return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
     return None
 
 
@@ -517,6 +523,7 @@ def _piece_style(
     es_rem = nom.startswith("REMANENTE__")
     es_ref = nom.startswith("REF__")
     es_guill = nom.startswith("RETAZO_GUILLOTINA__") or nom.startswith("CU_CORTE__")
+    es_guill_rtz_cu = _es_guillotina_rtz_cu(nom)
     es_tat = nom.startswith("TATUAJE__")
 
     if es_rem:
@@ -740,12 +747,13 @@ def populate_nesting_scene(
         es_rem = nom.startswith("REMANENTE__")
         es_ref = nom.startswith("REF__")
         es_guill = nom.startswith("RETAZO_GUILLOTINA__") or nom.startswith("CU_CORTE__")
+        es_guill_rtz_cu = _es_guillotina_rtz_cu(nom)
         es_tat = nom.startswith("TATUAJE__")
         if es_tat and not mostrar_etiquetas_rtz:
             continue
         compensada = bool(p.get("plasma_compensada_manual"))
 
-        if not (es_rem or es_ref or es_guill or es_tat):
+        if not (es_rem or es_ref or es_guill or es_tat or es_guill_rtz_cu):
             piece_meta = _resolve_piece_meta(p, meta_por_ruta, job_fallback)
             if nom not in resumen:
                 resumen[nom] = {
@@ -770,12 +778,17 @@ def populate_nesting_scene(
 
         pols = p.get("poligonos") or []
         if pols and not es_tat:
-            if es_ref:
+            if es_ref or es_guill_rtz_cu:
                 combined = piece_path_from_polys(pols, refine=False)
                 if not combined.isEmpty():
                     item = QGraphicsPathItem(combined)
-                    item.setBrush(QBrush(COLOR_REF_FILL))
-                    item.setPen(QPen(COLOR_REF_EDGE, 1.2))
+                    if es_guill_rtz_cu:
+                        item.setBrush(QBrush(COLOR_RTZ_REF_FILL))
+                        pen = QPen(COLOR_GUILL, 4.5, Qt.PenStyle.DashDotLine)
+                    else:
+                        item.setBrush(QBrush(COLOR_REF_FILL))
+                        pen = QPen(QColor("#1E293B"), 1.2)
+                    item.setPen(pen)
                     item.setZValue(Z_PIECE + 2)
                     scene.addItem(item)
                     gfx_items.append(item)
@@ -807,7 +820,7 @@ def populate_nesting_scene(
         if (
             compensada
             and not drag_preview
-            and not (es_rem or es_ref or es_guill or es_tat)
+            and not (es_rem or es_ref or es_guill or es_tat or es_guill_rtz_cu)
             and offset_comp > 1e-6
             and callable(poly_from_pieza)
         ):

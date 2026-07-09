@@ -111,6 +111,7 @@ from modules.nesting_engine.sheet_numbering import (
     asignar_numeracion_global_hojas,
     numeracion_hojas_es_consistente,
 )
+from modules.nesting_engine.cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids
 
 COLOR_TARJETA = "#FFFFFF"
 COLOR_BORDE = "#CBD5E1"
@@ -2476,6 +2477,7 @@ class TabNesting(QWidget, TimerHost):
         wo_label = self._order_label_para_rtz()
         if not numeracion_hojas_es_consistente(resultados, wo_label):
             asignar_numeracion_global_hojas(resultados, wo_label, sobrescribir=True)
+        asignar_rtz_cu_sin_gap_ids(resultados)
         scroll_clear(self.lista_hojas)
 
         from interface.nesting_costos import calcular_reporte_costos, aplicar_totales_a_tab
@@ -2561,7 +2563,7 @@ class TabNesting(QWidget, TimerHost):
                         f"{prefijo_ign}{nombre_placa}{sufijo}{origen_str} | {efi_txt}"
                     )
                     hoja_tag = self._etiqueta_hoja_lista(hoja)
-                    if hoja_tag:
+                    if hoja_tag and not hoja.get("cu_rtz_virtual"):
                         texto_btn = f"{texto_btn}  {hoja_tag}"
                     estilo_params = dict(
                         es_retazo=es_retazo,

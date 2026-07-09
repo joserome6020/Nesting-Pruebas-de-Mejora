@@ -91,7 +91,7 @@ def buscar_manifest_en_nesting(ruta_nesting: str) -> Optional[dict[str, Any]]:
     root = _norm_ruta(ruta_nesting)
     if not root or not os.path.isdir(root):
         return None
-    patron_cama = re.compile(r"CAMA\s+LASER", re.IGNORECASE)
+    patron_cama = re.compile(r"CAMA\s+LASER|NESTEOS\s+DE\s+COBRE", re.IGNORECASE)
     for nombre in sorted(os.listdir(root)):
         if not patron_cama.search(nombre or ""):
             continue

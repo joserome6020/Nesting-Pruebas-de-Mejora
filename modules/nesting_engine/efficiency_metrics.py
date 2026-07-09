@@ -29,6 +29,7 @@ def _es_pieza_real_nombre(nombre: str) -> bool:
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
         or n.startswith("RETAZO_GUILLOTINA__")
+        or n.startswith("RTZCU_ZONA__")
         or n.startswith("CU_CORTE__")
         or n.startswith("REMANENTE__")
     )
@@ -228,7 +229,17 @@ def _es_pieza_contable(pieza) -> bool:
 
 def contar_piezas_hoja(hoja) -> int:
     piezas = (hoja or {}).get("piezas") or []
-    return sum(1 for p in piezas if _es_pieza_contable(p))
+    excl_rtz_en_madre = bool((hoja or {}).get("modo_largos_cu")) and not (
+        (hoja or {}).get("cu_rtz_virtual") or (hoja or {}).get("es_retazo")
+    )
+    n = 0
+    for p in piezas:
+        if not _es_pieza_contable(p):
+            continue
+        if excl_rtz_en_madre and p.get("cu_zona_rtz"):
+            continue
+        n += 1
+    return n
 
 
 def contar_piezas_grupo(info_grupo) -> int:
@@ -236,7 +247,14 @@ def contar_piezas_grupo(info_grupo) -> int:
         return 0
     total = 0
     for hoja in info_grupo.get("hojas") or []:
-        total += contar_piezas_hoja(hoja)
+        if not isinstance(hoja, dict):
+            continue
+        if hoja.get("cu_rtz_virtual"):
+            total += contar_piezas_hoja(hoja)
+        elif not hoja.get("es_retazo"):
+            total += contar_piezas_hoja(hoja)
+        else:
+            total += contar_piezas_hoja(hoja)
     return total
 
 
