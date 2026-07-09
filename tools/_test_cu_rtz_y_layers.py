@@ -329,6 +329,54 @@ def test_cobre_sin_gap_dxf_madre_sin_rtz_ni_cut_cu() -> None:
             assert not any(bad in u for u in used), f"overlay en DXF: {used}"
 
 
+def test_numeracion_cobre_ignora_rtz_virtual() -> None:
+    """RTZCU virtual no debe consumir H global ni renumerarse como W.O.-H*."""
+    from modules.nesting_engine.sheet_numbering import (
+        asignar_numeracion_global_hojas,
+        numeracion_hojas_es_consistente,
+    )
+
+    piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock()],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+
+    wo = "W.O. 7 X6"
+    resultados = {"0.25_CU": {"hojas": hojas, "modo_largos_cu": True}}
+    asignar_numeracion_global_hojas(resultados, wo, sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual")]
+    virtuales = [h for h in hojas if h.get("cu_rtz_virtual")]
+    assert madres, "sin hojas madre"
+    assert virtuales, "sin hojas RTZ virtual"
+
+    max_h = max(int(h["sheet_seq"]) for h in madres)
+    assert max_h == len(madres), f"madres deben ser H1..H{len(madres)}, max={max_h}"
+
+    for v in virtuales:
+        pid = str(v.get("placa_id") or v.get("sheet_code") or "")
+        assert pid.startswith("RTZCU"), pid
+        assert not pid.startswith(wo), f"RTZ virtual no debe ser W.O.-H: {pid}"
+
+    # Simula refresco UI (procesar_lista_hojas): re-numerar con virtuales ya insertadas.
+    asignar_numeracion_global_hojas(resultados, wo, sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+
+    madres2 = [h for h in hojas if not h.get("cu_rtz_virtual")]
+    virtuales2 = [h for h in hojas if h.get("cu_rtz_virtual")]
+    max_h2 = max(int(h["sheet_seq"]) for h in madres2)
+    assert max_h2 == len(madres2), f"tras refresco UI: max H={max_h2} madres={len(madres2)}"
+    for v in virtuales2:
+        pid = str(v.get("placa_id") or v.get("sheet_code") or "")
+        assert pid.startswith("RTZCU"), pid
+    assert numeracion_hojas_es_consistente(resultados, wo)
+
+
 def main() -> int:
     test_laser_normal_sin_capas_cobre()
     print("[OK] 1/5 Nesteo láser normal: sin capas cobre fantasma")
@@ -343,7 +391,10 @@ def main() -> int:
     print("[OK] 4/5 DXF RTZ cobre: archivo separado RTZCU-Hn")
 
     test_cobre_sin_gap_dxf_madre_sin_rtz_ni_cut_cu()
-    print("[OK] 5/5 DXF madre sin_gap: BAR_START sí; CUT_CU y overlays RTZ no")
+    print("[OK] 5/6 DXF madre sin_gap: BAR_START sí; CUT_CU y overlays RTZ no")
+
+    test_numeracion_cobre_ignora_rtz_virtual()
+    print("[OK] 6/6 Numeración cobre: RTZCU no consume H global (refresco UI)")
 
     print("\n=== TODAS LAS PRUEBAS PASARON ===")
     return 0

@@ -3,6 +3,20 @@ Numeración global de hojas (H1, H2, …) compartida entre DXF, PDF y base de da
 """
 
 
+def hoja_cuenta_para_numeracion_global(hoja) -> bool:
+    """
+    Hojas que consumen un H secuencial W.O.-Hn / SWO-Hn.
+
+    Las virtuales RTZCU de cobre (cu_rtz_virtual) usan RTZCU{n}-H{m} y no deben
+    avanzar el contador global; si se numeran como W.O.-H* se desfasan madre/RTZ.
+    """
+    if not isinstance(hoja, dict):
+        return False
+    if hoja.get("cu_rtz_virtual"):
+        return False
+    return True
+
+
 def _grupo_nesting_sort_key():
     try:
         from interface.utils_nesting import grupo_nesting_sort_key
@@ -61,6 +75,9 @@ def asignar_numeracion_global_hojas(
     vistos: set[str] = set()
 
     for _clave, hoja in iterar_hojas_ordenadas(resultados):
+        if not hoja_cuenta_para_numeracion_global(hoja):
+            continue
+
         if (
             not sobrescribir
             and hoja.get("sheet_code")
@@ -93,6 +110,8 @@ def numeracion_hojas_es_consistente(resultados, order_label: str) -> bool:
     esperado = 0
 
     for _clave, hoja in iterar_hojas_ordenadas(resultados):
+        if not hoja_cuenta_para_numeracion_global(hoja):
+            continue
         esperado += 1
         codigo = str(hoja.get("sheet_code") or "").strip()
         seq = hoja.get("sheet_seq")

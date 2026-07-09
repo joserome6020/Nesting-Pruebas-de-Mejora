@@ -555,7 +555,15 @@ def _inyectar_metadata_hoja(
     placa_w = _safe_float(hoja.get("placa_w", 0.0), 0.0) or 0.0
     placa_h = _safe_float(hoja.get("placa_h", 0.0), 0.0) or 0.0
 
-    sheet_code = str(hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}")
+    if hoja.get("cu_rtz_virtual"):
+        sheet_code = str(
+            hoja.get("placa_id")
+            or hoja.get("cu_rtz_id")
+            or hoja.get("sheet_code")
+            or f"{order_label}-H{sheet_seq}"
+        ).strip()
+    else:
+        sheet_code = str(hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}")
     default_sheet_uid = (
         f"{_slug_token(order_label)}__"
         f"{_slug_token(thickness_name)}__"
@@ -1248,8 +1256,12 @@ def exportar_resultados_a_dxf(
                     })
 
             if es_cu_rtz_virtual:
+                # RTZCU{n}-H{m}: nunca heredar un W.O.-H* stale del numerador global.
                 sheet_code = str(
-                    hoja.get("sheet_code") or hoja.get("placa_id") or f"{order_label}-H{sheet_seq}"
+                    hoja.get("placa_id")
+                    or hoja.get("cu_rtz_id")
+                    or hoja.get("sheet_code")
+                    or f"{order_label}-H{sheet_seq}"
                 ).strip()
             else:
                 sheet_code = hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}"
