@@ -120,9 +120,7 @@ def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
     copiados = 0
     step_dirs = [
         rutas.get("nesteos_cobre_step"),
-        rutas.get("cama_laser_step"),
-        rutas.get("cama_laser_iges"),
-        rutas.get("cama_laser_12kw_step"),
+        rutas.get("nesteos_cobre_iges"),
         rutas.get("robot_laser_step_A"),
         rutas.get("robot_laser_step_B"),
         rutas.get("robot_plasma_step_A"),
@@ -159,8 +157,6 @@ def _auditar_steps_en_rutas(
 ) -> dict[str, dict[str, int]]:
     familias = [
         ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
-        ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
-        ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
         ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
         ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
     ]
@@ -169,11 +165,11 @@ def _auditar_steps_en_rutas(
     for etiqueta, dxf_key, step_key in familias:
         dxf_dir = os.path.normpath(str(rutas.get(dxf_key) or "").strip())
         step_dir = os.path.normpath(str(rutas.get(step_key) or "").strip())
-        iges_dir = os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
+        iges_dir = os.path.normpath(str(rutas.get("nesteos_cobre_iges") or "").strip())
         candidatos_dxf = _listar_dxfs_en_carpeta(dxf_dir) if dxf_dir else []
         n_dxf = len(candidatos_dxf)
         n_dxf_3d = n_dxf
-        if fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
+        if fmt_map and etiqueta == "NESTEOS DE COBRE":
             n_dxf_3d = sum(
                 1
                 for p in candidatos_dxf
@@ -181,7 +177,7 @@ def _auditar_steps_en_rutas(
             )
         n_step = 0
         n_iges = 0
-        if dxf_dir and fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
+        if dxf_dir and fmt_map and etiqueta == "NESTEOS DE COBRE":
             try:
                 from freecad_runner import _cad_path_for_dxf
 
@@ -247,8 +243,6 @@ def _validar_steps_tras_export(
             step_dir = rutas.get(
                 {
                     "NESTEOS DE COBRE": "nesteos_cobre_step",
-                    "CAMA LASER": "cama_laser_step",
-                    "CAMA LASER 12KW": "cama_laser_12kw_step",
                     "ROBOT LASER": "robot_laser_step_A",
                     "ROBOT PLASMA": "robot_plasma_step_A",
                 }.get(etiqueta, ""),
@@ -264,8 +258,7 @@ def _validar_steps_tras_export(
                 str(
                     rutas.get(
                         {
-                            "CAMA LASER": "cama_laser_step",
-                            "CAMA LASER 12KW": "cama_laser_12kw_step",
+                            "NESTEOS DE COBRE": "nesteos_cobre_step",
                             "ROBOT LASER": "robot_laser_step_A",
                             "ROBOT PLASMA": "robot_plasma_step_A",
                         }.get(etiqueta, ""),
@@ -279,8 +272,6 @@ def _validar_steps_tras_export(
                     rutas.get(
                         {
                             "NESTEOS DE COBRE": "nesteos_cobre_dxf",
-                            "CAMA LASER": "cama_laser_dxf",
-                            "CAMA LASER 12KW": "cama_laser_12kw_dxf",
                             "ROBOT LASER": "robot_laser_dxf",
                             "ROBOT PLASMA": "robot_plasma_dxf",
                         }.get(etiqueta, ""),
@@ -296,12 +287,12 @@ def _validar_steps_tras_export(
 
                     for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
                         nombre = os.path.basename(dxf_path)
-                        if fmt_map and etiqueta in ("CAMA LASER", "NESTEOS DE COBRE"):
+                        if fmt_map and etiqueta == "NESTEOS DE COBRE":
                             fmt = fmt_map.get(nombre, "step")
                             if not _cu_dxf_requiere_3d(fmt):
                                 continue
                             out_dir = (
-                                os.path.normpath(str(rutas.get("cama_laser_iges") or "").strip())
+                                os.path.normpath(str(rutas.get("nesteos_cobre_iges") or "").strip())
                                 if fmt == "iges"
                                 else step_dir
                             )
@@ -805,17 +796,7 @@ def lanzar_freecad_robotica(
             return "dxf"
         return "step"
 
-    # CAMA LASER (acero / placas; cobre va a NESTEOS DE COBRE)
-    if rutas.get("cama_laser_dxf") and not es_cobre:
-        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        _convertir(
-            "CAMA LASER",
-            "cama_laser_dxf",
-            "cama_laser_step",
-            "TR",
-            0.0, 0.0, 0.0,
-            material="STEEL",
-        )
+    # CAMA LASER (acero): solo DXF — no genera STEP/IGES.
 
     # NESTEOS DE COBRE (largos CU: madre + RTZCU)
     if es_cobre and rutas.get("nesteos_cobre_dxf"):
@@ -836,17 +817,6 @@ def lanzar_freecad_robotica(
                 export_format="step",
                 dxf_filter=lambda p: _cu_dxf_requiere_3d(_fmt_for_dxf(p)),
             )
-
-    if rutas.get("cama_laser_12kw_dxf"):
-        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        _convertir(
-            "CAMA LASER 12KW",
-            "cama_laser_12kw_dxf",
-            "cama_laser_12kw_step",
-            "TR",
-            0.0, 0.0, 0.0,
-            material="STEEL",
-        )
 
     # ROBOT LASER
     if rutas.get("robot_laser_dxf"):
@@ -942,9 +912,7 @@ def exportar_resultados_a_dxf(
         "robot_laser_step_B": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"),
         "robot_plasma_step_A": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"),
         "robot_plasma_step_B": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"),
-        "cama_laser_step": os.path.join(job_root_dir, RUTA_CAMA_LASER, "STEP"),
-        "cama_laser_iges": os.path.join(job_root_dir, RUTA_CAMA_LASER, "IGES"),
-        "cama_laser_12kw_step": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "STEP"),
+        "nesteos_cobre_iges": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "IGES"),
     }
 
     for r in rutas.values():

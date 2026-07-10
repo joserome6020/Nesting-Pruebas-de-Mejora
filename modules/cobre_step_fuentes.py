@@ -87,15 +87,22 @@ def cargar_manifest_cobre(ruta_manifest: str) -> Optional[dict[str, Any]]:
 
 
 def buscar_manifest_en_nesting(ruta_nesting: str) -> Optional[dict[str, Any]]:
-    """Busca cobre_dxf_fuentes.json en carpetas CAMA LASER bajo NESTING."""
+    """Busca cobre_dxf_fuentes.json en NESTEOS DE COBRE (y legacy CAMA LASER)."""
     root = _norm_ruta(ruta_nesting)
     if not root or not os.path.isdir(root):
         return None
-    patron_cama = re.compile(r"CAMA\s+LASER|NESTEOS\s+DE\s+COBRE", re.IGNORECASE)
+    candidatos_dir = []
     for nombre in sorted(os.listdir(root)):
-        if not patron_cama.search(nombre or ""):
-            continue
-        candidato = os.path.join(root, nombre, MANIFEST_FILENAME)
+        upper = str(nombre or "").upper()
+        if "NESTEOS DE COBRE" in upper:
+            candidatos_dir.append(os.path.join(root, nombre))
+    for nombre in sorted(os.listdir(root)):
+        if re.search(r"CAMA\s+LASER", str(nombre or ""), re.IGNORECASE):
+            path = os.path.join(root, nombre)
+            if path not in candidatos_dir:
+                candidatos_dir.append(path)
+    for candidato_dir in candidatos_dir:
+        candidato = os.path.join(candidato_dir, MANIFEST_FILENAME)
         data = cargar_manifest_cobre(candidato)
         if data and data.get("fuentes"):
             data["_manifest_path"] = candidato
