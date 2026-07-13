@@ -25,18 +25,41 @@ function Resolve-PythonExePath {
 
 function Resolve-CmakeExe {
     param([string]$PyExePath)
-    # En Windows el venv coloca python.exe y cmake.exe en el mismo directorio (Scripts).
     $pyBinDir = Split-Path -Parent $PyExePath
+    $pyName = Split-Path -Leaf $pyBinDir
     $candidates = @(
-        (Join-Path $pyBinDir "cmake.exe"),
-        (Join-Path (Join-Path (Split-Path -Parent $pyBinDir) "Scripts") "cmake.exe")
+        (Join-Path $pyBinDir "cmake.exe")
     )
-    foreach ($cmake in $candidates) {
+    if ($pyName -ieq "Scripts") {
+        # venv: .venv\Scripts\python.exe → cmake en el mismo Scripts
+        $candidates += (Join-Path $pyBinDir "cmake.exe")
+    } else {
+        # Instalación global: Python314\python.exe → Python314\Scripts\cmake.exe
+        $candidates += (Join-Path $pyBinDir "Scripts\cmake.exe")
+    }
+    foreach ($cmake in $candidates | Select-Object -Unique) {
         if ($cmake -and (Test-Path -LiteralPath $cmake)) { return $cmake }
     }
+    try {
+        $null = & $PyExePath -m cmake --version 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $scriptsDir = (& $PyExePath -c "import sysconfig; print(sysconfig.get_path('scripts'))").Trim()
+            $fromScripts = Join-Path $scriptsDir "cmake.exe"
+            if (Test-Path -LiteralPath $fromScripts) { return $fromScripts }
+        }
+    } catch { }
     $cmd = Get-Command cmake -ErrorAction SilentlyContinue
     if ($cmd -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
-    throw "cmake no encontrado. Ejecuta: python -m pip install cmake"
+    $scriptsHint = if ($pyName -ieq "Scripts") { $pyBinDir } else { Join-Path $pyBinDir "Scripts" }
+    throw @"
+cmake no encontrado junto a Python ni en PATH.
+
+Instalado vía pip pero Scripts no está en PATH. Prueba:
+  py -3.14 -m pip install --upgrade cmake
+  py -3.14 -m cmake --version
+
+O agrega a PATH: $scriptsHint
+"@
 }
 
 function Find-VsWherePath {

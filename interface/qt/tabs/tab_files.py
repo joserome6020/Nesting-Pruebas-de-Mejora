@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QComboBox,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -38,6 +39,7 @@ from interface.qt.theme import (
     COLOR_TEXTO_SECUNDARIO,
     COLOR_TEXTO_SUBTITULO,
     COLOR_TEXTO_TITULO,
+    COLOR_TEXTO_MUTED,
     apply_push_button,
     surface_dialog_stylesheet,
 )
@@ -57,7 +59,7 @@ class TabFiles(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         card = make_card()
-        card.setMinimumSize(720, 420)
+        card.setMinimumSize(720, 480)
         card.setMaximumWidth(980)
         lay = QVBoxLayout(card)
         lay.setContentsMargins(48, 44, 48, 44)
@@ -86,15 +88,86 @@ class TabFiles(QWidget):
         self.btn_historial.clicked.connect(self.mostrar_gestion_historial)
         lay.addWidget(self.btn_historial, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        self.lbl_status = QLabel(f"Ruta Objetivo: {config.RUTA_SERVIDOR_RAIZ}")
-        self.lbl_status.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
-        self.lbl_status.setWordWrap(True)
-        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self.lbl_status)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color:{COLOR_BORDE};max-height:1px;")
+        lay.addWidget(sep)
+
+        engine_title = QLabel("MOTOR DE NESTEO")
+        engine_title.setStyleSheet(
+            f"font-size:13px;font-weight:700;color:{COLOR_TEXTO_SECUNDARIO};letter-spacing:0.5px;"
+        )
+        engine_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(engine_title)
+
+        from modules.nesting_engine.engine_registry import list_engine_metas
+        from modules.nesting_engine.nest_engine_config import load_default_steel_engine_id
+
+        self._engine_combo = QComboBox()
+        self._engine_combo.setObjectName("HerinoxCombo")
+        self._engine_combo.setFixedSize(450, 40)
+        self._engine_metas = list_engine_metas()
+        current_eid = load_default_steel_engine_id()
+        current_idx = 0
+        for i, meta in enumerate(self._engine_metas):
+            label = meta.display_name
+            if meta.status != "ready":
+                label = f"{label}  (pendiente)"
+            self._engine_combo.addItem(label, meta.engine_id)
+            idx = self._engine_combo.count() - 1
+            self._engine_combo.setItemData(
+                idx,
+                meta.description or meta.display_name,
+                Qt.ItemDataRole.ToolTipRole,
+            )
+            if meta.status != "ready":
+                model = self._engine_combo.model()
+                item = model.item(idx)
+                if item is not None:
+                    item.setEnabled(False)
+            if meta.engine_id == current_eid:
+                current_idx = i
+        self._engine_combo.blockSignals(True)
+        self._engine_combo.setCurrentIndex(current_idx)
+        self._engine_combo.blockSignals(False)
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_combo_changed)
+        lay.addWidget(self._engine_combo, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.lbl_engine_status = QLabel("")
+        self.lbl_engine_status.setStyleSheet(f"color:{COLOR_TEXTO_MUTED};font-size:11px;")
+        self.lbl_engine_status.setWordWrap(True)
+        self.lbl_engine_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._refresh_engine_status_label(current_eid)
+        lay.addWidget(self.lbl_engine_status)
 
         outer.addStretch()
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         outer.addStretch()
+
+    def _refresh_engine_status_label(self, engine_id: str) -> None:
+        from modules.nesting_engine.engine_registry import get_engine_meta
+
+        try:
+            meta = get_engine_meta(engine_id)
+            desc = (meta.description or "").strip()
+            if desc:
+                self.lbl_engine_status.setText(f"Activo: {meta.display_name} — {desc}")
+            else:
+                self.lbl_engine_status.setText(f"Activo: {meta.display_name}")
+        except Exception:
+            self.lbl_engine_status.setText(f"Activo: {engine_id}")
+
+    def _on_engine_combo_changed(self, index: int) -> None:
+        from modules.nesting_engine.nest_engine_config import apply_steel_engine
+
+        if index < 0:
+            return
+        eid = str(self._engine_combo.itemData(index) or "").strip()
+        if not eid:
+            return
+        motor = getattr(self.app, "motor_nesting", None)
+        apply_steel_engine(eid, motor=motor)
+        self._refresh_engine_status_label(eid)
 
     def _ui(self, fn, *args):
         call_on_main(fn, *args)

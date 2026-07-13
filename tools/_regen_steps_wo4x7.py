@@ -87,13 +87,13 @@ def main() -> int:
     blocked = 0
     for path in dxf_files:
         try:
-            removed, final = sanitize_laser_dxf(path)
+            removed, final, _ents = sanitize_laser_dxf(path)
             print(f"[DXF] {os.path.basename(path)}: -{len(removed)} capas -> {final}")
         except PermissionError:
             blocked += 1
             os.makedirs(clean_dir, exist_ok=True)
             clean_path = os.path.join(clean_dir, os.path.basename(path))
-            removed, final = sanitize_laser_dxf(path, out_path=clean_path)
+            removed, final, _ents = sanitize_laser_dxf(path, out_path=clean_path)
             print(f"[DXF] {os.path.basename(path)} (bloqueado, copia limpia): -{len(removed)} -> {final}")
     if os.path.isdir(clean_dir):
         clean_files = [

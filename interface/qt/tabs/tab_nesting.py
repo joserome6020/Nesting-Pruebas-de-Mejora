@@ -112,7 +112,6 @@ from modules.nesting_engine.sheet_numbering import (
     numeracion_hojas_es_consistente,
 )
 from modules.nesting_engine.cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids
-
 COLOR_TARJETA = "#FFFFFF"
 COLOR_BORDE = "#CBD5E1"
 COLOR_GRIS_DARK = "#1E293B"
@@ -1966,6 +1965,17 @@ class TabNesting(QWidget, TimerHost):
 
             datos_placas = self.app.plates_manager.obtener_datos_placas()
 
+            steel_engine_id = None
+            if not self._wo_solo_cobre():
+                steel_engine_id = self._steel_engine_id_para_nesteo()
+                try:
+                    from modules.nesting_engine.engine_registry import get_engine_meta
+
+                    meta = get_engine_meta(steel_engine_id)
+                    receptor_en_vivo(f"Motor: {meta.display_name}", 0.01)
+                except Exception:
+                    pass
+
             # Cobre 100%: barras largas deterministas -> nesteo directo, sin
             # análisis de lotes MES (los escenarios optimizan costo de placa,
             # que no aplica al cobre). La cantidad se coloca tal cual.
@@ -1976,15 +1986,21 @@ class TabNesting(QWidget, TimerHost):
 
                 self._inputs_precalculados_por_k[int(T)] = self._clonar_datos_partes_edicion(datos_base)
 
-                res = self.app.motor_nesting.ejecutar_nesting_visual(
-                    datos_base,
-                    datos_placas,
+                nest_kwargs = dict(
                     progress_callback=receptor_en_vivo,
                     config_kerf=kerf_val,
                     config_margin=margin_val,
                     config_corner=corner_val,
                     config_opt=opt_val,
                     wo_name=wo_act,
+                )
+                if steel_engine_id:
+                    nest_kwargs["engine_id"] = steel_engine_id
+
+                res = self.app.motor_nesting.ejecutar_nesting_visual(
+                    datos_base,
+                    datos_placas,
+                    **nest_kwargs,
                 )
 
                 if _abortar_si_cancelado():
@@ -2023,15 +2039,20 @@ class TabNesting(QWidget, TimerHost):
 
                 self._inputs_precalculados_por_k[int(k)] = self._clonar_datos_partes_edicion(datos_k)
 
-                nestings_precalculados[k] = self.app.motor_nesting.ejecutar_nesting_visual(
-                    datos_k,
-                    datos_placas,
+                nest_kwargs_lote = dict(
                     progress_callback=cb_wrapper,
                     config_kerf=kerf_val,
                     config_margin=margin_val,
                     config_corner=corner_val,
                     config_opt=opt_val,
                     wo_name=wo_act,
+                )
+                if steel_engine_id:
+                    nest_kwargs_lote["engine_id"] = steel_engine_id
+                nestings_precalculados[k] = self.app.motor_nesting.ejecutar_nesting_visual(
+                    datos_k,
+                    datos_placas,
+                    **nest_kwargs_lote,
                 )
                 self._propagar_auditoria_dxf_a_parts(nestings_precalculados[k])
                 if _abortar_si_cancelado():
@@ -2162,6 +2183,19 @@ class TabNesting(QWidget, TimerHost):
             "El nesteo de largos también quedó calculado: revísalo en NESTEO DE LARGOS "
             "y elige qué barras van al pedido."
         )
+
+        try:
+            item0 = (resultados_list or [{}])[0] or {}
+            engine_id = item0.get("nest_engine_id")
+            if engine_id:
+                from modules.nesting_engine.engine_registry import get_engine_meta
+
+                meta = get_engine_meta(engine_id)
+                mensaje = (
+                    f"Motor seleccionado: {meta.display_name}\n\n" + mensaje
+                )
+        except Exception:
+            pass
 
         avisos = []
         for item in resultados_list or []:
@@ -2674,6 +2708,13 @@ class TabNesting(QWidget, TimerHost):
             if not es_cu:
                 return False
         return True
+
+    def _steel_engine_id_para_nesteo(self) -> str:
+        """Motor elegido en FILES; se aplica al inicio de cada corrida de acero."""
+        from modules.nesting_engine.nest_engine_config import apply_saved_steel_engine
+
+        motor = getattr(self.app, "motor_nesting", None)
+        return apply_saved_steel_engine(motor=motor)
 
     def _inventario_desde_resultado(self, resultado) -> dict:
         inventario = {}

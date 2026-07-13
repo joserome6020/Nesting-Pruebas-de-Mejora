@@ -27,7 +27,7 @@ endif()
 
 add_subdirectory("${CLIPPER2_CPP_DIR}" "${CMAKE_BINARY_DIR}/clipper2_cpp")
 
-pybind11_add_module(algorithm_cpp MODULE bindings.cpp packer.cpp)
+pybind11_add_module(algorithm_cpp MODULE bindings.cpp packer.cpp packer_base.cpp packer_burke_blf.cpp packer_libnest2d.cpp packer_svgnest_ultra.cpp)
 
 target_include_directories(
     algorithm_cpp PRIVATE

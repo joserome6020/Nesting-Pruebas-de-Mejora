@@ -89,6 +89,9 @@ class SistemaNestingPro(QMainWindow):
         self.herinox_tc_fuente = "FALLBACK"
         self.herinox_nominal_by_code = {}
         self.motor_nesting = MotorNesting()
+        from modules.nesting_engine.nest_engine_config import apply_saved_steel_engine
+
+        apply_saved_steel_engine(self.motor_nesting)
         self.datos_placas_empresa, self.datos_placas_proveedor = self.plates_manager.obtener_datos_placas_divididos()
         self.datos_partes_actuales = []
         self.dxf_nesting_audit = {"total": 0, "ok": 0, "omitidos": []}
@@ -411,40 +414,64 @@ class SistemaNestingPro(QMainWindow):
             return
         call_on_main(self._mostrar_dialogo_actualizacion, info)
 
-    def _mostrar_dialogo_actualizacion(self, info):
+    def _preguntar_si_no(self, titulo: str, texto: str, *, default_si: bool = True) -> bool:
         from PySide6.QtWidgets import QMessageBox
 
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(titulo)
+        box.setText(texto)
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        btn_si = box.button(QMessageBox.StandardButton.Yes)
+        btn_no = box.button(QMessageBox.StandardButton.No)
+        if btn_si is not None:
+            btn_si.setText("Sí")
+        if btn_no is not None:
+            btn_no.setText("No")
+        box.setDefaultButton(
+            QMessageBox.StandardButton.Yes
+            if default_si
+            else QMessageBox.StandardButton.No
+        )
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+    def _mostrar_dialogo_actualizacion(self, info):
+        from PySide6.QtWidgets import QMessageBox
+        from modules.app_auto_update import dismiss_available_update, entry_mode
+
+        resumen = (info.remote_summary or "Mejoras y correcciones en el nesting.").strip()
+
         if not info.can_apply:
+            detalle = f"\n\n{info.reason_blocked}" if info.reason_blocked else ""
             QMessageBox.information(
                 self,
                 "Actualización disponible",
-                f"Hay una versión nueva en GitHub ({info.remote_commit}).\n\n"
-                f"{info.remote_summary}\n\n"
-                f"{info.reason_blocked}",
+                f"Se encontró una actualización nueva.\n\n{resumen}{detalle}",
             )
             return
 
         extra = ""
         if info.needs_bootstrap:
             extra = (
-                "\n\n(Esta PC aún no tiene el proyecto clonado; "
-                "se descargará automáticamente en la primera actualización.)"
+                "\n\n(Esta PC aún no tiene el proyecto descargado; "
+                "se instalará en la primera actualización.)"
             )
 
-        resp = QMessageBox.question(
-            self,
+        if entry_mode() == "python":
+            pregunta = "¿Actualizar el proyecto ahora?"
+        else:
+            pregunta = "¿Actualizar, compilar el .exe e instalar ahora?"
+
+        if not self._preguntar_si_no(
             "Actualización disponible",
-            f"Se encontró una actualización en GitHub.\n\n"
-            f"Local: {info.local_commit}\n"
-            f"Remoto: {info.remote_commit}\n"
-            f"{info.remote_summary}\n\n"
-            "¿Actualizar proyecto, compilar el .exe e instalar ahora?"
-            f"{extra}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if resp != QMessageBox.StandardButton.Yes:
+            f"Se encontró una actualización nueva.\n\n{resumen}\n\n{pregunta}{extra}",
+            default_si=True,
+        ):
+            dismiss_available_update(info)
             return
+
         self.abrir_ventana_carga("Actualizando ARGA Nesting Suite…")
         threading.Thread(
             target=self._worker_aplicar_actualizacion,
@@ -480,14 +507,11 @@ class SistemaNestingPro(QMainWindow):
 
         QMessageBox.information(self, "Actualización correcta", result.message)
         if result.needs_restart:
-            resp = QMessageBox.question(
-                self,
+            if self._preguntar_si_no(
                 "Reiniciar",
                 "¿Reiniciar la aplicación ahora para usar la versión nueva?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if resp == QMessageBox.StandardButton.Yes:
+                default_si=True,
+            ):
                 from modules.app_auto_update import launch_restart
 
                 launch_restart(result)

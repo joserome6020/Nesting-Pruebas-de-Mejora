@@ -1,4 +1,10 @@
-"""Actualización automática: git pull + compilación del .exe (repo privado vía Git local)."""
+"""Actualización automática: sincroniza con origin/main (pull ff-only) y reinicia la app.
+
+- Modo Python (desarrollo): solo git pull; no compila .exe.
+- Modo .exe: pull + compilación vía tools/arga_apply_update.ps1.
+- Solo avisa si origin/main va commits por delante del HEAD local.
+- Si el usuario rechaza, no vuelve a preguntar por el mismo commit remoto.
+"""
 from __future__ import annotations
 
 import json
@@ -30,6 +36,8 @@ class UpdateInfo:
     can_apply: bool
     reason_blocked: str = ""
     needs_bootstrap: bool = False
+    remote_commit_full: str = ""
+    commits_behind: int = 0
 
 
 @dataclass
@@ -77,14 +85,77 @@ def _load_install_state() -> dict:
 
 def _save_install_state(*, repo_root: Path, exe_path: str) -> None:
     _install_dir().mkdir(parents=True, exist_ok=True)
-    state = {
-        "repo_root": str(repo_root.resolve()),
-        "active_exe": str(exe_path),
-    }
+    state = _load_install_state()
+    state["repo_root"] = str(repo_root.resolve())
+    state["active_exe"] = str(exe_path)
     _install_state_path().write_text(
         json.dumps(state, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def _write_install_state(state: dict) -> None:
+    _install_dir().mkdir(parents=True, exist_ok=True)
+    _install_state_path().write_text(
+        json.dumps(state, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def _mark_remote_synced(remote_commit: str) -> None:
+    commit = str(remote_commit or "").strip()
+    if not commit:
+        return
+    state = _load_install_state()
+    state["last_synced_remote"] = commit
+    state.pop("last_dismissed_remote", None)
+    _write_install_state(state)
+
+
+def dismiss_available_update(info: UpdateInfo) -> None:
+    """Usuario rechazó: no volver a preguntar por el mismo commit remoto."""
+    commit = str(info.remote_commit_full or "").strip()
+    if not commit:
+        return
+    state = _load_install_state()
+    state["last_dismissed_remote"] = commit
+    _write_install_state(state)
+
+
+def _working_tree_dirty(root: Path) -> bool:
+    if not _repo_has_git(root):
+        return False
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        return bool(str(out.stdout or "").strip())
+    except Exception:
+        return False
+
+
+def _commits_behind_remote(root: Path, branch: str = GITHUB_BRANCH) -> int:
+    if not _repo_has_git(root):
+        return 0
+    try:
+        out = subprocess.run(
+            ["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if out.returncode != 0:
+            return 0
+        return max(0, int(str(out.stdout or "0").strip() or "0"))
+    except Exception:
+        return 0
 
 
 def _is_frozen() -> bool:
@@ -404,16 +475,28 @@ def check_for_updates() -> UpdateInfo:
             needs_bootstrap=needs_bootstrap,
         )
 
-    has_update = bool(local) and local != remote
-    if not local:
+    commits_behind = _commits_behind_remote(root) if _repo_has_git(root) else 0
+    has_update = commits_behind > 0
+    if not _repo_has_git(root):
         has_update = True
+
+    state = _load_install_state()
+    dismissed = str(state.get("last_dismissed_remote") or "").strip()
+    if has_update and dismissed and dismissed == remote:
+        has_update = False
 
     can_apply = _git_available()
     blocked = ""
     if has_update and not can_apply:
         blocked = (
-            "Hay versión nueva, pero falta Git en esta PC. "
-            "Instale Git for Windows y autentique GitHub una sola vez."
+            "Hay una versión nueva, pero falta Git en esta PC. "
+            "Instale Git for Windows y autentíquelo una sola vez."
+        )
+    elif has_update and _repo_has_git(root) and _working_tree_dirty(root):
+        can_apply = False
+        blocked = (
+            "Hay cambios locales sin commit. Guarde su trabajo o haga commit "
+            "antes de actualizar para que el proyecto quede igual al remoto."
         )
 
     return UpdateInfo(
@@ -425,6 +508,8 @@ def check_for_updates() -> UpdateInfo:
         can_apply=can_apply,
         reason_blocked=blocked,
         needs_bootstrap=needs_bootstrap,
+        remote_commit_full=remote,
+        commits_behind=commits_behind,
     )
 
 
@@ -436,7 +521,7 @@ def _git_pull(root: Path, progress: Callable[[str, float], None] | None) -> Upda
             except Exception:
                 pass
 
-    _prog("Descargando cambios de GitHub…", 0.25)
+    _prog("Descargando actualización…", 0.25)
     try:
         fetch = subprocess.run(
             ["git", "fetch", "origin", GITHUB_BRANCH],
@@ -531,11 +616,10 @@ def _launch_build_and_restart(root: Path, parent_pid: int, progress) -> UpdateRe
     else:
         extra = ""
     msg = (
-        "Proyecto actualizado desde GitHub.\n\n"
+        "Proyecto actualizado.\n\n"
         "La aplicación se cerrará, se compilará el .exe nuevo y se abrirá "
-        "automáticamente (también se actualiza el acceso directo del escritorio)."
-        f"{extra}\n\n"
-        f"Ejecutable: {new_exe}"
+        "automáticamente."
+        f"{extra}"
     )
     return UpdateResult(True, msg, needs_restart=True, quit_app=True)
 
@@ -553,9 +637,37 @@ def apply_update(
     if err:
         return UpdateResult(False, err)
 
+    if _repo_has_git(root) and _working_tree_dirty(root):
+        return UpdateResult(
+            False,
+            "No se puede actualizar: hay cambios locales sin commit.\n\n"
+            "Guarde o haga commit de su trabajo e intente de nuevo.",
+        )
+
     fail = _git_pull(root, progress)
     if fail is not None:
         return fail
+
+    synced = _read_local_commit(root)
+    if synced:
+        _mark_remote_synced(synced)
+
+    mode = entry_mode()
+    if mode == "python":
+        main_py = (root / "main.py").resolve()
+        py_exe = str(Path(sys.executable).resolve())
+        if progress:
+            try:
+                progress("Actualización descargada.", 1.0)
+            except Exception:
+                pass
+        return UpdateResult(
+            True,
+            "Proyecto actualizado.\n\n"
+            "Cierre la aplicación y vuelva a abrirla para usar la versión nueva.",
+            needs_restart=True,
+            restart_cmd=[py_exe, str(main_py)],
+        )
 
     pid = int(parent_pid or os.getpid())
     return _launch_build_and_restart(root, pid, progress)

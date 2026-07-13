@@ -42,12 +42,18 @@ from .geometry_parser import (
     interiores_poly,
 )
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
+from .engine_registry import list_engine_metas, is_engine_ready
+from .nest_engine_context import (
+    get_active_engine_id,
+    normalize_engine_id,
+    set_active_engine_id,
+)
 from .efficiency_metrics import (
     actualizar_eficiencias_hoja,
     calcular_eficiencias_grupo,
     nombre_rtz_para_placa,
 )
-from .nest_optimization import get_nest_profile, score_placa_simulacion
+from .nest_optimization import get_engine_profile, get_nest_profile, score_placa_simulacion
 from .exporter import exportar_resultados_a_dxf
 from .cu_largos_nesting import procesar_grupo_largos_cu
 from .cu_inventory import (
@@ -904,11 +910,15 @@ class MotorNesting:
         self.escala_dxf = 25.4
         self._cancel_checker = None
         self.orientacion_cobre_por_ruta = {}
+        self.active_engine_id = get_active_engine_id()
+        self._ultima_comparacion_motores = None
         try:
-            profile = get_nest_profile()
+            profile = get_engine_profile(self.active_engine_id)
             mode = str(os.environ.get("ARGA_NEST_MODE", "first")).strip().lower()
+            ready = [m.engine_id for m in list_engine_metas() if is_engine_ready(m.engine_id)]
             print(
-                f"[NESTING ENGINE] backend={nesting_engine_name()} | "
+                f"[NESTING ENGINE] active={self.active_engine_id} | "
+                f"backend={nesting_engine_name()} | ready={ready} | "
                 f"mode={mode} mc={profile.get('mc_iterations')} "
                 f"lookahead={profile.get('lookahead')} refine={profile.get('refine_hoja')}"
             )
@@ -1194,11 +1204,73 @@ class MotorNesting:
         except Exception:
             return None
 
-    def ejecutar_nesting_visual(self, lista_partes, datos_placas, progress_callback=None, config_kerf=DEFAULT_KERF_IN, config_margin=DEFAULT_MARGIN_IN, config_corner="INFERIOR IZQUIERDA", config_opt="OPTIMIZAR LARGO Y ANCHO", wo_name="PENDIENTE"):
+    def ejecutar_nesting_visual(
+        self,
+        lista_partes,
+        datos_placas,
+        progress_callback=None,
+        config_kerf=DEFAULT_KERF_IN,
+        config_margin=DEFAULT_MARGIN_IN,
+        config_corner="INFERIOR IZQUIERDA",
+        config_opt="OPTIMIZAR LARGO Y ANCHO",
+        wo_name="PENDIENTE",
+        engine_id=None,
+    ):
         def notificar(msg, porcentaje):
             if progress_callback: progress_callback(msg, porcentaje)
 
-        if not lista_partes: return {"error": "Lista vacía."}
+        engine_token = None
+        resolved_engine = normalize_engine_id(engine_id or self.active_engine_id)
+        try:
+            engine_token = set_active_engine_id(resolved_engine)
+            self.active_engine_id = resolved_engine
+        except Exception:
+            pass
+
+        def _release_engine_context():
+            if engine_token is not None:
+                from .nest_engine_context import reset_active_engine_id
+
+                reset_active_engine_id(engine_token)
+
+        if not lista_partes:
+            _release_engine_context()
+            return {"error": "Lista vacía."}
+
+        try:
+            return self._ejecutar_nesting_visual_core(
+                lista_partes,
+                datos_placas,
+                progress_callback=progress_callback,
+                config_kerf=config_kerf,
+                config_margin=config_margin,
+                config_corner=config_corner,
+                config_opt=config_opt,
+                wo_name=wo_name,
+                resolved_engine=resolved_engine,
+            )
+        finally:
+            _release_engine_context()
+
+    def _ejecutar_nesting_visual_core(
+        self,
+        lista_partes,
+        datos_placas,
+        progress_callback=None,
+        config_kerf=DEFAULT_KERF_IN,
+        config_margin=DEFAULT_MARGIN_IN,
+        config_corner="INFERIOR IZQUIERDA",
+        config_opt="OPTIMIZAR LARGO Y ANCHO",
+        wo_name="PENDIENTE",
+        resolved_engine=None,
+    ):
+        def notificar(msg, porcentaje):
+            if progress_callback:
+                progress_callback(msg, porcentaje)
+
+        resolved_engine = normalize_engine_id(resolved_engine or get_active_engine_id())
+        total_dxf = len(lista_partes)
+
         try:
             if os.path.exists(DEBUG_LOG_NESTING):
                 os.remove(DEBUG_LOG_NESTING)
@@ -1207,10 +1279,12 @@ class MotorNesting:
 
         _dbg_nesting("============================================================")
         _dbg_nesting("[NUEVA-EJECUCION] Inicio de corrida de nesting")
-        _dbg_nesting(f"[PARAMS] kerf={config_kerf} | margin={config_margin} | corner={config_corner} | opt={config_opt} | wo={wo_name}")
+        _dbg_nesting(
+            f"[PARAMS] engine={resolved_engine} | kerf={config_kerf} | margin={config_margin} | "
+            f"corner={config_corner} | opt={config_opt} | wo={wo_name}"
+        )
         _dbg_nesting("============================================================")
         grupos = {}
-        total_dxf = len(lista_partes)
         piezas_parser_fallidas = []
         
         for i, (pieza, mat, qty, cal, st, ruta) in enumerate(lista_partes):
@@ -1444,6 +1518,7 @@ class MotorNesting:
                         config_opt,
                         config_corner,
                         wo_name,
+                        resolved_engine,
                     ),
                 ): clave
                 for clave, piezas in grupos_ordenados
@@ -1483,7 +1558,43 @@ class MotorNesting:
             "ok": total_dxf,
             "omitidos": [],
         }
+        resultados["_nest_engine_id"] = resolved_engine
         return resultados
+
+    def ejecutar_comparacion_motores_visual(
+        self,
+        lista_partes,
+        datos_placas,
+        progress_callback=None,
+        config_kerf=DEFAULT_KERF_IN,
+        config_margin=DEFAULT_MARGIN_IN,
+        config_corner="INFERIOR IZQUIERDA",
+        config_opt="OPTIMIZAR LARGO Y ANCHO",
+        wo_name="PENDIENTE",
+    ):
+        """Opción B: corre todos los motores de acero en paralelo (cobre excluido)."""
+        from .engine_compare import ejecutar_comparacion_motores
+
+        def _factory():
+            child = MotorNesting()
+            child.set_cancel_checker(self._cancel_checker)
+            child.orientacion_cobre_por_ruta = dict(self.orientacion_cobre_por_ruta or {})
+            return child
+
+        bundle = ejecutar_comparacion_motores(
+            _factory,
+            lista_partes,
+            datos_placas,
+            progress_callback=progress_callback,
+            cancel_checker=self._cancelado,
+            config_kerf=config_kerf,
+            config_margin=config_margin,
+            config_corner=config_corner,
+            config_opt=config_opt,
+            wo_name=wo_name,
+        )
+        self._ultima_comparacion_motores = bundle
+        return bundle
 
     def _procesar_grupo_parallel(
         self,
@@ -1626,7 +1737,7 @@ class MotorNesting:
         estructurales = [p for p in piezas if p['area'] > AREA_LIMITE_MM2]
         accesorios_base = [p for p in piezas if p['area'] <= AREA_LIMITE_MM2]
 
-        nest_profile = get_nest_profile()
+        nest_profile = get_engine_profile(get_active_engine_id())
         mc_iters = int(nest_profile.get("mc_iterations", 1))
         mc_fast = int(nest_profile.get("mc_lookahead_iterations", 1))
         use_lookahead = bool(nest_profile.get("lookahead", False))
@@ -4022,7 +4133,9 @@ def _procesar_grupo_parallel_worker(job):
         config_opt,
         config_corner,
         wo_name,
+        engine_id,
     ) = job
+    set_active_engine_id(engine_id)
     return MotorNesting()._procesar_grupo_parallel(
         clave,
         piezas,

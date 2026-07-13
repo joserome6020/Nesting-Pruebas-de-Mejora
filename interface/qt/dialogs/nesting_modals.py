@@ -614,3 +614,125 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
 
     _centrar_dialogo(dlg, parent)
     dlg.exec()
+
+
+def mostrar_modal_comparacion_motores(parent, bundle) -> str | None:
+    """
+    Opción B: tabla comparativa de motores. Devuelve engine_id elegido o None si cancela.
+    """
+    from modules.nesting_engine.engine_compare import comparison_rows_for_ui
+    from modules.nesting_engine.nest_engine_context import (
+        ENGINE_ARGA_BASE,
+        normalize_engine_id,
+    )
+
+    rows = comparison_rows_for_ui(bundle)
+    if not rows:
+        return normalize_engine_id(ENGINE_ARGA_BASE)
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Comparación de motores de nesting")
+    dlg.setMinimumSize(820, 420)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+
+    lay = QVBoxLayout(dlg)
+    titulo = QLabel("Seleccione el motor a usar para este nesteo (acero / placas)")
+    titulo.setStyleSheet(
+        f"color:{COLOR_TEXTO_TITULO};font-size:14px;font-weight:700;background:transparent;"
+    )
+    lay.addWidget(titulo)
+
+    hint = QLabel(
+        "Se ejecutaron todos los motores en paralelo. El cobre sigue en su módulo externo. "
+        "Los motores pendientes aparecen deshabilitados hasta su fase."
+    )
+    hint.setWordWrap(True)
+    hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;background:transparent;")
+    lay.addWidget(hint)
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    inner = QWidget()
+    inner_lay = QVBoxLayout(inner)
+
+    group = QButtonGroup(dlg)
+    selected_id = {"value": normalize_engine_id(bundle.selected_engine_id)}
+
+    def _status_label(status: str, ready: bool) -> str:
+        if status == "ok":
+            return "Listo"
+        if status == "pending":
+            return "Pendiente"
+        if status == "error":
+            return "Error"
+        return "No disponible"
+
+    for row in rows:
+        eid = row["engine_id"]
+        enabled = bool(row.get("ready")) and row.get("status") == "ok"
+        radio = QRadioButton(
+            f"{row['display_name']}  —  {_status_label(row.get('status'), row.get('ready'))}"
+        )
+        radio.setEnabled(enabled)
+        radio.setStyleSheet("color:#0F172A;font-size:12px;font-weight:600;")
+        if row.get("selected") and enabled:
+            radio.setChecked(True)
+            selected_id["value"] = eid
+        elif not any(r.get("selected") for r in rows) and eid == ENGINE_ARGA_BASE and enabled:
+            radio.setChecked(True)
+            selected_id["value"] = eid
+
+        detail = (
+            f"Fase {row.get('phase', '?')}  |  "
+            f"Hojas: {row.get('hojas', 0)}  |  "
+            f"Efi. prom: {row.get('eficiencia_promedio', 0.0):.1f}%  |  "
+            f"Piezas: {row.get('piezas_colocadas', 0)}  |  "
+            f"Pend.: {row.get('piezas_pendientes', 0)}  |  "
+            f"Costo: ${row.get('costo_total', 0.0):,.2f}  |  "
+            f"Tiempo: {row.get('elapsed_s', 0.0):.1f}s"
+        )
+        if row.get("error"):
+            detail += f"\n{row['error']}"
+
+        sub = QLabel(detail)
+        sub.setWordWrap(True)
+        sub.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:10px;margin-left:22px;")
+
+        group.addButton(radio)
+        radio.toggled.connect(
+            lambda checked, engine=eid: selected_id.update({"value": engine}) if checked else None
+        )
+        inner_lay.addWidget(radio)
+        inner_lay.addWidget(sub)
+
+    inner_lay.addStretch()
+    scroll.setWidget(inner)
+    lay.addWidget(scroll, 1)
+
+    btn_row = QHBoxLayout()
+    btn_cancel = QPushButton("Cancelar")
+    apply_push_button(btn_cancel, "#64748B", font_size=11)
+    btn_ok = QPushButton("Usar motor seleccionado")
+    apply_push_button(btn_ok, COLOR_EXITO, font_size=11, font_weight=700)
+    btn_row.addStretch()
+    btn_row.addWidget(btn_cancel)
+    btn_row.addWidget(btn_ok)
+    lay.addLayout(btn_row)
+
+    result = {"engine_id": None}
+
+    def _accept():
+        result["engine_id"] = normalize_engine_id(selected_id["value"])
+        dlg.accept()
+
+    def _reject():
+        dlg.reject()
+
+    btn_ok.clicked.connect(_accept)
+    btn_cancel.clicked.connect(_reject)
+    _centrar_dialogo(dlg, parent)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return result["engine_id"]
+

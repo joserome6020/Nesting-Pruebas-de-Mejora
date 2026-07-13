@@ -5,6 +5,10 @@
 #include <stdexcept>
 
 #include "packer.hpp"
+#include "packer_base.hpp"
+#include "packer_burke_blf.hpp"
+#include "packer_libnest2d.hpp"
+#include "packer_svgnest_ultra.hpp"
 
 namespace py = pybind11;
 
@@ -170,6 +174,224 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("limite_rings") = py::none(),
         py::arg("mc_iterations") = arga::kMonteCarloIterationsDefault);
 
+    m.def(
+        "empaquetar_una_hoja_base",
+        [](py::list piezas_in,
+           double w_placa,
+           double h_placa,
+           double kerf_override,
+           double margin_override,
+           const std::string& opt_override,
+           const std::string& corner_override,
+           py::object limite_rings_obj) {
+            std::vector<arga::PieceIn> piezas;
+            piezas.reserve(piezas_in.size());
+            for (const auto& item : piezas_in) {
+                piezas.push_back(parse_piece(py::cast<py::dict>(item)));
+            }
+
+            std::optional<std::vector<std::vector<arga::Point2D>>> limite;
+            if (!limite_rings_obj.is_none()) {
+                auto rings = parse_rings(limite_rings_obj);
+                if (!rings.empty()) {
+                    limite = rings;
+                }
+            }
+
+            const arga::PackResult result = arga::empaquetar_una_hoja_base(
+                piezas,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                opt_override,
+                corner_override,
+                limite);
+
+            py::list restos;
+            for (const auto& p : result.restos) {
+                restos.append(piece_in_to_py(p));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos);
+        },
+        py::arg("piezas"),
+        py::arg("w_placa"),
+        py::arg("h_placa"),
+        py::arg("kerf_override") = 0.2,
+        py::arg("margin_override") = 0.0,
+        py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
+        py::arg("corner_override") = "INFERIOR IZQUIERDA",
+        py::arg("limite_rings") = py::none());
+
+    m.def(
+        "empaquetar_una_hoja_burke_blf",
+        [](py::list piezas_in,
+           double w_placa,
+           double h_placa,
+           double kerf_override,
+           double margin_override,
+           const std::string& opt_override,
+           const std::string& corner_override,
+           py::object limite_rings_obj,
+           int hill_climb_iterations) {
+            std::vector<arga::PieceIn> piezas;
+            piezas.reserve(piezas_in.size());
+            for (const auto& item : piezas_in) {
+                piezas.push_back(parse_piece(py::cast<py::dict>(item)));
+            }
+
+            std::optional<std::vector<std::vector<arga::Point2D>>> limite;
+            if (!limite_rings_obj.is_none()) {
+                auto rings = parse_rings(limite_rings_obj);
+                if (!rings.empty()) {
+                    limite = rings;
+                }
+            }
+
+            const arga::PackResult result = arga::empaquetar_una_hoja_burke_blf(
+                piezas,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                opt_override,
+                corner_override,
+                limite,
+                hill_climb_iterations);
+
+            py::list restos;
+            for (const auto& p : result.restos) {
+                restos.append(piece_in_to_py(p));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos);
+        },
+        py::arg("piezas"),
+        py::arg("w_placa"),
+        py::arg("h_placa"),
+        py::arg("kerf_override") = 0.2,
+        py::arg("margin_override") = 0.0,
+        py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
+        py::arg("corner_override") = "INFERIOR IZQUIERDA",
+        py::arg("limite_rings") = py::none(),
+        py::arg("hill_climb_iterations") = 10);
+
+    m.def(
+        "empaquetar_una_hoja_libnest2d",
+        [](py::list piezas_in,
+           double w_placa,
+           double h_placa,
+           double kerf_override,
+           double margin_override,
+           const std::string& opt_override,
+           const std::string& corner_override,
+           py::object limite_rings_obj,
+           int selector_iterations) {
+            std::vector<arga::PieceIn> piezas;
+            piezas.reserve(piezas_in.size());
+            for (const auto& item : piezas_in) {
+                piezas.push_back(parse_piece(py::cast<py::dict>(item)));
+            }
+
+            std::optional<std::vector<std::vector<arga::Point2D>>> limite;
+            if (!limite_rings_obj.is_none()) {
+                auto rings = parse_rings(limite_rings_obj);
+                if (!rings.empty()) {
+                    limite = rings;
+                }
+            }
+
+            const arga::PackResult result = arga::empaquetar_una_hoja_libnest2d(
+                piezas,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                opt_override,
+                corner_override,
+                limite,
+                selector_iterations);
+
+            py::list restos;
+            for (const auto& p : result.restos) {
+                restos.append(piece_in_to_py(p));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos);
+        },
+        py::arg("piezas"),
+        py::arg("w_placa"),
+        py::arg("h_placa"),
+        py::arg("kerf_override") = 0.2,
+        py::arg("margin_override") = 0.0,
+        py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
+        py::arg("corner_override") = "INFERIOR IZQUIERDA",
+        py::arg("limite_rings") = py::none(),
+        py::arg("selector_iterations") = 8);
+
+    m.def(
+        "empaquetar_una_hoja_svgnest_ultra",
+        [](py::list piezas_in,
+           double w_placa,
+           double h_placa,
+           double kerf_override,
+           double margin_override,
+           const std::string& opt_override,
+           const std::string& corner_override,
+           py::object limite_rings_obj,
+           int ga_population,
+           int ga_generations,
+           double rotation_step_deg,
+           bool part_in_part,
+           std::uint32_t ga_seed) {
+            std::vector<arga::PieceIn> piezas;
+            piezas.reserve(piezas_in.size());
+            for (const auto& item : piezas_in) {
+                piezas.push_back(parse_piece(py::cast<py::dict>(item)));
+            }
+
+            std::optional<std::vector<std::vector<arga::Point2D>>> limite;
+            if (!limite_rings_obj.is_none()) {
+                auto rings = parse_rings(limite_rings_obj);
+                if (!rings.empty()) {
+                    limite = rings;
+                }
+            }
+
+            const arga::PackResult result = arga::empaquetar_una_hoja_svgnest_ultra(
+                piezas,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                opt_override,
+                corner_override,
+                limite,
+                ga_population,
+                ga_generations,
+                rotation_step_deg,
+                part_in_part,
+                ga_seed);
+
+            py::list restos;
+            for (const auto& p : result.restos) {
+                restos.append(piece_in_to_py(p));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos);
+        },
+        py::arg("piezas"),
+        py::arg("w_placa"),
+        py::arg("h_placa"),
+        py::arg("kerf_override") = 0.2,
+        py::arg("margin_override") = 0.0,
+        py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
+        py::arg("corner_override") = "INFERIOR IZQUIERDA",
+        py::arg("limite_rings") = py::none(),
+        py::arg("ga_population") = 30,
+        py::arg("ga_generations") = 30,
+        py::arg("rotation_step_deg") = 15.0,
+        py::arg("part_in_part") = true,
+        py::arg("ga_seed") = 0);
+
     m.attr("ENGINE_NAME") = "cpp_clipper2";
-    m.attr("ENGINE_VERSION") = "1.0.0";
+    m.attr("ENGINE_BASE_NAME") = "arga_base_pizarron";
+    m.attr("ENGINE_VERSION") = "1.1.0";
 }

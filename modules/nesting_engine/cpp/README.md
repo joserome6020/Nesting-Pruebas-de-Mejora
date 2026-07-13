@@ -1,12 +1,27 @@
 # Motor de nesting C++ (Arga Suite)
 
-Implementación nativa del empaquetado por hoja (`empaquetar_una_hoja_mc`) con **Clipper2** para operaciones geométricas. Todo el cálculo matemático del hot path corre en C++; Python solo orquesta.
+Implementación nativa del empaquetado por hoja con **Clipper2** y registro de motores en Python.
+
+## Motores de acero (placas)
+
+| ID | Nombre | Fase | Estado Fase 0 |
+|----|--------|------|----------------|
+| `arga_base` | ARGA Base (Pizarrón) | 1 | **Activo** (`packer_base.cpp`) |
+| `burke_blf` | Burke BLF + NFP | 2 | **Activo** (`packer_burke_blf.cpp`) |
+| `libnest2d` | libnest2d | 3 | **Activo** (`packer_libnest2d.cpp`) |
+| `svgnest_ultra` | SVGNest Ultra | 4 | **Activo** (`packer_svgnest_ultra.cpp`) |
+
+El **cobre (CU)** no usa estos motores: pipeline externo `cu_largos_nesting.py`.
+
+## Comparación paralela (Opción B)
+
+En corridas directas de acero (`T < 4`, sin WO 100% cobre), la UI ejecuta todos los motores en paralelo y muestra un modal para elegir el resultado.
 
 ## Alcance
 
 | Componente | Motor |
 |------------|-------|
-| Empaque por hoja (hot path) | **C++** (`algorithm_cpp.pyd`) |
+| Empaque por hoja (hot path) | **Registro** → C++ / futuros NFP |
 | Orquestación multi-placa, RTZ, costos, export | **Python** (`manager.py`) |
 
 ## Requisitos (Windows)

@@ -230,12 +230,13 @@ def normalize_material(raw: str) -> str:
     m = re.sub(r"\s+", " ", m)
     if not m:
         return ""
+    # Galvanizado antes que A 36 genérico (A 36 GALV también contiene "A 36").
+    if ("A 36" in m and "GALV" in m) or "GALVAN" in m:
+        return "A 36 GALV"
     if "A 36" in m or "A36" in m:
         return "A 36"
     if "CARBON" in m or ("ACERO" in m and "CARBONO" in m) or "STEEL, CARBON" in m or "STEEL CARBON" in m:
         return "A 36"
-    if ("A 36" in m and "GALV" in m) or "GALVAN" in m:
-        return "A 36 GALV"
     # Inoxidable: piezas DXF (INOXIDABLE), Herinox (SSTL / SSTL 304) y variantes comunes.
     if "SSTL" in m:
         if "316" in m:

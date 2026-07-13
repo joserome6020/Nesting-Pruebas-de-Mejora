@@ -1,8 +1,18 @@
-"""Perfil de optimización del motor de nesting (iteraciones MC, lookahead)."""
+"""Perfiles de optimización por motor de nesting (acero / placas)."""
 from __future__ import annotations
 
 import os
 
+from .nest_engine_context import (
+    DEFAULT_STEEL_ENGINE_ID,
+    ENGINE_ARGA_BASE,
+    ENGINE_BURKE_BLF,
+    ENGINE_LIBNEST2D,
+    ENGINE_SVGNEST_ULTRA,
+    normalize_engine_id,
+)
+
+# Perfiles de intensidad (modo global ARGA_NEST_MODE) — se combinan con el motor activo.
 NEST_MODES = {
     "first": {
         "mc_iterations": 1,
@@ -12,16 +22,98 @@ NEST_MODES = {
         "accesorios_retries": 1,
         "refinar_intentos": 0,
     },
-    "fast": {"mc_iterations": 5, "mc_lookahead_iterations": 3, "lookahead": False, "refine_hoja": False, "accesorios_retries": 3, "refinar_intentos": 0},
-    "standard": {"mc_iterations": 15, "mc_lookahead_iterations": 5, "lookahead": True, "refine_hoja": True, "accesorios_retries": 14, "refinar_intentos": 12},
-    "max": {"mc_iterations": 30, "mc_lookahead_iterations": 8, "lookahead": True, "refine_hoja": True, "accesorios_retries": 14, "refinar_intentos": 12},
+    "fast": {
+        "mc_iterations": 5,
+        "mc_lookahead_iterations": 3,
+        "lookahead": False,
+        "refine_hoja": False,
+        "accesorios_retries": 3,
+        "refinar_intentos": 0,
+    },
+    "standard": {
+        "mc_iterations": 15,
+        "mc_lookahead_iterations": 5,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 14,
+        "refinar_intentos": 12,
+    },
+    "max": {
+        "mc_iterations": 30,
+        "mc_lookahead_iterations": 8,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 14,
+        "refinar_intentos": 12,
+    },
+}
+
+# Ajustes base por motor (Fase 0: solo arga_base activo).
+ENGINE_BASE_PROFILES: dict[str, dict] = {
+    ENGINE_ARGA_BASE: {
+        "mc_iterations": 1,
+        "mc_lookahead_iterations": 1,
+        "lookahead": False,
+        "refine_hoja": False,
+        "accesorios_retries": 1,
+        "refinar_intentos": 0,
+        "continual_optimization": False,
+        "rotation_step_deg": 90,
+        "use_nfp": False,
+        "use_genetic_algorithm": False,
+        "group_identical": True,
+        "morphology_gap_fill": True,
+        "lock_profile": True,
+    },
+    ENGINE_BURKE_BLF: {
+        "mc_iterations": 10,
+        "mc_lookahead_iterations": 4,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 8,
+        "refinar_intentos": 6,
+        "continual_optimization": False,
+        "rotation_step_deg": 90,
+        "use_nfp": True,
+        "use_genetic_algorithm": False,
+        "hill_climbing_order": True,
+    },
+    ENGINE_LIBNEST2D: {
+        "mc_iterations": 8,
+        "mc_lookahead_iterations": 3,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 6,
+        "refinar_intentos": 4,
+        "continual_optimization": False,
+        "rotation_step_deg": 90,
+        "use_nfp": True,
+        "placer": "nfp",
+        "selector": "largest_area_first",
+    },
+    ENGINE_SVGNEST_ULTRA: {
+        "mc_iterations": 30,
+        "mc_lookahead_iterations": 10,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 14,
+        "refinar_intentos": 12,
+        "continual_optimization": True,
+        "continual_until_user_stops": True,
+        "rotation_step_deg": 15,
+        "use_nfp": True,
+        "use_genetic_algorithm": True,
+        "ga_population": 30,
+        "ga_mutation_rate": 0.15,
+        "part_in_part": True,
+        "common_line_lite": False,
+    },
 }
 
 _DEFAULT_MODE = "first"
 
 
-def get_nest_profile() -> dict:
-    """Perfil activo: env ARGA_NEST_MODE o ARGA_NEST_ITERATIONS."""
+def _mode_overrides() -> dict:
     mode = str(os.environ.get("ARGA_NEST_MODE", _DEFAULT_MODE)).strip().lower()
     if mode in NEST_MODES:
         return dict(NEST_MODES[mode])
@@ -40,8 +132,38 @@ def get_nest_profile() -> dict:
             "accesorios_retries": 1 if n <= 1 else min(14, n),
             "refinar_intentos": 0 if n <= 1 else 12,
         }
-
     return dict(NEST_MODES[_DEFAULT_MODE])
+
+
+def get_engine_profile(engine_id: str | None = None) -> dict:
+    """Perfil efectivo del motor (base del motor + overrides ARGA_NEST_MODE)."""
+    eid = normalize_engine_id(engine_id or DEFAULT_STEEL_ENGINE_ID)
+    base = dict(ENGINE_BASE_PROFILES.get(eid, ENGINE_BASE_PROFILES[ENGINE_ARGA_BASE]))
+    mode = _mode_overrides()
+
+    # El motor define el comportamiento principal; el modo global solo escala iteraciones
+    # cuando el motor no fija continual_optimization ni lock_profile.
+    if not base.get("continual_optimization") and not base.get("lock_profile"):
+        for key in (
+            "mc_iterations",
+            "mc_lookahead_iterations",
+            "lookahead",
+            "refine_hoja",
+            "accesorios_retries",
+            "refinar_intentos",
+        ):
+            if key in mode:
+                base[key] = mode[key]
+
+    base["engine_id"] = eid
+    return base
+
+
+def get_nest_profile() -> dict:
+    """Compatibilidad: perfil del motor activo (env ARGA_NEST_ENGINE o arga_base)."""
+    from .nest_engine_context import get_active_engine_id
+
+    return get_engine_profile(get_active_engine_id())
 
 
 def score_placa_simulacion(
@@ -79,31 +201,26 @@ def score_placa_simulacion(
     else:
         penalizacion = 1.0 + ((1.0 - efi) ** 2) * 5.0
 
-    # Última tanda en esta placa: castigo fuerte si la placa queda casi vacía
     if restos_count == 0 and efi < 0.55:
         penalizacion += (0.55 - efi) * 400.0
 
-    # Castigo por piezas que quedarían sin colocar en esta placa
     penal_restos = float(restos_count) * 22.0
     if restos_count > 0:
         penal_restos += (precio / max(placa_area, 1.0)) * float(restos_count) * 140.0
         area_r = max(0.0, float(area_restos or 0.0))
         if area_r > 0.0:
             efi_cola = area_r / placa_area
-            # Dejar mucha cola pequeña que llenará otra placa entera → malo
             if efi_cola < 0.30 and restos_count >= 2:
                 penal_restos += (0.30 - efi_cola) * 350.0
             elif efi_cola < 0.45:
                 penal_restos += (0.45 - efi_cola) * 120.0
 
-    # Preferir colocar más piezas por iteración cuando aún hay pool grande
     if piezas_colocadas > 0 and restos_count > 0:
         total_sim = piezas_colocadas + restos_count
         ratio = piezas_colocadas / total_sim
         if ratio < 0.45:
             penalizacion += (0.45 - ratio) * 60.0
 
-    # Muchas piezas pequeñas en placa casi vacía (ej. 59 pzas al 42% en 240x96)
     if piezas_colocadas >= 12 and efi < 0.50:
         penalizacion += (0.50 - efi) * float(piezas_colocadas) * 3.5
 
