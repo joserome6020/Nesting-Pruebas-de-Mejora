@@ -4,7 +4,7 @@
 #include <optional>
 #include <stdexcept>
 
-#include "packer.hpp"
+#include "packer_lab.hpp"
 
 namespace py = pybind11;
 
@@ -125,6 +125,7 @@ py::dict placement_step_to_py(const arga::PlacementStep& s) {
     d["bbox_w_mm"] = s.bbox_w_mm;
     d["bbox_h_mm"] = s.bbox_h_mm;
     d["variaciones_evaluadas"] = s.variaciones_evaluadas;
+    d["estrategia"] = s.estrategia;
     if (s.colocada) {
         d["pieza"] = piece_out_to_py(s.pieza_colocada);
     }
@@ -133,8 +134,8 @@ py::dict placement_step_to_py(const arga::PlacementStep& s) {
 
 }  // namespace
 
-PYBIND11_MODULE(algorithm_cpp, m) {
-    m.doc() = "Motor de nesting nativo C++ (Arga Suite)";
+PYBIND11_MODULE(algorithm_cpp_lab, m) {
+    m.doc() = "Motor LAB SIMULATOR (Arga Suite) — anclas concavas + interlock";
 
     m.def(
         "empaquetar_una_hoja_mc",
@@ -256,6 +257,6 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("limite_rings") = py::none(),
         py::arg("mc_iterations") = 1);
 
-    m.attr("ENGINE_NAME") = "cpp_clipper2";
-    m.attr("ENGINE_VERSION") = "1.0.0";
+    m.attr("ENGINE_NAME") = "lab_clipper2_v1";
+    m.attr("ENGINE_VERSION") = "1.0.0-lab";
 }

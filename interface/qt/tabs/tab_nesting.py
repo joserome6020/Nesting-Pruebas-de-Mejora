@@ -357,6 +357,35 @@ class TabNesting(QWidget, TimerHost):
             return
         self.cargar_workspace_async(ruta_archivo)
 
+    def abrir_nest_sim_lab(self):
+        from interface.qt.dialogs.nest_sim_timeline import DEFAULT_SCENARIO, abrir_reproductor
+
+        dlg = getattr(self, "_dlg_nest_replayer", None)
+        if dlg is not None:
+            try:
+                dlg.raise_()
+                dlg.activateWindow()
+                return
+            except RuntimeError:
+                self._dlg_nest_replayer = None
+
+        escenario = DEFAULT_SCENARIO
+        if not os.path.isfile(escenario):
+            from PySide6.QtWidgets import QFileDialog
+
+            escenario, _ = QFileDialog.getOpenFileName(
+                self,
+                "Escenario de nesteo",
+                "",
+                "Escenario (*.nestsim.json *.json)",
+            )
+            if not escenario:
+                return
+
+        win = abrir_reproductor(escenario, parent=self)
+        if win is not None:
+            self._dlg_nest_replayer = win
+
     def abrir_nesting_largos(self):
         from interface.qt.dialogs.largos_nesting_modal import abrir_nesting_largos
 

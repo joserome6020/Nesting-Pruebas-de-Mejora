@@ -55,6 +55,7 @@ struct PlacementStep {
     double bbox_w_mm = 0.0;
     double bbox_h_mm = 0.0;
     int variaciones_evaluadas = 0;
+    std::string estrategia;
     PieceOut pieza_colocada;
 };
 

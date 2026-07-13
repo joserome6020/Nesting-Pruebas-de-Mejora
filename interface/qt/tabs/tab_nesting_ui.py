@@ -187,6 +187,7 @@ def build_tab_nesting_ui(tab) -> None:
     tab.btn_ver_lotes = _btn("HISTORIAL DE W.O.", tab.reabrir_modal_escenarios)
     tab.btn_costos = _btn("COSTOS DE ORDEN", lambda: __import__("interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]).abrir_modal_costos(tab))
     tab.btn_nesting_largos = _btn("NESTEO DE LARGOS", tab.abrir_nesting_largos, bg="#455E75")
+    tab.btn_nest_sim_lab = _btn("REPRODUCTOR NEST", tab.abrir_nest_sim_lab, bg="#2F6DEA")
     tab.btn_config = _btn("CONFIGURACIÓN", lambda: abrir_modal_configuracion(tab))
     tab.btn_pdf_nesting = _btn("PDF NESTING", tab.exportar_reporte_pdf_nesting)
     tab.btn_editar_lote = _btn("EDITAR LOTE", tab.editar_lote_activo)

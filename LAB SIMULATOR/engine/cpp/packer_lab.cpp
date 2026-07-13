@@ -1,4 +1,4 @@
-#include "packer.hpp"
+#include "packer_lab.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -469,6 +469,96 @@ void compact_slide_position(
     try_slide(kSlideStepFineMm);
 }
 
+struct ShapeSignature {
+    double area = 0.0;
+    double bw = 0.0;
+    double bh = 0.0;
+};
+
+ShapeSignature shape_signature_of(const std::vector<std::vector<Point2D>>& rings, double area_hint) {
+    ShapeSignature sig;
+    const Bounds b = bounds_of_rings(rings);
+    sig.area = area_hint > 0.0 ? area_hint : total_area(rings);
+    sig.bw = b.maxx - b.minx;
+    sig.bh = b.maxy - b.miny;
+    return sig;
+}
+
+bool same_shape_signature(const ShapeSignature& a, const ShapeSignature& b, double tol_mm = 2.0) {
+    const double area_tol = std::max(250.0, a.area * 0.002);
+    return std::abs(a.area - b.area) <= area_tol
+        && std::abs(a.bw - b.bw) <= tol_mm
+        && std::abs(a.bh - b.bh) <= tol_mm;
+}
+
+int count_identical_on_sheet(const std::vector<PieceOut>& placed, const ShapeSignature& sig) {
+    int n = 0;
+    for (const auto& p : placed) {
+        if (same_shape_signature(shape_signature_of(p.poligonos, p.area), sig)) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+void append_lab_concavity_anchors(
+    const std::vector<Point2D>& ring,
+    double px,
+    double py,
+    std::vector<std::pair<double, double>>& anclajes,
+    double w_placa,
+    double h_placa,
+    double margin_px) {
+    const size_t n = ring.size();
+    if (n < 4) {
+        return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const auto& p0 = ring[(i + n - 1) % n];
+        const auto& p1 = ring[i];
+        const auto& p2 = ring[(i + 1) % n];
+        const double cross = ((p1.x - p0.x) * (p2.y - p1.y)) - ((p1.y - p0.y) * (p2.x - p1.x));
+        if (cross >= -0.5) {
+            continue;
+        }
+        double ax = px + p1.x;
+        double ay = py + p1.y;
+        const double len1 = std::hypot(p1.x - p0.x, p1.y - p0.y);
+        const double len2 = std::hypot(p2.x - p1.x, p2.y - p1.y);
+        if (len1 > 1e-6 && len2 > 1e-6) {
+            double nx = -((p1.y - p0.y) / len1 + (p2.y - p1.y) / len2);
+            double ny = ((p1.x - p0.x) / len1 + (p2.x - p1.x) / len2);
+            const double nl = std::hypot(nx, ny);
+            if (nl > 1e-6) {
+                ax += (nx / nl) * 4.0;
+                ay += (ny / nl) * 4.0;
+            }
+        }
+        if (ax < margin_px - 0.5 || ay < margin_px - 0.5 || ax > w_placa - margin_px + 0.5
+            || ay > h_placa - margin_px + 0.5) {
+            continue;
+        }
+        anclajes.emplace_back(ax, ay);
+    }
+}
+
+void append_lab_anchors_from_placed(
+    const std::vector<std::vector<Point2D>>& poly_placed,
+    double px,
+    double py,
+    std::vector<std::pair<double, double>>& anclajes,
+    double w_placa,
+    double h_placa,
+    double margin_px) {
+    if (poly_placed.empty()) {
+        return;
+    }
+    const Bounds b = bounds_of_rings(poly_placed);
+    anclajes.emplace_back(px + b.maxx + 1.0, py + b.miny);
+    anclajes.emplace_back(px + b.minx, py + b.maxy + 1.0);
+    append_lab_concavity_anchors(poly_placed.front(), px, py, anclajes, w_placa, h_placa, margin_px);
+}
+
 std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
     std::vector<PieceIn> pendientes,
     double w_placa,
@@ -505,6 +595,10 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
             step_rec.categoria = categoria_pieza_label(clase_pieza);
         }
 
+        const auto sig_actual = shape_signature_of(p_data.rings, area_pieza);
+        const int dup_en_hoja = count_identical_on_sheet(hoja.piezas, sig_actual);
+        const bool modo_interlock_lab = dup_en_hoja > 0 && es_rectangular;
+
         const auto variaciones = build_variaciones(
             p_data.rings, p_data.marks, w_placa, h_placa, margin_px, kerf_radio);
         if (timeline_out) {
@@ -524,6 +618,8 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
         double mejor_py = 0.0;
         double mejor_score = std::numeric_limits<double>::infinity();
         std::vector<std::pair<double, double>> mejor_anchors;
+
+        std::string estrategia_usada = "estandar";
 
         for (const auto& var : variaciones) {
             for (const auto& anclaje : anclajes) {
@@ -546,10 +642,17 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
                 double score = 0.0;
                 if (es_estructural_grande) {
                     score = (px * px) + (py * py);
+                    estrategia_usada = "estructural";
+                } else if (modo_interlock_lab) {
+                    // LAB: pieza repetida — priorizar huecos laterales antes de apilar
+                    score = py + (px * 800.0);
+                    estrategia_usada = "interlock_repetida";
                 } else if (es_rectangular) {
                     score = (px * 1000000.0) + py + ((py * py) * 0.00001);
+                    estrategia_usada = "rectangular";
                 } else {
                     score = (px * px) + (py * py);
+                    estrategia_usada = "compleja";
                 }
 
                 if (score < mejor_score) {
@@ -557,10 +660,16 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
                     mejor_var = &var;
                     mejor_px = px;
                     mejor_py = py;
-                    mejor_anchors = {
-                        {px + var.b_maxx + 1.0, py + var.b_miny},
-                        {px + var.b_minx, py + var.b_maxy + 1.0},
-                    };
+                    mejor_anchors.clear();
+                    Bounds bb_var = bounds_of_rings(var.poly);
+                    append_lab_anchors_from_placed(
+                        var.poly,
+                        px,
+                        py,
+                        mejor_anchors,
+                        w_placa,
+                        h_placa,
+                        margin_px);
                 }
             }
         }
@@ -574,6 +683,16 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
             fijas_bounds.push_back(bounds_of_rings(cand_buff_final));
 
             anclajes.insert(anclajes.end(), mejor_anchors.begin(), mejor_anchors.end());
+            std::vector<std::pair<double, double>> extra_anchors;
+            append_lab_anchors_from_placed(
+                cand_final,
+                mejor_px,
+                mejor_py,
+                extra_anchors,
+                w_placa,
+                h_placa,
+                margin_px);
+            anclajes.insert(anclajes.end(), extra_anchors.begin(), extra_anchors.end());
             anclajes.erase(
                 std::remove_if(
                     anclajes.begin(),
@@ -602,6 +721,7 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
                 step_rec.rotacion_grados = mejor_var->rot_deg;
                 step_rec.bbox_w_mm = bb_final.maxx - bb_final.minx;
                 step_rec.bbox_h_mm = bb_final.maxy - bb_final.miny;
+                step_rec.estrategia = estrategia_usada;
                 step_rec.pieza_colocada = hoja.piezas.back();
                 timeline_out->push_back(std::move(step_rec));
             }
