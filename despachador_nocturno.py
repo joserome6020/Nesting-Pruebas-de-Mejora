@@ -301,15 +301,17 @@ def resolver_destinos_step(step_root: str):
 def clasificar_familia(nombre_carpeta: str):
     nombre = (nombre_carpeta or "").upper()
 
-    # Cobre largos / cama láser (DXF nest con CUT_CU + fuentes en manifiesto)
-    if "CAMA LASER" in nombre:
+    # Cobre largos: solo NESTEOS DE COBRE genera STEP (sin Cama A/B).
+    if "NESTEOS DE COBRE" in nombre:
         return "COBRE"
 
-    # Solo aceptar familias ROBOT
+    # CAMA LASER acero: solo DXF de corte; no entra al flujo STEP.
+    if "CAMA LASER" in nombre:
+        return None
+
     if "ROBOT" not in nombre:
         return None
 
-    # Mantener el tipo real de proceso
     if "PLASMA" in nombre:
         return "PLASMA"
 
@@ -320,7 +322,7 @@ def clasificar_familia(nombre_carpeta: str):
 
 
 def resolver_destinos_step_cobre(step_root: str):
-    """Cobre / CAMA LASER: un solo STEP junto al nest (sin Cama A/B)."""
+    """NESTEOS DE COBRE: un solo STEP por hoja (sin Cama A/B)."""
     step_root = norm_path(step_root)
     if not step_root:
         return []
@@ -340,8 +342,9 @@ def resolver_destinos_step_cobre(step_root: str):
 
 def descubrir_familias(ruta_nesting: str):
     """
-    Detecta automáticamente carpetas candidatas dentro de NESTING.
-    Todo lo que tenga LASER o PLASMA entra al flujo.
+    Detecta carpetas con conversión STEP dentro de NESTING:
+    NESTEOS DE COBRE, ROBOT LASER + MINI NEST y ROBOT PLASMA.
+    CAMA LASER (acero) exporta solo DXF.
     """
     ruta_nesting = norm_path(ruta_nesting)
     familias = []
@@ -596,7 +599,7 @@ def procesar_ruta_nesting(
         dbg(f"DESTINOS STEP => {fam['destinos_step']}")
 
     if not familias:
-        dbg("❌ No se detectó ninguna subcarpeta candidata (CAMA LASER / ROBOT LASER / PLASMA) dentro de NESTING.")
+        dbg("❌ No se detectó ninguna subcarpeta candidata (NESTEOS DE COBRE / ROBOT LASER / ROBOT PLASMA) dentro de NESTING.")
         return {
             "ok": False,
             "familias_detectadas": 0,

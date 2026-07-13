@@ -56,10 +56,15 @@ def main() -> int:
         ),
         help="Carpeta del canal (contiene DXF/ y STEP/).",
     )
+    parser.add_argument(
+        "--dxf-dir",
+        default=None,
+        help="Carpeta DXF explícita (p. ej. DXF/_clean). Por defecto: <base>/DXF",
+    )
     args = parser.parse_args()
 
     base = os.path.normpath(args.base)
-    dxf_dir = os.path.join(base, "DXF")
+    dxf_dir = os.path.normpath(args.dxf_dir) if args.dxf_dir else os.path.join(base, "DXF")
     step_a = os.path.join(base, "STEP", "Cama A")
     step_b = os.path.join(base, "STEP", "Cama B")
 
@@ -87,14 +92,16 @@ def main() -> int:
     blocked = 0
     for path in dxf_files:
         try:
-            removed, final, _ents = sanitize_laser_dxf(path)
-            print(f"[DXF] {os.path.basename(path)}: -{len(removed)} capas -> {final}")
+            removed, final, ents = sanitize_laser_dxf(path)
+            ent_note = f", -{ents} ent cobre" if ents else ""
+            print(f"[DXF] {os.path.basename(path)}: -{len(removed)} capas{ent_note} -> {final}")
         except PermissionError:
             blocked += 1
             os.makedirs(clean_dir, exist_ok=True)
             clean_path = os.path.join(clean_dir, os.path.basename(path))
-            removed, final, _ents = sanitize_laser_dxf(path, out_path=clean_path)
-            print(f"[DXF] {os.path.basename(path)} (bloqueado, copia limpia): -{len(removed)} -> {final}")
+            removed, final, ents = sanitize_laser_dxf(path, out_path=clean_path)
+            ent_note = f", -{ents} ent cobre" if ents else ""
+            print(f"[DXF] {os.path.basename(path)} (bloqueado, copia limpia): -{len(removed)} capas{ent_note} -> {final}")
     if os.path.isdir(clean_dir):
         clean_files = [
             p
