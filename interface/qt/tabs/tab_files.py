@@ -146,11 +146,18 @@ class TabFiles(QWidget):
 
     def _refresh_engine_status_label(self, engine_id: str) -> None:
         from modules.nesting_engine.engine_registry import get_engine_meta
+        from modules.nesting_engine.nest_engine_context import ENGINE_SVGNEST_ULTRA
 
         try:
             meta = get_engine_meta(engine_id)
             desc = (meta.description or "").strip()
-            if desc:
+            if str(engine_id) == ENGINE_SVGNEST_ULTRA:
+                tip = (
+                    "Activo: SVGNest Ultra — optimiza como NestFab; "
+                    "deja correr y pulsa Cancelar para aceptar el mejor resultado."
+                )
+                self.lbl_engine_status.setText(tip)
+            elif desc:
                 self.lbl_engine_status.setText(f"Activo: {meta.display_name} — {desc}")
             else:
                 self.lbl_engine_status.setText(f"Activo: {meta.display_name}")

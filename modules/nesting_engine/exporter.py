@@ -459,26 +459,17 @@ def _resolver_carpeta_principal(clave, hoja):
 
 
 def _debe_generar_plasma(clave, hoja):
+    """
+    ROBOT PLASMA solo si hubo compensación plasma (manual).
+    Antes también se generaba para calibre > 3/8 con pieza grande aunque
+    no se hubiera compensado; eso metía DXF 1:1 en la carpeta plasma.
+    """
     if bool(hoja.get("plasma_compensado_manual", False)):
         return True
-    _, thk_val = _parse_thickness_from_clave(clave)
-
-    from .efficiency_metrics import hoja_es_sobrante_sin_compra
-
-    # Accesorios / mini nests / sobrante láser (RTZ) sin compensar
-    if hoja.get("es_retazo", False):
-        return False
-    if hoja_es_sobrante_sin_compra(hoja) and not bool(
-        hoja.get("plasma_compensado_manual")
-    ):
-        return False
-
-    # Plasma solo para > 3/8
-    if thk_val is None or thk_val <= 0.375:
-        return False
-
-    # Y solo si al menos un componente es >= 80 x 140
-    return _has_big_component(hoja)
+    for pz in hoja.get("piezas") or []:
+        if bool(pz.get("plasma_compensada_manual")):
+            return True
+    return False
 
 def _slug_token(value: str) -> str:
     text = str(value or "").strip()
@@ -1165,12 +1156,11 @@ def exportar_resultados_a_dxf(
                     placement["closed"] = bool(closed_flag)
                 placements_principales.append(placement)
 
-                # DXF plasma (solo cuando aplique; cobre no usa plasma)
+                # DXF plasma (solo cuando aplique; cobre no usa plasma).
+                # Desfase geométrico SOLO si la hoja/pieza se compensó manualmente.
+                # Sin compensación: mismo nest 1:1 (no empujar corte fuera de placa).
                 if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA") and not nom.startswith("CU_CORTE__") and not es_cu_hoja:
-                    from modules.plasma_dxf_export import (
-                        build_plasma_profile_from_nested,
-                        sanitize_plasma_profile,
-                    )
+                    from modules.plasma_dxf_export import sanitize_plasma_profile
 
                     off_piece = float(
                         pz.get("plasma_offset_mm_manual")
@@ -1179,20 +1169,14 @@ def exportar_resultados_a_dxf(
                         or plasma_offset_job
                         or 0.0
                     )
+                    off_export = off_piece if compensada_pieza else 0.0
                     if compensada_pieza:
                         plasma_outer, plasma_holes = sanitize_plasma_profile(
                             pols[0],
                             pols[1:] if len(pols) > 1 else [],
                         )
                     else:
-                        try:
-                            plasma_outer, plasma_holes = build_plasma_profile_from_nested(
-                                pols,
-                                offset_mm=off_piece,
-                                already_compensated=False,
-                            )
-                        except Exception:
-                            plasma_outer, plasma_holes = outer_main, holes_main
+                        plasma_outer, plasma_holes = outer_main, holes_main
 
                     ruta_src = str(pz.get("ruta") or "").strip()
                     plasma_ruta = (
@@ -1211,8 +1195,8 @@ def exportar_resultados_a_dxf(
                         "prefer_source_dxf": False,
                         "compensated": compensada_pieza,
                         "plasma_export": True,
-                        "compensated_plasma_source": bool(plasma_ruta),
-                        "plasma_offset_mm": off_piece,
+                        "compensated_plasma_source": bool(plasma_ruta) and off_export > 0,
+                        "plasma_offset_mm": off_export,
                         "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
@@ -1301,10 +1285,7 @@ def exportar_resultados_a_dxf(
             lista_plasma = placements_plasma
             if solo_plasma and not lista_plasma:
                 # RTZC: nunca reutilizar principales (outer láser limpiado agresivamente)
-                from modules.plasma_dxf_export import (
-                    build_plasma_profile_from_nested,
-                    sanitize_plasma_profile,
-                )
+                from modules.plasma_dxf_export import sanitize_plasma_profile
 
                 lista_plasma = []
                 comp_hoja = bool(hoja.get("plasma_compensado_manual"))
@@ -1321,16 +1302,16 @@ def exportar_resultados_a_dxf(
                     if not pols:
                         continue
                     comp_pz = comp_hoja or bool(pz.get("plasma_compensada_manual"))
+                    off_export = off_hoja if comp_pz else 0.0
                     if comp_pz:
                         po, ph = sanitize_plasma_profile(
                             pols[0],
                             pols[1:] if len(pols) > 1 else [],
                         )
                     else:
-                        po, ph = build_plasma_profile_from_nested(
-                            pols,
-                            offset_mm=off_hoja,
-                            already_compensated=False,
+                        po, ph = _clean_profile_for_production(
+                            pols[0],
+                            pols[1:] if len(pols) > 1 else [],
                         )
                     ruta_rtzc = str(pz.get("ruta") or "").strip()
                     plasma_ruta_rtzc = (
@@ -1347,8 +1328,8 @@ def exportar_resultados_a_dxf(
                         "ruta": plasma_ruta_rtzc,
                         "compensated": comp_pz,
                         "plasma_export": True,
-                        "compensated_plasma_source": bool(plasma_ruta_rtzc),
-                        "plasma_offset_mm": off_hoja,
+                        "compensated_plasma_source": bool(plasma_ruta_rtzc) and off_export > 0,
+                        "plasma_offset_mm": off_export,
                         "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),

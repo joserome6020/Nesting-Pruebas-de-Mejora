@@ -5,7 +5,7 @@ import os
 
 from .nest_engine_context import (
     DEFAULT_STEEL_ENGINE_ID,
-    ENGINE_ARGA_BASE,
+    ENGINE_ARGA_FORCE,
     ENGINE_BURKE_BLF,
     ENGINE_LIBNEST2D,
     ENGINE_SVGNEST_ULTRA,
@@ -48,14 +48,14 @@ NEST_MODES = {
     },
 }
 
-# Ajustes base por motor (Fase 0: solo arga_base activo).
+# Ajustes base por motor (Fase 0: solo arga_force activo).
 ENGINE_BASE_PROFILES: dict[str, dict] = {
-    ENGINE_ARGA_BASE: {
+    ENGINE_ARGA_FORCE: {
         "mc_iterations": 1,
         "mc_lookahead_iterations": 1,
         "lookahead": False,
         "refine_hoja": False,
-        "accesorios_retries": 1,
+        "accesorios_retries": 8,
         "refinar_intentos": 0,
         "continual_optimization": False,
         "rotation_step_deg": 90,
@@ -92,20 +92,25 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "selector": "largest_area_first",
     },
     ENGINE_SVGNEST_ULTRA: {
-        "mc_iterations": 30,
-        "mc_lookahead_iterations": 10,
-        "lookahead": True,
+        "mc_iterations": 8,
+        "mc_lookahead_iterations": 2,
+        "lookahead": False,
         "refine_hoja": True,
-        "accesorios_retries": 14,
-        "refinar_intentos": 12,
-        "continual_optimization": True,
-        "continual_until_user_stops": True,
-        "rotation_step_deg": 15,
+        "accesorios_retries": 8,
+        "refinar_intentos": 6,
+        "continual_optimization": False,
+        # Desactivado: con cancel_checker el manager lo enlazaba también en SIM-PLACA
+        # y cada candidato de placa se quedaba minutos en bucle NestFab (log mudo al 25%).
+        "continual_until_user_stops": False,
+        "continual_stagnation_rounds": 2,
+        "rotation_step_deg": 30,
         "use_nfp": True,
         "use_genetic_algorithm": True,
-        "ga_population": 30,
+        "ga_population": 12,
         "ga_mutation_rate": 0.15,
         "part_in_part": True,
+        "morphology_gap_fill": True,
+        "open_cavity_fill": True,
         "common_line_lite": False,
     },
 }
@@ -138,7 +143,7 @@ def _mode_overrides() -> dict:
 def get_engine_profile(engine_id: str | None = None) -> dict:
     """Perfil efectivo del motor (base del motor + overrides ARGA_NEST_MODE)."""
     eid = normalize_engine_id(engine_id or DEFAULT_STEEL_ENGINE_ID)
-    base = dict(ENGINE_BASE_PROFILES.get(eid, ENGINE_BASE_PROFILES[ENGINE_ARGA_BASE]))
+    base = dict(ENGINE_BASE_PROFILES.get(eid, ENGINE_BASE_PROFILES[ENGINE_ARGA_FORCE]))
     mode = _mode_overrides()
 
     # El motor define el comportamiento principal; el modo global solo escala iteraciones

@@ -101,6 +101,31 @@ def calcular_restos_desde_colocados(pool, hoja) -> list:
     return restos
 
 
+def contar_piezas_reales_hoja(hoja) -> Counter:
+    return Counter(
+        str(p.get("nombre") or "")
+        for p in piezas_reales_en_hoja(hoja)
+        if str(p.get("nombre") or "").strip()
+    )
+
+
+def calcular_restos_por_delta(pool, delta: Counter) -> list:
+    """
+    Quita del pool solo las piezas recién colocadas (delta de conteos).
+    No usar calcular_restos_desde_colocados contra una madre que ya tenía piezas:
+    eso “come” instancias homónimas que aún faltan por nestear.
+    """
+    restante = Counter(delta or {})
+    restos = []
+    for p in pool or []:
+        nom = str(p.get("nombre") or "")
+        if restante.get(nom, 0) > 0:
+            restante[nom] -= 1
+            continue
+        restos.append(copy.deepcopy(p))
+    return restos
+
+
 def remover_colocados_del_pool(pool, hoja) -> list:
     """Devuelve pool sin las piezas que ya están en la hoja (FIFO por nombre)."""
     return calcular_restos_desde_colocados(pool, hoja)

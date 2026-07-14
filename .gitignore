@@ -12,6 +12,9 @@ modules/nesting_engine/build/
 modules/nesting_engine/cpp/third_party/
 modules/nesting_engine/algorithm_cpp*.pyd
 
+# Dependencias vendored (Deepnest, etc.)
+third_party/
+
 # PyInstaller / artefactos de build local
 build/
 dist/
@@ -26,3 +29,10 @@ _ref_oficial/
 Contexto_ArgaNestingSuite.txt
 Contexto_Rapido/
 herinox_sync.local.json
+
+# Builds temporales C++
+modules/nesting_engine/cpp/build_*/
+modules/nesting_engine/algorithm_cpp.pyd.bak
+modules/nesting_engine/algorithm_cpp.pyd.prev
+modules/nesting_engine/algorithm_cpp.pyd.new
+

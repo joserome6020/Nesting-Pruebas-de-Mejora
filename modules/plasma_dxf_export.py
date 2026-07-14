@@ -1243,6 +1243,23 @@ def export_plasma_placement(
                 log(f"    plasma[{nom}] validacion omitida: {exc}", level="WARN")
         return ok
 
+    # Sin compensación: DXF fuente 1:1 (igual que el nest), sin desfase.
+    if ruta and os.path.isfile(ruta):
+        try:
+            from modules.nest_exporter import _export_source_dxf_at_placement
+
+            _export_source_dxf_at_placement(
+                msp, doc, p, draw_marks=draw_marks, strict=False
+            )
+            ok = True
+            log(f"    plasma[{nom}]: fuente 1:1 sin desfase -> OK", level="INFO")
+            return ok
+        except Exception as exc:
+            log(
+                f"    plasma[{nom}]: fuente 1:1 fallo ({exc}); usando poligono nest",
+                level="WARN",
+            )
+
     ok = _export_plasma_polygon_fallback(
         msp, p, draw_holes=draw_holes, draw_marks=False
     )

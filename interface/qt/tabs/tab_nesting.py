@@ -361,6 +361,10 @@ class TabNesting(QWidget, TimerHost):
 
         abrir_nesting_largos(self)
 
+    def abrir_nest_sim_lab(self):
+        from interface.qt.dialogs.nest_sim_lab import abrir_nest_sim_lab
+
+        abrir_nest_sim_lab(self)
     def _ui(self, fn, *args):
         call_on_main(fn, *args)
 
@@ -1634,21 +1638,37 @@ class TabNesting(QWidget, TimerHost):
             return
         if not self._ctx_hoja_valida(self.hoja_actual_data, "Renestear placa"):
             return
-        self.renestear_solo_placa(self.clave_actual, self.hoja_actual_data)
+        engine_id = self._mostrar_dialogo_motor_renest(
+            "Renestear placa",
+            f"Elija el motor para renestear la placa {self.hoja_actual_data.get('placa_id', '')}.",
+        )
+        if not engine_id:
+            return
+        self.renestear_solo_placa(
+            self.clave_actual, self.hoja_actual_data, engine_id=engine_id
+        )
 
     def panel_renestear_calibre(self):
         if not self._ctx_tiene_resultados(self.clave_actual):
             return
-        self._iniciar_renest_calibre_con_seleccion_placa(self.clave_actual)
+        self._iniciar_renest_calibre_con_seleccion_motor(self.clave_actual)
 
+    def _iniciar_renest_calibre_con_seleccion_motor(self, clave, *, engine_id=None):
+        if self._es_grupo_cobre(clave):
+            self.renestear_calibre_completo_ui(clave)
+            return
+        if engine_id is None:
+            engine_id = self._mostrar_dialogo_motor_renest(
+                "Renestear calibre completo",
+                f"Elija el motor para renestear el calibre {clave}.",
+            )
+            if not engine_id:
+                return
+        self.renestear_calibre_completo_ui(clave, engine_id=engine_id)
+
+    # Compat: llamadas antiguas con selección de placa → ahora piden motor.
     def _iniciar_renest_calibre_con_seleccion_placa(self, clave, *, candidata_placa=None):
-        if candidata_placa is not None or self._es_grupo_cobre(clave):
-            self.renestear_calibre_completo_ui(clave, candidata_placa=candidata_placa)
-            return
-        candidata = self._mostrar_dialogo_placa_renest_calibre(clave)
-        if candidata is False:
-            return
-        self.renestear_calibre_completo_ui(clave, candidata_placa=candidata)
+        self._iniciar_renest_calibre_con_seleccion_motor(clave)
 
     def panel_mudar_todas_piezas(self):
         if not self._ctx_tiene_resultados(self.clave_actual):
@@ -2792,33 +2812,39 @@ class TabNesting(QWidget, TimerHost):
 
             sub_renest = QMenu("RENESTEAR", menu)
             if tiene_rtz and not es_cu_largos:
-                sub_renest.addAction(
-                    "CON RTZ (conservar retazo)",
-                    self._safe_ctx(
-                        "Renestear con RTZ",
-                        lambda c=clave, h=hoja: self.renestear_solo_placa(
-                            c, h, absorber_rtz=False
+                for eid, label in self._opciones_motores_renest():
+                    sub_m = QMenu(label, sub_renest)
+                    sub_m.addAction(
+                        "CON RTZ (conservar retazo)",
+                        self._safe_ctx(
+                            "Renestear con RTZ",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, absorber_rtz=False, engine_id=e
+                            ),
                         ),
-                    ),
-                )
-                sub_renest.addAction(
-                    "SIN RTZ (piezas a placa madre)",
-                    self._safe_ctx(
-                        "Renestear sin RTZ",
-                        lambda c=clave, h=hoja: self.renestear_solo_placa(
-                            c, h, absorber_rtz=True
+                    )
+                    sub_m.addAction(
+                        "SIN RTZ (piezas a placa madre)",
+                        self._safe_ctx(
+                            "Renestear sin RTZ",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, absorber_rtz=True, engine_id=e
+                            ),
                         ),
-                    ),
-                )
+                    )
+                    sub_renest.addMenu(sub_m)
                 menu.addMenu(sub_renest)
             else:
-                menu.addAction(
-                    "RENESTEAR",
-                    self._safe_ctx(
-                        "Renestear placa",
-                        lambda c=clave, h=hoja: self.renestear_solo_placa(c, h),
-                    ),
-                )
+                for eid, label in self._opciones_motores_renest():
+                    menu.addAction(
+                        f"RENESTEAR · {label}",
+                        self._safe_ctx(
+                            "Renestear placa",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, engine_id=e
+                            ),
+                        ),
+                    )
             menu.addAction(
                 "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
@@ -3446,8 +3472,9 @@ class TabNesting(QWidget, TimerHost):
     def _build_piezas_para_renest_calibre(self, clave):
         conteo_job = self._conteo_piezas_job_grupo(clave)
         conteo_nido = self._contar_piezas_reales_grupo(clave)
-        # Renesteo de calibre completo debe usar el job/lote, no solo lo ya colocado.
-        conteo_total = conteo_job if conteo_job else conteo_nido
+        # Renesteo debe conservar las cantidades DEL NEST abierto.
+        # Usar el job cuando pide más piezas infla el nest (732→888) y clona.
+        conteo_total = conteo_nido if conteo_nido else conteo_job
         if not conteo_total:
             self._renest_calibre_build_info = {}
             return []
@@ -3480,10 +3507,11 @@ class TabNesting(QWidget, TimerHost):
             "faltantes_geom": faltantes_geom,
             "total_esperado": sum(int(v) for v in conteo_total.values()),
             "total_generado": len(piezas_out),
+            "fuente_conteo": "nido" if conteo_nido else "job",
         }
         return piezas_out
 
-    def renestear_calibre_completo_ui(self, clave, *, candidata_placa=None):
+    def renestear_calibre_completo_ui(self, clave, *, candidata_placa=None, engine_id=None):
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
         if clave not in self.app.resultados_nesting:
@@ -3497,7 +3525,7 @@ class TabNesting(QWidget, TimerHost):
             return QMessageBox.warning(
                 self,
                 "Atención",
-                "No se encontró geometría DXF para todas las piezas del job:\n"
+                "No se encontró geometría DXF para todas las piezas a renestear:\n"
                 f"{lineas}{extra}",
             )
         if not piezas_pack:
@@ -3505,22 +3533,22 @@ class TabNesting(QWidget, TimerHost):
                 "Atención",
                 "No se pudieron reconstruir las piezas de este calibre para renestear.",
             )
-        total_job = int(build_info.get("total_esperado") or len(piezas_pack))
-        if len(piezas_pack) != total_job:
+        total_esperado = int(build_info.get("total_esperado") or len(piezas_pack))
+        if len(piezas_pack) != total_esperado:
             return QMessageBox.warning(
                 self,
                 "Atención",
-                f"No se pudieron reconstruir todas las piezas del job.\n"
-                f"Esperadas: {total_job} · Generadas: {len(piezas_pack)}.\n"
+                f"No se pudieron reconstruir todas las piezas del nest.\n"
+                f"Esperadas: {total_esperado} · Generadas: {len(piezas_pack)}.\n"
                 "Revise PARTS y rutas DXF antes de renestear.",
             )
         total_nido = sum(int(v) for v in (build_info.get("conteo_nido") or {}).values())
+        total_job_cnt = sum(int(v) for v in (build_info.get("conteo_job") or {}).values())
         aviso_cantidad = ""
-        if total_nido and total_job != total_nido:
+        if total_job_cnt and total_nido and total_job_cnt != total_nido:
             aviso_cantidad = (
-                f"\n\nPiezas en el job: {total_job}\n"
-                f"Piezas en el nesteo actual: {total_nido}\n"
-                "Se renesteará con la cantidad del job/lote activo."
+                f"\n\nSe renesteará con las {total_nido} piezas del nest actual "
+                f"(el job pide {total_job_cnt}; no se inventan piezas extra)."
             )
         es_cobre = self._es_grupo_cobre(clave)
         cu_separacion_in = None
@@ -3548,6 +3576,14 @@ class TabNesting(QWidget, TimerHost):
             )
             titulo = "Renestear cobre en largos"
         else:
+            motor_txt = ""
+            if engine_id:
+                try:
+                    from modules.nesting_engine.engine_registry import get_engine_meta
+
+                    motor_txt = f"\n\nMotor: {get_engine_meta(engine_id).display_name}"
+                except Exception:
+                    motor_txt = f"\n\nMotor: {engine_id}"
             placa_txt = ""
             if candidata_placa:
                 placa_txt = (
@@ -3556,7 +3592,7 @@ class TabNesting(QWidget, TimerHost):
                 )
             detalle = (
                 f"Se volverá a optimizar todo el calibre {clave} desde cero."
-                f"{placa_txt}{aviso_cantidad}\n\n¿Continuar?"
+                f"{motor_txt}{placa_txt}{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear calibre completo"
         if QMessageBox.question(self, titulo, detalle) != QMessageBox.StandardButton.Yes:
@@ -3576,11 +3612,28 @@ class TabNesting(QWidget, TimerHost):
 
         sep_cu = cu_separacion_in
         largo_sin_cu = cu_largo_sin_separacion_in
+        engine_renest = engine_id
 
         def worker():
             backup_grp = copy.deepcopy((self.app.resultados_nesting or {}).get(clave))
-            inv_esperado = self._conteo_piezas_job_grupo(clave) or self._inventario_piezas_grupo(clave)
+            # Validar contra las piezas que se mandaron a renestear (nest), no el job.
+            inv_esperado = self._inventario_piezas_canonico(
+                {n: int(c) for n, c in (build_info.get("conteo_nido") or {}).items()}
+            )
+            if not inv_esperado:
+                from collections import Counter
+
+                inv_esperado = self._inventario_piezas_canonico(
+                    dict(Counter(str(p.get("nombre") or "") for p in piezas_pack))
+                )
+            engine_token = None
             try:
+                if engine_renest and not es_cobre:
+                    from modules.nesting_engine.nest_engine_context import set_active_engine_id
+
+                    engine_token = set_active_engine_id(engine_renest)
+                    if getattr(self.app, "motor_nesting", None) is not None:
+                        self.app.motor_nesting.active_engine_id = engine_renest
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
                 if candidata_placa:
                     datos_placas = self._filtrar_datos_placas_para_candidata(
@@ -3645,6 +3698,11 @@ class TabNesting(QWidget, TimerHost):
                     )
 
                 self.app.after(0, on_err)
+            finally:
+                if engine_token is not None:
+                    from modules.nesting_engine.nest_engine_context import reset_active_engine_id
+
+                    reset_active_engine_id(engine_token)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -3787,6 +3845,66 @@ class TabNesting(QWidget, TimerHost):
                 continue
         return filtradas
 
+    def _opciones_motores_renest(self):
+        """Lista (engine_id, etiqueta) de motores listos para renesteo de acero."""
+        from modules.nesting_engine.engine_registry import list_engine_metas, is_engine_ready
+
+        out = []
+        for meta in list_engine_metas():
+            if not is_engine_ready(meta.engine_id):
+                continue
+            out.append((meta.engine_id, meta.display_name))
+        if not out:
+            out.append(("arga_force", "ARGA FORCE"))
+        return out
+
+    def _mostrar_dialogo_motor_renest(self, titulo, texto):
+        """Diálogo para elegir motor de renesteo. Retorna engine_id o None si cancela."""
+        from interface.qt.theme import apply_push_button
+
+        opciones = self._opciones_motores_renest()
+        dlg = QDialog(self)
+        dlg.setWindowTitle(titulo)
+        dlg.setModal(True)
+        dlg.resize(480, 360)
+        dlg.setStyleSheet("background:#F8FAFC;")
+        lay = QVBoxLayout(dlg)
+
+        lbl = QLabel(texto)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#475569;font-size:11px;")
+        lay.addWidget(lbl)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setSpacing(6)
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
+
+        seleccion = {"eid": None}
+
+        def _pick(eid):
+            seleccion["eid"] = eid
+            dlg.accept()
+
+        for eid, label in opciones:
+            b = QPushButton(label)
+            apply_push_button(b, COLOR_GRIS_DARK, font_size=10, padding="8px 10px")
+            b.clicked.connect(lambda _checked=False, e=eid: _pick(e))
+            inner_lay.addWidget(b)
+        inner_lay.addStretch()
+
+        btn_cerrar = QPushButton("CANCELAR")
+        apply_push_button(btn_cerrar, "#FFFFFF", font_size=11)
+        btn_cerrar.clicked.connect(dlg.reject)
+        lay.addWidget(btn_cerrar)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return seleccion["eid"]
+
     def _rellenar_submenu_renest_calibre(self, sub_menu, clave):
         sub_menu.clear()
         if self._es_grupo_cobre(clave):
@@ -3799,27 +3917,13 @@ class TabNesting(QWidget, TimerHost):
             )
             return
 
-        candidatas = self._obtener_candidatas_placa_renest_calibre(clave)
-        if not candidatas:
-            na = sub_menu.addAction("Sin placas compatibles en Herinox")
-            na.setEnabled(False)
-            return
-
-        sub_menu.addAction(
-            "AUTOMÁTICO (mejor placa)",
-            self._safe_ctx(
-                "Renestear calibre",
-                lambda c=clave: self.renestear_calibre_completo_ui(c),
-            ),
-        )
-        sub_menu.addSeparator()
-        for cand in candidatas[:30]:
+        for eid, label in self._opciones_motores_renest():
             sub_menu.addAction(
-                self._etiqueta_placa_inventario(cand),
+                label,
                 self._safe_ctx(
                     "Renestear calibre",
-                    lambda c=clave, p=cand: self.renestear_calibre_completo_ui(
-                        c, candidata_placa=p
+                    lambda c=clave, e=eid: self.renestear_calibre_completo_ui(
+                        c, engine_id=e
                     ),
                 ),
             )
@@ -5831,6 +5935,7 @@ class TabNesting(QWidget, TimerHost):
         compensar_plasma=False,
         offset_mm_forzado=None,
         absorber_rtz=False,
+        engine_id=None,
     ):
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
@@ -5885,9 +5990,17 @@ class TabNesting(QWidget, TimerHost):
         hoja_ref = hoja
         backup_grupo = self._snapshot_grupo_nesting(clave)
         inventario_antes = self._inventario_piezas_grupo(clave)
+        engine_renest = engine_id
 
         def worker():
+            engine_token = None
             try:
+                if engine_renest:
+                    from modules.nesting_engine.nest_engine_context import set_active_engine_id
+
+                    engine_token = set_active_engine_id(engine_renest)
+                    if getattr(self.app, "motor_nesting", None) is not None:
+                        self.app.motor_nesting.active_engine_id = engine_renest
                 if hasattr(self.app, "actualizar_progreso"):
                     self.app.actualizar_progreso("Preparando geometrías...", 0.1)
                 if hasattr(self.app, "actualizar_progreso"):
@@ -5950,6 +6063,11 @@ class TabNesting(QWidget, TimerHost):
                     )
 
                 self.app.after(0, on_err)
+            finally:
+                if engine_token is not None:
+                    from modules.nesting_engine.nest_engine_context import reset_active_engine_id
+
+                    reset_active_engine_id(engine_token)
 
         threading.Thread(target=worker, daemon=True).start()
 

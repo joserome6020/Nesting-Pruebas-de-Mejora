@@ -146,25 +146,9 @@ class TabParts(QWidget, TimerHost):
         hdr.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
 
-        self.lbl_dxf_conteo = QLabel("DXF NESTEO: —")
-        self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
-        hdr.addWidget(self.lbl_dxf_conteo)
-
-        self.btn_dxf_omitidos = QPushButton("VER OMITIDOS")
-        apply_push_button(self.btn_dxf_omitidos, ARGB_BTN_4, font_size=10)
-        self.btn_dxf_omitidos.setEnabled(False)
-        self.btn_dxf_omitidos.clicked.connect(self.abrir_dialogo_dxf_omitidos)
-        hdr.addWidget(self.btn_dxf_omitidos)
-
         self._dxf_audit_token = 0
         self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
         hdr.addStretch()
-        self.lbl_piezas_nestear = QLabel("PIEZAS A NESTEAR: —")
-        self.lbl_piezas_nestear.setStyleSheet(self._estilo_lbl_dxf_conteo())
-        self.lbl_piezas_nestear.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        hdr.addWidget(self.lbl_piezas_nestear)
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
@@ -207,6 +191,29 @@ class TabParts(QWidget, TimerHost):
         sb.rangeChanged.connect(lambda *_: self._sync_parts_header_scrollbar())
         sb.valueChanged.connect(lambda *_: self._sync_parts_header_scrollbar())
         tabla_lay.addWidget(self.lista_scroll, 1)
+
+        # Pie: conteos DXF / piezas a la izquierda (debajo de la tabla).
+        frame_footer = QWidget()
+        foot = QHBoxLayout(frame_footer)
+        foot.setContentsMargins(0, 8, 0, 0)
+        foot.setSpacing(12)
+        self.lbl_dxf_conteo = QLabel("DXF NESTEO: —")
+        self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        foot.addWidget(self.lbl_dxf_conteo)
+        self.btn_dxf_omitidos = QPushButton("VER OMITIDOS")
+        apply_push_button(self.btn_dxf_omitidos, ARGB_BTN_4, font_size=10)
+        self.btn_dxf_omitidos.setEnabled(False)
+        self.btn_dxf_omitidos.clicked.connect(self.abrir_dialogo_dxf_omitidos)
+        foot.addWidget(self.btn_dxf_omitidos)
+        self.lbl_piezas_nestear = QLabel("PIEZAS A NESTEAR: —")
+        self.lbl_piezas_nestear.setStyleSheet(self._estilo_lbl_dxf_conteo())
+        self.lbl_piezas_nestear.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        foot.addWidget(self.lbl_piezas_nestear)
+        foot.addStretch()
+        tabla_lay.addWidget(frame_footer)
+
         splitter.addWidget(frame_tabla)
 
         frame_visor_bg = make_card()

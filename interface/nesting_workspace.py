@@ -618,18 +618,25 @@ def enlazar_rutas_en_payload(payload, *, log=None) -> int:
     total = 0
     _log("Enlazando rutas DXF desde PARTS (sin geometría)…", phase="RUTAS")
     t0 = time.perf_counter()
-    for lote in multilote:
-        if not isinstance(lote, dict):
-            continue
-        data = lote.get("data")
+
+    def _enlazar_mapa(data) -> int:
+        n = 0
         if not isinstance(data, dict):
-            continue
+            return 0
         for clave, info in data.items():
             if not isinstance(info, dict):
                 continue
             for hoja in info.get("hojas") or []:
                 if isinstance(hoja, dict):
-                    total += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+                    n += enriquecer_hoja_export_desde_partes(hoja, clave, datos_partes)
+        return n
+
+    for lote in multilote:
+        if not isinstance(lote, dict):
+            continue
+        total += _enlazar_mapa(lote.get("data"))
+    # Workspaces con resultados_nesting plano (LAB / nests antiguos) también necesitan rutas.
+    total += _enlazar_mapa(payload.get("resultados_nesting") or payload.get("resultados"))
     _log(f"Rutas enlazadas: {total} ({time.perf_counter() - t0:.1f}s)", phase="RUTAS")
     return total
 

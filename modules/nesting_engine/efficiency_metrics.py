@@ -114,9 +114,9 @@ def _metricas_hoja_aislada(hoja) -> dict:
         "area_piezas_mm2": area_piezas,
         "area_placa_mm2": area_placa,
         "area_util_real_mm2": _area_retazo_real(hoja) if (hoja or {}).get("es_retazo") else area_placa,
-        "eficiencia_directa": efi_directa,
+        "eficiencia_directa": min(100.0, efi_directa),
         "eficiencia_real": min(100.0, efi_real),
-        "eficiencia": efi_directa,
+        "eficiencia": min(100.0, efi_directa),
     }
 
 
@@ -145,9 +145,9 @@ def calcular_eficiencias_hoja(hoja, hojas_grupo=None) -> dict:
             "area_piezas_mm2": area_piezas,
             "area_placa_mm2": area_placa,
             "area_util_real_mm2": area_real,
-            "eficiencia_directa": efi_directa,
+            "eficiencia_directa": min(100.0, efi_directa),
             "eficiencia_real": min(100.0, efi_real),
-            "eficiencia": efi_directa,
+            "eficiencia": min(100.0, efi_directa),
         }
 
     area_rtz = sum(area_piezas_reales_hoja(r) for r in rtz_map.get(idx, []))
@@ -160,9 +160,9 @@ def calcular_eficiencias_hoja(hoja, hojas_grupo=None) -> dict:
         "area_placa_mm2": area_placa,
         "area_util_real_mm2": area_placa,
         "area_piezas_con_rtz_mm2": area_total_fisica,
-        "eficiencia_directa": efi_directa,
+        "eficiencia_directa": min(100.0, efi_directa),
         "eficiencia_real": min(100.0, efi_real),
-        "eficiencia": efi_directa,
+        "eficiencia": min(100.0, efi_directa),
     }
 
 

@@ -146,17 +146,21 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 }
             }
 
-            const arga::PackResult result = arga::empaquetar_una_hoja_mc(
-                piezas,
-                w_placa,
-                h_placa,
-                kerf_override,
-                margin_override,
-                opt_override,
-                corner_override,
-                limite,
-                nullptr,
-                mc_iterations);
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_mc(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite,
+                    nullptr,
+                    mc_iterations);
+            }
 
             py::list restos;
             for (const auto& p : result.restos) {
@@ -198,15 +202,19 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 }
             }
 
-            const arga::PackResult result = arga::empaquetar_una_hoja_base(
-                piezas,
-                w_placa,
-                h_placa,
-                kerf_override,
-                margin_override,
-                opt_override,
-                corner_override,
-                limite);
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_base(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite);
+            }
 
             py::list restos;
             for (const auto& p : result.restos) {
@@ -248,16 +256,20 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 }
             }
 
-            const arga::PackResult result = arga::empaquetar_una_hoja_burke_blf(
-                piezas,
-                w_placa,
-                h_placa,
-                kerf_override,
-                margin_override,
-                opt_override,
-                corner_override,
-                limite,
-                hill_climb_iterations);
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_burke_blf(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite,
+                    hill_climb_iterations);
+            }
 
             py::list restos;
             for (const auto& p : result.restos) {
@@ -300,16 +312,20 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 }
             }
 
-            const arga::PackResult result = arga::empaquetar_una_hoja_libnest2d(
-                piezas,
-                w_placa,
-                h_placa,
-                kerf_override,
-                margin_override,
-                opt_override,
-                corner_override,
-                limite,
-                selector_iterations);
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_libnest2d(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite,
+                    selector_iterations);
+            }
 
             py::list restos;
             for (const auto& p : result.restos) {
@@ -356,20 +372,24 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 }
             }
 
-            const arga::PackResult result = arga::empaquetar_una_hoja_svgnest_ultra(
-                piezas,
-                w_placa,
-                h_placa,
-                kerf_override,
-                margin_override,
-                opt_override,
-                corner_override,
-                limite,
-                ga_population,
-                ga_generations,
-                rotation_step_deg,
-                part_in_part,
-                ga_seed);
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_svgnest_ultra(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite,
+                    ga_population,
+                    ga_generations,
+                    rotation_step_deg,
+                    part_in_part,
+                    ga_seed);
+            }
 
             py::list restos;
             for (const auto& p : result.restos) {

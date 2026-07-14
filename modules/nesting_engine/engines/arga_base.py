@@ -1,4 +1,4 @@
-"""Motor 1 — ARGA Base (pizarrón)."""
+"""Motor 1 — ARGA FORCE (ex ARGA Base / pizarrón)."""
 from __future__ import annotations
 
 import time
@@ -6,17 +6,18 @@ import time
 from .types import NestEngineMeta, PackSheetRequest, PackSheetResult
 
 
-class ArgaBaseEngine:
+class ArgaForceEngine:
     META = NestEngineMeta(
-        engine_id="arga_base",
-        display_name="ARGA Base",
+        engine_id="arga_force",
+        display_name="ARGA FORCE",
         description=(
-            "Coloca por mayor área, agrupa piezas idénticas, aprovecha huecos "
-            "y rellena con piezas pequeñas."
+            "Pizarrón ARGA: mayor In² → agrupar iguales → morfología y huecos "
+            "entre piezas → cuántos pequeños caben. Toque Burke/NFP en cavidades "
+            "cóncavas (p. ej. VFM)."
         ),
         phase=1,
         status="ready",
-        inspiration="Diagrama operativo ARGA",
+        inspiration="Diagrama operativo ARGA (pizarrón) + refuerzo cóncavo tipo motor 2",
     )
 
     @classmethod
@@ -57,3 +58,7 @@ class ArgaBaseEngine:
                 elapsed_s=time.perf_counter() - t0,
                 error=str(exc),
             )
+
+
+# Alias de compatibilidad (imports antiguos).
+ArgaBaseEngine = ArgaForceEngine

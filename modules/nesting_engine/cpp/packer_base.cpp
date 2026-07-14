@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -15,9 +16,16 @@ namespace {
 using namespace Clipper2Lib;
 
 constexpr double kPi = 3.14159265358979323846;
-constexpr double kVoidMinAreaMm2 = 50.0 * 50.0;
+constexpr double kVoidMinAreaMm2 = 25.0 * 25.0;
+// Orificio anidable (part-in-part): ≥ ~80 in². Tornillos/pequeños no cuentan.
+constexpr double kHostHoleMinMm2 = 80.0 * 645.16;
 constexpr double kSlideStepCoarseMm = 3.0;
 constexpr double kSlideStepFineMm = 0.5;
+// Alineado con manager.ARGA_AREA_ESTRUCTURAL_MM2 (= 200 in²).
+constexpr double kAreaEstructuralUmbralMm2 = 200.0 * 645.16;
+constexpr int kMaxHuecosPorPasada = 48;
+constexpr int kMaxPasillos = 80;
+constexpr int kMaxGuardRelleno = 256;
 
 struct Bounds {
     double minx = 0.0;
@@ -47,7 +55,9 @@ struct LimitContext {
 struct PlacementState {
     SheetOut hoja;
     std::vector<PathsD> fijas_buff_paths;
+    std::vector<PathsD> fijas_solid_paths;  // sin kerf: colisión en relleno de cavidades C/VFM
     std::vector<Bounds> fijas_bounds;
+    std::vector<char> fijas_es_anfitriona;  // 1 = estructural anfitrión
 };
 
 PathD to_path_d(const std::vector<Point2D>& ring) {
@@ -137,6 +147,24 @@ double piece_area(const PieceIn& p) {
     return p.area > 0.0 ? p.area : total_area(p.rings);
 }
 
+bool pieza_es_anfitriona_huecos(const PieceIn& p) {
+    if (p.rings.size() < 2) {
+        return false;
+    }
+    // Solo barrenos grandes anidables — no sumar mil tornillos para marcar host.
+    for (size_t i = 1; i < p.rings.size(); ++i) {
+        if (polygon_area_ring(p.rings[i]) >= kHostHoleMinMm2) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool pieza_va_en_fase_estructural(const PieceIn& p) {
+    // Anfitrionas con cavidades (VFM etc.) van primero aunque el área esté bajo el umbral.
+    return piece_area(p) >= kAreaEstructuralUmbralMm2 || pieza_es_anfitriona_huecos(p);
+}
+
 Point2D polygon_centroid(const std::vector<Point2D>& ring) {
     if (ring.size() < 3) {
         return {0.0, 0.0};
@@ -195,6 +223,30 @@ void rotate_rings(std::vector<std::vector<Point2D>>& rings, double cx, double cy
     }
 }
 
+PathsD pick_largest_path(const PathsD& solution) {
+    if (solution.empty()) {
+        return {};
+    }
+    if (solution.size() == 1) {
+        return solution;
+    }
+    double best = -1.0;
+    size_t best_i = 0;
+    for (size_t i = 0; i < solution.size(); ++i) {
+        const double a = std::abs(Area(solution[i]));
+        if (a > best) {
+            best = a;
+            best_i = i;
+        }
+    }
+    return {solution[best_i]};
+}
+
+/**
+ * Buffer de kerf preservando canales abiertos (perfil C / VFM).
+ * NUNCA usar pick_largest_path sobre el offset: colapsa el canal cóncavo a un
+ * sólido cerrado y las piezas pequeñas jamás pueden entrar.
+ */
 PathsD buffer_paths(const PathsD& subject, double delta) {
     if (subject.empty()) {
         return {};
@@ -203,27 +255,75 @@ PathsD buffer_paths(const PathsD& subject, double delta) {
     if (cleaned.empty()) {
         cleaned = subject;
     }
-    PathsD solution = InflatePaths(cleaned, delta, JoinType::Miter, EndType::Polygon);
-    if (solution.empty()) {
+
+    const double abs_delta = std::abs(delta);
+    const JoinType jt = JoinType::Round;
+    if (abs_delta < 1e-12) {
+        return cleaned;
+    }
+
+    if (cleaned.size() == 1) {
+        PathsD solution = InflatePaths(cleaned, delta, jt, EndType::Polygon);
+        PathsD u = Union(solution, FillRule::NonZero);
+        return u.empty() ? solution : u;
+    }
+
+    // Contorno exterior crece; cada hueco se encoge (material crece hacia dentro).
+    PathsD outer = InflatePaths({cleaned[0]}, abs_delta, jt, EndType::Polygon);
+    PathsD outer_u = Union(outer, FillRule::NonZero);
+    if (outer_u.empty()) {
+        outer_u = outer;
+    }
+    if (outer_u.empty()) {
         return {};
     }
-    if (solution.size() > 1) {
-        double best = -1.0;
-        size_t best_i = 0;
-        for (size_t i = 0; i < solution.size(); ++i) {
-            const double a = std::abs(Area(solution[i]));
-            if (a > best) {
-                best = a;
-                best_i = i;
-            }
+
+    PathsD holes_shrunk;
+    for (size_t i = 1; i < cleaned.size(); ++i) {
+        PathsD hi = InflatePaths({cleaned[i]}, -abs_delta, jt, EndType::Polygon);
+        if (hi.empty()) {
+            continue;
         }
-        return {solution[best_i]};
+        holes_shrunk.insert(holes_shrunk.end(), hi.begin(), hi.end());
     }
-    return solution;
+    if (holes_shrunk.empty()) {
+        return outer_u;
+    }
+
+    PathsD solid = Difference(outer_u, holes_shrunk, FillRule::NonZero);
+    return solid.empty() ? outer_u : solid;
 }
 
 std::vector<std::vector<Point2D>> buffer_rings(const std::vector<std::vector<Point2D>>& rings, double delta) {
     return from_paths_d(buffer_paths(to_paths_d(rings), delta));
+}
+
+/** Metal real = exterior − huecos. Nunca guardar anillos crudos: con NonZero el
+ *  interior del orificio sigue “ocupado” y paths_intersect rechaza TODA pieza dentro. */
+PathsD materialize_metal(const std::vector<std::vector<Point2D>>& rings) {
+    if (rings.empty()) {
+        return {};
+    }
+    PathsD outer = to_paths_d({rings[0]});
+    if (outer.empty()) {
+        return {};
+    }
+    if (rings.size() == 1) {
+        return outer;
+    }
+    PathsD holes;
+    for (size_t i = 1; i < rings.size(); ++i) {
+        PathsD h = to_paths_d({rings[i]});
+        holes.insert(holes.end(), h.begin(), h.end());
+    }
+    if (holes.empty()) {
+        return outer;
+    }
+    PathsD solid = Difference(outer, holes, FillRule::NonZero);
+    if (solid.empty()) {
+        solid = Difference(outer, holes, FillRule::EvenOdd);
+    }
+    return solid.empty() ? outer : solid;
 }
 
 bool paths_intersect(const PathsD& a, const PathsD& b) {
@@ -240,6 +340,18 @@ bool path_contained_in(const PathsD& subject, const PathsD& container) {
     }
     const PathsD diff = Difference(subject, container, FillRule::NonZero);
     return diff.empty() || std::abs(Area(diff)) < 1e-4;
+}
+
+bool point_in_paths(double x, double y, const PathsD& container) {
+    if (container.empty()) {
+        return false;
+    }
+    PathD pt;
+    pt.emplace_back(x, y);
+    pt.emplace_back(x + 0.02, y);
+    pt.emplace_back(x + 0.02, y + 0.02);
+    pt.emplace_back(x, y + 0.02);
+    return path_contained_in(PathsD{pt}, container);
 }
 
 PathsD translate_copy(const PathsD& src, double dx, double dy) {
@@ -336,38 +448,115 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     return ctx;
 }
 
+/** Límite de orificio: encoge kerf COMPLETO (2·radio); contención = pieza exacta.
+ *  Gap pieza↔pared del orificio = kerf (p. ej. 0.3"). NUNCA reducir kerf para forzar cabida. */
+LimitContext make_hole_limit(const std::vector<Point2D>& hole_ring, double kerf_radio) {
+    LimitContext ctx;
+    if (hole_ring.size() < 3) {
+        return ctx;
+    }
+    PathsD paths = to_paths_d({hole_ring});
+    const double shrink = 2.0 * kerf_radio;  // kerf completo
+    if (shrink > 1e-9) {
+        paths = InflatePaths(paths, -shrink, JoinType::Miter, EndType::Polygon);
+    }
+    if (paths.empty()) {
+        return ctx;
+    }
+    ctx.active = true;
+    ctx.eval_paths = paths;
+    ctx.bounds = bounds_of_paths(paths);
+    return ctx;
+}
+
+/** Límite de vacío abierto (canal C/VFM / pasillo): kerf COMPLETO + pieza exacta.
+ *  Si la pieza no cabe con kerf real, NO entra: eso es correcto de fabricación. */
+LimitContext make_void_limit(const std::vector<std::vector<Point2D>>& rings, double kerf_radio) {
+    LimitContext ctx;
+    if (rings.empty() || rings[0].size() < 3) {
+        return ctx;
+    }
+    PathsD paths = to_paths_d(rings);
+    const double shrink = 2.0 * kerf_radio;  // kerf completo
+    if (shrink > 1e-9) {
+        paths = InflatePaths(paths, -shrink, JoinType::Miter, EndType::Polygon);
+    }
+    if (paths.empty()) {
+        return ctx;
+    }
+    ctx.active = true;
+    ctx.eval_paths = paths;
+    ctx.bounds = bounds_of_paths(paths);
+    return ctx;
+}
+
+bool bounds_contiene(const Bounds& outer, const Bounds& inner, double tol = 1.0) {
+    return inner.minx >= outer.minx - tol && inner.maxx <= outer.maxx + tol
+        && inner.miny >= outer.miny - tol && inner.maxy <= outer.maxy + tol;
+}
+
 bool comprobar_colision(
     double pos_x,
     double pos_y,
     const Variation& var,
     const LimitContext& limit,
     const std::vector<Bounds>& fijas_bounds,
-    const std::vector<PathsD>& fijas_buff_paths) {
+    const std::vector<PathsD>& fijas_buff_paths,
+    const std::vector<PathsD>& fijas_solid_paths,
+    const std::vector<char>& fijas_es_anfitriona,
+    double kerf_radio) {
     const double cmx = pos_x + var.b_minx;
     const double cmy = pos_y + var.b_miny;
     const double cMx = pos_x + var.b_maxx;
     const double cMy = pos_y + var.b_maxy;
+    const double kerf_full = 2.0 * kerf_radio;
 
+    std::optional<PathsD> moved_exact_cache;
+    std::optional<PathsD> moved_buff;
     if (limit.active) {
-        if (cmx < limit.bounds.minx || cmy < limit.bounds.miny || cMx > limit.bounds.maxx || cMy > limit.bounds.maxy) {
-            return true;
-        }
-        const PathsD moved = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
-        if (!path_contained_in(moved, limit.eval_paths)) {
+        moved_exact_cache = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
+        if (!path_contained_in(*moved_exact_cache, limit.eval_paths)) {
             return true;
         }
     }
 
-    std::optional<PathsD> moved_buff;
+    auto ensure_exact = [&]() -> const PathsD& {
+        if (!moved_exact_cache) {
+            moved_exact_cache = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
+        }
+        return *moved_exact_cache;
+    };
+
     for (size_t idx = 0; idx < fijas_bounds.size(); ++idx) {
         const auto& f_b = fijas_bounds[idx];
-        if (!(cMx <= f_b.minx + 0.05 || cmx >= f_b.maxx - 0.05 || cMy <= f_b.miny + 0.05 || cmy >= f_b.maxy - 0.05)) {
-            if (!moved_buff) {
-                moved_buff = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
-            }
-            if (paths_intersect(*moved_buff, fijas_buff_paths[idx])) {
+        const double pad = std::max(0.05, kerf_full + 1.0);
+        if (cMx + pad <= f_b.minx || cmx - pad >= f_b.maxx || cMy + pad <= f_b.miny
+            || cmy - pad >= f_b.maxy) {
+            continue;
+        }
+        const bool marcada_host =
+            limit.active && idx < fijas_es_anfitriona.size() && fijas_es_anfitriona[idx]
+            && idx < fijas_solid_paths.size() && !fijas_solid_paths[idx].empty();
+        bool es_host_cavity = false;
+        if (marcada_host) {
+            const auto& hb = fijas_bounds[idx];
+            const double inset = std::max(0.0, kerf_radio) + 0.5;
+            es_host_cavity =
+                cmx >= hb.minx + inset - 0.5 && cMx <= hb.maxx - inset + 0.5
+                && cmy >= hb.miny + inset - 0.5 && cMy <= hb.maxy - inset + 0.5;
+        }
+        if (es_host_cavity) {
+            if (paths_intersect(ensure_exact(), fijas_solid_paths[idx])) {
                 return true;
             }
+            continue;
+        }
+        // Pieza↔pieza: buff↔buff (gap metal = kerf). Rápido y estable.
+        if (!moved_buff) {
+            moved_buff = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
+        }
+        if (idx < fijas_buff_paths.size() && paths_intersect(*moved_buff, fijas_buff_paths[idx])) {
+            return true;
         }
     }
     return false;
@@ -380,21 +569,44 @@ void compact_slide_position(
     double margin_px,
     const LimitContext& limit,
     const std::vector<Bounds>& fijas_bounds,
-    const std::vector<PathsD>& fijas_buff_paths) {
+    const std::vector<PathsD>& fijas_buff_paths,
+    const std::vector<PathsD>& fijas_solid_paths,
+    const std::vector<char>& fijas_es_anfitriona,
+    double kerf_radio) {
     auto try_slide = [&](double step_mm) {
         bool moved = true;
+        const double min_x = limit.active ? limit.bounds.minx : margin_px;
+        const double min_y = limit.active ? limit.bounds.miny : margin_px;
         while (moved) {
             moved = false;
             const double test_px = px - step_mm;
-            if (test_px + var.b_minx >= margin_px) {
-                if (!comprobar_colision(test_px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
+            if (test_px + var.b_minx >= min_x - 0.01) {
+                if (!comprobar_colision(
+                        test_px,
+                        py,
+                        var,
+                        limit,
+                        fijas_bounds,
+                        fijas_buff_paths,
+                        fijas_solid_paths,
+                        fijas_es_anfitriona,
+                        kerf_radio)) {
                     px = test_px;
                     moved = true;
                 }
             }
             const double test_py = py - step_mm;
-            if (test_py + var.b_miny >= margin_px) {
-                if (!comprobar_colision(px, test_py, var, limit, fijas_bounds, fijas_buff_paths)) {
+            if (test_py + var.b_miny >= min_y - 0.01) {
+                if (!comprobar_colision(
+                        px,
+                        test_py,
+                        var,
+                        limit,
+                        fijas_bounds,
+                        fijas_buff_paths,
+                        fijas_solid_paths,
+                        fijas_es_anfitriona,
+                        kerf_radio)) {
                     py = test_py;
                     moved = true;
                 }
@@ -429,29 +641,155 @@ bool colocar_pieza(
     std::vector<std::pair<double, double>> mejor_anchors;
 
     std::vector<std::pair<double, double>> anclajes;
-    anclajes.emplace_back(margin_px, margin_px);
+    // En huecos/limites interiores el ancla debe ser la esquina del hueco, NO el
+    // origen de la placa (si no, nunca coloca nada en cavidades tipo VFM).
+    if (limit.active) {
+        // Centroide del vacío (esquinas AABB suelen caer en metal en canales C irregulares).
+        if (!limit.eval_paths.empty() && !limit.eval_paths[0].empty()) {
+            std::vector<Point2D> ring;
+            ring.reserve(limit.eval_paths[0].size());
+            for (const auto& pt : limit.eval_paths[0]) {
+                ring.push_back({pt.x, pt.y});
+            }
+            const Point2D c = polygon_centroid(ring);
+            if (point_in_paths(c.x, c.y, limit.eval_paths)) {
+                anclajes.emplace_back(c.x, c.y);
+            }
+        }
+        const double midx = (limit.bounds.minx + limit.bounds.maxx) * 0.5;
+        const double midy = (limit.bounds.miny + limit.bounds.maxy) * 0.5;
+        const double q1x = limit.bounds.minx + (limit.bounds.maxx - limit.bounds.minx) * 0.25;
+        const double q3x = limit.bounds.minx + (limit.bounds.maxx - limit.bounds.minx) * 0.75;
+        const double q1y = limit.bounds.miny + (limit.bounds.maxy - limit.bounds.miny) * 0.25;
+        const double q3y = limit.bounds.miny + (limit.bounds.maxy - limit.bounds.miny) * 0.75;
+        anclajes.emplace_back(limit.bounds.minx, limit.bounds.miny);
+        anclajes.emplace_back(limit.bounds.minx, limit.bounds.maxy);
+        anclajes.emplace_back(limit.bounds.maxx, limit.bounds.miny);
+        anclajes.emplace_back(limit.bounds.maxx, limit.bounds.maxy);
+        anclajes.emplace_back(midx, limit.bounds.miny);
+        anclajes.emplace_back(limit.bounds.minx, midy);
+        anclajes.emplace_back(midx, midy);
+        anclajes.emplace_back(q1x, q1y);
+        anclajes.emplace_back(q3x, q1y);
+        anclajes.emplace_back(q1x, q3y);
+        anclajes.emplace_back(q3x, q3y);
+        // Malla + línea media del canal (imprescindible para vacíos elongados).
+        const double bw = limit.bounds.maxx - limit.bounds.minx;
+        const double bh = limit.bounds.maxy - limit.bounds.miny;
+        const int nx = bw > 800.0 ? 14 : (bw > 200.0 ? 8 : 5);
+        const int ny = bh > 400.0 ? 10 : (bh > 100.0 ? 6 : 4);
+        for (int iy = 0; iy <= ny; ++iy) {
+            for (int ix = 0; ix <= nx; ++ix) {
+                const double x = limit.bounds.minx + bw * (static_cast<double>(ix) / static_cast<double>(nx));
+                const double y = limit.bounds.miny + bh * (static_cast<double>(iy) / static_cast<double>(ny));
+                if (point_in_paths(x, y, limit.eval_paths)) {
+                    anclajes.emplace_back(x, y);
+                }
+            }
+        }
+        if (bw >= bh * 1.5) {
+            const double midy = (limit.bounds.miny + limit.bounds.maxy) * 0.5;
+            for (int ix = 0; ix <= nx; ++ix) {
+                const double x = limit.bounds.minx + bw * (static_cast<double>(ix) / static_cast<double>(nx));
+                if (point_in_paths(x, midy, limit.eval_paths)) {
+                    anclajes.emplace_back(x, midy);
+                }
+            }
+        } else if (bh >= bw * 1.5) {
+            const double midx = (limit.bounds.minx + limit.bounds.maxx) * 0.5;
+            for (int iy = 0; iy <= ny; ++iy) {
+                const double y = limit.bounds.miny + bh * (static_cast<double>(iy) / static_cast<double>(ny));
+                if (point_in_paths(midx, y, limit.eval_paths)) {
+                    anclajes.emplace_back(midx, y);
+                }
+            }
+        }
+    } else {
+        anclajes.emplace_back(margin_px, margin_px);
+        // Esquinas del marco útil (descubrir patio sin malla densa costosa).
+        anclajes.emplace_back(w_placa - margin_px, margin_px);
+        anclajes.emplace_back(margin_px, h_placa - margin_px);
+        anclajes.emplace_back(w_placa - margin_px, h_placa - margin_px);
+        anclajes.emplace_back((w_placa) * 0.5, margin_px);
+        anclajes.emplace_back(margin_px, (h_placa) * 0.5);
+        anclajes.emplace_back((w_placa) * 0.5, (h_placa) * 0.5);
+    }
     for (const auto& b : state.fijas_bounds) {
+        if (limit.active && !bounds_contiene(limit.bounds, b, 2.0)
+            && !bounds_contiene(b, limit.bounds, 2.0)) {
+            // Solo anclas cercanas al hueco (piezas ya dentro o el propio marco).
+            continue;
+        }
         anclajes.emplace_back(b.maxx + 1.0, b.miny);
         anclajes.emplace_back(b.minx, b.maxy + 1.0);
+        anclajes.emplace_back(b.minx, b.miny);
+        anclajes.emplace_back(b.maxx + 1.0, b.maxy + 1.0);
+        // Anclas mid-edge: rellenar bahías cóncavas / flancos (explore concave).
+        const double mx = (b.minx + b.maxx) * 0.5;
+        const double my = (b.miny + b.maxy) * 0.5;
+        anclajes.emplace_back(b.maxx + 1.0, my);
+        anclajes.emplace_back(mx, b.maxy + 1.0);
+        anclajes.emplace_back(b.minx - 1.0, my);
+        anclajes.emplace_back(mx, b.miny - 1.0);
     }
 
     for (const auto& var : variaciones) {
         for (const auto& anclaje : anclajes) {
+            // Siempre anclar con poly_buff: gap sólido↔sólido ≥ kerf (buff↔buff).
+            // Anclar solo con exacto en cavidades dejaba ~kerf/2 entre piezas (inaceptable).
             double px = anclaje.first - var.b_minx;
             double py = anclaje.second - var.b_miny;
 
-            if (px + var.b_minx < margin_px - 0.1 || py + var.b_miny < margin_px - 0.1
-                || px + var.b_maxx > w_placa - margin_px + 0.1
-                || py + var.b_maxy > h_placa - margin_px + 0.1) {
-                continue;
+            if (!limit.active) {
+                if (px + var.b_minx < margin_px - 0.1 || py + var.b_miny < margin_px - 0.1
+                    || px + var.b_maxx > w_placa - margin_px + 0.1
+                    || py + var.b_maxy > h_placa - margin_px + 0.1) {
+                    continue;
+                }
+            } else {
+                if (px + var.b_minx < -0.1 || py + var.b_miny < -0.1
+                    || px + var.b_maxx > w_placa + 0.1
+                    || py + var.b_maxy > h_placa + 0.1) {
+                    continue;
+                }
             }
-            if (comprobar_colision(px, py, var, limit, state.fijas_bounds, state.fijas_buff_paths)) {
+            if (comprobar_colision(
+                    px,
+                    py,
+                    var,
+                    limit,
+                    state.fijas_bounds,
+                    state.fijas_buff_paths,
+                    state.fijas_solid_paths,
+                    state.fijas_es_anfitriona,
+                    kerf_radio)) {
                 continue;
             }
 
-            compact_slide_position(px, py, var, margin_px, limit, state.fijas_bounds, state.fijas_buff_paths);
+            compact_slide_position(
+                px,
+                py,
+                var,
+                margin_px,
+                limit,
+                state.fijas_bounds,
+                state.fijas_buff_paths,
+                state.fijas_solid_paths,
+                state.fijas_es_anfitriona,
+                kerf_radio);
 
-            double score = es_estructural_grande ? (px * px) + (py * py) : (px * 1000000.0) + py;
+            // Estructurales: BLF apretado (menos pasillos muertos entre VFM).
+            // Pequeñas / en cavidad: empaquetar hacia la esquina del hueco o placa.
+            double score;
+            if (limit.active) {
+                const double lx = px - limit.bounds.minx;
+                const double ly = py - limit.bounds.miny;
+                score = (ly * 1000000.0) + lx;
+            } else if (es_estructural_grande) {
+                score = (py * 1000000.0) + px;
+            } else {
+                score = (py * 1000000.0) + px;
+            }
 
             if (score < mejor_score) {
                 mejor_score = score;
@@ -475,7 +813,20 @@ bool colocar_pieza(
     const auto cand_buff_final = translate_rings_copy(mejor_var->poly_buff, mejor_px, mejor_py);
 
     state.fijas_buff_paths.push_back(to_paths_d(cand_buff_final));
+    // Sólido perforado: orificios quedan libres para Intersection/contain.
+    state.fijas_solid_paths.push_back(materialize_metal(cand_final));
     state.fijas_bounds.push_back(bounds_of_rings(cand_buff_final));
+    // Anfitriona SOLO con barreno anidable grande. Piezas “grandes” macizas o con
+    // tornillos NO deben saltar kerf pieza↔pieza (causa empalmes en barrenos).
+    PieceIn placed_in{
+        p_data.nombre,
+        area_pieza,
+        p_data.calibre,
+        p_data.material,
+        cand_final,
+        cand_marks_final};
+    const bool es_host = pieza_es_anfitriona_huecos(placed_in);
+    state.fijas_es_anfitriona.push_back(es_host ? 1 : 0);
 
     PieceOut placed;
     placed.nombre = p_data.nombre;
@@ -562,21 +913,259 @@ PathD rectangulo_placa(double w_placa, double h_placa, double margin_px) {
     return rect;
 }
 
-/** Paso 3: morfología — regiones libres = placa − ocupado (con kerf). */
+/** Pasillos entre piezas (AABB) y corredores pieza↔borde de placa.
+ *  El Difference Clipper suele unir todo en un solo polígono; sin AABB los
+ *  canales entre VFM se pierden en el “patio” y las BKT se van al margen. */
+std::vector<std::vector<std::vector<Point2D>>> detectar_pasillos_entre_piezas(
+    const PlacementState& state,
+    double w_placa,
+    double h_placa,
+    double margin_px) {
+    std::vector<std::vector<std::vector<Point2D>>> pasillos;
+    const auto& bounds = state.fijas_bounds;
+    if (bounds.empty()) {
+        return pasillos;
+    }
+
+    constexpr double kPasilloMinMm = 28.0;
+    // Canales anchos entre barras / patio lateral (~35"+) deben ser rellenables.
+    constexpr double kPasilloMaxMm = 2200.0;
+    constexpr double kOverlapMinMm = 40.0;
+
+    auto add_rect = [&](double x0, double y0, double x1, double y1) {
+        const double w = x1 - x0;
+        const double h = y1 - y0;
+        if (w <= 0.0 || h <= 0.0) {
+            return;
+        }
+        const double narrow = std::min(w, h);
+        const double wide = std::max(w, h);
+        if (narrow < kPasilloMinMm || narrow > kPasilloMaxMm) {
+            return;
+        }
+        if (wide < kOverlapMinMm) {
+            return;
+        }
+        if (w * h < kVoidMinAreaMm2) {
+            return;
+        }
+        std::vector<Point2D> ring = {
+            {x0, y0},
+            {x1, y0},
+            {x1, y1},
+            {x0, y1},
+            {x0, y0},
+        };
+        pasillos.push_back({std::move(ring)});
+    };
+
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        for (size_t j = i + 1; j < bounds.size(); ++j) {
+            const auto& a = bounds[i];
+            const auto& b = bounds[j];
+            const double ox0 = std::max(a.minx, b.minx);
+            const double ox1 = std::min(a.maxx, b.maxx);
+            const double oy0 = std::max(a.miny, b.miny);
+            const double oy1 = std::min(a.maxy, b.maxy);
+
+            // Hueco vertical entre A y B (mismo “carril” X).
+            if (ox1 - ox0 >= kOverlapMinMm) {
+                double gap0 = 0.0;
+                double gap1 = 0.0;
+                if (a.maxy <= b.miny) {
+                    gap0 = a.maxy;
+                    gap1 = b.miny;
+                } else if (b.maxy <= a.miny) {
+                    gap0 = b.maxy;
+                    gap1 = a.miny;
+                }
+                const double gh = gap1 - gap0;
+                if (gh >= kPasilloMinMm && gh <= kPasilloMaxMm) {
+                    add_rect(ox0, gap0, ox1, gap1);
+                }
+            }
+
+            // Hueco horizontal entre A y B (mismo “carril” Y).
+            if (oy1 - oy0 >= kOverlapMinMm) {
+                double gap0 = 0.0;
+                double gap1 = 0.0;
+                if (a.maxx <= b.minx) {
+                    gap0 = a.maxx;
+                    gap1 = b.minx;
+                } else if (b.maxx <= a.minx) {
+                    gap0 = b.maxx;
+                    gap1 = a.minx;
+                }
+                const double gw = gap1 - gap0;
+                if (gw >= kPasilloMinMm && gw <= kPasilloMaxMm) {
+                    add_rect(gap0, oy0, gap1, oy1);
+                }
+            }
+        }
+    }
+
+    // Corredores pieza ↔ borde útil de placa (scrap lateral / superior).
+    const double plate_minx = margin_px;
+    const double plate_miny = margin_px;
+    const double plate_maxx = w_placa - margin_px;
+    const double plate_maxy = h_placa - margin_px;
+    for (const auto& b : bounds) {
+        const double span_x = std::min(b.maxx, plate_maxx) - std::max(b.minx, plate_minx);
+        const double span_y = std::min(b.maxy, plate_maxy) - std::max(b.miny, plate_miny);
+        if (span_x >= kOverlapMinMm) {
+            const double y0 = std::max(b.miny, plate_miny);
+            const double y1 = std::min(b.maxy, plate_maxy);
+            if (b.minx - plate_minx >= kPasilloMinMm) {
+                add_rect(plate_minx, y0, b.minx, y1);
+            }
+            if (plate_maxx - b.maxx >= kPasilloMinMm) {
+                add_rect(b.maxx, y0, plate_maxx, y1);
+            }
+        }
+        if (span_y >= kOverlapMinMm) {
+            const double x0 = std::max(b.minx, plate_minx);
+            const double x1 = std::min(b.maxx, plate_maxx);
+            if (b.miny - plate_miny >= kPasilloMinMm) {
+                add_rect(x0, plate_miny, x1, b.miny);
+            }
+            if (plate_maxy - b.maxy >= kPasilloMinMm) {
+                add_rect(x0, b.maxy, x1, plate_maxy);
+            }
+        }
+    }
+
+    auto by_narrow = [](const auto& a, const auto& b) {
+        const Bounds ba = bounds_of_rings(a);
+        const Bounds bb = bounds_of_rings(b);
+        const double min_a = std::min(ba.maxx - ba.minx, ba.maxy - ba.miny);
+        const double min_b = std::min(bb.maxx - bb.minx, bb.maxy - bb.miny);
+        if (std::abs(min_a - min_b) > 1.0) {
+            return min_a < min_b;
+        }
+        return total_area(a) < total_area(b);
+    };
+    std::sort(pasillos.begin(), pasillos.end(), by_narrow);
+    if (pasillos.size() > static_cast<size_t>(kMaxPasillos)) {
+        pasillos.resize(static_cast<size_t>(kMaxPasillos));
+    }
+    return pasillos;
+}
+
+/** Cavidades abiertas (perfil C/U/VFM): libre dentro del AABB de la anfitriona.
+ *  No son barrenos cerrados; Clipper las fusiona con el patio y se pierden. */
+struct CavidadAbierta {
+    size_t host_idx = 0;
+    std::vector<std::vector<Point2D>> rings;
+};
+
+std::vector<CavidadAbierta> listar_cavidades_abiertas_por_host(const PlacementState& state) {
+    std::vector<CavidadAbierta> cavidades;
+    const size_t n = std::min(state.hoja.piezas.size(), state.fijas_buff_paths.size());
+    for (size_t i = 0; i < n; ++i) {
+        const auto& placed = state.hoja.piezas[i];
+        if (placed.poligonos.empty()) {
+            continue;
+        }
+        // Solo estructurales anfitrionas (VFM etc.): no rellenar con flags de BKT.
+        if (i >= state.fijas_es_anfitriona.size() || !state.fijas_es_anfitriona[i]) {
+            // Fallback: solo piezas grandes / perfil abierta — no BKTs con tornillos.
+            const Bounds bb = bounds_of_rings(placed.poligonos);
+            const double bbox_area = (bb.maxx - bb.minx) * (bb.maxy - bb.miny);
+            const double area_mat = piece_area(
+                PieceIn{placed.nombre, placed.area, placed.calibre, placed.material, placed.poligonos, placed.marcas});
+            const bool anfitriona =
+                area_mat >= kAreaEstructuralUmbralMm2
+                || (bbox_area > kVoidMinAreaMm2 * 4.0 && bbox_area > 0.0 && area_mat / bbox_area < 0.85);
+            if (!anfitriona) {
+                continue;
+            }
+        }
+
+        const Bounds bb = bounds_of_rings(placed.poligonos);
+        const double bw = bb.maxx - bb.minx;
+        const double bh = bb.maxy - bb.miny;
+        const double bbox_area = bw * bh;
+        if (bbox_area < kVoidMinAreaMm2 * 4.0) {
+            continue;
+        }
+
+        constexpr double pad = 0.0;
+        PathD aabb;
+        aabb.emplace_back(bb.minx - pad, bb.miny - pad);
+        aabb.emplace_back(bb.maxx + pad, bb.miny - pad);
+        aabb.emplace_back(bb.maxx + pad, bb.maxy + pad);
+        aabb.emplace_back(bb.minx - pad, bb.maxy + pad);
+
+        PathsD host_solid = materialize_metal(placed.poligonos);
+        if (host_solid.empty()) {
+            continue;
+        }
+        PathsD free_in = Difference(PathsD{aabb}, host_solid, FillRule::NonZero);
+        if (free_in.empty()) {
+            free_in = Difference(PathsD{aabb}, host_solid, FillRule::EvenOdd);
+        }
+        for (const auto& path : free_in) {
+            const double a = std::abs(Area(path));
+            if (a < 5.0 * 645.16) {
+                continue;
+            }
+            if (a > bbox_area * 0.85) {
+                continue;
+            }
+            const Bounds pb = bounds_of_paths({path});
+            const double pw = pb.maxx - pb.minx;
+            const double ph = pb.maxy - pb.miny;
+            if (pw > bw * 0.92 && ph > bh * 0.92) {
+                continue;
+            }
+            auto rings = from_paths_d({path});
+            if (!rings.empty()) {
+                cavidades.push_back(CavidadAbierta{i, std::move(rings)});
+            }
+        }
+    }
+    return cavidades;
+}
+
+std::vector<std::vector<std::vector<Point2D>>> detectar_cavidades_abiertas_en_anfitrionas(
+    const PlacementState& state) {
+    std::vector<std::vector<std::vector<Point2D>>> cavidades;
+    auto listed = listar_cavidades_abiertas_por_host(state);
+    cavidades.reserve(listed.size());
+    for (auto& c : listed) {
+        cavidades.push_back(std::move(c.rings));
+    }
+    return cavidades;
+}
+
+/** Paso 3: morfologia — regiones libres = placa - ocupado (con kerf). */
 std::vector<std::vector<std::vector<Point2D>>> detectar_huecos(
     const PlacementState& state,
     double w_placa,
     double h_placa,
     double margin_px,
-    double kerf_radio) {
+    double kerf_radio,
+    bool solo_interiores_y_pasillos = false) {
     PathsD sheet = {rectangulo_placa(w_placa, h_placa, margin_px)};
+    // Ocupado = SÓLIDO (no buff). Si restamos buffs y luego make_void_limit
+    // encoje kerf otra vez, el patio se estrecha ~1.5×kerf y las BKT no caben
+    // (regresión visible vs nest “lleno” aunque ilegales en cavidad).
     PathsD occupied;
-    for (const auto& piece_paths : state.fijas_buff_paths) {
-        occupied.insert(occupied.end(), piece_paths.begin(), piece_paths.end());
+    for (const auto& piece_paths : state.fijas_solid_paths) {
+        if (!piece_paths.empty()) {
+            occupied.insert(occupied.end(), piece_paths.begin(), piece_paths.end());
+        }
+    }
+    if (occupied.empty()) {
+        for (const auto& piece_paths : state.fijas_buff_paths) {
+            occupied.insert(occupied.end(), piece_paths.begin(), piece_paths.end());
+        }
     }
 
     if (occupied.empty()) {
-        return {from_paths_d(sheet)};
+        return solo_interiores_y_pasillos
+            ? std::vector<std::vector<std::vector<Point2D>>>{}
+            : std::vector<std::vector<std::vector<Point2D>>>{from_paths_d(sheet)};
     }
 
     PathsD occ_union = Union(occupied, FillRule::NonZero);
@@ -585,22 +1174,137 @@ std::vector<std::vector<std::vector<Point2D>>> detectar_huecos(
     }
 
     PathsD free_paths = Difference(sheet, occ_union, FillRule::NonZero);
-    std::vector<std::vector<std::vector<Point2D>>> huecos;
+    std::vector<std::vector<std::vector<Point2D>>> interiores;
+    std::vector<std::vector<std::vector<Point2D>>> exteriores;
 
-    for (const auto& path : free_paths) {
-        const double a = std::abs(Area(path));
-        if (a < kVoidMinAreaMm2) {
+    for (const auto& placed : state.hoja.piezas) {
+        if (placed.poligonos.size() < 2) {
             continue;
         }
-        auto rings = from_paths_d({path});
-        if (!rings.empty()) {
-            huecos.push_back(std::move(rings));
+        for (size_t ri = 1; ri < placed.poligonos.size(); ++ri) {
+            const auto& hole_ring = placed.poligonos[ri];
+            const double a = polygon_area_ring(hole_ring);
+            // Barrenos (< ~5 in²) no caben BKTs; saturan el cupo de huecos.
+            if (a < 5.0 * 645.16) {
+                continue;
+            }
+            interiores.push_back({hole_ring});
         }
     }
 
-    std::sort(huecos.begin(), huecos.end(), [](const auto& a, const auto& b) {
+    {
+        auto abiertas = detectar_cavidades_abiertas_en_anfitrionas(state);
+        for (auto& c : abiertas) {
+            interiores.push_back(std::move(c));
+        }
+    }
+
+    auto pasillos = detectar_pasillos_entre_piezas(state, w_placa, h_placa, margin_px);
+
+    if (!solo_interiores_y_pasillos) {
+        const double area_placa = std::max(1.0, (w_placa - 2.0 * margin_px) * (h_placa - 2.0 * margin_px));
+        // Antes 8%: el scrap entre barras (~1 polígono grande) se descartaba y las
+        // BKT iban al borde. Ahora admitimos patio grande + siempre el mayor libre.
+        const double patio_umbral = area_placa * 0.55;
+        PathD mayor_libre;
+        double mayor_area = 0.0;
+        for (const auto& path : free_paths) {
+            const double a = std::abs(Area(path));
+            if (a > mayor_area) {
+                mayor_area = a;
+                mayor_libre = path;
+            }
+            if (a < kVoidMinAreaMm2 || a > patio_umbral) {
+                continue;
+            }
+            const Bounds pb = bounds_of_paths({path});
+            const double cx = (pb.minx + pb.maxx) * 0.5;
+            const double cy = (pb.miny + pb.maxy) * 0.5;
+            bool es_cavidad_ya_listada = false;
+            for (const auto& hin : interiores) {
+                const Bounds hb = bounds_of_rings(hin);
+                if (bounds_contiene(hb, Bounds{cx, cy, cx, cy}, 2.0)
+                    || (std::abs(total_area(hin) - a) < a * 0.15
+                        && bounds_contiene(hb, pb, 5.0))) {
+                    es_cavidad_ya_listada = true;
+                    break;
+                }
+            }
+            for (const auto& pas : pasillos) {
+                const Bounds hb = bounds_of_rings(pas);
+                if (bounds_contiene(hb, Bounds{cx, cy, cx, cy}, 2.0)) {
+                    es_cavidad_ya_listada = true;
+                    break;
+                }
+            }
+            if (es_cavidad_ya_listada) {
+                continue;
+            }
+            auto rings = from_paths_d({path});
+            if (!rings.empty()) {
+                exteriores.push_back(std::move(rings));
+            }
+        }
+        // Garantizar relleno del patio dominante aunque supere el umbral.
+        if (mayor_area >= kVoidMinAreaMm2) {
+            const Bounds pb = bounds_of_paths({mayor_libre});
+            const double cx = (pb.minx + pb.maxx) * 0.5;
+            const double cy = (pb.miny + pb.maxy) * 0.5;
+            bool ya = false;
+            for (const auto& ex : exteriores) {
+                const Bounds hb = bounds_of_rings(ex);
+                if (bounds_contiene(hb, Bounds{cx, cy, cx, cy}, 2.0)
+                    || (std::abs(total_area(ex) - mayor_area) < mayor_area * 0.15)) {
+                    ya = true;
+                    break;
+                }
+            }
+            if (!ya) {
+                auto rings = from_paths_d({mayor_libre});
+                if (!rings.empty()) {
+                    exteriores.push_back(std::move(rings));
+                }
+            }
+        }
+    }
+
+    auto by_area_desc = [](const auto& a, const auto& b) {
         return total_area(a) > total_area(b);
-    });
+    };
+    auto by_area_asc = [](const auto& a, const auto& b) {
+        return total_area(a) < total_area(b);
+    };
+    auto by_pasillo_primero = [](const auto& a, const auto& b) {
+        const Bounds ba = bounds_of_rings(a);
+        const Bounds bb = bounds_of_rings(b);
+        const double min_a = std::min(ba.maxx - ba.minx, ba.maxy - ba.miny);
+        const double min_b = std::min(bb.maxx - bb.minx, bb.maxy - bb.miny);
+        if (std::abs(min_a - min_b) > 1.0) {
+            return min_a < min_b;
+        }
+        return total_area(a) < total_area(b);
+    };
+    std::sort(interiores.begin(), interiores.end(), by_area_asc);
+    if (interiores.size() > static_cast<size_t>(kMaxHuecosPorPasada)) {
+        interiores.resize(static_cast<size_t>(kMaxHuecosPorPasada));
+    }
+    std::sort(pasillos.begin(), pasillos.end(), by_pasillo_primero);
+    // Patio: bolsas chicas primero (SVGNest "sand" / Deepnest: rellenar huecos
+    // antes de diluir piezas en el patio grande).
+    std::sort(exteriores.begin(), exteriores.end(), by_area_asc);
+
+    std::vector<std::vector<std::vector<Point2D>>> huecos;
+    huecos.reserve(interiores.size() + pasillos.size() + exteriores.size());
+    for (auto& h : interiores) {
+        huecos.push_back(std::move(h));
+    }
+    for (auto& h : pasillos) {
+        huecos.push_back(std::move(h));
+    }
+    for (auto& h : exteriores) {
+        huecos.push_back(std::move(h));
+    }
+    (void)kerf_radio;
     return huecos;
 }
 
@@ -608,90 +1312,295 @@ bool pieza_cabe_en_hueco(const PieceIn& p, const Bounds& hueco_bounds, double to
     const Bounds pb = bounds_of_rings(p.rings);
     const double w_p = pb.maxx - pb.minx;
     const double h_p = pb.maxy - pb.miny;
-    const double min_p = std::min(w_p, h_p);
-    const double max_p = std::max(w_p, h_p);
     const double w_h = hueco_bounds.maxx - hueco_bounds.minx;
     const double h_h = hueco_bounds.maxy - hueco_bounds.miny;
-    const double min_h = std::min(w_h, h_h);
-    const double max_h = std::max(w_h, h_h);
-    return min_p <= min_h + tol && max_p <= max_h + tol;
+    // Admitir rotación 90° (intercambio largo/ancho).
+    return (w_p <= w_h + tol && h_p <= h_h + tol)
+        || (h_p <= w_h + tol && w_p <= h_h + tol);
 }
 
-/** Paso 4: recorrer piezas pequeñas e intentar llenar cada hueco. */
+/** Relleno directo orificio-a-orificio (como SVGNest Ultra try_part_in_part).
+ *  Prueba TODAS las piezas restantes que quepan (bridas P15 en cavidad P09_2, etc.). */
+void rellenar_orificios_directo(
+    PlacementState& state,
+    std::vector<PieceIn>& restos,
+    double w_placa,
+    double h_placa,
+    double kerf_custom) {
+    const double kerf_radio = (kerf_custom * 25.4) / 2.0;
+    constexpr double kMinHoleAreaMm2 = kHostHoleMinMm2;
+
+    if (restos.empty()) {
+        return;
+    }
+    std::sort(restos.begin(), restos.end(), [](const PieceIn& a, const PieceIn& b) {
+        return piece_area(a) < piece_area(b);
+    });
+
+    for (int guard = 0; guard < kMaxGuardRelleno && !restos.empty(); ++guard) {
+        size_t colocadas = 0;
+        std::vector<PieceIn> pendientes;
+        pendientes.reserve(restos.size());
+        for (auto& p : restos) {
+            if (pieza_es_anfitriona_huecos(p)) {
+                pendientes.push_back(std::move(p));
+                continue;
+            }
+            bool placed = false;
+            for (const auto& host : state.hoja.piezas) {
+                if (host.poligonos.size() < 2) {
+                    continue;
+                }
+                for (size_t hi = 1; hi < host.poligonos.size(); ++hi) {
+                    if (polygon_area_ring(host.poligonos[hi]) < kMinHoleAreaMm2) {
+                        continue;
+                    }
+                    const Bounds hb = bounds_of_rings({host.poligonos[hi]});
+                    if (!pieza_cabe_en_hueco(p, hb)) {
+                        continue;
+                    }
+                    const LimitContext hole_limit = make_hole_limit(host.poligonos[hi], kerf_radio);
+                    if (!hole_limit.active) {
+                        continue;
+                    }
+                    if (colocar_pieza(p, state, w_placa, h_placa, kerf_radio, 0.0, hole_limit)) {
+                        placed = true;
+                        ++colocadas;
+                        break;
+                    }
+                }
+                if (placed) {
+                    break;
+                }
+            }
+            if (!placed) {
+                pendientes.push_back(std::move(p));
+            }
+        }
+        restos = std::move(pendientes);
+        if (colocadas == 0) {
+            break;
+        }
+    }
+}
+
+/** Relleno de canales abiertos C/VFM (AABB − metal), no barrenos.
+ *  Balance por anfitriona: no saturar VFM inferior dejando la superior vacía. */
+void rellenar_cavidades_abiertas_directo(
+    PlacementState& state,
+    std::vector<PieceIn>& restos,
+    double w_placa,
+    double h_placa,
+    double kerf_custom) {
+    const double kerf_radio = (kerf_custom * 25.4) / 2.0;
+
+    std::vector<PieceIn> grandes;
+    std::vector<PieceIn> pequenas;
+    for (const auto& p : restos) {
+        if (pieza_va_en_fase_estructural(p)) {
+            grandes.push_back(p);
+        } else {
+            pequenas.push_back(p);
+        }
+    }
+    if (pequenas.empty()) {
+        restos = std::move(grandes);
+        return;
+    }
+    std::sort(pequenas.begin(), pequenas.end(), [](const PieceIn& a, const PieceIn& b) {
+        return piece_area(a) < piece_area(b);
+    });
+
+    const size_t n_hosts = state.hoja.piezas.size();
+    std::vector<int> fill_por_host(n_hosts, 0);
+    std::vector<char> host_agotado(n_hosts, 0);
+
+    auto place_one_in_host = [&](size_t host_idx, bool solo_alto) -> bool {
+        auto all = listar_cavidades_abiertas_por_host(state);
+        std::vector<CavidadAbierta> cavs;
+        for (auto& c : all) {
+            if (c.host_idx != host_idx) {
+                continue;
+            }
+            const Bounds hb = bounds_of_rings(c.rings);
+            if (solo_alto) {
+                const double narrow = std::min(hb.maxx - hb.minx, hb.maxy - hb.miny);
+                if (narrow < 6.0 * 25.4) {
+                    continue;
+                }
+            }
+            cavs.push_back(std::move(c));
+        }
+        if (cavs.empty()) {
+            return false;
+        }
+        std::sort(cavs.begin(), cavs.end(), [](const CavidadAbierta& a, const CavidadAbierta& b) {
+            const Bounds ba = bounds_of_rings(a.rings);
+            const Bounds bb = bounds_of_rings(b.rings);
+            // Preferir cavidades todavía “vacías” (menor área de AABB no ayuda);
+            // priorizar canal largo.
+            const double la = std::max(ba.maxx - ba.minx, ba.maxy - ba.miny);
+            const double lb = std::max(bb.maxx - bb.minx, bb.maxy - bb.miny);
+            return la > lb;
+        });
+
+        for (const auto& cav : cavs) {
+            const Bounds hb = bounds_of_rings(cav.rings);
+            const LimitContext limit = make_void_limit(cav.rings, kerf_radio);
+            if (!limit.active) {
+                continue;
+            }
+            // Densificar ESTE canal antes de pasar a otro (máx. 12 piezas / turno).
+            int en_canal = 0;
+            bool progreso = true;
+            while (progreso && en_canal < 12 && !pequenas.empty()) {
+                progreso = false;
+                for (size_t pi = 0; pi < pequenas.size(); ++pi) {
+                    PieceIn& p = pequenas[pi];
+                    if (!pieza_cabe_en_hueco(p, hb, /*tol=*/1.0)) {
+                        continue;
+                    }
+                    if (solo_alto) {
+                        const Bounds pb = bounds_of_rings(p.rings);
+                        const double thin = 3.80 * 25.4;
+                        if (std::min(pb.maxx - pb.minx, pb.maxy - pb.miny) <= thin) {
+                            continue;
+                        }
+                    }
+                    if (colocar_pieza(p, state, w_placa, h_placa, kerf_radio, 0.0, limit)) {
+                        ++fill_por_host[host_idx];
+                        ++en_canal;
+                        pequenas.erase(pequenas.begin() + static_cast<std::ptrdiff_t>(pi));
+                        progreso = true;
+                        break;
+                    }
+                }
+            }
+            if (en_canal > 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto pack_balanced = [&](bool solo_alto) {
+        std::fill(host_agotado.begin(), host_agotado.end(), 0);
+        for (int guard = 0; guard < kMaxGuardRelleno && !pequenas.empty(); ++guard) {
+            // Elegir anfitriona con cavidades y menor relleno.
+            auto all = listar_cavidades_abiertas_por_host(state);
+            std::vector<char> tiene(n_hosts, 0);
+            for (const auto& c : all) {
+                if (c.host_idx < n_hosts) {
+                    tiene[c.host_idx] = 1;
+                }
+            }
+            int best = -1;
+            int best_fill = std::numeric_limits<int>::max();
+            for (size_t h = 0; h < n_hosts; ++h) {
+                if (!tiene[h] || host_agotado[h]) {
+                    continue;
+                }
+                if (fill_por_host[h] < best_fill) {
+                    best_fill = fill_por_host[h];
+                    best = static_cast<int>(h);
+                }
+            }
+            if (best < 0) {
+                break;
+            }
+            if (!place_one_in_host(static_cast<size_t>(best), solo_alto)) {
+                host_agotado[static_cast<size_t>(best)] = 1;
+            }
+        }
+    };
+
+    pack_balanced(/*solo_alto=*/true);
+    pack_balanced(/*solo_alto=*/false);
+
+    restos.clear();
+    restos.reserve(grandes.size() + pequenas.size());
+    for (auto& p : grandes) {
+        restos.push_back(std::move(p));
+    }
+    for (auto& p : pequenas) {
+        restos.push_back(std::move(p));
+    }
+}
+
+/** Paso 4: llenar huecos colocando EN EL MISMO estado de la placa (con colisiones). */
 void rellenar_huecos_con_pequenas(
     PlacementState& state,
     std::vector<PieceIn>& restos,
     double w_placa,
     double h_placa,
     double kerf_custom,
-    double margin_custom) {
+    double margin_custom,
+    bool solo_interiores_y_pasillos = false) {
     const double kerf_radio = (kerf_custom * 25.4) / 2.0;
     const double margin_px = margin_custom > 0.0 ? (margin_custom * 25.4) : 0.0;
 
     std::vector<PieceIn> grandes;
     std::vector<PieceIn> pequenas;
     for (const auto& p : restos) {
-        if (piece_area(p) >= kAreaEstructuralUmbralMm2) {
+        if (pieza_va_en_fase_estructural(p)) {
             grandes.push_back(p);
         } else {
             pequenas.push_back(p);
         }
     }
-  if (pequenas.empty()) {
+    if (pequenas.empty()) {
         restos = std::move(grandes);
         return;
     }
 
+    // Pequeñas primero: caben mejor en pasillos/cavidades irregulares.
     std::sort(pequenas.begin(), pequenas.end(), [](const PieceIn& a, const PieceIn& b) {
-        return piece_area(a) > piece_area(b);
+        return piece_area(a) < piece_area(b);
     });
 
-    auto huecos = detectar_huecos(state, w_placa, h_placa, margin_px, kerf_radio);
-    std::vector<PieceIn> sin_colocar;
+    // Un hueco prioritario por pasada y redesdetectar: llena pasillos/cavidades
+    // antes de “tragarse” las piezas en el vacío grande al final.
+    for (int guard = 0; guard < kMaxGuardRelleno && !pequenas.empty(); ++guard) {
+        auto huecos = detectar_huecos(
+            state, w_placa, h_placa, margin_px, kerf_radio, solo_interiores_y_pasillos);
+        if (huecos.empty()) {
+            break;
+        }
+        if (huecos.size() > static_cast<size_t>(kMaxHuecosPorPasada)) {
+            huecos.resize(static_cast<size_t>(kMaxHuecosPorPasada));
+        }
 
-    for (const auto& hueco_rings : huecos) {
-        const Bounds hb = bounds_of_rings(hueco_rings);
-        std::vector<PieceIn> candidatos;
-        std::vector<PieceIn> siguientes;
-
-        for (auto& p : pequenas) {
-            if (pieza_cabe_en_hueco(p, hb)) {
-                candidatos.push_back(std::move(p));
-            } else {
-                siguientes.push_back(std::move(p));
+        size_t colocadas_pasada = 0;
+        for (const auto& hueco_rings : huecos) {
+            const Bounds hb = bounds_of_rings(hueco_rings);
+            const LimitContext limit = make_void_limit(hueco_rings, kerf_radio);
+            if (!limit.active) {
+                continue;
             }
-        }
-        pequenas = std::move(siguientes);
 
-        if (candidatos.empty()) {
-            continue;
+            std::vector<PieceIn> pendientes;
+            pendientes.reserve(pequenas.size());
+            for (auto& p : pequenas) {
+                if (!pieza_cabe_en_hueco(p, hb)) {
+                    pendientes.push_back(std::move(p));
+                    continue;
+                }
+                if (colocar_pieza(p, state, w_placa, h_placa, kerf_radio, 0.0, limit)) {
+                    ++colocadas_pasada;
+                } else {
+                    pendientes.push_back(std::move(p));
+                }
+            }
+            pequenas = std::move(pendientes);
+            // Seguir con el siguiente hueco en la misma pasada (antes
+            // cortaba al primer éxito y muchas cavidades quedaban vacías).
         }
-
-        auto orden_candidatos = orden_pizarron(std::move(candidatos));
-        auto [sub_state, sub_restos] = colocar_en_orden(
-            orden_candidatos,
-            w_placa,
-            h_placa,
-            kerf_custom,
-            margin_custom,
-            hueco_rings);
-
-        for (auto& placed : sub_state.hoja.piezas) {
-            state.hoja.piezas.push_back(std::move(placed));
-            state.hoja.area_usada += 0.0;  // recalc below
-        }
-        for (auto& fp : sub_state.fijas_buff_paths) {
-            state.fijas_buff_paths.push_back(std::move(fp));
-        }
-        for (auto& fb : sub_state.fijas_bounds) {
-            state.fijas_bounds.push_back(std::move(fb));
-        }
-
-        for (auto& r : sub_restos) {
-            pequenas.push_back(std::move(r));
+        if (colocadas_pasada == 0) {
+            break;
         }
     }
 
+    std::vector<PieceIn> sin_colocar;
     for (auto& p : pequenas) {
         sin_colocar.push_back(std::move(p));
     }
@@ -733,28 +1642,197 @@ PackResult empaquetar_una_hoja_base(
         return out;
     }
 
-    std::vector<PieceIn> pool = piezas;
-
-    // Fases 1-2: mayor área por grupo de idénticas (nombre).
-    auto ordenadas = orden_pizarron(std::move(pool));
-    auto [state, restos] = colocar_en_orden(
-        ordenadas,
-        w_placa,
-        h_placa,
-        kerf_override,
-        margin_override,
-        limite_rings);
-
-    // Fases 3-4: morfología de huecos y piezas pequeñas (solo placa madre completa).
     const bool es_placa_completa = !limite_rings || limite_rings->empty();
-    if (es_placa_completa && !restos.empty()) {
-        rellenar_huecos_con_pequenas(
-            state,
-            restos,
+    const double kerf_radio = (kerf_override * 25.4) / 2.0;
+
+    // Empaque restringido (RTZ/hueco Python): una sola pasada como antes.
+    if (!es_placa_completa) {
+        auto ordenadas = orden_pizarron(piezas);
+        auto [state, restos] = colocar_en_orden(
+            ordenadas,
             w_placa,
             h_placa,
             kerf_override,
-            margin_override);
+            margin_override,
+            limite_rings);
+        finalizar_eficiencia(state.hoja, w_placa, h_placa);
+        out.hoja = std::move(state.hoja);
+        out.restos = std::move(restos);
+        return out;
+    }
+
+    // Placa madre completa:
+    // 1) estructurales primero (generan cavidades interiores)
+    // 2) rellenar esos huecos con TODAS las piezas pequeñas
+    // 3) colocar remanentes en el resto libre de la placa
+    // Hosts (barreno anidable grande) primero; el resto puede ir a part-in-part.
+    std::vector<PieceIn> hosts;
+    std::vector<PieceIn> no_hosts;
+    hosts.reserve(piezas.size());
+    no_hosts.reserve(piezas.size());
+    for (const auto& p : piezas) {
+        if (pieza_es_anfitriona_huecos(p)) {
+            hosts.push_back(p);
+        } else {
+            no_hosts.push_back(p);
+        }
+    }
+
+    PlacementState state;
+    std::vector<PieceIn> restos;
+
+    if (!hosts.empty()) {
+        auto orden_hosts = orden_pizarron(std::move(hosts));
+        auto [st, r] = colocar_en_orden(
+            orden_hosts,
+            w_placa,
+            h_placa,
+            kerf_override,
+            margin_override,
+            std::nullopt);
+        state = std::move(st);
+        no_hosts.insert(no_hosts.end(), r.begin(), r.end());
+    }
+
+    // Part-in-part ANTES del patio: bridas/medianas entran a barrenos host.
+    if (!no_hosts.empty()) {
+        for (int pass = 0; pass < 12 && !no_hosts.empty(); ++pass) {
+            const size_t antes = no_hosts.size();
+            rellenar_orificios_directo(state, no_hosts, w_placa, h_placa, kerf_override);
+            if (no_hosts.size() >= antes) {
+                break;
+            }
+        }
+    }
+
+    std::vector<PieceIn> estructurales;
+    std::vector<PieceIn> pool_peq;
+    for (auto& p : no_hosts) {
+        if (pieza_va_en_fase_estructural(p)) {
+            estructurales.push_back(std::move(p));
+        } else {
+            pool_peq.push_back(std::move(p));
+        }
+    }
+    if (!estructurales.empty()) {
+        auto orden_est = orden_pizarron(std::move(estructurales));
+        const LimitContext limit = make_limit_context(std::nullopt, margin_px);
+        std::vector<PieceIn> cola = std::move(orden_est);
+        while (!cola.empty()) {
+            PieceIn p_data = std::move(cola.front());
+            cola.erase(cola.begin());
+            if (!colocar_pieza(p_data, state, w_placa, h_placa, kerf_radio, margin_px, limit)) {
+                std::vector<PieceIn> one{std::move(p_data)};
+                rellenar_orificios_directo(state, one, w_placa, h_placa, kerf_override);
+                if (!one.empty()) {
+                    restos.push_back(std::move(one.front()));
+                }
+            } else {
+                rellenar_orificios_directo(state, pool_peq, w_placa, h_placa, kerf_override);
+            }
+        }
+    }
+
+    // Fase 1.5a: canales abiertos C/VFM (AABB-metal).
+    if (!pool_peq.empty()) {
+        for (int pass = 0; pass < 32 && !pool_peq.empty(); ++pass) {
+            const size_t antes = pool_peq.size();
+            rellenar_cavidades_abiertas_directo(state, pool_peq, w_placa, h_placa, kerf_override);
+            if (pool_peq.size() >= antes) {
+                break;
+            }
+        }
+    }
+    // Fase 1.5b: orificios otra pasada.
+    if (!pool_peq.empty()) {
+        for (int pass = 0; pass < 8 && !pool_peq.empty(); ++pass) {
+            const size_t antes = pool_peq.size();
+            rellenar_orificios_directo(state, pool_peq, w_placa, h_placa, kerf_override);
+            if (pool_peq.size() >= antes) {
+                break;
+            }
+        }
+    }
+
+    // Fase 2a: SOLO cavidades abiertas/cerradas + pasillos (nada de patio libre).
+    if (!pool_peq.empty()) {
+        for (int pass = 0; pass < 16 && !pool_peq.empty(); ++pass) {
+            const size_t antes = pool_peq.size();
+            rellenar_huecos_con_pequenas(
+                state,
+                pool_peq,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                /*solo_interiores_y_pasillos=*/true);
+            if (pool_peq.size() >= antes) {
+                break;
+            }
+        }
+    }
+    // Fase 2b: exteriores + patio dominante (scrap grande entre/alrededor estructurales).
+    if (!pool_peq.empty()) {
+        for (int pass = 0; pass < 16 && !pool_peq.empty(); ++pass) {
+            const size_t antes = pool_peq.size();
+            rellenar_huecos_con_pequenas(
+                state,
+                pool_peq,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                /*solo_interiores_y_pasillos=*/false);
+            if (pool_peq.size() >= antes) {
+                break;
+            }
+        }
+    }
+
+    // Restos: placa libre intercalando relleno de huecos/patio cada 2 piezas.
+    if (!pool_peq.empty()) {
+        auto orden_peq = orden_pizarron(std::move(pool_peq));
+        const LimitContext limit = make_limit_context(std::nullopt, margin_px);
+        std::vector<PieceIn> cola = std::move(orden_peq);
+        size_t since_fill = 0;
+        while (!cola.empty()) {
+            PieceIn p_data = std::move(cola.front());
+            cola.erase(cola.begin());
+            if (!colocar_pieza(p_data, state, w_placa, h_placa, kerf_radio, margin_px, limit)) {
+                restos.push_back(std::move(p_data));
+                continue;
+            }
+            ++since_fill;
+            if (!cola.empty() && since_fill >= 2) {
+                since_fill = 0;
+                rellenar_huecos_con_pequenas(
+                    state,
+                    cola,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    /*solo_interiores_y_pasillos=*/false);
+            }
+        }
+    }
+
+    // Última pasada: residuales en cavidades/pasillos/patio.
+    if (!restos.empty()) {
+        for (int pass = 0; pass < 12 && !restos.empty(); ++pass) {
+            const size_t antes = restos.size();
+            rellenar_huecos_con_pequenas(
+                state,
+                restos,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                /*solo_interiores_y_pasillos=*/false);
+            if (restos.size() >= antes) {
+                break;
+            }
+        }
     }
 
     finalizar_eficiencia(state.hoja, w_placa, h_placa);

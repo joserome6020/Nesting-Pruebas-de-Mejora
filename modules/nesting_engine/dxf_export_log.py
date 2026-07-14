@@ -78,7 +78,10 @@ def _fmt_bounds(b: tuple[float, float, float, float] | None) -> str:
 def resolve_export_mode(p: dict) -> str:
     if bool(p.get("plasma_export")):
         if str(p.get("ruta") or "").strip():
-            return "PLASMA:desfase_dxf_fuente"
+            off = float(p.get("plasma_offset_mm") or 0.0)
+            if off > 0 and bool(p.get("compensated_plasma_source") or p.get("compensated")):
+                return "PLASMA:desfase_dxf_fuente"
+            return "PLASMA:fuente_1:1_sin_desfase"
         return "PLASMA:poligono_nest_sin_fuente"
     if bool(p.get("compensated_plasma_source")) and str(p.get("ruta") or "").strip():
         return "PLASMA_LEGACY:fuente_compensada"

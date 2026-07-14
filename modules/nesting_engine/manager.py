@@ -44,10 +44,35 @@ from .geometry_parser import (
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .engine_registry import list_engine_metas, is_engine_ready
 from .nest_engine_context import (
+    ENGINE_ARGA_FORCE,
+    ENGINE_SVGNEST_ULTRA,
     get_active_engine_id,
     normalize_engine_id,
     set_active_engine_id,
 )
+
+
+def _es_motor_arga_force(engine_id=None) -> bool:
+    """ARGA FORCE (alias legacy arga_base ya normalizado a arga_force)."""
+    eid = normalize_engine_id(engine_id if engine_id is not None else get_active_engine_id())
+    return eid == ENGINE_ARGA_FORCE
+
+# Cancelación NestFab-like visible en helpers de módulo (mismo hilo / mismo proceso).
+_CANCEL_TLS = threading.local()
+
+
+def _bind_pack_cancel_checker(fn):
+    prev = getattr(_CANCEL_TLS, "fn", None)
+    _CANCEL_TLS.fn = fn
+    return prev
+
+
+def _unbind_pack_cancel_checker(prev):
+    _CANCEL_TLS.fn = prev
+
+
+def _active_pack_cancel_checker():
+    return getattr(_CANCEL_TLS, "fn", None)
 from .efficiency_metrics import (
     actualizar_eficiencias_hoja,
     calcular_eficiencias_grupo,
@@ -215,17 +240,107 @@ RTZ_MINI_NEST_MAX_LARGO_MM = 60.0 * 25.4
 # Retazos menores a 20\" × 20\" no generan RTZ ni mini-nest.
 RTZ_TAMANO_MIN_IN = 20.0
 RTZ_TAMANO_MIN_MM = RTZ_TAMANO_MIN_IN * 25.4
+# Barrenos/orificios: umbral más estricto (≥22\") para no abrir RTZ
+# “apenas legales” (~20.25\") con 1–3 pzas y baja utilización.
+RTZ_HOLE_TAMANO_MIN_IN = 22.0
 RTZ_MINI_NEST_AREA_MIN_MM2 = RTZ_TAMANO_MIN_MM * RTZ_TAMANO_MIN_MM
+# Metal overlap mínimo para rechazar un RTZ proyectado sobre la madre.
+RTZ_REJECT_OVERLAP_MM2 = 100.0
 
 
-def _retazo_cumple_tamano_minimo(w_mm, h_mm):
+def _es_pieza_fisica_hoja(nombre: str) -> bool:
+    n = str(nombre or "")
+    return not (_is_virtual_piece(n) or n.startswith("REF__"))
+
+
+def _hole_ya_reutilizado_en_madre(hole_poly, hoja, min_area_mm2: float = 500.0) -> bool:
+    """True si el barreno ya tiene piezas físicas anidadas en la madre."""
+    if hole_poly is None or getattr(hole_poly, "is_empty", True):
+        return True
+    for p in hoja.get("piezas") or []:
+        if not _es_pieza_fisica_hoja(p.get("nombre")):
+            continue
+        g = reconstruir_poly_seguro(p.get("poligonos") or [])
+        if g is None or g.is_empty:
+            continue
+        try:
+            c = g.centroid
+            if hole_poly.contains(c) or hole_poly.covers(c):
+                return True
+            inter = hole_poly.intersection(g)
+            if float(getattr(inter, "area", 0.0) or 0.0) >= float(min_area_mm2):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _rtz_proyectado_choca_madre(hoja_madre, retazo, hoja_retazo, tol_mm2=RTZ_REJECT_OVERLAP_MM2) -> bool:
+    """
+    True si proyectar las piezas del mini-nest RTZ sobre la madre solapa metal real.
+    Evita el empalme REF/RTZ vs piezas ya colocadas (y entre sí sobre la madre).
+    """
+    if not hoja_madre or not retazo or not hoja_retazo:
+        return True
+    gx = float(retazo.get("global_x") or 0.0)
+    gy = float(retazo.get("global_y") or 0.0)
+    solids = []
+    for p in hoja_madre.get("piezas") or []:
+        if not _es_pieza_fisica_hoja(p.get("nombre")):
+            continue
+        g = reconstruir_poly_seguro(p.get("poligonos") or [])
+        if g is None or g.is_empty:
+            continue
+        solids.append(g)
+    if not solids:
+        return False
+
+    projected = []
+    for p_acc in hoja_retazo.get("piezas") or []:
+        nom = str(p_acc.get("nombre") or "")
+        if nom.startswith("REMANENTE__") or nom.startswith("TATUAJE__"):
+            continue
+        rings = p_acc.get("poligonos") or []
+        if not rings:
+            continue
+        try:
+            moved = _translate_poligonos_for_overlay(rings, gx, gy)
+            g = Polygon(moved[0], moved[1:] if len(moved) > 1 else None)
+            if g.is_empty:
+                continue
+            if not g.is_valid:
+                g = g.buffer(0)
+            projected.append(g)
+        except Exception:
+            continue
+
+    for g in projected:
+        for s in solids:
+            try:
+                if float(g.intersection(s).area) >= float(tol_mm2):
+                    return True
+            except Exception:
+                continue
+        for g2 in projected:
+            if g2 is g:
+                continue
+            try:
+                if float(g.intersection(g2).area) >= float(tol_mm2):
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _retazo_cumple_tamano_minimo(w_mm, h_mm, *, tipo: str | None = None):
     w_mm = float(w_mm or 0.0)
     h_mm = float(h_mm or 0.0)
     if w_mm <= 0.0 or h_mm <= 0.0:
         return False
     w_in = w_mm / 25.4
     h_in = h_mm / 25.4
-    return min(w_in, h_in) >= RTZ_TAMANO_MIN_IN
+    min_in = RTZ_HOLE_TAMANO_MIN_IN if str(tipo or "").upper() == "HOLE" else RTZ_TAMANO_MIN_IN
+    return min(w_in, h_in) >= min_in
 
 
 def _filtrar_retazo_por_tamano_minimo(retazo):
@@ -233,7 +348,7 @@ def _filtrar_retazo_por_tamano_minimo(retazo):
         return None
     w = float(retazo.get("w") or 0.0)
     h = float(retazo.get("h") or 0.0)
-    if not _retazo_cumple_tamano_minimo(w, h):
+    if not _retazo_cumple_tamano_minimo(w, h, tipo=retazo.get("tipo")):
         return None
     return retazo
 
@@ -250,7 +365,7 @@ def _clamp_retazo_mini_nest_a_cama_laser(retazo: dict):
         return None
     w0 = float(retazo.get("w") or 0.0)
     h0 = float(retazo.get("h") or 0.0)
-    if not _retazo_cumple_tamano_minimo(w0, h0):
+    if not _retazo_cumple_tamano_minimo(w0, h0, tipo=retazo.get("tipo")):
         return None
     poly = retazo.get("poly_borde")
     if poly is None or getattr(poly, "is_empty", True):
@@ -282,7 +397,7 @@ def _clamp_retazo_mini_nest_a_cama_laser(retazo: dict):
         return None
     minx, miny, maxx, maxy = poly_ok.bounds
     w1, h1 = maxx - minx, maxy - miny
-    if w1 < 1.0 or h1 < 1.0 or not _retazo_cumple_tamano_minimo(w1, h1):
+    if w1 < 1.0 or h1 < 1.0 or not _retazo_cumple_tamano_minimo(w1, h1, tipo=retazo.get("tipo")):
         return None
     poly_local = affinity.translate(poly_ok, -minx, -miny)
     out = dict(retazo)
@@ -727,6 +842,9 @@ def _empaquetar_mejor_hoja_mc(
         mejor_n = len(piezas) + 1
 
         max_retries = max(1, int(accesorios_retries or 14))
+        # Lotes grandes: 1 intento. 8×267 piezas con VFM multi-hueco = minutos/placa.
+        if len(base) > 40:
+            max_retries = 1
         for intento in range(max_retries):
             if intento == 0:
                 batch = base
@@ -772,6 +890,893 @@ def _empaquetar_mejor_hoja_mc(
         debug_tag=debug_tag,
         mc_iterations=mc_iterations,
     )
+
+
+ARGA_VOID_MIN_AREA_MM2 = 40.0 * 40.0
+# ~200 in²: VFM/HFM grandes entran como estructurales (antes 499 in² las
+# mandaba a “solo accesorios” y disparaba 8 reintentos × 267 piezas).
+ARGA_AREA_ESTRUCTURAL_MM2 = 200 * 645.16
+
+
+def _es_pieza_estructural(p, umbral=None):
+    um = float(umbral if umbral is not None else ARGA_AREA_ESTRUCTURAL_MM2)
+    area = float(p.get("area", 0) or 0)
+    if area > um:
+        return True
+    poly = p.get("poly")
+    try:
+        interiors = getattr(poly, "interiors", None) or ()
+        if interiors:
+            hole_area = 0.0
+            for ring in interiors:
+                try:
+                    hole_area += float(Polygon(ring).area)
+                except Exception:
+                    continue
+            if hole_area >= ARGA_VOID_MIN_AREA_MM2:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _split_pool_estructural_accesorio(piezas, umbral=None):
+    est, acc = [], []
+    for p in piezas or []:
+        if _es_pieza_estructural(p, umbral):
+            est.append(p)
+        else:
+            acc.append(p)
+    return est, acc
+
+
+def _empaquetar_arga_combinado(
+    estructurales,
+    accesorios,
+    w_placa,
+    h_placa,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    mc_iterations=1,
+    debug_tag="",
+):
+    """
+  Una sola llamada C++: estructurales primero, luego gap-fill de accesorios
+  en huecos libres e interiores (motor ARGA Base).
+    """
+    batch = [copy.deepcopy(p) for p in (estructurales or [])]
+    batch.extend(copy.deepcopy(p) for p in (accesorios or []))
+    if not batch:
+        return None, [], list(accesorios or [])
+
+    hoja, restos = _safe_empaquetar_una_hoja_mc(
+        batch,
+        w_placa,
+        h_placa,
+        kerf,
+        margin,
+        opt,
+        corner,
+        debug_tag=debug_tag,
+        mc_iterations=mc_iterations,
+    )
+    if not hoja or not hoja.get("piezas"):
+        return hoja, list(estructurales or []), list(accesorios or [])
+    restos_est, restos_acc = _split_pool_estructural_accesorio(restos)
+    return hoja, restos_est, restos_acc
+
+
+def _as_pack_piece_from_colocada(p):
+    """Convierte pieza ya colocada en hoja al formato de empaque (origen local)."""
+    poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+    if poly is None or poly.is_empty:
+        return None
+
+    marks_geom = _rebuild_marks_geom(p.get("marcas") or [])
+    if marks_geom is None:
+        marks_geom = LineString()
+
+    minx, miny, _, _ = poly.bounds
+    return {
+        "nombre": str(p.get("nombre", "")),
+        "poly": affinity.translate(poly, -minx, -miny),
+        "marks": affinity.translate(marks_geom, -minx, -miny) if not marks_geom.is_empty else marks_geom,
+        "area": float(p.get("area", poly.area) or poly.area),
+        "calibre": p.get("calibre", ""),
+        "material": p.get("material", ""),
+    }
+
+
+def _zonas_libres_hoja_madre(hoja, w_placa, h_placa, kerf_in, margin_in):
+    """Regiones libres en placa madre: huecos entre piezas + interiores de piezas grandes."""
+    if not isinstance(hoja, dict):
+        return []
+
+    kerf_radio = (float(kerf_in or 0.0) * 25.4) / 2.0
+    margin_px = float(margin_in or 0.0) * 25.4
+    sheet = box(margin_px, margin_px, w_placa - margin_px, h_placa - margin_px)
+    if sheet.is_empty:
+        return []
+
+    ocupados = []
+    for p in hoja.get("piezas") or []:
+        nombre = str(p.get("nombre") or "")
+        if _is_virtual_piece(nombre):
+            continue
+        poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+        if poly is None or poly.is_empty:
+            continue
+        try:
+            ocupados.append(poly.buffer(kerf_radio, join_style=2))
+        except Exception:
+            ocupados.append(poly)
+
+    zonas = []
+    if ocupados:
+        try:
+            libre = sheet.difference(unary_union(ocupados))
+        except Exception:
+            libre = sheet
+        if not libre.is_empty:
+            geoms = list(libre.geoms) if libre.geom_type == "MultiPolygon" else [libre]
+            for g in geoms:
+                if g.geom_type != "Polygon" or float(g.area) < ARGA_VOID_MIN_AREA_MM2:
+                    continue
+                zonas.append(g)
+
+    for p in hoja.get("piezas") or []:
+        nombre = str(p.get("nombre") or "")
+        if _is_virtual_piece(nombre):
+            continue
+        poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+        if poly is None or poly.is_empty:
+            continue
+        for interior in interiores_poly(poly):
+            try:
+                hole = Polygon(interior)
+            except Exception:
+                continue
+            if hole.is_empty or float(hole.area) < ARGA_VOID_MIN_AREA_MM2:
+                continue
+            zonas.append(hole)
+
+    zonas.sort(key=lambda z: float(z.area), reverse=True)
+    return zonas
+
+
+def _rellenar_accesorios_en_huecos_hoja(
+    hoja,
+    accesorios,
+    w_placa,
+    h_placa,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    mc_iterations=1,
+    accesorios_retries=6,
+    clave="",
+    solo_interiores=False,
+):
+    """
+    Coloca accesorios en huecos de una placa ya comprometida (p. ej. sin RTZ).
+    Usar solo cuando el empaquetado combinado no cubrió interiores; una pasada segura.
+    """
+    from .sheet_integrity import calcular_restos_desde_colocados
+
+    if not accesorios or not isinstance(hoja, dict) or not hoja.get("piezas"):
+        return accesorios
+
+    pool = copy.deepcopy(accesorios)
+    kerf_mm = (float(kerf or 0.0) * 25.4) / 2.0
+
+    if solo_interiores:
+        zonas = []
+        for p in hoja.get("piezas") or []:
+            if _is_virtual_piece(str(p.get("nombre") or "")):
+                continue
+            poly = reconstruir_poly_seguro(p.get("poligonos") or [])
+            if poly is None:
+                continue
+            for interior in interiores_poly(poly):
+                try:
+                    hole = Polygon(interior)
+                    if float(hole.area) >= ARGA_VOID_MIN_AREA_MM2:
+                        zonas.append(hole)
+                except Exception:
+                    pass
+        zonas.sort(key=lambda z: float(z.area), reverse=True)
+    else:
+        zonas = _zonas_libres_hoja_madre(hoja, w_placa, h_placa, kerf, margin)
+
+    if not zonas:
+        return pool
+
+    colocados_total = 0
+    for zona in zonas:
+        if not pool:
+            break
+
+        minx, miny, maxx, maxy = zona.bounds
+        w_z = maxx - minx
+        h_z = maxy - miny
+        if w_z < 5.0 or h_z < 5.0:
+            continue
+
+        try:
+            zona_pack = zona.buffer(-kerf_mm, join_style=2) if kerf_mm > 0 else zona
+            if zona_pack.is_empty:
+                zona_pack = zona
+        except Exception:
+            zona_pack = zona
+
+        zona_pack = _polygon_usable_for_limite(zona_pack)
+        if zona_pack is None:
+            continue
+
+        # Restar piezas YA colocadas en esa zona (evita empalmes al rellenar barrenos).
+        try:
+            ocupado = []
+            for p_ex in hoja.get("piezas") or []:
+                if not _es_pieza_fisica_hoja(p_ex.get("nombre")):
+                    continue
+                g_ex = reconstruir_poly_seguro(p_ex.get("poligonos") or [])
+                if g_ex is None or g_ex.is_empty:
+                    continue
+                if zona_pack.intersects(g_ex):
+                    ocupado.append(g_ex)
+            if ocupado:
+                zona_pack = zona_pack.difference(unary_union(ocupado))
+                zona_pack = _polygon_usable_for_limite(zona_pack)
+                if zona_pack is None:
+                    continue
+        except Exception:
+            pass
+
+        minx, miny, maxx, maxy = zona_pack.bounds
+        w_z = maxx - minx
+        h_z = maxy - miny
+        if w_z < 5.0 or h_z < 5.0:
+            continue
+
+        area_z = float(zona_pack.area)
+        candidatos = []
+        restantes = []
+        for p in pool:
+            area_p = float(p.get("area", 0) or 0)
+            if area_p > area_z * 0.95:
+                restantes.append(p)
+                continue
+            poly = p.get("poly")
+            if poly is None:
+                restantes.append(p)
+                continue
+            bx0, by0, bx1, by1 = poly.bounds
+            w_p, h_p = bx1 - bx0, by1 - by0
+            min_p, max_p = min(w_p, h_p), max(w_p, h_p)
+            min_z, max_z = min(w_z, h_z), max(w_z, h_z)
+            if min_p <= min_z + 3.0 and max_p <= max_z + 3.0:
+                candidatos.append(copy.deepcopy(p))
+            else:
+                restantes.append(p)
+
+        pool = restantes
+        if not candidatos:
+            continue
+
+        poly_local = affinity.translate(zona_pack, -minx, -miny)
+        hoja_z, _restos_z = _empaquetar_mejor_hoja_mc(
+            candidatos,
+            w_z,
+            h_z,
+            kerf,
+            margin,
+            opt,
+            corner,
+            limite_poly=poly_local,
+            debug_tag=f"clave={clave} | hueco_backfill",
+            mc_iterations=mc_iterations,
+            solo_accesorios=True,
+            accesorios_retries=max(6, int(accesorios_retries or 6)),
+        )
+        if not hoja_z or not hoja_z.get("piezas"):
+            pool.extend(candidatos)
+            continue
+
+        for p_acc in hoja_z.get("piezas") or []:
+            if _is_virtual_piece(str(p_acc.get("nombre") or "")):
+                continue
+            p_clon = copy.deepcopy(p_acc)
+            if p_clon.get("poligonos"):
+                p_clon["poligonos"] = _translate_poligonos_for_overlay(
+                    p_clon["poligonos"], minx, miny
+                )
+            # Rechazar si aún empalma metal real de la madre.
+            g_new = reconstruir_poly_seguro(p_clon.get("poligonos") or [])
+            choca = False
+            if g_new is not None and not g_new.is_empty:
+                for p_ex in hoja.get("piezas") or []:
+                    if not _es_pieza_fisica_hoja(p_ex.get("nombre")):
+                        continue
+                    g_ex = reconstruir_poly_seguro(p_ex.get("poligonos") or [])
+                    if g_ex is None or g_ex.is_empty:
+                        continue
+                    try:
+                        if float(g_new.intersection(g_ex).area) >= 100.0:
+                            choca = True
+                            break
+                    except Exception:
+                        continue
+            if choca:
+                _dbg_nesting(
+                    f"[HUECO-BACKFILL-SKIP-OVERLAP] clave={clave} | "
+                    f"pieza={p_acc.get('nombre')}"
+                )
+                continue
+            if p_clon.get("marcas"):
+                nuevas_marcas = []
+                for line_coords in p_clon["marcas"]:
+                    try:
+                        nuevas_marcas.append(
+                            list(
+                                affinity.translate(
+                                    LineString(line_coords), xoff=minx, yoff=miny
+                                ).coords
+                            )
+                        )
+                    except Exception:
+                        nuevas_marcas.append(line_coords)
+                p_clon["marcas"] = nuevas_marcas
+            hoja.setdefault("piezas", []).append(p_clon)
+            colocados_total += 1
+
+    pool = calcular_restos_desde_colocados(accesorios, hoja)
+
+    if colocados_total:
+        actualizar_eficiencias_hoja(hoja)
+        _dbg_nesting(
+            f"[HUECO-BACKFILL] clave={clave} | piezas_colocadas={colocados_total} | "
+            f"accesorios_restantes={len(pool)} | solo_interiores={solo_interiores}"
+        )
+    return pool
+
+
+ARGA_REDIST_UMBRAL_EF = 52.0
+ARGA_REDIST_PIEZAS_SUELTAS_MAX = 8
+# Post-proceso (redistribuir / huecos): simulaciones rápidas; el empaque principal no se toca.
+ARGA_POST_MC_ITERATIONS = 1
+ARGA_POST_ACC_RETRIES = 2
+ARGA_REDIST_MAX_DESTINOS = 6
+ARGA_REDIST_MAX_PASADAS = 4
+# Si la absorción completa falla, no intentar 40+ piezas sueltas (minutos/placa).
+ARGA_REDIST_MAX_PIEZAS_SUELTAS = 8
+
+
+def _polygon_usable_for_limite(geom):
+    """Normaliza zona libre a un solo Polygon (buffer puede devolver MultiPolygon)."""
+    if geom is None or getattr(geom, "is_empty", False):
+        return None
+    if geom.geom_type == "MultiPolygon":
+        polys = [
+            g for g in geom.geoms
+            if getattr(g, "geom_type", "") == "Polygon" and not g.is_empty
+        ]
+        if not polys:
+            return None
+        return max(polys, key=lambda g: float(g.area))
+    if geom.geom_type == "Polygon":
+        return geom
+    return None
+
+
+def _pieza_cabe_bbox_en_placa(pieza, w_placa, h_placa, tol=10.0):
+    poly = pieza.get("poly")
+    if poly is None:
+        return True
+    minx, miny, maxx, maxy = poly.bounds
+    w_req, h_req = maxx - minx, maxy - miny
+    max_req, min_req = max(w_req, h_req), min(w_req, h_req)
+    max_p, min_p = max(w_placa, h_placa), min(w_placa, h_placa)
+    return max_p >= (max_req - tol) and min_p >= (min_req - tol)
+
+
+def _params_placa_hoja(hoja):
+    return {
+        "kerf": float(hoja.get("kerf_usado", DEFAULT_KERF_IN) or DEFAULT_KERF_IN),
+        "margin": float(hoja.get("margin_usado", DEFAULT_MARGIN_IN) or DEFAULT_MARGIN_IN),
+        "opt": hoja.get("opt_usado", "OPTIMIZAR LARGO Y ANCHO"),
+        "corner": hoja.get("corner_usado", "INFERIOR IZQUIERDA"),
+        "w": float(hoja.get("placa_w", 0.0) or 0.0),
+        "h": float(hoja.get("placa_h", 0.0) or 0.0),
+    }
+
+
+def _meta_placa_desde_hoja(hoja):
+    return {
+        k: hoja.get(k)
+        for k in (
+            "placa_id",
+            "placa_w",
+            "placa_h",
+            "precio_placa",
+            "kerf_usado",
+            "margin_usado",
+            "opt_usado",
+            "corner_usado",
+            "es_retazo",
+            "origen_placa",
+            "sheet_uid",
+            "_nest_list_idx",
+        )
+    }
+
+
+def _aplicar_renest_en_hoja(plantilla, nueva, params):
+    meta = _meta_placa_desde_hoja(plantilla)
+    plantilla.clear()
+    plantilla.update(nueva)
+    plantilla.update(meta)
+    plantilla["placa_w"] = params["w"]
+    plantilla["placa_h"] = params["h"]
+    plantilla["kerf_usado"] = params["kerf"]
+    plantilla["margin_usado"] = params["margin"]
+    plantilla["opt_usado"] = params["opt"]
+    plantilla["corner_usado"] = params["corner"]
+    actualizar_eficiencias_hoja(plantilla)
+
+
+def _piezas_pack_en_hoja(hoja):
+    out = []
+    for p in (hoja.get("piezas") or []):
+        if _is_virtual_piece(str(p.get("nombre") or "")):
+            continue
+        pp = _as_pack_piece_from_colocada(p)
+        if pp is not None:
+            out.append(pp)
+    return out
+
+
+def _simular_renest_agregar(
+    destino,
+    piezas_extra_pack,
+    *,
+    mc_iterations=1,
+    accesorios_retries=8,
+):
+    """Prueba si destino puede absorber piezas extra re-empacando toda la placa."""
+    if not piezas_extra_pack:
+        return False, None
+    base = _piezas_pack_en_hoja(destino)
+    combinadas = base + [copy.deepcopy(p) for p in piezas_extra_pack]
+    params = _params_placa_hoja(destino)
+    w, h = params["w"], params["h"]
+    if w <= 0 or h <= 0:
+        return False, None
+
+    esperadas = Counter(str(p.get("nombre") or "") for p in combinadas)
+    tiene_est = any(_es_pieza_estructural(p) for p in combinadas)
+    nueva, sobras = _empaquetar_mejor_hoja_mc(
+        combinadas,
+        w,
+        h,
+        params["kerf"],
+        params["margin"],
+        params["opt"],
+        params["corner"],
+        debug_tag="redist_agregar",
+        mc_iterations=mc_iterations,
+        solo_accesorios=not tiene_est,
+        accesorios_retries=max(6, int(accesorios_retries or 8)),
+    )
+    if sobras or not nueva or not nueva.get("piezas"):
+        return False, None
+
+    colocadas = Counter(
+        str(p.get("nombre") or "")
+        for p in nueva.get("piezas") or []
+        if not _is_virtual_piece(str(p.get("nombre") or ""))
+    )
+    if colocadas != esperadas:
+        return False, None
+    return True, nueva
+
+
+def _renest_hoja_desde_pack(hoja, piezas_pack, *, mc_iterations=1, accesorios_retries=8):
+    if not piezas_pack:
+        return True
+    params = _params_placa_hoja(hoja)
+    w, h = params["w"], params["h"]
+    if w <= 0 or h <= 0:
+        return False
+    tiene_est = any(_es_pieza_estructural(p) for p in piezas_pack)
+    nueva, sobras = _empaquetar_mejor_hoja_mc(
+        [copy.deepcopy(p) for p in piezas_pack],
+        w,
+        h,
+        params["kerf"],
+        params["margin"],
+        params["opt"],
+        params["corner"],
+        debug_tag="redist_renest_origen",
+        mc_iterations=mc_iterations,
+        solo_accesorios=not tiene_est,
+        accesorios_retries=max(6, int(accesorios_retries or 8)),
+    )
+    if sobras or not nueva or not nueva.get("piezas"):
+        return False
+    _aplicar_renest_en_hoja(hoja, nueva, params)
+    return True
+
+
+def _placa_candidata_redistribuir(hoja):
+    if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+        return False
+    ef = float(hoja.get("eficiencia", 0) or 0)
+    n = len(_piezas_pack_en_hoja(hoja))
+    if n <= 0:
+        return False
+    if ef < ARGA_REDIST_UMBRAL_EF:
+        return True
+    if n <= ARGA_REDIST_PIEZAS_SUELTAS_MAX and ef < 68.0:
+        return True
+    return False
+
+
+def _redistribuir_placas_subutilizadas_arga(
+    hojas_finales,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    mc_iterations=1,
+    accesorios_retries=8,
+    clave="",
+    solo_absorcion=True,
+):
+    """
+    Consolida piezas de placas muy vacías hacia placas densas del mismo grupo
+    (mismo calibre+material). Fill-first: no balancea hacia hojas flojas.
+
+    Por defecto solo_absorcion=True: intenta absorber la placa completa (rápido).
+    Pieza-a-pieza solo si solo_absorcion=False y n <= ARGA_REDIST_MAX_PIEZAS_SUELTAS.
+    """
+    if not hojas_finales:
+        return hojas_finales, 0.0
+
+    madres = [h for h in hojas_finales if isinstance(h, dict) and not h.get("es_retazo")]
+    rtz = [h for h in hojas_finales if isinstance(h, dict) and h.get("es_retazo")]
+    if len(madres) < 2:
+        return hojas_finales, 0.0
+
+    ahorro_total = 0.0
+    cambiado = True
+    pasada = 0
+    while cambiado and pasada < ARGA_REDIST_MAX_PASADAS:
+        pasada += 1
+        cambiado = False
+        origenes = [h for h in madres if _placa_candidata_redistribuir(h)]
+        origenes.sort(key=lambda h: float(h.get("eficiencia", 0) or 0))
+
+        for origen in list(origenes):
+            if origen not in madres:
+                continue
+            pool_origen = _piezas_pack_en_hoja(origen)
+            if not pool_origen:
+                continue
+
+            destinos = [
+                h for h in madres if h is not origen and not h.get("es_retazo")
+            ]
+            destinos.sort(
+                key=lambda h: float(h.get("eficiencia", 0) or 0),
+                reverse=True,
+            )
+            destinos = destinos[:ARGA_REDIST_MAX_DESTINOS]
+            if not destinos:
+                continue
+
+            # 1) Intento barato: absorber TODA la placa spars en un destino denso.
+            absorbido = False
+            for destino in destinos:
+                params_d = _params_placa_hoja(destino)
+                if not all(
+                    _pieza_cabe_bbox_en_placa(p, params_d["w"], params_d["h"])
+                    for p in pool_origen
+                ):
+                    continue
+                ok, nueva = _simular_renest_agregar(
+                    destino,
+                    pool_origen,
+                    mc_iterations=mc_iterations,
+                    accesorios_retries=accesorios_retries,
+                )
+                if not ok or nueva is None:
+                    continue
+                params = _params_placa_hoja(destino)
+                _aplicar_renest_en_hoja(destino, nueva, params)
+                ahorro_total += float(origen.get("precio_placa", 0) or 0)
+                madres.remove(origen)
+                cambiado = True
+                absorbido = True
+                _dbg_nesting(
+                    f"[REDISTRIBUIR-ABSORBER] clave={clave} | "
+                    f"origen={origen.get('placa_id')} | destino={destino.get('placa_id')} | "
+                    f"piezas={len(pool_origen)} | dest_ef={float(destino.get('eficiencia', 0) or 0):.1f}% | "
+                    f"ahorro=${float(origen.get('precio_placa', 0) or 0):.2f}"
+                )
+                break
+            if absorbido:
+                continue
+
+            # 2) Pieza a pieza solo bajo demanda y con pocas piezas (caro).
+            if solo_absorcion or len(pool_origen) > ARGA_REDIST_MAX_PIEZAS_SUELTAS:
+                if not solo_absorcion:
+                    _dbg_nesting(
+                        f"[REDISTRIBUIR-SKIP-SUELTAS] clave={clave} | "
+                        f"origen={origen.get('placa_id')} | n={len(pool_origen)} | "
+                        "absorción falló; no se reparte pieza-a-pieza (costo alto)"
+                    )
+                continue
+
+            movidas = 0
+            for pieza in sorted(list(pool_origen), key=lambda p: float(p.get("area", 0) or 0)):
+                opciones = []
+                for destino in destinos:
+                    if destino not in madres:
+                        continue
+                    params_d = _params_placa_hoja(destino)
+                    if not _pieza_cabe_bbox_en_placa(
+                        pieza, params_d["w"], params_d["h"]
+                    ):
+                        continue
+                    ok, nueva = _simular_renest_agregar(
+                        destino,
+                        [pieza],
+                        mc_iterations=mc_iterations,
+                        accesorios_retries=accesorios_retries,
+                    )
+                    if not ok or nueva is None:
+                        continue
+                    ef_old = float(destino.get("eficiencia", 0) or 0)
+                    ef_new = float(nueva.get("eficiencia", 0) or 0)
+                    opciones.append((destino, nueva, ef_old, ef_new))
+
+                if not opciones:
+                    continue
+
+                opciones.sort(key=lambda t: (-t[2], -t[3]))
+                destino, nueva, ef_old, ef_new = opciones[0]
+                params = _params_placa_hoja(destino)
+                snap_destino = copy.deepcopy(destino)
+                _aplicar_renest_en_hoja(destino, nueva, params)
+                try:
+                    pool_origen.remove(pieza)
+                except ValueError:
+                    for i, p in enumerate(pool_origen):
+                        if p is pieza:
+                            pool_origen.pop(i)
+                            break
+                if pool_origen:
+                    if not _renest_hoja_desde_pack(
+                        origen,
+                        pool_origen,
+                        mc_iterations=mc_iterations,
+                        accesorios_retries=accesorios_retries,
+                    ):
+                        _aplicar_renest_en_hoja(destino, snap_destino, params)
+                        pool_origen.append(pieza)
+                        _dbg_nesting(
+                            f"[REDISTRIBUIR-ROLLBACK] clave={clave} | pieza={pieza.get('nombre')} | "
+                            f"origen={origen.get('placa_id')} | destino={destino.get('placa_id')} | "
+                            "re-nest origen falló; se revierte destino"
+                        )
+                        continue
+                movidas += 1
+                cambiado = True
+                _dbg_nesting(
+                    f"[REDISTRIBUIR] clave={clave} | pieza={pieza.get('nombre')} | "
+                    f"desde_ef={float(origen.get('eficiencia', 0) or 0):.1f}% | "
+                    f"hacia={destino.get('placa_id')} | dest_ef_antes={ef_old:.1f}% | "
+                    f"dest_ef_despues={ef_new:.1f}%"
+                )
+
+            if not movidas:
+                continue
+
+            if pool_origen:
+                if not _renest_hoja_desde_pack(
+                    origen,
+                    pool_origen,
+                    mc_iterations=mc_iterations,
+                    accesorios_retries=accesorios_retries,
+                ):
+                    _dbg_nesting(
+                        f"[REDISTRIBUIR-WARN] clave={clave} | origen={origen.get('placa_id')} | "
+                        "no se pudo re-nestear piezas restantes tras movimientos"
+                    )
+            else:
+                ahorro_total += float(origen.get("precio_placa", 0) or 0)
+                if origen in madres:
+                    madres.remove(origen)
+                _dbg_nesting(
+                    f"[REDISTRIBUIR-PLACA-ELIMINADA] clave={clave} | placa_id={origen.get('placa_id')} | "
+                    f"ahorro=${float(origen.get('precio_placa', 0) or 0):.2f}"
+                )
+
+    return madres + rtz, ahorro_total
+
+
+def _rellenar_huecos_en_placas_madre(
+    hojas_finales,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    mc_iterations=1,
+    accesorios_retries=8,
+    clave="",
+):
+    """
+    Mueve accesorios de placas poco llenas a otras placas del lote
+    con re-empaque transaccional (sin append suelto que duplica inventario).
+    """
+    if not hojas_finales:
+        return hojas_finales
+
+    vacias: set[int] = set()
+    madres = [h for h in hojas_finales if isinstance(h, dict) and not h.get("es_retazo")]
+    if len(madres) < 2:
+        return hojas_finales
+
+    donantes = sorted(
+        [h for h in madres if _placa_candidata_redistribuir(h)],
+        key=lambda h: float(h.get("eficiencia", 0) or 0),
+    )
+    receptores = sorted(madres, key=lambda h: -float(h.get("eficiencia", 0) or 0))
+
+    for donante in donantes:
+        pool = _piezas_pack_en_hoja(donante)
+        accesorios = [p for p in pool if not _es_pieza_estructural(p)]
+        estructurales = [p for p in pool if _es_pieza_estructural(p)]
+        if not accesorios:
+            continue
+
+        movidas = 0
+        for pieza in sorted(list(accesorios), key=lambda p: float(p.get("area", 0) or 0)):
+            colocada = False
+            for receptor in receptores:
+                if receptor is donante:
+                    continue
+                ok, nueva = _simular_renest_agregar(
+                    receptor,
+                    [pieza],
+                    mc_iterations=mc_iterations,
+                    accesorios_retries=accesorios_retries,
+                )
+                if not ok or nueva is None:
+                    continue
+                params = _params_placa_hoja(receptor)
+                snap_receptor = copy.deepcopy(receptor)
+                _aplicar_renest_en_hoja(receptor, nueva, params)
+                try:
+                    accesorios.remove(pieza)
+                except ValueError:
+                    for i, p in enumerate(accesorios):
+                        if p is pieza:
+                            accesorios.pop(i)
+                            break
+                restantes_don = estructurales + accesorios
+                if restantes_don:
+                    if not _renest_hoja_desde_pack(
+                        donante,
+                        restantes_don,
+                        mc_iterations=mc_iterations,
+                        accesorios_retries=accesorios_retries,
+                    ):
+                        _aplicar_renest_en_hoja(receptor, snap_receptor, params)
+                        accesorios.append(pieza)
+                        _dbg_nesting(
+                            f"[HUECO-ENTRE-ROLLBACK] clave={clave} | pieza={pieza.get('nombre')} | "
+                            f"donante={donante.get('placa_id')} | receptor={receptor.get('placa_id')}"
+                        )
+                        continue
+                movidas += 1
+                colocada = True
+                break
+            if not colocada:
+                break
+
+        if movidas > 0:
+            _dbg_nesting(
+                f"[HUECO-ENTRE-PLACAS] clave={clave} | donante={donante.get('placa_id')} | "
+                f"colocados={movidas} | restantes={len(accesorios)}"
+            )
+
+        if not estructurales and not accesorios:
+            vacias.add(id(donante))
+
+    if not vacias:
+        return hojas_finales
+    return [h for h in hojas_finales if id(h) not in vacias]
+
+
+def _validar_inventario_hojas(piezas, hojas, *, clave="", kerf_global=DEFAULT_KERF_IN):
+    from .sheet_integrity import sanitizar_hojas_grupo, validar_colocacion_completa
+
+    hojas_chk = sanitizar_hojas_grupo(
+        piezas, copy.deepcopy(hojas), clave=clave, kerf_global=kerf_global
+    )
+    ok, msg = validar_colocacion_completa(piezas, hojas_chk)
+    return ok, msg, hojas_chk
+
+
+def _post_proceso_arga_seguro(
+    piezas,
+    hojas_finales,
+    costo_total_lote,
+    kerf,
+    margin,
+    opt,
+    corner,
+    *,
+    clave="",
+):
+    """
+    Consolida placas subutilizadas (fill-first) con validación de inventario.
+
+    El relleno de cavidades interiores sigue en el empaque C++; aquí solo se
+    mueven piezas entre madres del mismo calibre/material para eliminar hojas
+    spars (H17/H19/H23). Si el inventario se rompe, se revierte el paso.
+    """
+    if not hojas_finales or not _es_motor_arga_force():
+        return hojas_finales, costo_total_lote
+
+    madres_antes = sum(
+        1 for h in hojas_finales if isinstance(h, dict) and not h.get("es_retazo")
+    )
+    _dbg_nesting(
+        f"[POST-ARGA-ON] clave={clave} | hojas={len(hojas_finales)} | madres={madres_antes}"
+    )
+
+    base = copy.deepcopy(hojas_finales)
+    costo = float(costo_total_lote or 0.0)
+
+    try:
+        redist, ahorro = _redistribuir_placas_subutilizadas_arga(
+            copy.deepcopy(base),
+            kerf,
+            margin,
+            opt,
+            corner,
+            mc_iterations=ARGA_POST_MC_ITERATIONS,
+            accesorios_retries=ARGA_POST_ACC_RETRIES,
+            clave=clave,
+            solo_absorcion=True,
+        )
+        ok, msg, redist_ok = _validar_inventario_hojas(
+            piezas, redist, clave=clave, kerf_global=kerf
+        )
+        if ok:
+            base = redist_ok
+            costo = max(0.0, costo - float(ahorro or 0.0))
+            _dbg_nesting(
+                f"[POST-ARGA-REDIST-OK] clave={clave} | ahorro=${float(ahorro or 0):.2f} | "
+                f"hojas={len(base)}"
+            )
+        else:
+            _dbg_nesting(f"[POST-ARGA-REDIST-ROLLBACK] clave={clave} | {msg}")
+    except Exception as exc:
+        _dbg_nesting(f"[POST-ARGA-REDIST-ERR] clave={clave} | {exc}")
+
+    # Sin pasada extra de huecos entre madres aquí: muy cara y ya se rellenan
+    # barrenos/patio al cerrar cada placa madre.
+    return base, costo
 
 
 def _placas_que_caben_pieza(placas, max_req, min_req, tol=10.0):
@@ -863,9 +1868,11 @@ def _safe_empaquetar_una_hoja_mc(
     limite_poly=None,
     debug_tag="",
     mc_iterations=None,
+    cancel_checker=None,
 ):
     hoja_vacia = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     restos_default = list(piezas or [])
+    cc = cancel_checker if cancel_checker is not None else _active_pack_cancel_checker()
 
     try:
         result = empaquetar_una_hoja_mc(
@@ -878,6 +1885,7 @@ def _safe_empaquetar_una_hoja_mc(
             corner_override,
             limite_poly=limite_poly,
             mc_iterations=mc_iterations,
+            cancel_checker=cc,
         )
 
         if result is None:
@@ -971,6 +1979,7 @@ class MotorNesting:
             corner_override,
             limite_poly=limite_poly,
             debug_tag="empaque_mc_ui",
+            cancel_checker=self._cancelado,
         )
 
     def empaquetar_con_reintentos(
@@ -1031,6 +2040,7 @@ class MotorNesting:
                 limite_poly=limite_poly,
                 debug_tag=f"{debug_tag}|try={intento + 1}",
                 mc_iterations=mc_iters,
+                cancel_checker=self._cancelado,
             )
             if not nh:
                 continue
@@ -1499,58 +2509,147 @@ class MotorNesting:
             _dbg_nesting("[ABORT] No hay grupos válidos para enviar a multiproceso")
             return {"error": "No hay grupos válidos para procesar."}
 
-        nucleos_totales = multiprocessing.cpu_count()
-        nucleos_a_usar = max(1, min(nucleos_totales - 2, total_lotes_reales))
+        nest_profile = get_engine_profile(resolved_engine)
+        nestfab_continual = (
+            normalize_engine_id(resolved_engine) == ENGINE_SVGNEST_ULTRA
+            and bool(nest_profile.get("continual_until_user_stops"))
+        )
 
-        with concurrent.futures.ProcessPoolExecutor(
-            max_workers=nucleos_a_usar,
-            initializer=_nesting_worker_bootstrap,
-        ) as executor:
-            futuros = {
-                executor.submit(
-                    _procesar_grupo_parallel_worker,
-                    (
-                        clave,
-                        piezas,
-                        datos_placas,
-                        config_kerf,
-                        config_margin,
-                        config_opt,
-                        config_corner,
-                        wo_name,
-                        resolved_engine,
-                    ),
-                ): clave
-                for clave, piezas in grupos_ordenados
-            }
+        # NestFab continuo (opcional): Ultra en hilo actual para que Cancelar deje el mejor.
+        # Por defecto está OFF en el perfil: las sims multi-placa usan GA acotado.
+        if nestfab_continual:
+            notificar(
+                "SVGNest Ultra: mejora continua (Cancelar = aceptar lo mejor)...",
+                0.16,
+            )
+            prev_cc = _bind_pack_cancel_checker(self._cancelado)
+            try:
+                for i, (clave, piezas) in enumerate(grupos_ordenados):
+                    if self._cancelado():
+                        notificar(
+                            "Nesting detenido: se conserva lo calculado hasta ahora.",
+                            0.16 + (i / max(1, total_lotes_reales)) * 0.84,
+                        )
+                        break
+                    notificar(
+                        f"Ultra optimizando lote {i + 1}/{total_lotes_reales}: {clave}",
+                        0.16 + (i / max(1, total_lotes_reales)) * 0.84,
+                    )
+                    try:
+                        clave_w, resultado_grupo = self._procesar_grupo_parallel(
+                            clave,
+                            piezas,
+                            datos_placas,
+                            config_kerf,
+                            config_margin,
+                            config_opt,
+                            config_corner,
+                            wo_name,
+                        )
+                        resultados[clave_w or clave] = resultado_grupo
+                    except Exception as exc:
+                        print(f"Error en Lote {clave}: {exc}")
+                        resultados[clave] = {"error": f"Error en cálculo: {exc}"}
+            finally:
+                _unbind_pack_cancel_checker(prev_cc)
+        else:
+            # Ultra (y resto): multiproceso normal. Cancel aún se propaga entre placas.
+            nucleos_totales = multiprocessing.cpu_count()
+            nucleos_a_usar = max(1, min(nucleos_totales - 2, total_lotes_reales))
 
-            for i, futuro in enumerate(concurrent.futures.as_completed(futuros)):
-                clave = futuros[futuro]
-                try:
-                    raw_result = futuro.result()
+            # Evento compartido: Cancelar UI propaga a workers (cheques entre placas).
+            try:
+                mp_manager = multiprocessing.Manager()
+                cancel_event = mp_manager.Event()
+            except Exception:
+                mp_manager = None
+                cancel_event = None
 
-                    if raw_result is None:
-                        raise RuntimeError("El worker regresó None")
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=nucleos_a_usar,
+                initializer=_nesting_worker_bootstrap,
+            ) as executor:
+                futuros = {
+                    executor.submit(
+                        _procesar_grupo_parallel_worker,
+                        (
+                            clave,
+                            piezas,
+                            datos_placas,
+                            config_kerf,
+                            config_margin,
+                            config_opt,
+                            config_corner,
+                            wo_name,
+                            resolved_engine,
+                            cancel_event,
+                        ),
+                    ): clave
+                    for clave, piezas in grupos_ordenados
+                }
 
-                    if isinstance(raw_result, tuple) and len(raw_result) == 2:
-                        clave_worker, resultado_grupo = raw_result
-                        if not clave_worker:
-                            clave_worker = clave
-                        resultados[clave] = resultado_grupo
-                    elif isinstance(raw_result, dict):
-                        # fallback tolerante por si algún camino del worker devuelve solo dict
-                        resultados[clave] = raw_result
-                    else:
-                        raise RuntimeError(
-                            f"Salida inesperada del worker: tipo={type(raw_result).__name__}"
+                pendientes = set(futuros.keys())
+                completados = 0
+                while pendientes:
+                    if self._cancelado():
+                        if cancel_event is not None:
+                            try:
+                                cancel_event.set()
+                            except Exception:
+                                pass
+                        for fut in list(pendientes):
+                            fut.cancel()
+                        notificar(
+                            "Nesting cancelado: deteniendo workers...",
+                            0.16 + (completados / max(1, total_lotes_reales)) * 0.84,
+                        )
+                        break
+
+                    done, not_done = concurrent.futures.wait(
+                        pendientes,
+                        timeout=0.4,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        continue
+
+                    for futuro in done:
+                        pendientes.discard(futuro)
+                        clave = futuros[futuro]
+                        try:
+                            raw_result = futuro.result()
+
+                            if raw_result is None:
+                                raise RuntimeError("El worker regresó None")
+
+                            if isinstance(raw_result, tuple) and len(raw_result) == 2:
+                                clave_worker, resultado_grupo = raw_result
+                                if not clave_worker:
+                                    clave_worker = clave
+                                resultados[clave] = resultado_grupo
+                            elif isinstance(raw_result, dict):
+                                resultados[clave] = raw_result
+                            else:
+                                raise RuntimeError(
+                                    f"Salida inesperada del worker: tipo={type(raw_result).__name__}"
+                                )
+
+                        except Exception as exc:
+                            print(f"Error en Lote {clave}: {exc}")
+                            resultados[clave] = {"error": f"Error en cálculo: {exc}"}
+
+                        completados += 1
+                        progreso_actual = 0.16 + (completados / total_lotes_reales) * 0.84
+                        notificar(
+                            f"Lotes procesados: {completados}/{total_lotes_reales}",
+                            progreso_actual,
                         )
 
-                except Exception as exc:
-                    print(f"Error en Lote {clave}: {exc}")
-                    resultados[clave] = {"error": f"Error en cálculo: {exc}"}
-
-                progreso_actual = 0.16 + ((i + 1) / total_lotes_reales) * 0.84
-                notificar(f"Lotes procesados: {i + 1}/{total_lotes_reales}", progreso_actual)
+            if mp_manager is not None:
+                try:
+                    mp_manager.shutdown()
+                except Exception:
+                    pass
 
         notificar("Construyendo modelos visuales...", 1.0)
         self._ultima_auditoria_dxf = {
@@ -1597,6 +2696,42 @@ class MotorNesting:
         return bundle
 
     def _procesar_grupo_parallel(
+        self,
+        clave,
+        piezas,
+        datos_placas,
+        config_kerf,
+        config_margin,
+        config_opt,
+        config_corner,
+        wo_name="PENDIENTE",
+        q_msg=None,
+        cu_routing_override=None,
+        sin_rtz=False,
+        cu_separacion_in=None,
+        cu_largo_sin_separacion_in=None,
+    ):
+        prev_cc = _bind_pack_cancel_checker(self._cancelado)
+        try:
+            return self._procesar_grupo_parallel_impl(
+                clave,
+                piezas,
+                datos_placas,
+                config_kerf,
+                config_margin,
+                config_opt,
+                config_corner,
+                wo_name=wo_name,
+                q_msg=q_msg,
+                cu_routing_override=cu_routing_override,
+                sin_rtz=sin_rtz,
+                cu_separacion_in=cu_separacion_in,
+                cu_largo_sin_separacion_in=cu_largo_sin_separacion_in,
+            )
+        finally:
+            _unbind_pack_cancel_checker(prev_cc)
+
+    def _procesar_grupo_parallel_impl(
         self,
         clave,
         piezas,
@@ -1733,7 +2868,7 @@ class MotorNesting:
                 formatos_vistos.add(formato)
                 placas_unicas_simulacion.append(p)
 
-        AREA_LIMITE_MM2 = 499 * 645.16
+        AREA_LIMITE_MM2 = ARGA_AREA_ESTRUCTURAL_MM2
         estructurales = [p for p in piezas if p['area'] > AREA_LIMITE_MM2]
         accesorios_base = [p for p in piezas if p['area'] <= AREA_LIMITE_MM2]
 
@@ -1752,14 +2887,26 @@ class MotorNesting:
         hojas_finales = []
         costo_total_lote = 0
         inventario_aviso = ""
+        contador_rtz_grupo = 1
         
         pendientes_est = copy.deepcopy(estructurales)
         accesorios = copy.deepcopy(accesorios_base)
         num_placa_actual = 1
 
         while pendientes_est or accesorios:
+            if self._cancelado():
+                _dbg_nesting(f"[CANCEL] clave={clave} | abortando grupo (NestFab stop)")
+                break
             pool_est_snapshot = copy.deepcopy(pendientes_est)
             pool_acc_snapshot = copy.deepcopy(accesorios)
+            usar_pack_combinado = bool(
+                pendientes_est
+                and accesorios
+                and _es_motor_arga_force()
+            )
+            pool_combined_snapshot = (
+                pool_est_snapshot + pool_acc_snapshot if usar_pack_combinado else None
+            )
             if pendientes_est: pendientes_est.sort(key=lambda x: x['area'], reverse=True)
             if accesorios: accesorios.sort(key=lambda x: x['area'], reverse=True)
             
@@ -1848,20 +2995,40 @@ class MotorNesting:
                 restos_acc_out = []
 
                 if sim_est:
-                    hoja_sim, restos_sim = _safe_empaquetar_una_hoja_mc(
-                        sim_est,
-                        candidato_placa["w"],
-                        candidato_placa["h"],
-                        config_kerf,
-                        config_margin,
-                        config_opt,
-                        config_corner,
-                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=estructurales",
-                        mc_iterations=mc_iters,
-                    )
-                    restos_est_out = restos_sim
-                    restos_acc_out = sim_acc
-                    modo = "estructurales"
+                    if usar_pack_combinado:
+                        hoja_sim, restos_est_out, restos_acc_out = _empaquetar_arga_combinado(
+                            sim_est,
+                            sim_acc,
+                            candidato_placa["w"],
+                            candidato_placa["h"],
+                            config_kerf,
+                            config_margin,
+                            config_opt,
+                            config_corner,
+                            mc_iterations=mc_iters,
+                            debug_tag=(
+                                f"clave={clave} | placa_id={candidato_placa.get('id')} | "
+                                "modo=combinado"
+                            ),
+                        )
+                        restos_sim = restos_est_out + restos_acc_out
+                        if not hoja_sim or not hoja_sim.get("piezas"):
+                            continue
+                    else:
+                        hoja_sim, restos_sim = _safe_empaquetar_una_hoja_mc(
+                            sim_est,
+                            candidato_placa["w"],
+                            candidato_placa["h"],
+                            config_kerf,
+                            config_margin,
+                            config_opt,
+                            config_corner,
+                            debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=estructurales",
+                            mc_iterations=mc_iters,
+                        )
+                        restos_est_out = restos_sim
+                        restos_acc_out = sim_acc
+                    modo = "combinado" if usar_pack_combinado else "estructurales"
                 elif sim_acc:
                     hoja_sim, restos_sim = _empaquetar_mejor_hoja_mc(
                         sim_acc,
@@ -1943,6 +3110,9 @@ class MotorNesting:
 
             hoja_ganadora = mejor_hoja_temp
             candidato_ganador = mejor_placa
+            forzar_sin_mini_nest = _debe_forzar_sin_mini_nest(
+                req_cal, candidato_ganador["w"], candidato_ganador["h"]
+            )
 
             # Refinar compactación solo en modos con refine_hoja (standard/max)
             if refine_hoja and cu_refinar_intentos > 0:
@@ -1964,10 +3134,40 @@ class MotorNesting:
 
             from .sheet_integrity import calcular_restos_desde_colocados
 
-            if pendientes_est:
-                mejor_restos_est = calcular_restos_desde_colocados(pool_est_snapshot, hoja_ganadora)
+            if usar_pack_combinado and pool_combined_snapshot is not None:
+                pre_restos = calcular_restos_desde_colocados(
+                    pool_combined_snapshot, hoja_ganadora
+                )
+                _, pre_acc = _split_pool_estructural_accesorio(pre_restos)
+                if pre_acc:
+                    _rellenar_accesorios_en_huecos_hoja(
+                        hoja_ganadora,
+                        pre_acc,
+                        candidato_ganador["w"],
+                        candidato_ganador["h"],
+                        config_kerf,
+                        config_margin,
+                        config_opt,
+                        config_corner,
+                        mc_iterations=mc_iters,
+                        accesorios_retries=cu_acc_retries,
+                        clave=clave,
+                        solo_interiores=False,
+                    )
+                restos_all = calcular_restos_desde_colocados(
+                    pool_combined_snapshot, hoja_ganadora
+                )
+                mejor_restos_est, mejor_restos_acc = _split_pool_estructural_accesorio(
+                    restos_all
+                )
+            elif pendientes_est:
+                mejor_restos_est = calcular_restos_desde_colocados(
+                    pool_est_snapshot, hoja_ganadora
+                )
             else:
-                mejor_restos_acc = calcular_restos_desde_colocados(pool_acc_snapshot, hoja_ganadora)
+                mejor_restos_acc = calcular_restos_desde_colocados(
+                    pool_acc_snapshot, hoja_ganadora
+                )
             
             _dbg_nesting(
                 f"[SIM-PLACA-GANADORA] clave={clave} | placa_id={candidato_ganador.get('id')} | "
@@ -1985,8 +3185,47 @@ class MotorNesting:
                 'es_retazo': False, 'origen_placa': candidato_ganador['origen']
             })
             
-            if pendientes_est: pendientes_est = mejor_restos_est
-            else: accesorios = mejor_restos_acc
+            if usar_pack_combinado:
+                pendientes_est = mejor_restos_est
+                accesorios = mejor_restos_acc
+            elif pendientes_est:
+                pendientes_est = mejor_restos_est
+            else:
+                accesorios = mejor_restos_acc
+
+            # Fill-first: antes de RTZ / siguiente madre, empujar leftovers a huecos/patio.
+            pool_fill = list(pendientes_est or []) + list(accesorios or [])
+            if pool_fill:
+                from .sheet_integrity import (
+                    calcular_restos_por_delta,
+                    contar_piezas_reales_hoja,
+                )
+
+                conteo_antes = contar_piezas_reales_hoja(hoja_ganadora)
+                _rellenar_accesorios_en_huecos_hoja(
+                    hoja_ganadora,
+                    pool_fill,
+                    candidato_ganador["w"],
+                    candidato_ganador["h"],
+                    config_kerf,
+                    config_margin,
+                    config_opt,
+                    config_corner,
+                    mc_iterations=mc_iters,
+                    accesorios_retries=max(4, int(cu_acc_retries or 4)),
+                    clave=clave,
+                    solo_interiores=False,
+                )
+                delta = contar_piezas_reales_hoja(hoja_ganadora) - conteo_antes
+                if delta:
+                    pendientes_est = calcular_restos_por_delta(pendientes_est, delta)
+                    accesorios = calcular_restos_por_delta(accesorios, delta)
+                    _dbg_nesting(
+                        f"[FILL-ANTES-RTZ] clave={clave} | "
+                        f"colocadas={sum(delta.values())} | "
+                        f"restan_est={len(pendientes_est)} | restan_acc={len(accesorios)}"
+                    )
+                actualizar_eficiencias_hoja(hoja_ganadora)
 
             if sin_rtz:
                 _dbg_nesting(
@@ -2000,25 +3239,44 @@ class MotorNesting:
 
             mini_nests_locales = []
             retazos_virtuales = []
-            contador_rtz = 1
             
             for p in list(hoja_ganadora['piezas']):
-                if "REMANENTE__" in p['nombre']: continue
+                if not _es_pieza_fisica_hoja(p.get('nombre')):
+                    continue
                 poly = reconstruir_poly_seguro(p['poligonos'])
                 for interior in interiores_poly(poly):
                     hole_poly = Polygon(interior)
                     minx, miny, maxx, maxy = hole_poly.bounds
                     w_r, h_r = maxx - minx, maxy - miny
-                    if _retazo_cumple_tamano_minimo(w_r, h_r):
-                        id_retazo = nombre_rtz_para_placa(
-                            contador_rtz, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
+                    if not _retazo_cumple_tamano_minimo(w_r, h_r, tipo="HOLE"):
+                        continue
+                    # Barreno ya reutilizado en madre: no abrir RTZ encima (causa empalmes).
+                    if _hole_ya_reutilizado_en_madre(hole_poly, hoja_ganadora):
+                        _dbg_nesting(
+                            f"[RTZ-SKIP-HOLE-OCUPADO] clave={clave} | "
+                            f"placa={candidato_ganador.get('id')} | "
+                            f"host={p.get('nombre')} | {w_r/25.4:.1f}x{h_r/25.4:.1f}\""
                         )
-                        poly_local = affinity.translate(hole_poly, -minx, -miny)
-                        retazos_virtuales.append({"id": id_retazo, "w": w_r, "h": h_r, "poly_borde": poly_local, "tipo": "HOLE", "global_x": minx, "global_y": miny})
-                        contador_rtz += 1
+                        continue
+                    id_retazo = nombre_rtz_para_placa(
+                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
+                    )
+                    poly_local = affinity.translate(hole_poly, -minx, -miny)
+                    retazos_virtuales.append({
+                        "id": id_retazo,
+                        "w": w_r,
+                        "h": h_r,
+                        "poly_borde": poly_local,
+                        "tipo": "HOLE",
+                        "global_x": minx,
+                        "global_y": miny,
+                    })
+                    contador_rtz_grupo += 1
                             
             max_x, max_y = 0, 0
             for p in list(hoja_ganadora['piezas']):
+                if not _es_pieza_fisica_hoja(p.get('nombre')):
+                    continue
                 poly = reconstruir_poly_seguro(p['poligonos'])
                 if poly:
                     _, _, mx, my = poly.bounds
@@ -2040,10 +3298,10 @@ class MotorNesting:
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
                     id_retazo = nombre_rtz_para_placa(
-                        contador_rtz, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
+                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
                     )
                     retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_der, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
-                    contador_rtz += 1
+                    contador_rtz_grupo += 1
 
             if h_orig - max_y > 150:
                 rem_arr = box(0, max_y, max_x, h_orig)
@@ -2051,10 +3309,10 @@ class MotorNesting:
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
                     id_retazo = nombre_rtz_para_placa(
-                        contador_rtz, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
+                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
                     )
                     retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_arr, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
-                    contador_rtz += 1
+                    contador_rtz_grupo += 1
 
             retazos_virtuales = [
                 r
@@ -2119,7 +3377,18 @@ class MotorNesting:
                                 candidatos_seguro, hoja_retazo
                             )
                         
-                        if hoja_retazo['piezas']:
+                        if hoja_retazo.get('piezas'):
+                            # Rechazar RTZ que empalmaría al proyectarse sobre la madre.
+                            if _rtz_proyectado_choca_madre(
+                                hoja_ganadora, retazo, hoja_retazo
+                            ):
+                                _dbg_nesting(
+                                    f"[RTZ-REJECT-OVERLAP] clave={clave} | "
+                                    f"retazo={retazo.get('id')} | tipo={retazo.get('tipo')} | "
+                                    f"placa={candidato_ganador.get('id')}"
+                                )
+                                continue
+
                             rtz_usado = True
 
                             from .sheet_integrity import calcular_restos_desde_colocados
@@ -2178,7 +3447,6 @@ class MotorNesting:
 
                                 p_clon = copy.deepcopy(p_acc)
                                 if forzar_sin_mini_nest:
-                                    # En modo SIN MINI NEST estas piezas deben quedar reales en placa madre.
                                     p_clon['nombre'] = f"{p_clon['nombre']}"
                                 else:
                                     p_clon['nombre'] = f"REF__{p_clon['nombre']}"
@@ -2218,6 +3486,7 @@ class MotorNesting:
                         or p_acc['nombre'].startswith("TATUAJE__")
                         or p_acc['nombre'].startswith("RETAZO_GUILLOTINA__")
                         or p_acc['nombre'].startswith("CU_CORTE__")
+                        or p_acc['nombre'].startswith("REF__")
                     ):
                         continue
                     try:
@@ -2310,8 +3579,19 @@ class MotorNesting:
             costo_total_lote += candidato_ganador['precio']
             num_placa_actual += 1
 
-        # REEMPLAZA ESTE BLOQUE EN manager.py (CASI AL FINAL DE LA FUNCIÓN)
         if hojas_finales:
+            if _es_motor_arga_force():
+                hojas_finales, costo_total_lote = _post_proceso_arga_seguro(
+                    piezas,
+                    hojas_finales,
+                    costo_total_lote,
+                    config_kerf,
+                    config_margin,
+                    config_opt,
+                    config_corner,
+                    clave=clave,
+                )
+
             from .sheet_integrity import sanitizar_hojas_grupo, validar_colocacion_completa
 
             hojas_finales = sanitizar_hojas_grupo(
@@ -4124,25 +5404,47 @@ def _nesting_worker_bootstrap():
 
 def _procesar_grupo_parallel_worker(job):
     """Worker de proceso: instancia limpia sin referencias a la UI Qt."""
-    (
-        clave,
-        piezas,
-        datos_placas,
-        config_kerf,
-        config_margin,
-        config_opt,
-        config_corner,
-        wo_name,
-        engine_id,
-    ) = job
+    cancel_event = None
+    if len(job) >= 10:
+        (
+            clave,
+            piezas,
+            datos_placas,
+            config_kerf,
+            config_margin,
+            config_opt,
+            config_corner,
+            wo_name,
+            engine_id,
+            cancel_event,
+        ) = job[:10]
+    else:
+        (
+            clave,
+            piezas,
+            datos_placas,
+            config_kerf,
+            config_margin,
+            config_opt,
+            config_corner,
+            wo_name,
+            engine_id,
+        ) = job
     set_active_engine_id(engine_id)
-    return MotorNesting()._procesar_grupo_parallel(
-        clave,
-        piezas,
-        datos_placas,
-        config_kerf,
-        config_margin,
-        config_opt,
-        config_corner,
-        wo_name,
-    )
+    motor = MotorNesting()
+    if cancel_event is not None:
+        motor.set_cancel_checker(lambda: bool(cancel_event.is_set()))
+    prev = _bind_pack_cancel_checker(motor._cancelado)
+    try:
+        return motor._procesar_grupo_parallel(
+            clave,
+            piezas,
+            datos_placas,
+            config_kerf,
+            config_margin,
+            config_opt,
+            config_corner,
+            wo_name,
+        )
+    finally:
+        _unbind_pack_cancel_checker(prev)

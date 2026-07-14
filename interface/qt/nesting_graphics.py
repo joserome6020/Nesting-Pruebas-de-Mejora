@@ -386,7 +386,7 @@ def _place_text_centered_in_cell(
 
 
 class NestingGraphicsView(QGraphicsView):
-    """Viewport con antialiasing, zoom suave y fondo CAD."""
+    """Viewport con antialiasing, zoom suave, pan (arrastre) y fondo CAD."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -409,6 +409,32 @@ class NestingGraphicsView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         # Coordenadas CAD: origen abajo-izq, Y hacia arriba (igual que DXF/mm del motor).
         self.scale(1.0, -1.0)
+        self._is_panning = False
+        self._pan_last = None
+
+    def fit_nest_rect(self, rect):
+        """Ajuste igual que el nest normal: Y invertida + fitInView."""
+        from PySide6.QtCore import QRectF
+
+        if rect is None:
+            return
+        if not isinstance(rect, QRectF):
+            try:
+                x0, x1, y0, y1 = rect
+                rect = QRectF(
+                    float(x0),
+                    float(min(y0, y1)),
+                    float(abs(x1 - x0)),
+                    float(abs(y1 - y0)),
+                )
+            except Exception:
+                return
+        if rect.width() <= 1 or rect.height() <= 1:
+            return
+        self.resetTransform()
+        self.scale(1.0, -1.0)
+        self.setSceneRect(rect.adjusted(-50, -50, 50, 50))
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def wheelEvent(self, event):
         if event.angleDelta().y() == 0:
@@ -416,6 +442,59 @@ class NestingGraphicsView(QGraphicsView):
         factor = 1.12 if event.angleDelta().y() > 0 else 1.0 / 1.12
         self.scale(factor, factor)
         event.accept()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_panning = True
+            self._pan_last = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._is_panning and self._pan_last is not None:
+            cur = event.position()
+            dx = float(cur.x() - self._pan_last.x())
+            dy = float(cur.y() - self._pan_last.y())
+            self._pan_last = cur
+            p0 = self.mapToScene(0, 0)
+            p1 = self.mapToScene(int(round(dx)), int(round(dy)))
+            self.translate(p1.x() - p0.x(), p1.y() - p0.y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_panning = False
+            self._pan_last = None
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class NestLabGraphicsView(NestingGraphicsView):
+    """Vista LAB: zoom con rueda + arrastre con botón izquierdo/medio."""
+
+    def mousePressEvent(self, event):
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+            self._is_panning = True
+            self._pan_last = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() in (Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+            self._is_panning = False
+            self._pan_last = None
+            self.unsetCursor()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 @dataclass

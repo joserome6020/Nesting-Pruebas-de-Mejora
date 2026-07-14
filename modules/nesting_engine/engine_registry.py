@@ -4,12 +4,12 @@ from __future__ import annotations
 import time
 from typing import Callable, Optional, Type
 
-from .engines import ArgaBaseEngine, BurkeBlfEngine, Libnest2dEngine, SvgnestUltraEngine
+from .engines import ArgaForceEngine, BurkeBlfEngine, Libnest2dEngine, SvgnestUltraEngine
 from .engines.types import NestEngineMeta, NestEngineNotReadyError, PackSheetRequest, PackSheetResult
 from .nest_engine_context import STEEL_ENGINE_IDS, get_active_engine_id, normalize_engine_id
 
 _ENGINE_CLASSES: dict[str, Type] = {
-    ArgaBaseEngine.META.engine_id: ArgaBaseEngine,
+    ArgaForceEngine.META.engine_id: ArgaForceEngine,
     BurkeBlfEngine.META.engine_id: BurkeBlfEngine,
     Libnest2dEngine.META.engine_id: Libnest2dEngine,
     SvgnestUltraEngine.META.engine_id: SvgnestUltraEngine,

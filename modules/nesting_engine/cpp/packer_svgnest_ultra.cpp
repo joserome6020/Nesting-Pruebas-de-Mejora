@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <random>
+#include <unordered_map>
 #include <vector>
 
 #include "clipper2/clipper.h"
@@ -17,6 +20,9 @@ using namespace Clipper2Lib;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kPartInPartMaxAreaMm2 = 800'000.0;
+constexpr double kVoidMinAreaMm2 = 25.0 * 25.0;
+constexpr double kAreaEstructuralUmbralMm2 = 200.0 * 645.16;
+constexpr int kMaxGuardCavidad = 80;
 
 struct Bounds {
     double minx = 0.0;
@@ -45,7 +51,14 @@ struct LimitContext {
 struct PlacementState {
     SheetOut hoja;
     std::vector<PathsD> fijas_buff_paths;
+    std::vector<PathsD> fijas_solid_paths;
     std::vector<Bounds> fijas_bounds;
+    std::vector<char> fijas_es_anfitriona;
+};
+
+struct CavidadAbierta {
+    size_t host_idx = 0;
+    std::vector<std::vector<Point2D>> rings;
 };
 
 PathD to_path_d(const std::vector<Point2D>& ring) {
@@ -191,6 +204,10 @@ void rotate_rings(std::vector<std::vector<Point2D>>& rings, double cx, double cy
     }
 }
 
+/**
+ * Buffer de kerf preservando canales abiertos (perfil C / VFM).
+ * No usar pick-largest sobre el offset: colapsa el canal cóncavo.
+ */
 PathsD buffer_paths(const PathsD& subject, double delta) {
     if (subject.empty()) {
         return {};
@@ -199,27 +216,86 @@ PathsD buffer_paths(const PathsD& subject, double delta) {
     if (cleaned.empty()) {
         cleaned = subject;
     }
-    PathsD solution = InflatePaths(cleaned, delta, JoinType::Miter, EndType::Polygon);
-    if (solution.empty()) {
+
+    const double abs_delta = std::abs(delta);
+    const JoinType jt = JoinType::Round;
+    if (abs_delta < 1e-12) {
+        return cleaned;
+    }
+
+    if (cleaned.size() == 1) {
+        PathsD solution = InflatePaths(cleaned, delta, jt, EndType::Polygon);
+        PathsD u = Union(solution, FillRule::NonZero);
+        return u.empty() ? solution : u;
+    }
+
+    PathsD outer = InflatePaths({cleaned[0]}, abs_delta, jt, EndType::Polygon);
+    PathsD outer_u = Union(outer, FillRule::NonZero);
+    if (outer_u.empty()) {
+        outer_u = outer;
+    }
+    if (outer_u.empty()) {
         return {};
     }
-    if (solution.size() > 1) {
-        double best = -1.0;
-        size_t best_i = 0;
-        for (size_t i = 0; i < solution.size(); ++i) {
-            const double a = std::abs(Area(solution[i]));
-            if (a > best) {
-                best = a;
-                best_i = i;
-            }
+
+    PathsD holes_shrunk;
+    for (size_t i = 1; i < cleaned.size(); ++i) {
+        PathsD hi = InflatePaths({cleaned[i]}, -abs_delta, jt, EndType::Polygon);
+        if (hi.empty()) {
+            continue;
         }
-        return {solution[best_i]};
+        holes_shrunk.insert(holes_shrunk.end(), hi.begin(), hi.end());
     }
-    return solution;
+    if (holes_shrunk.empty()) {
+        return outer_u;
+    }
+
+    PathsD solid = Difference(outer_u, holes_shrunk, FillRule::NonZero);
+    return solid.empty() ? outer_u : solid;
 }
 
 std::vector<std::vector<Point2D>> buffer_rings(const std::vector<std::vector<Point2D>>& rings, double delta) {
     return from_paths_d(buffer_paths(to_paths_d(rings), delta));
+}
+
+/** Metal real = exterior − huecos (necesario para AABB−metal en VFM). */
+PathsD materialize_metal(const std::vector<std::vector<Point2D>>& rings) {
+    if (rings.empty()) {
+        return {};
+    }
+    PathsD outer = to_paths_d({rings[0]});
+    if (outer.empty()) {
+        return {};
+    }
+    if (rings.size() == 1) {
+        return outer;
+    }
+    PathsD holes;
+    for (size_t i = 1; i < rings.size(); ++i) {
+        PathsD h = to_paths_d({rings[i]});
+        holes.insert(holes.end(), h.begin(), h.end());
+    }
+    if (holes.empty()) {
+        return outer;
+    }
+    PathsD solid = Difference(outer, holes, FillRule::NonZero);
+    if (solid.empty()) {
+        solid = Difference(outer, holes, FillRule::EvenOdd);
+    }
+    return solid.empty() ? outer : solid;
+}
+
+bool pieza_es_anfitriona(const PieceIn& p) {
+    if (p.rings.size() >= 2) {
+        return true;
+    }
+    const double area_mat = piece_area(p);
+    if (area_mat >= kAreaEstructuralUmbralMm2) {
+        return true;
+    }
+    const Bounds bb = bounds_of_rings(p.rings);
+    const double bbox_area = (bb.maxx - bb.minx) * (bb.maxy - bb.miny);
+    return bbox_area > kVoidMinAreaMm2 * 4.0 && bbox_area > 0.0 && area_mat / bbox_area < 0.85;
 }
 
 bool paths_intersect(const PathsD& a, const PathsD& b) {
@@ -274,25 +350,104 @@ PathD normalize_outer_at_origin(const std::vector<std::vector<Point2D>>& rings) 
     return out;
 }
 
+/** Cache NFP relativo estilo Deepnest/SVGNest: clave (A@origen, B@origen). */
+struct NfpPairCache {
+    std::unordered_map<std::uint64_t, PathsD> relative;
+
+    static std::uint64_t hash_path(const PathD& path) {
+        std::uint64_t h = 1469598103934665603ull;
+        for (const auto& p : path) {
+            const auto xi = static_cast<std::int64_t>(std::llround(p.x * 10.0));
+            const auto yi = static_cast<std::int64_t>(std::llround(p.y * 10.0));
+            h ^= static_cast<std::uint64_t>(xi) + 0x9e3779b97f4a7c15ull;
+            h *= 1099511628211ull;
+            h ^= static_cast<std::uint64_t>(yi) + 0x9e3779b97f4a7c15ull;
+            h *= 1099511628211ull;
+        }
+        h ^= static_cast<std::uint64_t>(path.size()) * 0x100000001b3ull;
+        return h;
+    }
+
+    const PathsD& get_relative(const PathD& station_at_origin, const PathD& orbiting_norm) {
+        const std::uint64_t key =
+            hash_path(station_at_origin) ^ (hash_path(orbiting_norm) * 0x9e3779b97f4a7c15ull);
+        const auto it = relative.find(key);
+        if (it != relative.end()) {
+            return it->second;
+        }
+        PathsD nfp;
+        if (station_at_origin.size() >= 3 && orbiting_norm.size() >= 3) {
+            const PathD inv_orb = invert_path(orbiting_norm);
+            nfp = MinkowskiSum(inv_orb, station_at_origin, true, 3);
+        }
+        auto [ins, _] = relative.emplace(key, std::move(nfp));
+        return ins->second;
+    }
+};
+
 void append_nfp_candidates(
     std::vector<std::pair<double, double>>& anclajes,
     const PathsD& stationary_buff,
-    const PathD& orbiting_norm) {
+    const PathD& orbiting_norm,
+    NfpPairCache* cache) {
     if (stationary_buff.empty() || orbiting_norm.empty()) {
         return;
     }
-    const PathD inv_orb = invert_path(orbiting_norm);
     for (const auto& stat_path : stationary_buff) {
         if (stat_path.size() < 3) {
             continue;
         }
-        const PathsD nfp_paths = MinkowskiSum(inv_orb, stat_path, true, 3);
+        Bounds bb{};
+        bool first = true;
+        PathD stat_norm;
+        stat_norm.reserve(stat_path.size());
+        for (const auto& p : stat_path) {
+            if (first) {
+                bb.minx = bb.maxx = p.x;
+                bb.miny = bb.maxy = p.y;
+                first = false;
+            } else {
+                bb.minx = std::min(bb.minx, p.x);
+                bb.maxx = std::max(bb.maxx, p.x);
+                bb.miny = std::min(bb.miny, p.y);
+                bb.maxy = std::max(bb.maxy, p.y);
+            }
+        }
+        for (const auto& p : stat_path) {
+            stat_norm.emplace_back(p.x - bb.minx, p.y - bb.miny);
+        }
+
+        PathsD nfp_paths;
+        if (cache != nullptr) {
+            nfp_paths = cache->get_relative(stat_norm, orbiting_norm);
+        } else {
+            const PathD inv_orb = invert_path(orbiting_norm);
+            nfp_paths = MinkowskiSum(inv_orb, stat_norm, true, 3);
+        }
+        // Deepnest: vertices del NFP; subsample si es enorme.
         for (const auto& nfp : nfp_paths) {
-            for (const auto& pt : nfp) {
-                anclajes.emplace_back(pt.x, pt.y);
+            const size_t n = nfp.size();
+            const size_t stride = n > 80 ? std::max<size_t>(1, n / 64) : 1;
+            for (size_t i = 0; i < n; i += stride) {
+                anclajes.emplace_back(nfp[i].x + bb.minx, nfp[i].y + bb.miny);
             }
         }
     }
+}
+
+void dedupe_anchors(std::vector<std::pair<double, double>>& anclajes) {
+    if (anclajes.size() < 2) {
+        return;
+    }
+    std::sort(anclajes.begin(), anclajes.end());
+    anclajes.erase(
+        std::unique(
+            anclajes.begin(),
+            anclajes.end(),
+            [](const auto& a, const auto& b) {
+                return std::abs(a.first - b.first) < 0.25 && std::abs(a.second - b.second) < 0.25;
+            }),
+        anclajes.end());
 }
 
 std::vector<int> build_rotation_angles(double step_deg) {
@@ -383,22 +538,44 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     return ctx;
 }
 
+/** Orificio: shrink kerf COMPLETO (2·radio). Contención = geometría exacta. */
 LimitContext make_hole_limit(const std::vector<Point2D>& hole_ring, double kerf_radio) {
-  LimitContext ctx;
-  if (hole_ring.size() < 3) {
+    LimitContext ctx;
+    if (hole_ring.size() < 3) {
+        return ctx;
+    }
+    auto paths = to_paths_d({hole_ring});
+    const double shrink = 2.0 * kerf_radio;
+    if (shrink > 1e-9) {
+        paths = InflatePaths(paths, -shrink, JoinType::Miter, EndType::Polygon);
+    }
+    if (paths.empty()) {
+        return ctx;
+    }
+    ctx.active = true;
+    ctx.eval_paths = paths;
+    ctx.bounds = bounds_of_paths(paths);
     return ctx;
-  }
-  auto paths = to_paths_d({hole_ring});
-  if (kerf_radio > 0.0) {
-    paths = InflatePaths(paths, -kerf_radio, JoinType::Miter, EndType::Polygon);
-  }
-  if (paths.empty()) {
+}
+
+/** Canal abierto C/VFM / vacío: kerf completo + pieza exacta. */
+LimitContext make_void_limit(const std::vector<std::vector<Point2D>>& rings, double kerf_radio) {
+    LimitContext ctx;
+    if (rings.empty() || rings[0].size() < 3) {
+        return ctx;
+    }
+    PathsD paths = to_paths_d(rings);
+    const double shrink = 2.0 * kerf_radio;
+    if (shrink > 1e-9) {
+        paths = InflatePaths(paths, -shrink, JoinType::Miter, EndType::Polygon);
+    }
+    if (paths.empty()) {
+        return ctx;
+    }
+    ctx.active = true;
+    ctx.eval_paths = paths;
+    ctx.bounds = bounds_of_paths(paths);
     return ctx;
-  }
-  ctx.active = true;
-  ctx.eval_paths = paths;
-  ctx.bounds = bounds_of_paths(paths);
-  return ctx;
 }
 
 bool comprobar_colision(
@@ -406,33 +583,67 @@ bool comprobar_colision(
     double pos_y,
     const Variation& var,
     const LimitContext& limit,
-    const std::vector<Bounds>& fijas_bounds,
-    const std::vector<PathsD>& fijas_buff_paths) {
+    const PlacementState& state,
+    double kerf_radio) {
     const double cmx = pos_x + var.b_minx;
     const double cmy = pos_y + var.b_miny;
     const double cMx = pos_x + var.b_maxx;
     const double cMy = pos_y + var.b_maxy;
+    const double kerf_full = 2.0 * kerf_radio;
+
+    std::optional<PathsD> moved_exact;
+    std::optional<PathsD> moved_buff;
 
     if (limit.active) {
-        if (cmx < limit.bounds.minx || cmy < limit.bounds.miny || cMx > limit.bounds.maxx || cMy > limit.bounds.maxy) {
+        moved_exact = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
+        if (cmx < limit.bounds.minx - 0.5 || cmy < limit.bounds.miny - 0.5
+            || cMx > limit.bounds.maxx + 0.5 || cMy > limit.bounds.maxy + 0.5) {
             return true;
         }
-        const PathsD moved = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
-        if (!path_contained_in(moved, limit.eval_paths)) {
+        if (!path_contained_in(*moved_exact, limit.eval_paths)) {
             return true;
         }
     }
 
-    std::optional<PathsD> moved_buff;
-    for (size_t idx = 0; idx < fijas_bounds.size(); ++idx) {
-        const auto& f_b = fijas_bounds[idx];
-        if (!(cMx <= f_b.minx + 0.05 || cmx >= f_b.maxx - 0.05 || cMy <= f_b.miny + 0.05 || cmy >= f_b.maxy - 0.05)) {
-            if (!moved_buff) {
-                moved_buff = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
-            }
-            if (paths_intersect(*moved_buff, fijas_buff_paths[idx])) {
+    auto ensure_exact = [&]() -> const PathsD& {
+        if (!moved_exact) {
+            moved_exact = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
+        }
+        return *moved_exact;
+    };
+    auto ensure_buff = [&]() -> const PathsD& {
+        if (!moved_buff) {
+            moved_buff = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
+        }
+        return *moved_buff;
+    };
+
+    for (size_t idx = 0; idx < state.fijas_bounds.size(); ++idx) {
+        const auto& f_b = state.fijas_bounds[idx];
+        const double pad = std::max(0.05, kerf_full + 1.0);
+        if (cMx + pad <= f_b.minx || cmx - pad >= f_b.maxx || cMy + pad <= f_b.miny
+            || cmy - pad >= f_b.maxy) {
+            continue;
+        }
+
+        const bool marcada_host = limit.active && idx < state.fijas_es_anfitriona.size()
+            && state.fijas_es_anfitriona[idx] && idx < state.fijas_solid_paths.size()
+            && !state.fijas_solid_paths[idx].empty();
+        bool es_host_cavity = false;
+        if (marcada_host) {
+            const double inset = std::max(0.0, kerf_radio) + 0.5;
+            es_host_cavity = cmx >= f_b.minx + inset - 0.5 && cMx <= f_b.maxx - inset + 0.5
+                && cmy >= f_b.miny + inset - 0.5 && cMy <= f_b.maxy - inset + 0.5;
+        }
+        if (es_host_cavity) {
+            if (paths_intersect(ensure_exact(), state.fijas_solid_paths[idx])) {
                 return true;
             }
+            continue;
+        }
+
+        if (paths_intersect(ensure_buff(), state.fijas_buff_paths[idx])) {
+            return true;
         }
     }
     return false;
@@ -444,22 +655,22 @@ void compact_slide_position(
     const Variation& var,
     double margin_px,
     const LimitContext& limit,
-    const std::vector<Bounds>& fijas_bounds,
-    const std::vector<PathsD>& fijas_buff_paths) {
+    const PlacementState& state,
+    double kerf_radio) {
     auto try_slide = [&](double step_mm) {
         bool moved = true;
         while (moved) {
             moved = false;
             const double test_px = px - step_mm;
             if (test_px + var.b_minx >= margin_px) {
-                if (!comprobar_colision(test_px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
+                if (!comprobar_colision(test_px, py, var, limit, state, kerf_radio)) {
                     px = test_px;
                     moved = true;
                 }
             }
             const double test_py = py - step_mm;
             if (test_py + var.b_miny >= margin_px) {
-                if (!comprobar_colision(px, test_py, var, limit, fijas_bounds, fijas_buff_paths)) {
+                if (!comprobar_colision(px, test_py, var, limit, state, kerf_radio)) {
                     py = test_py;
                     moved = true;
                 }
@@ -470,8 +681,25 @@ void compact_slide_position(
     try_slide(kSlideStepFineMm);
 }
 
-double nfp_score(double px, double py) {
-    return (py * 1'000'000.0) + px + std::sqrt((px * px) + (py * py)) * 0.01;
+double nfp_score_deepnest(
+    double px,
+    double py,
+    const Variation& var,
+    const PlacementState& state) {
+    // Deepnest/SVGNest: minimizar width*2 + height del bbox conjunto (gravedad X).
+    double minx = px + var.b_minx;
+    double miny = py + var.b_miny;
+    double maxx = px + var.b_maxx;
+    double maxy = py + var.b_maxy;
+    for (const auto& b : state.fijas_bounds) {
+        minx = std::min(minx, b.minx);
+        miny = std::min(miny, b.miny);
+        maxx = std::max(maxx, b.maxx);
+        maxy = std::max(maxy, b.maxy);
+    }
+    const double w = std::max(0.0, maxx - minx);
+    const double h = std::max(0.0, maxy - miny);
+    return (w * 2.0) + h + (py * 1e-3) + (px * 1e-6);
 }
 
 bool colocar_pieza_nfp(
@@ -483,7 +711,8 @@ bool colocar_pieza_nfp(
     double margin_px,
     const LimitContext& sheet_limit,
     const LimitContext* hole_limit,
-    double rotation_step_deg) {
+    double rotation_step_deg,
+    NfpPairCache* nfp_cache) {
     const auto variaciones = build_variaciones_fine(
         p_data.rings, p_data.marks, w_placa, h_placa, margin_px, kerf_radio, rotation_step_deg);
     if (variaciones.empty()) {
@@ -500,16 +729,27 @@ bool colocar_pieza_nfp(
     for (const auto& var : variaciones) {
         std::vector<std::pair<double, double>> anclajes;
         if (hole_limit) {
-            anclajes.emplace_back(hole_limit->bounds.minx, hole_limit->bounds.miny);
+            const auto& hb = hole_limit->bounds;
+            anclajes.emplace_back(hb.minx, hb.miny);
+            anclajes.emplace_back(hb.maxx, hb.miny);
+            anclajes.emplace_back(hb.minx, hb.maxy);
+            anclajes.emplace_back((hb.minx + hb.maxx) * 0.5, hb.miny);
+            anclajes.emplace_back(hb.minx, (hb.miny + hb.maxy) * 0.5);
         } else {
             anclajes.emplace_back(margin_px, margin_px);
         }
         for (const auto& b : state.fijas_bounds) {
             anclajes.emplace_back(b.maxx + 1.0, b.miny);
             anclajes.emplace_back(b.minx, b.maxy + 1.0);
+            anclajes.emplace_back(b.maxx + 1.0, (b.miny + b.maxy) * 0.5);
+            anclajes.emplace_back((b.minx + b.maxx) * 0.5, b.maxy + 1.0);
         }
-        for (size_t idx = 0; idx < state.fijas_buff_paths.size(); ++idx) {
-            append_nfp_candidates(anclajes, state.fijas_buff_paths[idx], var.outer_norm);
+        if (!hole_limit) {
+            for (size_t idx = 0; idx < state.fijas_buff_paths.size(); ++idx) {
+                append_nfp_candidates(
+                    anclajes, state.fijas_buff_paths[idx], var.outer_norm, nfp_cache);
+            }
+            dedupe_anchors(anclajes);
         }
 
         for (const auto& anclaje : anclajes) {
@@ -521,13 +761,13 @@ bool colocar_pieza_nfp(
                 || py + var.b_maxy > h_placa - margin_px + 0.1) {
                 continue;
             }
-            if (comprobar_colision(px, py, var, place_limit, state.fijas_bounds, state.fijas_buff_paths)) {
+            if (comprobar_colision(px, py, var, place_limit, state, kerf_radio)) {
                 continue;
             }
 
-            compact_slide_position(px, py, var, margin_px, place_limit, state.fijas_bounds, state.fijas_buff_paths);
+            compact_slide_position(px, py, var, margin_px, place_limit, state, kerf_radio);
 
-            const double score = nfp_score(px, py);
+            const double score = nfp_score_deepnest(px, py, var, state);
             if (score < mejor_score) {
                 mejor_score = score;
                 mejor_var = &var;
@@ -546,7 +786,9 @@ bool colocar_pieza_nfp(
     const auto cand_buff_final = translate_rings_copy(mejor_var->poly_buff, mejor_px, mejor_py);
 
     state.fijas_buff_paths.push_back(to_paths_d(cand_buff_final));
+    state.fijas_solid_paths.push_back(materialize_metal(cand_final));
     state.fijas_bounds.push_back(bounds_of_rings(cand_buff_final));
+    state.fijas_es_anfitriona.push_back(pieza_es_anfitriona(p_data) ? 1 : 0);
 
     PieceOut placed;
     placed.nombre = p_data.nombre;
@@ -568,7 +810,8 @@ void try_part_in_part(
     double kerf_radio,
     double margin_px,
     const LimitContext& sheet_limit,
-    double rotation_step_deg) {
+    double rotation_step_deg,
+    NfpPairCache* nfp_cache) {
     std::vector<PieceIn> siguientes;
     for (auto& p : restos) {
         if (piece_area(p) > kPartInPartMaxAreaMm2) {
@@ -596,7 +839,8 @@ void try_part_in_part(
                         margin_px,
                         sheet_limit,
                         &hole_limit,
-                        rotation_step_deg)) {
+                        rotation_step_deg,
+                        nfp_cache)) {
                     placed = true;
                     break;
                 }
@@ -612,6 +856,164 @@ void try_part_in_part(
     restos = std::move(siguientes);
 }
 
+std::vector<CavidadAbierta> listar_cavidades_abiertas_por_host(const PlacementState& state) {
+    std::vector<CavidadAbierta> cavidades;
+    const size_t n = std::min(state.hoja.piezas.size(), state.fijas_buff_paths.size());
+    for (size_t i = 0; i < n; ++i) {
+        const auto& placed = state.hoja.piezas[i];
+        if (placed.poligonos.empty()) {
+            continue;
+        }
+        if (i >= state.fijas_es_anfitriona.size() || !state.fijas_es_anfitriona[i]) {
+            PieceIn probe;
+            probe.nombre = placed.nombre;
+            probe.area = placed.area;
+            probe.rings = placed.poligonos;
+            if (!pieza_es_anfitriona(probe)) {
+                continue;
+            }
+        }
+
+        const Bounds bb = bounds_of_rings(placed.poligonos);
+        const double bw = bb.maxx - bb.minx;
+        const double bh = bb.maxy - bb.miny;
+        const double bbox_area = bw * bh;
+        if (bbox_area < kVoidMinAreaMm2 * 4.0) {
+            continue;
+        }
+
+        PathD aabb;
+        aabb.emplace_back(bb.minx, bb.miny);
+        aabb.emplace_back(bb.maxx, bb.miny);
+        aabb.emplace_back(bb.maxx, bb.maxy);
+        aabb.emplace_back(bb.minx, bb.maxy);
+
+        PathsD host_solid = i < state.fijas_solid_paths.size() && !state.fijas_solid_paths[i].empty()
+            ? state.fijas_solid_paths[i]
+            : materialize_metal(placed.poligonos);
+        if (host_solid.empty()) {
+            continue;
+        }
+        PathsD free_in = Difference(PathsD{aabb}, host_solid, FillRule::NonZero);
+        if (free_in.empty()) {
+            free_in = Difference(PathsD{aabb}, host_solid, FillRule::EvenOdd);
+        }
+        for (const auto& path : free_in) {
+            const double a = std::abs(Area(path));
+            if (a < 5.0 * 645.16 || a > bbox_area * 0.85) {
+                continue;
+            }
+            const Bounds pb = bounds_of_paths({path});
+            const double pw = pb.maxx - pb.minx;
+            const double ph = pb.maxy - pb.miny;
+            if (pw > bw * 0.92 && ph > bh * 0.92) {
+                continue;
+            }
+            auto rings = from_paths_d({path});
+            if (!rings.empty()) {
+                cavidades.push_back(CavidadAbierta{i, std::move(rings)});
+            }
+        }
+    }
+    return cavidades;
+}
+
+bool pieza_cabe_en_hueco_aabb(const PieceIn& p, const Bounds& hb, double tol = 1.0) {
+    const Bounds pb = bounds_of_rings(p.rings);
+    const double pw = pb.maxx - pb.minx;
+    const double ph = pb.maxy - pb.miny;
+    const double hw = hb.maxx - hb.minx;
+    const double hh = hb.maxy - hb.miny;
+    return (pw <= hw + tol && ph <= hh + tol) || (ph <= hw + tol && pw <= hh + tol);
+}
+
+/** Relleno NestFab+ARGA: canales abiertos C/VFM (AABB − metal) tras NFP/GA. */
+void try_open_cavities(
+    PlacementState& state,
+    std::vector<PieceIn>& restos,
+    double w_placa,
+    double h_placa,
+    double kerf_radio,
+    double margin_px,
+    const LimitContext& sheet_limit,
+    double rotation_step_deg,
+    NfpPairCache* nfp_cache) {
+    std::vector<PieceIn> grandes;
+    std::vector<PieceIn> pequenas;
+    for (auto& p : restos) {
+        if (pieza_es_anfitriona(p) && piece_area(p) >= kAreaEstructuralUmbralMm2) {
+            grandes.push_back(std::move(p));
+        } else {
+            pequenas.push_back(std::move(p));
+        }
+    }
+    if (pequenas.empty()) {
+        restos = std::move(grandes);
+        return;
+    }
+    std::sort(pequenas.begin(), pequenas.end(), [](const PieceIn& a, const PieceIn& b) {
+        return piece_area(a) < piece_area(b);
+    });
+
+    for (int guard = 0; guard < kMaxGuardCavidad && !pequenas.empty(); ++guard) {
+        auto cavs = listar_cavidades_abiertas_por_host(state);
+        if (cavs.empty()) {
+            break;
+        }
+        std::sort(cavs.begin(), cavs.end(), [](const CavidadAbierta& a, const CavidadAbierta& b) {
+            const Bounds ba = bounds_of_rings(a.rings);
+            const Bounds bb = bounds_of_rings(b.rings);
+            const double la = std::max(ba.maxx - ba.minx, ba.maxy - ba.miny);
+            const double lb = std::max(bb.maxx - bb.minx, bb.maxy - bb.miny);
+            return la > lb;
+        });
+
+        bool progreso = false;
+        for (const auto& cav : cavs) {
+            const Bounds hb = bounds_of_rings(cav.rings);
+            const LimitContext void_limit = make_void_limit(cav.rings, kerf_radio);
+            if (!void_limit.active) {
+                continue;
+            }
+            for (size_t pi = 0; pi < pequenas.size(); ++pi) {
+                if (!pieza_cabe_en_hueco_aabb(pequenas[pi], hb, 1.0)) {
+                    continue;
+                }
+                if (colocar_pieza_nfp(
+                        pequenas[pi],
+                        state,
+                        w_placa,
+                        h_placa,
+                        kerf_radio,
+                        margin_px,
+                        sheet_limit,
+                        &void_limit,
+                        rotation_step_deg,
+                        nfp_cache)) {
+                    pequenas.erase(pequenas.begin() + static_cast<std::ptrdiff_t>(pi));
+                    progreso = true;
+                    break;
+                }
+            }
+            if (progreso) {
+                break;
+            }
+        }
+        if (!progreso) {
+            break;
+        }
+    }
+
+    restos.clear();
+    restos.reserve(grandes.size() + pequenas.size());
+    for (auto& p : grandes) {
+        restos.push_back(std::move(p));
+    }
+    for (auto& p : pequenas) {
+        restos.push_back(std::move(p));
+    }
+}
+
 std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
     const std::vector<PieceIn>& piezas,
     const std::vector<size_t>& order,
@@ -621,7 +1023,8 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
     double margin_custom,
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
     double rotation_step_deg,
-    bool part_in_part) {
+    bool part_in_part,
+    NfpPairCache& nfp_cache) {
     PlacementState state;
     std::vector<PieceIn> restos;
 
@@ -629,10 +1032,23 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
     const double margin_px = margin_custom > 0.0 ? (margin_custom * 25.4) : 0.0;
     const LimitContext sheet_limit = make_limit_context(limite_rings, margin_px);
 
+    std::vector<size_t> hosts_ord;
+    std::vector<size_t> peq_ord;
+    hosts_ord.reserve(order.size());
+    peq_ord.reserve(order.size());
     for (const size_t idx : order) {
         if (idx >= piezas.size()) {
             continue;
         }
+        if (pieza_es_anfitriona(piezas[idx])) {
+            hosts_ord.push_back(idx);
+        } else {
+            peq_ord.push_back(idx);
+        }
+    }
+    // NestFab/Deepnest: grandes/anfitrionas primero; el GA ordena dentro de cada grupo.
+    // Luego morfología ARGA rellena canales VFM antes del patio libre.
+    for (const size_t idx : hosts_ord) {
         if (!colocar_pieza_nfp(
                 piezas[idx],
                 state,
@@ -642,13 +1058,29 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
                 margin_px,
                 sheet_limit,
                 nullptr,
-                rotation_step_deg)) {
+                rotation_step_deg,
+                &nfp_cache)) {
             restos.push_back(piezas[idx]);
         }
     }
+    for (const size_t idx : peq_ord) {
+        restos.push_back(piezas[idx]);
+    }
 
-    if (part_in_part && !restos.empty()) {
-        try_part_in_part(
+    if (!restos.empty()) {
+        if (part_in_part) {
+            try_part_in_part(
+                state,
+                restos,
+                w_placa,
+                h_placa,
+                kerf_radio,
+                margin_px,
+                sheet_limit,
+                rotation_step_deg,
+                &nfp_cache);
+        }
+        try_open_cavities(
             state,
             restos,
             w_placa,
@@ -656,7 +1088,26 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
             kerf_radio,
             margin_px,
             sheet_limit,
-            rotation_step_deg);
+            rotation_step_deg,
+            &nfp_cache);
+    }
+
+    std::vector<PieceIn> patio;
+    patio.swap(restos);
+    for (auto& p : patio) {
+        if (!colocar_pieza_nfp(
+                p,
+                state,
+                w_placa,
+                h_placa,
+                kerf_radio,
+                margin_px,
+                sheet_limit,
+                nullptr,
+                rotation_step_deg,
+                &nfp_cache)) {
+            restos.push_back(std::move(p));
+        }
     }
 
     const double denom = w_placa * h_placa;
@@ -785,10 +1236,27 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
     for (auto& ind : pop) {
         ind.order = random_permutation(n, rng);
     }
+    // Semilla NestFab/Deepnest: anfitrionas/grandes primero (como SVGNest default).
+    {
+        std::vector<size_t> seed(n);
+        std::iota(seed.begin(), seed.end(), 0);
+        std::stable_sort(seed.begin(), seed.end(), [&](size_t a, size_t b) {
+            const bool ha = pieza_es_anfitriona(piezas[a]);
+            const bool hb = pieza_es_anfitriona(piezas[b]);
+            if (ha != hb) {
+                return ha && !hb;
+            }
+            return piece_area(piezas[a]) > piece_area(piezas[b]);
+        });
+        pop.front().order = std::move(seed);
+    }
 
     SheetOut mejor_hoja;
     std::vector<PieceIn> mejor_restos = piezas;
     std::vector<size_t> mejor_order;
+
+    // Cache NFP entre evaluaciones del GA (misma idea que Deepnest nfpCache).
+    NfpPairCache nfp_cache;
 
     auto evaluate = [&](Individual& ind) {
         auto [state, restos] = pack_with_order(
@@ -800,7 +1268,8 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
             margin_override,
             limite_rings,
             rot_step,
-            part_in_part);
+            part_in_part,
+            nfp_cache);
         ind.fitness = fitness_score(state.hoja, restos, n);
         if (es_mejor_pack(state.hoja, restos, mejor_hoja, mejor_restos)) {
             mejor_hoja = std::move(state.hoja);
@@ -848,7 +1317,8 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
             margin_override,
             limite_rings,
             rot_step,
-            part_in_part);
+            part_in_part,
+            nfp_cache);
         mejor_hoja = std::move(state.hoja);
         mejor_restos = std::move(restos);
     }

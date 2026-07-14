@@ -13,10 +13,10 @@
     },
     "algorithm": "Bottom-Left (Estándar)",
     "nest_engine_registry": {
-        "default_steel_engine": "arga_base",
+        "default_steel_engine": "arga_force",
         "compare_mode": "parallel_full_job",
         "engines": [
-            "arga_base",
+            "arga_force",
             "burke_blf",
             "libnest2d",
             "svgnest_ultra"

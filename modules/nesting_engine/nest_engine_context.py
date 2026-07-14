@@ -5,20 +5,27 @@ import contextvars
 import os
 from typing import Iterable
 
-ENGINE_ARGA_BASE = "arga_base"
+ENGINE_ARGA_FORCE = "arga_force"
+ENGINE_ARGA_BASE = "arga_base"  # alias legacy
 ENGINE_BURKE_BLF = "burke_blf"
 ENGINE_LIBNEST2D = "libnest2d"
 ENGINE_SVGNEST_ULTRA = "svgnest_ultra"
 
 STEEL_ENGINE_IDS: tuple[str, ...] = (
-    ENGINE_ARGA_BASE,
+    ENGINE_ARGA_FORCE,
     ENGINE_BURKE_BLF,
     ENGINE_LIBNEST2D,
     ENGINE_SVGNEST_ULTRA,
 )
 
-DEFAULT_STEEL_ENGINE_ID = ENGINE_ARGA_BASE
-DEFAULT_SELECTED_ENGINE_ID = ENGINE_ARGA_BASE
+_ENGINE_ALIASES: dict[str, str] = {
+    "arga_base": ENGINE_ARGA_FORCE,
+    "arga_base_pizarron": ENGINE_ARGA_FORCE,
+    "base": ENGINE_ARGA_FORCE,
+}
+
+DEFAULT_STEEL_ENGINE_ID = ENGINE_SVGNEST_ULTRA
+DEFAULT_SELECTED_ENGINE_ID = ENGINE_SVGNEST_ULTRA
 
 _active_engine_id: contextvars.ContextVar[str] = contextvars.ContextVar(
     "nest_active_engine_id",
@@ -36,9 +43,11 @@ _selected_engine_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 def normalize_engine_id(engine_id: str | None) -> str:
     key = str(engine_id or "").strip().lower()
+    key = _ENGINE_ALIASES.get(key, key)
     if key in STEEL_ENGINE_IDS:
         return key
     env = str(os.environ.get("ARGA_NEST_ENGINE", "")).strip().lower()
+    env = _ENGINE_ALIASES.get(env, env)
     if env in STEEL_ENGINE_IDS:
         return env
     return DEFAULT_STEEL_ENGINE_ID

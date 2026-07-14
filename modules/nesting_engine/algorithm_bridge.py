@@ -20,6 +20,18 @@ _CPP_REQUIRED_MSG = (
 def _rings_from_shapely_polygon(poly):
     if poly is None:
         return []
+    if getattr(poly, "is_empty", False):
+        return []
+    if poly.geom_type == "MultiPolygon":
+        polys = [
+            g for g in poly.geoms
+            if getattr(g, "geom_type", "") == "Polygon" and not g.is_empty
+        ]
+        if not polys:
+            return []
+        poly = max(polys, key=lambda g: float(g.area))
+    elif poly.geom_type != "Polygon":
+        return []
     exterior = list(poly.exterior.coords)
     rings = [exterior]
     for hole in getattr(poly, "interiors", []):
@@ -342,12 +354,22 @@ def empaquetar_una_hoja_svgnest_ultra(
     gens = max(1, min(int(ga_generations or profile.get("mc_iterations", 30)), 100))
     rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 15.0))
     pip = bool(profile.get("part_in_part", True) if part_in_part is None else part_in_part)
+    # Continual NestFab: SOLO si el perfil lo pide. Tener cancel_checker NO basta:
+    # el manager lo enlaza también en SIM-PLACA y cada placa candidata se iba
+    # a un bucle de minutos (progreso/UI quietos, log sin líneas nuevas).
     continual = bool(cancel_checker) and bool(profile.get("continual_until_user_stops", False))
+    stagnation_limit = int(profile.get("continual_stagnation_rounds", 0) or 0)
 
     native_piezas = [_piece_to_native(p) for p in (piezas or [])]
     limite_rings = None
     if limite_poly is not None:
         limite_rings = _rings_from_shapely_polygon(limite_poly)
+
+    def _cancelled() -> bool:
+        try:
+            return bool(cancel_checker and cancel_checker())
+        except Exception:
+            return False
 
     def _run_cpp(generations: int, seed: int):
         hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
@@ -373,22 +395,27 @@ def empaquetar_una_hoja_svgnest_ultra(
     mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     mejor_restos = list(piezas or [])
     seed = 1
-    rounds = 0
-    batch = max(1, min(5, gens))
+    no_improve = 0
+    # Batches cortos para reaccionar rápido a Cancelar (estilo NestFab Stop).
+    batch = max(1, min(3, gens))
 
     while True:
-        if cancel_checker and cancel_checker():
+        if _cancelled():
             break
         hoja, restos = _run_cpp(batch, seed)
+        if _cancelled():
+            # Conserva el mejor hallado aunque el batch actual se haya cortado a medias.
+            if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
+                mejor_hoja, mejor_restos = hoja, restos
+            break
         if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
             mejor_hoja, mejor_restos = hoja, restos
+            no_improve = 0
+        else:
+            no_improve += 1
         seed += batch
-        rounds += 1
-        if rounds * batch >= 200:
+        if stagnation_limit > 0 and no_improve >= stagnation_limit:
             break
-        if len(mejor_restos) == 0 and float(mejor_hoja.get("eficiencia", 0.0) or 0.0) > 90.0:
-            if cancel_checker and cancel_checker():
-                break
 
     return mejor_hoja, mejor_restos
 
@@ -451,6 +478,7 @@ def empaquetar_una_hoja_mc(
     limite_poly=None,
     mc_iterations=None,
     engine_id=None,
+    cancel_checker=None,
 ):
     """Delega al motor activo vía engine_registry."""
     from .engine_registry import empaquetar_una_hoja as registry_pack
@@ -466,4 +494,5 @@ def empaquetar_una_hoja_mc(
         limite_poly=limite_poly,
         mc_iterations=mc_iterations,
         engine_id=engine_id or get_active_engine_id(),
+        cancel_checker=cancel_checker,
     )
