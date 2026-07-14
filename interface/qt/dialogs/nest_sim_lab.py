@@ -33,7 +33,12 @@ from interface.qt.nesting_graphics import (
     compute_fit_rect,
     populate_nesting_scene,
 )
-from interface.qt.theme import COLOR_TEXTO_TITULO, apply_push_button, surface_dialog_stylesheet
+from interface.qt.theme import (
+    COLOR_GRIS_DARK,
+    COLOR_TEXTO_TITULO,
+    apply_push_button,
+    surface_dialog_stylesheet,
+)
 from interface.utils_nesting import format_clave_calibre_display
 from modules.nesting_engine.efficiency_metrics import actualizar_eficiencias_hoja, formatear_eficiencias_placa
 from modules.nesting_engine.engine_registry import is_engine_ready, list_engine_metas
@@ -177,8 +182,8 @@ class NestSimCompareDialog(QDialog):
         row = QHBoxLayout()
         self.btn_abrir = QPushButton("Abrir .arganest…")
         self.btn_usar = QPushButton("Usar nest abierto")
-        apply_push_button(self.btn_abrir, "#2F6DEA", font_size=11, padding="6px 10px")
-        apply_push_button(self.btn_usar, "#455E75", font_size=11, padding="6px 10px")
+        apply_push_button(self.btn_abrir, COLOR_GRIS_DARK, font_size=11, padding="6px 10px")
+        apply_push_button(self.btn_usar, COLOR_GRIS_DARK, font_size=11, padding="6px 10px")
         self.btn_abrir.clicked.connect(self._abrir_arganest)
         self.btn_usar.clicked.connect(self._try_load_from_app)
         row.addWidget(self.btn_abrir)
@@ -234,12 +239,12 @@ class NestSimCompareDialog(QDialog):
         lay.addWidget(self.cmb_motor)
 
         self.btn_simular = QPushButton("Simular placa con motor")
-        apply_push_button(self.btn_simular, "#0F766E", font_size=12, padding="10px 12px")
+        apply_push_button(self.btn_simular, COLOR_GRIS_DARK, font_size=12, padding="10px 12px")
         self.btn_simular.clicked.connect(self._simular)
         lay.addWidget(self.btn_simular)
 
         self.btn_detener_sim = QPushButton("Detener (aceptar mejor)")
-        apply_push_button(self.btn_detener_sim, "#B45309", font_size=11, padding="8px 12px")
+        apply_push_button(self.btn_detener_sim, COLOR_GRIS_DARK, font_size=11, padding="8px 12px")
         self.btn_detener_sim.setEnabled(False)
         self.btn_detener_sim.setToolTip(
             "SVGNest Ultra / NestFab: deja de optimizar y conserva el mejor layout."
@@ -249,13 +254,13 @@ class NestSimCompareDialog(QDialog):
         self._sim_cancel = threading.Event()
 
         self.btn_timeline = QPushButton("Ver paso a paso (timeline)")
-        apply_push_button(self.btn_timeline, "#455E75", font_size=11, padding="8px 10px")
+        apply_push_button(self.btn_timeline, COLOR_GRIS_DARK, font_size=11, padding="8px 10px")
         self.btn_timeline.setEnabled(False)
         self.btn_timeline.clicked.connect(self._abrir_timeline)
         lay.addWidget(self.btn_timeline)
 
         self.btn_fit = QPushButton("Ajustar vistas")
-        apply_push_button(self.btn_fit, "#64748B", font_size=11, padding="6px 10px")
+        apply_push_button(self.btn_fit, COLOR_GRIS_DARK, font_size=11, padding="6px 10px")
         self.btn_fit.clicked.connect(self._ajustar_vistas)
         lay.addWidget(self.btn_fit)
 

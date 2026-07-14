@@ -34,7 +34,7 @@ from interface.largos_nesting_service import (
 )
 from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content
 from interface.qt.thread_bridge import call_on_main
-from interface.qt.theme import COLOR_ACENTO, COLOR_TEXTO_TITULO, apply_push_button, surface_dialog_stylesheet
+from interface.qt.theme import COLOR_GRIS_DARK, COLOR_TEXTO_TITULO, apply_push_button, surface_dialog_stylesheet
 from interface.qt.widgets.herinox_switch import HerinoxSwitch
 from interface.qt.widgets.largos_tira_canvas import LargosTiraCanvas
 
@@ -219,7 +219,7 @@ class LargosNestingDialog(QDialog):
         der_lay.addWidget(self.tbl_mrl, 1)
 
         self.btn_pdf_piso = QPushButton("Descargar PDF consumo en piso")
-        apply_push_button(self.btn_pdf_piso, COLOR_ACENTO, font_size=11)
+        apply_push_button(self.btn_pdf_piso, COLOR_GRIS_DARK, font_size=11)
         self.btn_pdf_piso.setMinimumHeight(36)
         self.btn_pdf_piso.clicked.connect(self._exportar_pdf_piso)
         der_lay.addWidget(self.btn_pdf_piso)
@@ -405,7 +405,7 @@ class LargosNestingDialog(QDialog):
         for k, btn in self._mrl_unit_btns.items():
             if k == key:
                 btn.setStyleSheet(
-                    "background:#1D4ED8;color:white;border:none;border-radius:6px;"
+                    "background:#334155;color:white;border:1px solid #94A3B8;border-radius:6px;"
                     "padding:6px 8px;font-weight:600;text-align:left;font-size:11px;"
                 )
             else:

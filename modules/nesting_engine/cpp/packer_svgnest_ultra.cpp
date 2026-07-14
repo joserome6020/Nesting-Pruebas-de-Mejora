@@ -450,6 +450,238 @@ void dedupe_anchors(std::vector<std::pair<double, double>>& anclajes) {
         anclajes.end());
 }
 
+Bounds bounds_of_path(const PathD& path) {
+    Bounds b;
+    bool first = true;
+    for (const auto& p : path) {
+        if (first) {
+            b.minx = b.maxx = p.x;
+            b.miny = b.maxy = p.y;
+            first = false;
+        } else {
+            b.minx = std::min(b.minx, p.x);
+            b.maxx = std::max(b.maxx, p.x);
+            b.miny = std::min(b.miny, p.y);
+            b.maxy = std::max(b.maxy, p.y);
+        }
+    }
+    return b;
+}
+
+void append_path_vertices_as_anchors(
+    std::vector<std::pair<double, double>>& anclajes,
+    const PathsD& paths,
+    size_t max_per_path = 64) {
+    for (const auto& path : paths) {
+        const size_t n = path.size();
+        if (n < 3) {
+            continue;
+        }
+        const size_t stride = n > max_per_path ? std::max<size_t>(1, n / max_per_path) : 1;
+        for (size_t i = 0; i < n; i += stride) {
+            anclajes.emplace_back(path[i].x, path[i].y);
+        }
+    }
+}
+
+/** IFP rectangular exacto (Deepnest GeometryUtil.noFitPolygonRectangle). */
+PathsD compute_rect_inner_nfp(const Bounds& container_bb, const Bounds& orb_bb) {
+    const double ow = orb_bb.maxx - orb_bb.minx;
+    const double oh = orb_bb.maxy - orb_bb.miny;
+    const double cw = container_bb.maxx - container_bb.minx;
+    const double ch = container_bb.maxy - container_bb.miny;
+    if (ow <= 0.0 || oh <= 0.0 || ow > cw + 1e-6 || oh > ch + 1e-6) {
+        return {};
+    }
+    PathD rect = {
+        {container_bb.minx - orb_bb.minx, container_bb.miny - orb_bb.miny},
+        {container_bb.maxx - orb_bb.maxx, container_bb.miny - orb_bb.miny},
+        {container_bb.maxx - orb_bb.maxx, container_bb.maxy - orb_bb.maxy},
+        {container_bb.minx - orb_bb.minx, container_bb.maxy - orb_bb.maxy},
+    };
+    return PathsD{std::move(rect)};
+}
+
+/**
+ * Inner-NFP estilo Deepnest getInnerNfp:
+ * frame expandido ⊕ (−B) − container ⊕ (−B), conservando componentes cuyo
+ * centroide cae dentro del contenedor (referencia = bbox-min de B @ origen).
+ */
+PathsD compute_inner_nfp(const PathD& container, const PathD& orb_norm) {
+    if (container.size() < 3 || orb_norm.size() < 3) {
+        return {};
+    }
+    const Bounds cb = bounds_of_path(container);
+    const double bw = std::max(1e-3, cb.maxx - cb.minx);
+    const double bh = std::max(1e-3, cb.maxy - cb.miny);
+    const PathD frame = {
+        {cb.minx - 0.05 * bw, cb.miny - 0.05 * bh},
+        {cb.maxx + 0.05 * bw, cb.miny - 0.05 * bh},
+        {cb.maxx + 0.05 * bw, cb.maxy + 0.05 * bh},
+        {cb.minx - 0.05 * bw, cb.maxy + 0.05 * bh},
+    };
+
+    const PathD inv = invert_path(orb_norm);
+    PathsD nfp_frame = MinkowskiSum(inv, frame, true, 3);
+    PathsD nfp_cont = MinkowskiSum(inv, container, true, 3);
+    if (nfp_frame.empty()) {
+        return {};
+    }
+
+    PathsD raw = nfp_cont.empty() ? nfp_frame : Difference(nfp_frame, nfp_cont, FillRule::NonZero);
+    if (raw.empty() && !nfp_cont.empty()) {
+        raw = Difference(nfp_frame, nfp_cont, FillRule::EvenOdd);
+    }
+
+    PathsD ifp;
+    for (const auto& path : raw) {
+        if (path.size() < 3 || std::abs(Area(path)) < 1.0) {
+            continue;
+        }
+        double cx = 0.0;
+        double cy = 0.0;
+        for (const auto& p : path) {
+            cx += p.x;
+            cy += p.y;
+        }
+        cx /= static_cast<double>(path.size());
+        cy /= static_cast<double>(path.size());
+        const auto pip = PointInPolygon(PointD{cx, cy}, container);
+        if (pip != PointInPolygonResult::IsOutside) {
+            ifp.push_back(path);
+        }
+    }
+
+    if (ifp.empty()) {
+        // Fallback Clipper2: MinkowskiDiff a veces recupera IFP en perfiles cóncavos.
+        PathsD md = MinkowskiDiff(orb_norm, container, true, 3);
+        for (const auto& path : md) {
+            if (path.size() < 3 || std::abs(Area(path)) < 1.0) {
+                continue;
+            }
+            double cx = 0.0;
+            double cy = 0.0;
+            for (const auto& p : path) {
+                cx += p.x;
+                cy += p.y;
+            }
+            cx /= static_cast<double>(path.size());
+            cy /= static_cast<double>(path.size());
+            if (PointInPolygon(PointD{cx, cy}, container) != PointInPolygonResult::IsOutside) {
+                ifp.push_back(path);
+            }
+        }
+    }
+
+    // Siempre añadir IFP AABB (exacto si el orificio/hoja es rectangular).
+    PathsD rect_ifp = compute_rect_inner_nfp(cb, bounds_of_path(orb_norm));
+    ifp.insert(ifp.end(), rect_ifp.begin(), rect_ifp.end());
+    return ifp;
+}
+
+PathsD outer_nfp_world(
+    const PathD& station_world,
+    const PathD& orb_norm,
+    NfpPairCache* cache) {
+    if (station_world.size() < 3 || orb_norm.size() < 3) {
+        return {};
+    }
+    const Bounds bb = bounds_of_path(station_world);
+    PathD stat_norm;
+    stat_norm.reserve(station_world.size());
+    for (const auto& p : station_world) {
+        stat_norm.emplace_back(p.x - bb.minx, p.y - bb.miny);
+    }
+    PathsD nfp_paths;
+    if (cache != nullptr) {
+        nfp_paths = cache->get_relative(stat_norm, orb_norm);
+    } else {
+        nfp_paths = MinkowskiSum(invert_path(orb_norm), stat_norm, true, 3);
+    }
+    for (auto& path : nfp_paths) {
+        for (auto& p : path) {
+            p.x += bb.minx;
+            p.y += bb.miny;
+        }
+    }
+    return nfp_paths;
+}
+
+/** Deepnest placeParts: finalNFP = binInnerNFP − ∪(outer NFP de piezas ya puestas). */
+PathsD subtract_placed_outer_nfps(
+    const PathsD& bin_ifp,
+    const PlacementState& state,
+    const PathD& orb_norm,
+    NfpPairCache* cache) {
+    if (bin_ifp.empty()) {
+        return {};
+    }
+    if (state.fijas_buff_paths.empty()) {
+        return bin_ifp;
+    }
+
+    PathsD obstacles;
+    for (const auto& buff : state.fijas_buff_paths) {
+        for (const auto& ring : buff) {
+            if (ring.size() < 3) {
+                continue;
+            }
+            PathsD nfp_w = outer_nfp_world(ring, orb_norm, cache);
+            obstacles.insert(obstacles.end(), nfp_w.begin(), nfp_w.end());
+        }
+    }
+    if (obstacles.empty()) {
+        return bin_ifp;
+    }
+
+    PathsD united = Union(obstacles, FillRule::NonZero);
+    PathsD final_nfp = Difference(bin_ifp, united, FillRule::NonZero);
+    if (final_nfp.empty()) {
+        final_nfp = Difference(bin_ifp, united, FillRule::EvenOdd);
+    }
+
+    PathsD cleaned;
+    for (const auto& path : final_nfp) {
+        if (path.size() >= 3 && std::abs(Area(path)) > 1.0) {
+            cleaned.push_back(path);
+        }
+    }
+    return cleaned.empty() ? bin_ifp : cleaned;
+}
+
+PathsD build_bin_inner_nfp(
+    const LimitContext* hole_limit,
+    const LimitContext& sheet_limit,
+    double w_placa,
+    double h_placa,
+    double margin_px,
+    const PathD& orb_norm) {
+    const Bounds orb_bb = bounds_of_path(orb_norm);
+
+    if (hole_limit && hole_limit->active && !hole_limit->eval_paths.empty()) {
+        PathsD out;
+        for (const auto& hp : hole_limit->eval_paths) {
+            PathsD ifp = compute_inner_nfp(hp, orb_norm);
+            out.insert(out.end(), ifp.begin(), ifp.end());
+        }
+        return out;
+    }
+
+    if (sheet_limit.active && !sheet_limit.eval_paths.empty()) {
+        PathsD out;
+        for (const auto& sp : sheet_limit.eval_paths) {
+            PathsD ifp = compute_inner_nfp(sp, orb_norm);
+            out.insert(out.end(), ifp.begin(), ifp.end());
+        }
+        if (!out.empty()) {
+            return out;
+        }
+    }
+
+    const Bounds plate{margin_px, margin_px, w_placa - margin_px, h_placa - margin_px};
+    return compute_rect_inner_nfp(plate, orb_bb);
+}
+
 std::vector<int> build_rotation_angles(double step_deg) {
     std::vector<int> angles;
     const int step = std::max(1, static_cast<int>(std::round(step_deg)));
@@ -727,30 +959,38 @@ bool colocar_pieza_nfp(
     double mejor_score = std::numeric_limits<double>::infinity();
 
     for (const auto& var : variaciones) {
+        // Deepnest placeParts: Inner-NFP del bin/orificio − unión NFP de piezas fijadas.
+        PathsD bin_ifp = build_bin_inner_nfp(
+            hole_limit, sheet_limit, w_placa, h_placa, margin_px, var.outer_norm);
+        PathsD final_nfp =
+            subtract_placed_outer_nfps(bin_ifp, state, var.outer_norm, nfp_cache);
+
         std::vector<std::pair<double, double>> anclajes;
-        if (hole_limit) {
-            const auto& hb = hole_limit->bounds;
-            anclajes.emplace_back(hb.minx, hb.miny);
-            anclajes.emplace_back(hb.maxx, hb.miny);
-            anclajes.emplace_back(hb.minx, hb.maxy);
-            anclajes.emplace_back((hb.minx + hb.maxx) * 0.5, hb.miny);
-            anclajes.emplace_back(hb.minx, (hb.miny + hb.maxy) * 0.5);
-        } else {
-            anclajes.emplace_back(margin_px, margin_px);
-        }
-        for (const auto& b : state.fijas_bounds) {
-            anclajes.emplace_back(b.maxx + 1.0, b.miny);
-            anclajes.emplace_back(b.minx, b.maxy + 1.0);
-            anclajes.emplace_back(b.maxx + 1.0, (b.miny + b.maxy) * 0.5);
-            anclajes.emplace_back((b.minx + b.maxx) * 0.5, b.maxy + 1.0);
-        }
-        if (!hole_limit) {
+        append_path_vertices_as_anchors(anclajes, final_nfp);
+        if (anclajes.empty()) {
+            // Fallback heurístico si Clipper no devolvió IFP usable.
+            if (hole_limit) {
+                const auto& hb = hole_limit->bounds;
+                anclajes.emplace_back(hb.minx, hb.miny);
+                anclajes.emplace_back(hb.maxx, hb.miny);
+                anclajes.emplace_back(hb.minx, hb.maxy);
+                anclajes.emplace_back((hb.minx + hb.maxx) * 0.5, hb.miny);
+                anclajes.emplace_back(hb.minx, (hb.miny + hb.maxy) * 0.5);
+            } else {
+                anclajes.emplace_back(margin_px, margin_px);
+            }
+            for (const auto& b : state.fijas_bounds) {
+                anclajes.emplace_back(b.maxx + 1.0, b.miny);
+                anclajes.emplace_back(b.minx, b.maxy + 1.0);
+                anclajes.emplace_back(b.maxx + 1.0, (b.miny + b.maxy) * 0.5);
+                anclajes.emplace_back((b.minx + b.maxx) * 0.5, b.maxy + 1.0);
+            }
             for (size_t idx = 0; idx < state.fijas_buff_paths.size(); ++idx) {
                 append_nfp_candidates(
                     anclajes, state.fijas_buff_paths[idx], var.outer_norm, nfp_cache);
             }
-            dedupe_anchors(anclajes);
         }
+        dedupe_anchors(anclajes);
 
         for (const auto& anclaje : anclajes) {
             double px = anclaje.first - var.b_minx;
@@ -1118,8 +1358,30 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
 double fitness_score(const SheetOut& hoja, const std::vector<PieceIn>& restos, size_t total_pieces) {
     const double placed = static_cast<double>(hoja.piezas.size());
     const double rest = static_cast<double>(restos.size());
+    // Deepnest: 1) colocar todo 2) compactar (width*2+height). Menor bbox ⇒ mejor.
+    double nest_w = 0.0;
+    double nest_h = 0.0;
+    if (!hoja.piezas.empty()) {
+        Bounds bb{};
+        bool first = true;
+        for (const auto& p : hoja.piezas) {
+            const Bounds pb = bounds_of_rings(p.poligonos);
+            if (first) {
+                bb = pb;
+                first = false;
+            } else {
+                bb.minx = std::min(bb.minx, pb.minx);
+                bb.miny = std::min(bb.miny, pb.miny);
+                bb.maxx = std::max(bb.maxx, pb.maxx);
+                bb.maxy = std::max(bb.maxy, pb.maxy);
+            }
+        }
+        nest_w = std::max(0.0, bb.maxx - bb.minx);
+        nest_h = std::max(0.0, bb.maxy - bb.miny);
+    }
+    const double compact = (nest_w * 2.0) + nest_h;
     return (placed * 1e12) + hoja.area_usada - (rest * 1e8) + (hoja.eficiencia * 1e4)
-           - (static_cast<double>(total_pieces) - placed) * 1e10;
+           - (static_cast<double>(total_pieces) - placed) * 1e10 - compact;
 }
 
 struct Individual {

@@ -9,7 +9,7 @@
 
 namespace arga {
 
-/** Motor SVGNest Ultra: NFP + GA + rotación fina + part-in-part + cavidades VFM. */
+/** Motor SVGNest Ultra: Inner/Outer NFP (Deepnest) + GA + part-in-part + cavidades VFM. */
 PackResult empaquetar_una_hoja_svgnest_ultra(
     const std::vector<PieceIn>& piezas,
     double w_placa,

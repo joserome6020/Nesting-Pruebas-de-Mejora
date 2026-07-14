@@ -131,9 +131,9 @@ class NestReplayer(QMainWindow):
         self.btn_play.setFixedSize(44, 44)
         self.btn_play.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_play.setStyleSheet(
-            "QPushButton{background:#2F6DEA;color:white;border:none;border-radius:22px;"
+            "QPushButton{background:#1E293B;color:white;border:none;border-radius:22px;"
             "font-size:18px;font-weight:700;}"
-            "QPushButton:hover{background:#2563EB;}"
+            "QPushButton:hover{background:#334155;}"
         )
         self.btn_play.clicked.connect(self._toggle_play)
         bar_lay.addWidget(self.btn_play)
@@ -149,9 +149,9 @@ class NestReplayer(QMainWindow):
         self.btn_fit = QPushButton("Ajustar")
         self.btn_fit.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_fit.setStyleSheet(
-            "QPushButton{background:#E2E8F0;color:#334155;border:none;border-radius:8px;"
+            "QPushButton{background:#1E293B;color:white;border:none;border-radius:8px;"
             "padding:8px 12px;font-weight:600;}"
-            "QPushButton:hover{background:#CBD5E1;}"
+            "QPushButton:hover{background:#334155;}"
         )
         self.btn_fit.clicked.connect(self._refit_view)
         bar_lay.addWidget(self.btn_fit)
