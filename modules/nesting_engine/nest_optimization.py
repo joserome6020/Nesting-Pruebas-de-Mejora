@@ -107,6 +107,7 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         # y cada candidato de placa se quedaba minutos en bucle NestFab (log mudo al 25%).
         "continual_until_user_stops": False,
         "continual_stagnation_rounds": 2,
+        # Paso de perfil para piezas chicas; C++ fuerza 90° en ≥200 in² y 45° en 80–200.
         "rotation_step_deg": 30,
         "use_nfp": True,
         "use_genetic_algorithm": True,
@@ -118,6 +119,8 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "common_line_lite": False,
         # Impide que ARGA_NEST_MODE=first baje mc_iterations a 1 (mataba el GA Ultra).
         "lock_profile": True,
+        # Pack diario: exploración + refine (algorithm_bridge); renest usa Accept.
+        "pack_explore_then_refine": True,
     },
 }
 

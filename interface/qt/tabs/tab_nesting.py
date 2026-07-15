@@ -3835,6 +3835,23 @@ class TabNesting(QWidget, TimerHost):
                 if not ok_inv:
                     raise RuntimeError(msg_inv)
 
+                try:
+                    from modules.nesting_engine.sheet_integrity import hoja_tiene_solapes_metal
+
+                    for hx in resultado.get("hojas") or []:
+                        if not isinstance(hx, dict) or hx.get("es_retazo"):
+                            continue
+                        solapa, detalle = hoja_tiene_solapes_metal(hx)
+                        if solapa:
+                            raise RuntimeError(
+                                "El motor generó piezas solapadas en una placa.\n"
+                                f"Detalle: {detalle}"
+                            )
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+
                 self._aplicar_flags_cobre_resultado(clave, resultado, backup_grp)
                 self.app.resultados_nesting[clave] = resultado
                 self._recalcular_costos_grupo(clave)
@@ -6563,6 +6580,27 @@ class TabNesting(QWidget, TimerHost):
                     idx_objetivo=idx_objetivo,
                 )
                 return
+
+        # Anti-solape: no aplicar nest con metal overlapping (nests “fantasma”).
+        try:
+            from modules.nesting_engine.sheet_integrity import hoja_tiene_solapes_metal
+
+            for hx in [nueva, *(hojas_adicionales or [])]:
+                if not hx:
+                    continue
+                solapa, detalle = hoja_tiene_solapes_metal(hx)
+                if solapa:
+                    self._abortar_y_restaurar_nesting(
+                        clv,
+                        snapshot,
+                        "El motor generó piezas solapadas; se restauró el nesteo anterior.\n"
+                        f"Detalle: {detalle}",
+                        hoja_original=hoja_original,
+                        idx_objetivo=idx_objetivo,
+                    )
+                    return
+        except Exception:
+            pass
 
         if tiene_minis and hoja_original and self._placa_equivalente_en_esencia(hoja_original, nueva):
             nueva = copy.deepcopy(hoja_original)

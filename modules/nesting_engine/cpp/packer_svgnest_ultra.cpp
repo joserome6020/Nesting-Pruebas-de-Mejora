@@ -855,6 +855,27 @@ std::vector<int> build_rotation_angles(double step_deg) {
     return angles;
 }
 
+/** ARGA taller: piezas grandes solo ortogonales (evita diagonales con desperdicio). */
+double effective_rotation_step_for_piece(
+    double profile_step_deg,
+    const std::vector<std::vector<Point2D>>& poly_src) {
+    double step = std::max(5.0, std::min(profile_step_deg, 90.0));
+    if (poly_src.empty()) {
+        return step;
+    }
+    const double area = std::abs(polygon_area_ring(poly_src.front()));
+    // ≥200 in² → 0/90/180/270 (estructural / anillos grandes)
+    if (area >= kAreaEstructuralUmbralMm2) {
+        return 90.0;
+    }
+    // 80–200 in² → pasos de 45° (menos inclinaciones raras)
+    constexpr double kMidAreaMm2 = 80.0 * 645.16;
+    if (area >= kMidAreaMm2) {
+        return std::max(45.0, step);
+    }
+    return step;
+}
+
 std::vector<Variation> build_variaciones_fine(
     const std::vector<std::vector<Point2D>>& poly_src,
     const std::vector<std::vector<Point2D>>& marks_src,
@@ -869,7 +890,8 @@ std::vector<Variation> build_variaciones_fine(
     }
 
     const Point2D centroid = polygon_centroid(poly_src.front());
-    const auto angles = build_rotation_angles(rotation_step_deg);
+    const double eff_step = effective_rotation_step_for_piece(rotation_step_deg, poly_src);
+    const auto angles = build_rotation_angles(eff_step);
 
     for (const int angulo : angles) {
         auto poly_rot = poly_src;

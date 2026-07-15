@@ -531,8 +531,34 @@ def empaquetar_una_hoja_svgnest_ultra(
         return hoja, restos, orden
 
     if not continual:
-        hoja, restos, _ord = _run_cpp(gens, 0)
-        return hoja, restos
+        # Pack diario Ultra (NestFab-like acotado): exploración corta → refine desde mejor.
+        # No abre bucle infinito (SIM-PLACA / jobs); presupuesto fijo de gens.
+        explor_gens = 1 if gens <= 2 else min(2, gens)
+        hoja, restos, orden = _run_cpp(explor_gens, 1)
+        mejor_h, mejor_r, mejor_o = hoja, restos, orden
+        refine_gens = max(gens, 4)
+        if (mejor_h.get("piezas") or []) and mejor_o:
+            h2, r2, o2 = _run_cpp(refine_gens, 2, seed_order=mejor_o)
+            if _svgnest_is_better(h2, r2, mejor_h, mejor_r):
+                mejor_h, mejor_r, mejor_o = h2, r2, o2
+            # Si quedó 1 resto: 2 pases extra de refine (evitar 2ª placa al 8%).
+            if len(mejor_r or []) == 1 and mejor_o:
+                for extra_seed in (3, 4):
+                    if _cancelled():
+                        break
+                    h3, r3, o3 = _run_cpp(
+                        max(6, refine_gens), extra_seed, seed_order=mejor_o
+                    )
+                    if _svgnest_is_better(h3, r3, mejor_h, mejor_r):
+                        mejor_h, mejor_r, mejor_o = h3, r3, o3
+                    if not (mejor_r or []):
+                        break
+        print(
+            f"[ULTRA-PACK] explor={explor_gens} refine={refine_gens} "
+            f"colocadas={len(mejor_h.get('piezas') or [])} restos={len(mejor_r or [])}",
+            flush=True,
+        )
+        return mejor_h, mejor_r
 
     mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     mejor_restos = list(piezas or [])

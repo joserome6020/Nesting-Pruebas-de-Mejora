@@ -80,6 +80,61 @@ def piezas_colocadas_en_hoja(hoja) -> list:
     return out
 
 
+def hoja_tiene_solapes_metal(
+    hoja,
+    *,
+    min_area_mm2: float = 25.0,
+    kerf_in: float | None = None,
+) -> tuple[bool, str]:
+    """True si dos piezas reales se solapan en metal (área > umbral).
+
+    Usado antes de aplicar renest/resultado para rechazar nests inválidos.
+    """
+    try:
+        from .geometry_parser import reconstruir_poly_seguro
+    except Exception as exc:
+        return False, f"validacion_solape_no_disponible:{exc}"
+
+    _ = kerf_in  # reservado; metal sólido sin buffer (kerf ya en nest)
+
+    piezas = [
+        p
+        for p in piezas_colocadas_en_hoja(hoja)
+        if _es_pieza_real_nombre(str((p or {}).get("nombre") or ""))
+    ]
+    if len(piezas) < 2:
+        return False, ""
+
+    geoms = []
+    names = []
+    for p in piezas:
+        g = reconstruir_poly_seguro(p.get("poligonos") or [])
+        if g is None or g.is_empty:
+            continue
+        try:
+            if not g.is_valid:
+                g = g.buffer(0)
+            if g.is_empty:
+                continue
+            geoms.append(g)
+            names.append(str(p.get("nombre") or "?"))
+        except Exception:
+            continue
+
+    for i in range(len(geoms)):
+        for j in range(i + 1, len(geoms)):
+            try:
+                inter = geoms[i].intersection(geoms[j])
+                if inter is None or inter.is_empty:
+                    continue
+                area = float(inter.area or 0.0)
+                if area >= float(min_area_mm2):
+                    return True, f"{names[i]} × {names[j]} ({area:.0f} mm²)"
+            except Exception:
+                continue
+    return False, ""
+
+
 def piezas_reales_en_hoja(hoja) -> list:
     return [p for p in piezas_colocadas_en_hoja(hoja) if _es_pieza_real_nombre(p.get("nombre", ""))]
 
