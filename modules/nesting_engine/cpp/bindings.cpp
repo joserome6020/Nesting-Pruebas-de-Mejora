@@ -357,7 +357,8 @@ PYBIND11_MODULE(algorithm_cpp, m) {
            int ga_generations,
            double rotation_step_deg,
            bool part_in_part,
-           std::uint32_t ga_seed) {
+           std::uint32_t ga_seed,
+           py::object seed_order_obj) {
             std::vector<arga::PieceIn> piezas;
             piezas.reserve(piezas_in.size());
             for (const auto& item : piezas_in) {
@@ -369,6 +370,19 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                 auto rings = parse_rings(limite_rings_obj);
                 if (!rings.empty()) {
                     limite = rings;
+                }
+            }
+
+            std::vector<size_t> seed_order;
+            const std::vector<size_t>* seed_ptr = nullptr;
+            if (!seed_order_obj.is_none()) {
+                py::sequence seq = py::cast<py::sequence>(seed_order_obj);
+                seed_order.reserve(seq.size());
+                for (auto item : seq) {
+                    seed_order.push_back(static_cast<size_t>(py::cast<py::int_>(item)));
+                }
+                if (!seed_order.empty()) {
+                    seed_ptr = &seed_order;
                 }
             }
 
@@ -388,14 +402,19 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                     ga_generations,
                     rotation_step_deg,
                     part_in_part,
-                    ga_seed);
+                    ga_seed,
+                    seed_ptr);
             }
 
             py::list restos;
             for (const auto& p : result.restos) {
                 restos.append(piece_in_to_py(p));
             }
-            return py::make_tuple(sheet_to_py(result.hoja), restos);
+            py::list orden;
+            for (size_t idx : result.orden) {
+                orden.append(static_cast<int>(idx));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos, orden);
         },
         py::arg("piezas"),
         py::arg("w_placa"),
@@ -409,7 +428,8 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("ga_generations") = 30,
         py::arg("rotation_step_deg") = 15.0,
         py::arg("part_in_part") = true,
-        py::arg("ga_seed") = 0);
+        py::arg("ga_seed") = 0,
+        py::arg("seed_order") = py::none());
 
     m.attr("ENGINE_NAME") = "cpp_clipper2";
     m.attr("ENGINE_BASE_NAME") = "arga_base_pizarron";

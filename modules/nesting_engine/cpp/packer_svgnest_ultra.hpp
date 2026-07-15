@@ -23,6 +23,7 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
     int ga_generations = 30,
     double rotation_step_deg = 15.0,
     bool part_in_part = true,
-    std::uint32_t ga_seed = 0);
+    std::uint32_t ga_seed = 0,
+    const std::vector<size_t>* seed_order = nullptr);
 
 }  // namespace arga

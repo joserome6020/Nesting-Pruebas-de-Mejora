@@ -1642,7 +1642,8 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
     int ga_generations,
     double rotation_step_deg,
     bool part_in_part,
-    std::uint32_t ga_seed) {
+    std::uint32_t ga_seed,
+    const std::vector<size_t>* seed_order) {
     PackResult out;
     out.restos = piezas;
     out.hoja.eficiencia = 0.0;
@@ -1661,25 +1662,56 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
 
     std::mt19937 rng(ga_seed != 0 ? ga_seed : static_cast<std::uint32_t>(std::random_device{}()));
     std::uniform_real_distribution<double> prob(0.0, 1.0);
-    const double mutation_rate = 0.15;
+    // Refinar desde un nest bueno: mutación un poco más alta para escapar mínimo local.
+    const double mutation_rate = (seed_order && seed_order->size() == n) ? 0.22 : 0.15;
+
+    auto order_is_valid = [&](const std::vector<size_t>& ord) -> bool {
+        if (ord.size() != n) {
+            return false;
+        }
+        std::vector<char> seen(n, 0);
+        for (size_t idx : ord) {
+            if (idx >= n || seen[idx]) {
+                return false;
+            }
+            seen[idx] = 1;
+        }
+        return true;
+    };
 
     std::vector<Individual> pop(static_cast<size_t>(population));
-    for (auto& ind : pop) {
-        ind.order = random_permutation(n, rng);
-    }
-    // Semilla NestFab/Deepnest: anfitrionas/grandes primero (como SVGNest default).
-    {
-        std::vector<size_t> seed(n);
-        std::iota(seed.begin(), seed.end(), 0);
-        std::stable_sort(seed.begin(), seed.end(), [&](size_t a, size_t b) {
-            const bool ha = pieza_es_anfitriona(piezas[a]);
-            const bool hb = pieza_es_anfitriona(piezas[b]);
-            if (ha != hb) {
-                return ha && !hb;
+    const bool refine_from_best = seed_order && order_is_valid(*seed_order);
+    if (refine_from_best) {
+        // NestFab-like: élite = orden ganador; resto = mutaciones / mezcla con élite.
+        pop.front().order = *seed_order;
+        for (size_t i = 1; i < pop.size(); ++i) {
+            pop[i].order = *seed_order;
+            mutate_swap(pop[i].order, rng, mutation_rate);
+            if (prob(rng) < 0.25) {
+                auto rnd = random_permutation(n, rng);
+                std::vector<size_t> child;
+                order_crossover(pop.front().order, rnd, child, rng);
+                pop[i].order = std::move(child);
             }
-            return piece_area(piezas[a]) > piece_area(piezas[b]);
-        });
-        pop.front().order = std::move(seed);
+        }
+    } else {
+        for (auto& ind : pop) {
+            ind.order = random_permutation(n, rng);
+        }
+        // Semilla NestFab/Deepnest: anfitrionas/grandes primero (como SVGNest default).
+        {
+            std::vector<size_t> seed(n);
+            std::iota(seed.begin(), seed.end(), 0);
+            std::stable_sort(seed.begin(), seed.end(), [&](size_t a, size_t b) {
+                const bool ha = pieza_es_anfitriona(piezas[a]);
+                const bool hb = pieza_es_anfitriona(piezas[b]);
+                if (ha != hb) {
+                    return ha && !hb;
+                }
+                return piece_area(piezas[a]) > piece_area(piezas[b]);
+            });
+            pop.front().order = std::move(seed);
+        }
     }
 
     SheetOut mejor_hoja;
@@ -1759,12 +1791,15 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
     }
 
     // El mejor ya salió de evaluate_batch; re-pack final duplicaba el costo NFP.
-    (void)mejor_order;
+    if (mejor_order.empty() && refine_from_best) {
+        mejor_order = *seed_order;
+    }
 
     const double denom = w_placa * h_placa;
     mejor_hoja.eficiencia = denom > 0.0 ? (mejor_hoja.area_usada / denom) * 100.0 : 0.0;
     out.hoja = std::move(mejor_hoja);
     out.restos = std::move(mejor_restos);
+    out.orden = std::move(mejor_order);
     return out;
 }
 

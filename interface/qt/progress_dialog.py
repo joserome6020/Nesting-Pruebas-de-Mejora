@@ -105,11 +105,11 @@ class ProgressDialog(QDialog):
         self._ultra_accept = bool(ultra_accept)
         # Logo rebotando + tiempo (+ botón Ultra si aplica). Más alto si hay botón.
         if self._usar_animacion and self._ultra_accept:
-            alto = 320
+            alto = 350
         elif self._usar_animacion:
             alto = 280
         elif self._ultra_accept:
-            alto = 290
+            alto = 320
         else:
             alto = 250
         self.setFixedSize(500, alto)
@@ -160,19 +160,29 @@ class ProgressDialog(QDialog):
         apply_push_button(self.btn_aceptar_mejor, COLOR_ACENTO, font_size=11, padding="8px 14px")
         self.btn_aceptar_mejor.setEnabled(False)
         self.btn_aceptar_mejor.setToolTip(
-            "Se activa solo cuando el motor ya tiene un acomodo NUEVO. "
-            "Al aceptarlo aplica ese resultado (no el nest anterior) y Ultra puede "
-            "haberlo mejorado más si esperas."
+            "Se activa cuando Ultra ya tiene un acomodo completo. "
+            "Mientras esperas, sigue refinando ese nest (estilo NestFab) y "
+            "el contador de mejoras sube cada vez que encuentra uno mejor. "
+            "Al aceptar se aplica el mejor actual sin esperar el round en curso."
         )
         self.btn_aceptar_mejor.clicked.connect(self._on_aceptar_mejor)
         self.btn_aceptar_mejor.hide()
+        self.lbl_mejoras = QLabel("Mejoras aplicadas: 0")
+        self.lbl_mejoras.setStyleSheet(
+            f"color:{COLOR_TEXTO_SECUNDARIO};font-weight:700;font-size:12px;"
+        )
+        self.lbl_mejoras.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_mejoras.hide()
+        self._mejoras_count = 0
         if self._ultra_accept:
             self.btn_aceptar_mejor.show()
+            self.lbl_mejoras.show()
             row = QHBoxLayout()
             row.addStretch(1)
             row.addWidget(self.btn_aceptar_mejor)
             row.addStretch(1)
             lay.addLayout(row)
+            lay.addWidget(self.lbl_mejoras)
 
         if self._usar_animacion:
             # Modo renesteo/carga: logo Arga rebotando + cronómetro.
@@ -234,8 +244,19 @@ class ProgressDialog(QDialog):
         if not self._ultra_accept or self._aceptando:
             return
         self.btn_aceptar_mejor.setEnabled(True)
-        if resumen:
-            self.lbl_mensaje.setText(f"Mejor acomodo listo · {resumen}")
+        # Resumen tipico: "... · mejoras=3"
+        mejoras = self._mejoras_count
+        texto = str(resumen or "")
+        if "mejoras=" in texto:
+            try:
+                mejoras = int(texto.rsplit("mejoras=", 1)[-1].strip().split()[0])
+            except Exception:
+                pass
+            texto = texto.rsplit(" · mejoras=", 1)[0].strip()
+        self._mejoras_count = max(0, int(mejoras))
+        self.lbl_mejoras.setText(f"Mejoras aplicadas: {self._mejoras_count}")
+        if texto:
+            self.lbl_mensaje.setText(f"Mejor acomodo listo · {texto}")
         else:
             self.lbl_mensaje.setText(
                 "Mejor acomodo listo · puedes aceptarlo o seguir optimizando"

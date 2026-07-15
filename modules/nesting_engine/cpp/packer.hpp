@@ -41,6 +41,8 @@ struct SheetOut {
 struct PackResult {
     SheetOut hoja;
     std::vector<PieceIn> restos;
+    /** Orden GA del mejor individuo (índices sobre `piezas` de entrada). Vacío si N/A. */
+    std::vector<size_t> orden;
 };
 
 constexpr int kMonteCarloIterationsDefault = 15;

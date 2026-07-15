@@ -502,8 +502,9 @@ def empaquetar_una_hoja_svgnest_ultra(
         pop_n: int | None = None,
         rot: float | None = None,
         use_pip: bool | None = None,
+        seed_order=None,
     ):
-        hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
+        raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
             native_piezas,
             w_placa,
             h_placa,
@@ -517,15 +518,27 @@ def empaquetar_una_hoja_svgnest_ultra(
             float(rot if rot is not None else rot_step),
             bool(pip if use_pip is None else use_pip),
             seed,
+            list(seed_order) if seed_order else None,
         )
-        return _assemble_pack_result(hoja_native, restos_native, piezas)
+        # Compat: builds viejos (hoja, restos) vs nuevos (hoja, restos, orden).
+        if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+            hoja_native, restos_native, orden_native = raw[0], raw[1], raw[2]
+        else:
+            hoja_native, restos_native = raw[0], raw[1]
+            orden_native = []
+        hoja, restos = _assemble_pack_result(hoja_native, restos_native, piezas)
+        orden = [int(x) for x in (orden_native or [])]
+        return hoja, restos, orden
 
     if not continual:
-        return _run_cpp(gens, 0)
+        hoja, restos, _ord = _run_cpp(gens, 0)
+        return hoja, restos
 
     mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     mejor_restos = list(piezas or [])
+    mejor_orden: list[int] | None = None
     notified_best = False
+    mejoras = 0  # veces que el mejor completo mejoró (NestFab: progreso visible)
     n_in = len(piezas or [])
 
     def _is_complete(hoja, restos) -> bool:
@@ -538,27 +551,28 @@ def empaquetar_una_hoja_svgnest_ultra(
         # C++ Ultra ya devuelve %; otros caminos pueden devolver 0–1.
         return efi if efi > 1.5 else efi * 100.0
 
-    def _consider(hoja, restos) -> bool:
+    def _consider(hoja, restos, orden=None) -> bool:
         """Actualiza mejor. True si mejoró."""
-        nonlocal mejor_hoja, mejor_restos
+        nonlocal mejor_hoja, mejor_restos, mejor_orden
         if not (hoja and (hoja.get("piezas") or [])):
             return False
         if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
             mejor_hoja, mejor_restos = hoja, restos
+            if orden and len(orden) == n_in:
+                mejor_orden = list(orden)
             return True
         return False
 
-    def _publish_if_complete(hoja, restos, *, label: str = "") -> None:
-        """Solo habilita Aceptar con nest COMPLETO (NestFab: nada a medias)."""
+    def _publish_best(*, label: str = "") -> None:
+        """Habilita Aceptar + contador de mejoras (solo nest COMPLETO)."""
         nonlocal notified_best
-        if not _is_complete(hoja, restos):
-            return
-        _consider(hoja, restos)
         if not _is_complete(mejor_hoja, mejor_restos):
             return
         n_pz = len(mejor_hoja.get("piezas") or [])
         pref = f"{label} · " if label else ""
-        notify_ultra_best_ready(f"{pref}{n_pz} pzas · {_efi_pct(mejor_hoja):.1f}%")
+        notify_ultra_best_ready(
+            f"{pref}{n_pz} pzas · {_efi_pct(mejor_hoja):.1f}% · mejoras={mejoras}"
+        )
         notified_best = True
 
     pool = ThreadPoolExecutor(max_workers=1)
@@ -590,16 +604,13 @@ def empaquetar_una_hoja_svgnest_ultra(
     try:
         print(
             f"[ULTRA-RENEST] accept={renest_accept} cancel={bool(cancel_checker)} "
-            f"n_piezas={n_in} pop={pop} rot={rot_step} pip={pip} seed=ultra",
+            f"n_piezas={n_in} pop={pop} rot={rot_step} pip={pip} seed=ultra "
+            f"refine_from_best=1",
             flush=True,
         )
 
         seed = 1
         no_improve = 0
-        # Renest NestFab: 1 generación C++ por ronda (pop/rot/PIP = perfil full).
-        # Publica el mejor COMPLETO al acabar cada gen (no 8 gens en silencio).
-        # Continual genérico: batches de varias gens.
-        batch = 1 if renest_accept else max(1, min(3, gens))
         rounds = 0
         # Mínimo gens rondas de calidad full; si accept-mode sigue hasta Cancel/Aceptar.
         min_rounds = max(1, int(gens))
@@ -608,14 +619,29 @@ def empaquetar_una_hoja_svgnest_ultra(
             if _cancelled():
                 break
 
+            # 1er completo: exploración rápida (1 gen). Luego refina desde ese orden
+            # con varias gens (estilo NestFab continual).
+            refining = bool(
+                renest_accept
+                and mejor_orden
+                and _is_complete(mejor_hoja, mejor_restos)
+            )
+            if renest_accept:
+                batch = max(4, min(int(gens), 12)) if refining else 1
+            else:
+                batch = max(1, min(3, gens))
+            seed_ord = mejor_orden if refining else None
+
             t_round = time.perf_counter()
             if renest_accept:
-                pack = _run_await(_run_cpp, batch, seed)
+                pack = _run_await(
+                    _run_cpp, batch, seed, seed_order=seed_ord
+                )
                 if pack is None:
                     break
-                hoja, restos = pack
+                hoja, restos, orden = pack
             else:
-                hoja, restos = _run_cpp(batch, seed)
+                hoja, restos, orden = _run_cpp(batch, seed)
 
             rounds += 1
             n_ok = len((hoja or {}).get("piezas") or [])
@@ -624,18 +650,27 @@ def empaquetar_una_hoja_svgnest_ultra(
                 f"[ULTRA-RENEST] round={rounds} gen_batch={batch} "
                 f"colocadas={n_ok} restos={n_rest} "
                 f"complete={_is_complete(hoja, restos)} "
+                f"refine={int(refining)} "
                 f"{time.perf_counter() - t_round:.1f}s "
                 f"pop={pop} rot={rot_step} pip={pip}",
                 flush=True,
             )
 
             if n_ok > 0:
-                _consider(hoja, restos)
-                _publish_if_complete(
-                    hoja,
-                    restos,
-                    label="nuevo" if not notified_best else "mejor",
-                )
+                improved = _consider(hoja, restos, orden)
+                if _is_complete(mejor_hoja, mejor_restos):
+                    if improved:
+                        if notified_best:
+                            mejoras += 1
+                        elif _is_complete(hoja, restos):
+                            # Primer completo: mejoras=0 (base), Aceptar ya disponible.
+                            pass
+                        _publish_best(label="mejor" if notified_best else "nuevo")
+                    elif not notified_best and _is_complete(hoja, restos):
+                        _publish_best(label="nuevo")
+                    elif notified_best:
+                        # Misma calidad: refrescar contador/efi actual.
+                        _publish_best(label="mejor")
 
             if _cancelled():
                 break
@@ -646,7 +681,7 @@ def empaquetar_una_hoja_svgnest_ultra(
                 no_improve += 1
             seed += 1
             if renest_accept:
-                # Perfil full por gen; no corta solo: Aceptar/Cancel corta el while.
+                # Continual hasta Aceptar/Cancel; tras base completa → refine.
                 continue
             if stagnation_limit > 0 and no_improve >= stagnation_limit:
                 break
