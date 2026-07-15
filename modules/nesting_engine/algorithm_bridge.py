@@ -564,9 +564,26 @@ def empaquetar_una_hoja_svgnest_ultra(
     pool = ThreadPoolExecutor(max_workers=1)
 
     def _run_await(fn, *args, **kwargs):
-        """Espera el pack en vuelo. Aceptar/Cancelar NO tiran el resultado a medias."""
+        """Lanza un round C++. Si el usuario Acepta/Cancela y ya hay mejor
+        completo, NO espera el round en curso (puede durar 10–20 min)."""
         fut = pool.submit(fn, *args, **kwargs)
         while not fut.done():
+            if _cancelled():
+                if _is_complete(mejor_hoja, mejor_restos):
+                    print(
+                        "[ULTRA-RENEST] Aceptar/Cancel: usando mejor ya listo · "
+                        "no esperar generación C++ en curso",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "[ULTRA-RENEST] Cancel sin completo · "
+                        "abortando espera del round en curso",
+                        flush=True,
+                    )
+                # El pack C++ puede seguir unos segundos en background;
+                # la UI ya no queda bloqueada.
+                return None
             time.sleep(0.12)
         return fut.result()
 
@@ -593,7 +610,10 @@ def empaquetar_una_hoja_svgnest_ultra(
 
             t_round = time.perf_counter()
             if renest_accept:
-                hoja, restos = _run_await(_run_cpp, batch, seed)
+                pack = _run_await(_run_cpp, batch, seed)
+                if pack is None:
+                    break
+                hoja, restos = pack
             else:
                 hoja, restos = _run_cpp(batch, seed)
 

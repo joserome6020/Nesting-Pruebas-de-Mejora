@@ -245,7 +245,9 @@ class ProgressDialog(QDialog):
         self._aceptando = True
         self.btn_aceptar_mejor.setEnabled(False)
         self.btn_aceptar_mejor.setText("Aceptando…")
-        self.lbl_mensaje.setText("Aceptando mejor acomodo actual…")
+        self.lbl_mensaje.setText(
+            "Aceptando mejor acomodo actual (sin esperar el round en curso)…"
+        )
 
     def _on_aceptar_mejor(self) -> None:
         parent = self.parent()
