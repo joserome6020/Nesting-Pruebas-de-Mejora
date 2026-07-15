@@ -52,7 +52,7 @@ def preguntar_separacion_cobre_renest(
     valor_largo_sin: float = 10.0,
 ) -> tuple[float, float] | None:
     """
-    Opciones de separación CU antes de renestear calibre completo.
+    Opciones de separación CU antes de renestear calibre o una barra sola.
     Retorna (separacion_in, largo_sin_separacion_in) o None si cancela.
     """
     dlg = QDialog(parent)
