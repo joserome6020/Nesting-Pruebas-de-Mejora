@@ -745,7 +745,7 @@ def empaquetar_una_hoja_legacy_mc(
     """Empaque C++ Monte Carlo legacy (referencia / diagnóstico)."""
     from .nest_optimization import get_engine_profile
 
-    profile = get_engine_profile("arga_base")
+    profile = get_engine_profile("arga_lite")
     if mc_iterations is None:
         mc_iterations = int(profile.get("mc_iterations", 1))
     mc_iterations = max(1, min(int(mc_iterations), 50))
@@ -776,6 +776,44 @@ def empaquetar_una_hoja_legacy_mc(
         ) from exc
 
     return _assemble_pack_result(hoja_native, restos_native, piezas)
+
+
+def empaquetar_una_hoja_arga_lite(
+    piezas,
+    w_placa,
+    h_placa,
+    kerf_override=0.3,
+    margin_override=0.15,
+    opt_override="OPTIMIZAR LARGO Y ANCHO",
+    corner_override="INFERIOR IZQUIERDA",
+    limite_poly=None,
+    mc_iterations=None,
+):
+    """
+    ARGA LITE: motor único histórico (MC C++ 1 pasada).
+    Sin semillas paralelas FORCE ni GA Ultra — rápido y densidad baja.
+    """
+    from .nest_optimization import get_engine_profile
+
+    profile = get_engine_profile("arga_lite")
+    iters = (
+        int(mc_iterations)
+        if mc_iterations is not None
+        else int(profile.get("mc_iterations", 1) or 1)
+    )
+    iters = max(1, min(iters, 8))
+    print(f"[LITE] empaque MC · iterations={iters}", flush=True)
+    return empaquetar_una_hoja_legacy_mc(
+        piezas,
+        w_placa,
+        h_placa,
+        kerf_override=kerf_override,
+        margin_override=margin_override,
+        opt_override=opt_override,
+        corner_override=corner_override,
+        limite_poly=limite_poly,
+        mc_iterations=iters,
+    )
 
 
 def empaquetar_una_hoja_mc(

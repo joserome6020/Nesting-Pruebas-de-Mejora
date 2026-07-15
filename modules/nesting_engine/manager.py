@@ -45,6 +45,7 @@ from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_eng
 from .engine_registry import list_engine_metas, is_engine_ready
 from .nest_engine_context import (
     ENGINE_ARGA_FORCE,
+    ENGINE_ARGA_LITE,
     ENGINE_SVGNEST_ULTRA,
     get_active_engine_id,
     normalize_engine_id,
@@ -59,9 +60,9 @@ def _es_motor_arga_force(engine_id=None) -> bool:
 
 
 def _early_exit_sim_placa_activo() -> bool:
-    """Early-exit de candidatas: FORCE siempre; Ultra solo en Selección Auto."""
+    """Early-exit de candidatas: FORCE/LITE; Ultra en Selección Auto."""
     eid = normalize_engine_id(get_active_engine_id())
-    if eid == ENGINE_ARGA_FORCE:
+    if eid in (ENGINE_ARGA_FORCE, ENGINE_ARGA_LITE):
         return True
     if eid == ENGINE_SVGNEST_ULTRA:
         # Manual Ultra fija formatos; Auto deja _plate_formats_allowed = None.

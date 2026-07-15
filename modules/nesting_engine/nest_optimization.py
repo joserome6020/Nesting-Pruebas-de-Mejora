@@ -6,6 +6,7 @@ import os
 from .nest_engine_context import (
     DEFAULT_STEEL_ENGINE_ID,
     ENGINE_ARGA_FORCE,
+    ENGINE_ARGA_LITE,
     ENGINE_BURKE_BLF,
     ENGINE_LIBNEST2D,
     ENGINE_SVGNEST_ULTRA,
@@ -121,6 +122,21 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "lock_profile": True,
         # Pack diario: exploración + refine (algorithm_bridge); renest usa Accept.
         "pack_explore_then_refine": True,
+    },
+    # Respaldo: motor único pre-FORCE/Ultra (MC 1 pasada). Rápido, peor densidad.
+    ENGINE_ARGA_LITE: {
+        "mc_iterations": 1,
+        "mc_lookahead_iterations": 1,
+        "lookahead": False,
+        "refine_hoja": False,
+        "accesorios_retries": 1,
+        "refinar_intentos": 0,
+        "continual_optimization": False,
+        "rotation_step_deg": 90,
+        "use_nfp": False,
+        "use_genetic_algorithm": False,
+        "force_parallel_seeds": 1,
+        "lock_profile": True,
     },
 }
 

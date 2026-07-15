@@ -18,7 +18,8 @@
         "engines": [
             "arga_force",
             "burke_blf",
-            "svgnest_ultra"
+            "svgnest_ultra",
+            "arga_lite"
         ],
         "copper_external_module": true
     }

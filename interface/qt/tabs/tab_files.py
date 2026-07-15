@@ -146,7 +146,10 @@ class TabFiles(QWidget):
 
     def _refresh_engine_status_label(self, engine_id: str) -> None:
         from modules.nesting_engine.engine_registry import get_engine_meta
-        from modules.nesting_engine.nest_engine_context import ENGINE_SVGNEST_ULTRA
+        from modules.nesting_engine.nest_engine_context import (
+            ENGINE_ARGA_LITE,
+            ENGINE_SVGNEST_ULTRA,
+        )
 
         try:
             meta = get_engine_meta(engine_id)
@@ -157,6 +160,11 @@ class TabFiles(QWidget):
                     "deja correr y pulsa Cancelar para aceptar el mejor resultado."
                 )
                 self.lbl_engine_status.setText(tip)
+            elif str(engine_id) == ENGINE_ARGA_LITE:
+                self.lbl_engine_status.setText(
+                    "Activo: ARGA LITE — nest clásico rápido (respaldo). "
+                    "Menor densidad; usar cuando el tiempo importa más que el aprovecho."
+                )
             elif desc:
                 self.lbl_engine_status.setText(f"Activo: {meta.display_name} — {desc}")
             else:

@@ -6,7 +6,8 @@ import os
 from typing import Any, Callable, Iterable, Optional
 
 ENGINE_ARGA_FORCE = "arga_force"
-ENGINE_ARGA_BASE = "arga_base"  # alias legacy
+ENGINE_ARGA_BASE = "arga_base"  # alias legacy → FORCE
+ENGINE_ARGA_LITE = "arga_lite"
 ENGINE_BURKE_BLF = "burke_blf"
 ENGINE_LIBNEST2D = "libnest2d"
 ENGINE_SVGNEST_ULTRA = "svgnest_ultra"
@@ -16,6 +17,7 @@ STEEL_ENGINE_IDS: tuple[str, ...] = (
     ENGINE_BURKE_BLF,
     ENGINE_LIBNEST2D,
     ENGINE_SVGNEST_ULTRA,
+    ENGINE_ARGA_LITE,  # al final: respaldo rápido / menor densidad
 )
 
 # Menú diario / renest / FILES / SIM-LAB. Código de libnest2d intacto.
