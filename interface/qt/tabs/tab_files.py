@@ -162,8 +162,8 @@ class TabFiles(QWidget):
                 self.lbl_engine_status.setText(tip)
             elif str(engine_id) == ENGINE_ARGA_LITE:
                 self.lbl_engine_status.setText(
-                    "Activo: ARGA LITE — nest clásico rápido (respaldo). "
-                    "Menor densidad; usar cuando el tiempo importa más que el aprovecho."
+                    "Activo: ARGA LITE — MC 3 pases (refine desde el mejor). "
+                    "Rápido y decente: respaldo urgente sin sacrificar tanto la densidad."
                 )
             elif desc:
                 self.lbl_engine_status.setText(f"Activo: {meta.display_name} — {desc}")

@@ -11,12 +11,12 @@ class ArgaLiteEngine:
         engine_id="arga_lite",
         display_name="ARGA LITE",
         description=(
-            "Motor ARGA clásico (Monte Carlo 1 pasada). El más rápido y el de menor "
-            "densidad: respaldo cuando se necesita un nest urgente."
+            "MC clásico en 3 pases explore→refine (parte del mejor anterior). "
+            "Rápido y decente: respaldo urgente sin quedar en nest ‘malo malo’."
         ),
         phase=0,
         status="ready",
-        inspiration="Motor único pre-engines (~2 semanas atrás): Bottom-Left / MC first",
+        inspiration="Motor pre-engines + refine-from-best tipo Ultra light",
     )
 
     @classmethod

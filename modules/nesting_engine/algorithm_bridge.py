@@ -778,6 +778,55 @@ def empaquetar_una_hoja_legacy_mc(
     return _assemble_pack_result(hoja_native, restos_native, piezas)
 
 
+def _lite_pieza_xy(pieza_hoja: dict) -> tuple[float, float]:
+    """Esquina inferior-izquierda aproximada de una pieza ya colocada."""
+    try:
+        rings = pieza_hoja.get("poligonos") or []
+        if rings and rings[0]:
+            xs = [float(p[0]) for p in rings[0]]
+            ys = [float(p[1]) for p in rings[0]]
+            return (min(xs), min(ys))
+    except Exception:
+        pass
+    return (0.0, 0.0)
+
+
+def _lite_orden_desde_mejor(hoja: dict, restos: list, pool_src: list) -> list:
+    """
+    Orden tipo Ultra seed: piezas colocadas (izq→der / abajo→arriba) y luego restos.
+    Sirve de base del siguiente pase MC aunque C++ reordene por clase/área.
+    """
+    lookup = _build_piece_lookup_lists(pool_src)
+    ordenadas: list = []
+
+    colocadas = sorted(
+        list(hoja.get("piezas") or []),
+        key=lambda pz: _lite_pieza_xy(pz),
+    )
+    for pz in colocadas:
+        restored = _piece_from_native_rest(
+            {"nombre": str(pz.get("nombre") or "")},
+            lookup,
+        )
+        if restored is not None:
+            ordenadas.append(restored)
+
+    for r in restos or []:
+        nom = str(r.get("nombre") or "")
+        bucket = lookup.get(nom)
+        if bucket:
+            ordenadas.append(copy.deepcopy(bucket.pop(0)))
+        else:
+            # Fallback: objeto resto ya es pieza pack-ready
+            ordenadas.append(copy.deepcopy(r))
+
+    # Por si faltó alguna del pool original
+    for nom, bucket in lookup.items():
+        while bucket:
+            ordenadas.append(copy.deepcopy(bucket.pop(0)))
+    return ordenadas
+
+
 def empaquetar_una_hoja_arga_lite(
     piezas,
     w_placa,
@@ -790,30 +839,92 @@ def empaquetar_una_hoja_arga_lite(
     mc_iterations=None,
 ):
     """
-    ARGA LITE: motor único histórico (MC C++ 1 pasada).
-    Sin semillas paralelas FORCE ni GA Ultra — rápido y densidad baja.
+    ARGA LITE: MC clásico con 3 pases explore→refine (estilo Ultra light).
+
+    Pase 1: exploración corta. Pases 2–3: parten del mejor orden previo y
+    amplían intentos MC; solo se acepta si mejora (piezas / área / restos).
+    Sin recompilar C++.
     """
     from .nest_optimization import get_engine_profile
 
     profile = get_engine_profile("arga_lite")
-    iters = (
-        int(mc_iterations)
-        if mc_iterations is not None
-        else int(profile.get("mc_iterations", 1) or 1)
+    pases = int(profile.get("lite_refine_passes", 3) or 3)
+    pases = max(1, min(pases, 5))
+    if mc_iterations is not None:
+        # Compat: si piden iterations explícitas, un solo shot MC.
+        iters = max(1, min(int(mc_iterations), 8))
+        print(f"[LITE] empaque MC · iterations={iters} (shot único)", flush=True)
+        return empaquetar_una_hoja_legacy_mc(
+            piezas,
+            w_placa,
+            h_placa,
+            kerf_override=kerf_override,
+            margin_override=margin_override,
+            opt_override=opt_override,
+            corner_override=corner_override,
+            limite_poly=limite_poly,
+            mc_iterations=iters,
+        )
+
+    pool0 = list(piezas or [])
+    if not pool0:
+        return {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}, []
+
+    mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
+    mejor_restos = list(pool0)
+    orden_actual = list(pool0)
+    mejoras = 0
+
+    print(
+        f"[LITE] explore->refine | pases={pases} (base=mejor anterior)",
+        flush=True,
     )
-    iters = max(1, min(iters, 8))
-    print(f"[LITE] empaque MC · iterations={iters}", flush=True)
-    return empaquetar_una_hoja_legacy_mc(
-        piezas,
-        w_placa,
-        h_placa,
-        kerf_override=kerf_override,
-        margin_override=margin_override,
-        opt_override=opt_override,
-        corner_override=corner_override,
-        limite_poly=limite_poly,
-        mc_iterations=iters,
+
+    for pase in range(1, pases + 1):
+        # Más intentos MC en pases posteriores (1 → 2 → 3 estrategias internas).
+        iters_pase = max(1, min(pase, 4))
+        print(
+            f"[LITE] pase {pase}/{pases} · mc_iters={iters_pase} · "
+            f"pool={len(orden_actual)}",
+            flush=True,
+        )
+        hoja, restos = empaquetar_una_hoja_legacy_mc(
+            orden_actual,
+            w_placa,
+            h_placa,
+            kerf_override=kerf_override,
+            margin_override=margin_override,
+            opt_override=opt_override,
+            corner_override=corner_override,
+            limite_poly=limite_poly,
+            mc_iterations=iters_pase,
+        )
+        if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
+            mejoras += 1
+            mejor_hoja, mejor_restos = hoja, restos
+            print(
+                f"[LITE] mejora pase {pase} · "
+                f"colocadas={len(hoja.get('piezas') or [])} "
+                f"restos={len(restos or [])} "
+                f"efi={float(hoja.get('eficiencia') or 0):.1f}%",
+                flush=True,
+            )
+            if not restos:
+                print(f"[LITE] completo en pase {pase} · stop", flush=True)
+                break
+        else:
+            print(f"[LITE] pase {pase} sin mejora · se conserva mejor", flush=True)
+
+        # Siguiente pase nace del mejor actual (orden espacial + restos).
+        orden_actual = _lite_orden_desde_mejor(mejor_hoja, mejor_restos, pool0)
+
+    print(
+        f"[LITE] fin · mejoras={mejoras}/{pases} · "
+        f"colocadas={len(mejor_hoja.get('piezas') or [])} "
+        f"restos={len(mejor_restos or [])}",
+        flush=True,
     )
+    return mejor_hoja, mejor_restos
 
 
 def empaquetar_una_hoja_mc(

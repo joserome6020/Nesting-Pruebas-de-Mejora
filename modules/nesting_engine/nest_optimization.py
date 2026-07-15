@@ -123,19 +123,20 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         # Pack diario: exploración + refine (algorithm_bridge); renest usa Accept.
         "pack_explore_then_refine": True,
     },
-    # Respaldo: motor único pre-FORCE/Ultra (MC 1 pasada). Rápido, peor densidad.
+    # Respaldo: MC clásico 3 pases explore→refine (rápido, decente).
     ENGINE_ARGA_LITE: {
-        "mc_iterations": 1,
+        "mc_iterations": 3,
         "mc_lookahead_iterations": 1,
         "lookahead": False,
-        "refine_hoja": False,
-        "accesorios_retries": 1,
+        "refine_hoja": True,
+        "accesorios_retries": 2,
         "refinar_intentos": 0,
         "continual_optimization": False,
         "rotation_step_deg": 90,
         "use_nfp": False,
         "use_genetic_algorithm": False,
         "force_parallel_seeds": 1,
+        "lite_refine_passes": 3,
         "lock_profile": True,
     },
 }
