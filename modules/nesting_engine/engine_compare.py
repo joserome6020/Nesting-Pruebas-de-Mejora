@@ -31,13 +31,13 @@ class EngineComparisonBundle:
 
 def _count_pieces_in_result(resultados: dict) -> tuple[int, int]:
     """Devuelve (colocadas, pendientes_estimadas) en grupos de acero."""
+    from .resultados_grupos import iter_grupos_material
+
     colocadas = 0
     pendientes = 0
     if not isinstance(resultados, dict):
         return 0, 0
-    for _clave, grupo in resultados.items():
-        if not isinstance(grupo, dict):
-            continue
+    for _clave, grupo in iter_grupos_material(resultados):
         if grupo.get("error"):
             pendientes += 1
             continue
@@ -61,12 +61,12 @@ def _count_pieces_in_result(resultados: dict) -> tuple[int, int]:
 
 
 def _avg_efficiency(resultados: dict) -> float:
+    from .resultados_grupos import iter_grupos_material
+
     effs = []
     if not isinstance(resultados, dict):
         return 0.0
-    for grupo in resultados.values():
-        if not isinstance(grupo, dict):
-            continue
+    for _clave, grupo in iter_grupos_material(resultados):
         for hoja in grupo.get("hojas") or []:
             if not isinstance(hoja, dict):
                 continue
@@ -78,22 +78,23 @@ def _avg_efficiency(resultados: dict) -> float:
 
 
 def _count_sheets(resultados: dict) -> int:
+    from .resultados_grupos import iter_grupos_material
+
     total = 0
     if not isinstance(resultados, dict):
         return 0
-    for grupo in resultados.values():
-        if isinstance(grupo, dict) and grupo.get("hojas"):
-            total += len(grupo.get("hojas") or [])
+    for _clave, grupo in iter_grupos_material(resultados):
+        total += len(grupo.get("hojas") or [])
     return total
 
 
 def _total_cost(resultados: dict) -> float:
+    from .resultados_grupos import iter_grupos_material
+
     total = 0.0
     if not isinstance(resultados, dict):
         return 0.0
-    for grupo in resultados.values():
-        if not isinstance(grupo, dict):
-            continue
+    for _clave, grupo in iter_grupos_material(resultados):
         try:
             total += float(grupo.get("costo_total") or 0.0)
         except Exception:

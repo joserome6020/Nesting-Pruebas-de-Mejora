@@ -388,7 +388,12 @@ class TabFiles(QWidget):
                 ordenados.append(p)
         for ruta in ordenados:
             f_lower = os.path.basename(ruta).lower()
-            if f_lower == f"{item_limpio}.dxf" or f_lower.startswith(f"{item_limpio},") or f_lower.startswith(f"{item_limpio} "):
+            if (
+                f_lower == f"{item_limpio}.dxf"
+                or f_lower.startswith(f"{item_limpio},")
+                or f_lower.startswith(f"{item_limpio} ")
+                or f_lower.startswith(f"{item_limpio}_")  # ej. 62135-1251-P03_TAB, A 36...
+            ):
                 return ruta
         return ""
 

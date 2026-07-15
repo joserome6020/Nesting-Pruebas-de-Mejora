@@ -1256,15 +1256,9 @@ class TabNesting(QWidget, TimerHost):
         self._registrar_meta_pdf_lote(ruta_final_proyecto, metadata["nombre"], ruta_origen=ruta_dxf)
         self._actualizar_lote_editable_en_memoria(actuales)
     def _primer_hoja_disponible(self, resultados):
-        if not isinstance(resultados, dict):
-            return None, None
+        from modules.nesting_engine.resultados_grupos import primer_grupo_con_hojas
 
-        for clave, info in resultados.items():
-            hojas = info.get("hojas", [])
-            if hojas:
-                return hojas[0], clave
-
-        return None, None
+        return primer_grupo_con_hojas(resultados)
 
     def _tiene_nesting_activo(self) -> bool:
         multilote = getattr(self.app, "resultados_multilote", None) or []
@@ -7392,18 +7386,25 @@ class TabNesting(QWidget, TimerHost):
                     if self.app.datos_partes_actuales:
                         print(f"Ruta de la primera pieza importada: {self.app.datos_partes_actuales[0][5]}")
 
-                    for mat, info in mini_resultados.items():
-                        if "hojas" in info and len(info["hojas"]) > 0:
-                            hoja_test = info["hojas"][0]
-                            print("Límites de placa extraídos:", hoja_test.get("limites_placa", "No existe llave 'limites_placa'"))
-                            if "piezas" in hoja_test and len(hoja_test["piezas"]) > 0:
-                                pieza_test = hoja_test["piezas"][0]
-                                print("Nombre de la pieza 1:", pieza_test.get("item", pieza_test.get("nombre", "Desconocido")))
-                                print("Llaves dentro de la pieza:", list(pieza_test.keys()))
-                                print("¿Tiene llave 'geometria'?:", "geometria" in pieza_test)
-                                if "geometria" in pieza_test:
-                                    print("Llaves dentro de geometría:", list(pieza_test["geometria"].keys()))
-                            break
+                    from modules.nesting_engine.resultados_grupos import iter_grupos_material
+
+                    for _mat, info in iter_grupos_material(mini_resultados):
+                        hojas_test = info.get("hojas") or []
+                        if not hojas_test:
+                            continue
+                        hoja_test = hojas_test[0]
+                        if not isinstance(hoja_test, dict):
+                            continue
+                        print("Límites de placa extraídos:", hoja_test.get("limites_placa", "No existe llave 'limites_placa'"))
+                        piezas_test = hoja_test.get("piezas") or []
+                        if piezas_test and isinstance(piezas_test[0], dict):
+                            pieza_test = piezas_test[0]
+                            print("Nombre de la pieza 1:", pieza_test.get("item", pieza_test.get("nombre", "Desconocido")))
+                            print("Llaves dentro de la pieza:", list(pieza_test.keys()))
+                            print("¿Tiene llave 'geometria'?:", "geometria" in pieza_test)
+                            if "geometria" in pieza_test:
+                                print("Llaves dentro de geometría:", list(pieza_test["geometria"].keys()))
+                        break
                     print("=" * 40 + "\n")
                     # === FIN DE RADIOGRAFÍA DE DATOS ===
 

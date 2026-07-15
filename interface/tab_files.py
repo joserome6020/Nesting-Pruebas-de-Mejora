@@ -166,6 +166,7 @@ class TabFiles(ctk.CTkFrame):
                 f_lower == f"{item_limpio}.dxf"
                 or f_lower.startswith(f"{item_limpio},")
                 or f_lower.startswith(f"{item_limpio} ")
+                or f_lower.startswith(f"{item_limpio}_")
             ):
                 return ruta
         return ""

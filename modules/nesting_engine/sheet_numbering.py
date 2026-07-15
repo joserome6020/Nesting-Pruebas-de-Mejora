@@ -26,9 +26,15 @@ def _grupo_nesting_sort_key():
 
 
 def iterar_grupos_nesting_ordenados(resultados):
+    from .resultados_grupos import es_grupo_material_nesting
+
     sort_key = _grupo_nesting_sort_key()
     claves = sorted(
-        (k for k in (resultados or {}) if isinstance((resultados or {}).get(k), dict)),
+        (
+            k
+            for k, v in (resultados or {}).items()
+            if es_grupo_material_nesting(k, v)
+        ),
         key=lambda k: sort_key(k, (resultados or {}).get(k)),
     )
     for clave in claves:

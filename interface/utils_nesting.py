@@ -401,12 +401,18 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
             with psycopg2.connect(**db_config) as conn:
                 with conn.cursor() as cursor:
                     if es_swo_real:
+                        from modules.nesting_engine.resultados_grupos import iter_grupos_material
+
                         prefijos_unicos = set()
-                        for clave_mat, info_mat in resultados.items():
-                            for hoja in info_mat.get("hojas", []):
-                                for pieza in hoja.get("piezas", []):
-                                    n_pieza = pieza.get("nombre", "").upper()
-                                    if "__" in n_pieza: 
+                        for _clave_mat, info_mat in iter_grupos_material(resultados):
+                            for hoja in info_mat.get("hojas", []) or []:
+                                if not isinstance(hoja, dict):
+                                    continue
+                                for pieza in hoja.get("piezas", []) or []:
+                                    if not isinstance(pieza, dict):
+                                        continue
+                                    n_pieza = str(pieza.get("nombre") or "").upper()
+                                    if "__" in n_pieza:
                                         prefijos_unicos.add(n_pieza.split("__")[0].strip())
                         
                         for prefijo in prefijos_unicos:
@@ -447,10 +453,16 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados)
     contador_rtzc_sobrante = inicializar_contador_rtzc_sobrante(resultados)
     
-    for clave_mat, info_mat in resultados.items():
+    from modules.nesting_engine.resultados_grupos import iter_grupos_material
+
+    for clave_mat, info_mat in iter_grupos_material(resultados):
+        if "error" in info_mat:
+            continue
         espesor = _normalizar_espesor_a_calibre(clave_mat)
         calibre_rtz = str(clave_mat).split("_", 1)[0].strip() or "NA"
-        for idx, hoja in enumerate(info_mat.get("hojas", [])):
+        for idx, hoja in enumerate(info_mat.get("hojas", []) or []):
+            if not isinstance(hoja, dict):
+                continue
             if hoja_es_sobrante_sin_compra(hoja):
                 nombre_prev = str(
                     hoja.get("sheet_display_name") or hoja.get("placa_id") or ""
