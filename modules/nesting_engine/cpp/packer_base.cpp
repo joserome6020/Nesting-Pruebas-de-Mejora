@@ -4,11 +4,13 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include "clipper2/clipper.h"
+#include "clipper2/clipper.minkowski.h"
 
 namespace arga {
 namespace {
@@ -19,13 +21,16 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kVoidMinAreaMm2 = 25.0 * 25.0;
 // Orificio anidable (part-in-part): ≥ ~80 in². Tornillos/pequeños no cuentan.
 constexpr double kHostHoleMinMm2 = 80.0 * 645.16;
+// Guest PIP: no meter piezas demasiado grandes en barrenos (estilo Ultra).
+constexpr double kPartInPartMaxGuestMm2 = 120.0 * 645.16;
 constexpr double kSlideStepCoarseMm = 3.0;
 constexpr double kSlideStepFineMm = 0.5;
 // Alineado con manager.ARGA_AREA_ESTRUCTURAL_MM2 (= 200 in²).
 constexpr double kAreaEstructuralUmbralMm2 = 200.0 * 645.16;
-constexpr int kMaxHuecosPorPasada = 48;
+constexpr int kMaxHuecosPorPasada = 32;
 constexpr int kMaxPasillos = 80;
-constexpr int kMaxGuardRelleno = 256;
+// Antes 256/48: morfología Clipper en anillos densos; 32 basta con early-break.
+constexpr int kMaxGuardRelleno = 32;
 
 struct Bounds {
     double minx = 0.0;
@@ -163,6 +168,59 @@ bool pieza_es_anfitriona_huecos(const PieceIn& p) {
 bool pieza_va_en_fase_estructural(const PieceIn& p) {
     // Anfitrionas con cavidades (VFM etc.) van primero aunque el área esté bajo el umbral.
     return piece_area(p) >= kAreaEstructuralUmbralMm2 || pieza_es_anfitriona_huecos(p);
+}
+
+PathD invert_path(const PathD& path) {
+    PathD out;
+    out.reserve(path.size());
+    for (const auto& p : path) {
+        out.emplace_back(-p.x, -p.y);
+    }
+    return out;
+}
+
+PathD normalize_outer_at_origin(const std::vector<std::vector<Point2D>>& rings) {
+    if (rings.empty() || rings.front().size() < 3) {
+        return {};
+    }
+    const Bounds bb = bounds_of_rings(rings);
+    PathD out = to_path_d(rings.front());
+    for (auto& p : out) {
+        p.x -= bb.minx;
+        p.y -= bb.miny;
+    }
+    return out;
+}
+
+/** NFP solo para anclas en cavidades/orificios (limit.active). No se usa en patio libre. */
+void append_nfp_cavity_anchors(
+    std::vector<std::pair<double, double>>& anclajes,
+    const PathsD& stationary_buff,
+    const PathD& orbiting_norm,
+    const Bounds& limit_bounds) {
+    if (stationary_buff.empty() || orbiting_norm.size() < 3) {
+        return;
+    }
+    const PathD inv_orb = invert_path(orbiting_norm);
+    for (const auto& stat_path : stationary_buff) {
+        if (stat_path.size() < 3) {
+            continue;
+        }
+        Bounds sb = bounds_of_paths({stat_path});
+        // Solo piezas cercanas al hueco (evita Minkowski global).
+        if (sb.maxx < limit_bounds.minx - 5.0 || sb.minx > limit_bounds.maxx + 5.0
+            || sb.maxy < limit_bounds.miny - 5.0 || sb.miny > limit_bounds.maxy + 5.0) {
+            continue;
+        }
+        const PathsD nfp_paths = MinkowskiSum(inv_orb, stat_path, true, 3);
+        for (const auto& nfp : nfp_paths) {
+            const size_t n = nfp.size();
+            const size_t stride = n > 64 ? std::max<size_t>(1, n / 48) : 1;
+            for (size_t i = 0; i < n; i += stride) {
+                anclajes.emplace_back(nfp[i].x, nfp[i].y);
+            }
+        }
+    }
 }
 
 Point2D polygon_centroid(const std::vector<Point2D>& ring) {
@@ -376,7 +434,11 @@ std::vector<Variation> build_variaciones(
     double h_placa,
     double margin_px,
     double kerf_radio) {
-    static const int rotations[] = {0, 90, 180, 270};
+    // Solo ortogonal (0/90/180/270). 45° infla el AABB y en producción
+    // suele empeorar el nest (y el corte) frente a rotaciones cardinales.
+    const int rotations[] = {0, 90, 180, 270};
+    const int n_rot = 4;
+
     std::vector<Variation> variaciones;
     if (poly_src.empty()) {
         return variaciones;
@@ -384,7 +446,8 @@ std::vector<Variation> build_variaciones(
 
     const Point2D centroid = polygon_centroid(poly_src.front());
 
-    for (const int angulo : rotations) {
+    for (int ri = 0; ri < n_rot; ++ri) {
+        const int angulo = rotations[ri];
         auto poly_rot = poly_src;
         auto marks_rot = marks_src;
         if (angulo != 0) {
@@ -573,12 +636,15 @@ void compact_slide_position(
     const std::vector<PathsD>& fijas_solid_paths,
     const std::vector<char>& fijas_es_anfitriona,
     double kerf_radio) {
-    auto try_slide = [&](double step_mm) {
+    // Coarse grande + fine corto: evita miles de comprobar_colision por piece.
+    auto try_slide_capped = [&](double step_mm, int max_steps) {
         bool moved = true;
         const double min_x = limit.active ? limit.bounds.minx : margin_px;
         const double min_y = limit.active ? limit.bounds.miny : margin_px;
-        while (moved) {
+        int steps = 0;
+        while (moved && steps < max_steps) {
             moved = false;
+            ++steps;
             const double test_px = px - step_mm;
             if (test_px + var.b_minx >= min_x - 0.01) {
                 if (!comprobar_colision(
@@ -613,8 +679,9 @@ void compact_slide_position(
             }
         }
     };
-    try_slide(kSlideStepCoarseMm);
-    try_slide(kSlideStepFineMm);
+    try_slide_capped(25.0, 80);   // ~1" por paso
+    try_slide_capped(kSlideStepCoarseMm, 40);
+    try_slide_capped(kSlideStepFineMm, 20);
 }
 
 bool colocar_pieza(
@@ -673,11 +740,11 @@ bool colocar_pieza(
         anclajes.emplace_back(q3x, q1y);
         anclajes.emplace_back(q1x, q3y);
         anclajes.emplace_back(q3x, q3y);
-        // Malla + línea media del canal (imprescindible para vacíos elongados).
+        // Malla liviana: grilla 14×10×4 rot×slide hacía minutos por placa con anillos.
         const double bw = limit.bounds.maxx - limit.bounds.minx;
         const double bh = limit.bounds.maxy - limit.bounds.miny;
-        const int nx = bw > 800.0 ? 14 : (bw > 200.0 ? 8 : 5);
-        const int ny = bh > 400.0 ? 10 : (bh > 100.0 ? 6 : 4);
+        const int nx = bw > 800.0 ? 6 : (bw > 200.0 ? 4 : 3);
+        const int ny = bh > 400.0 ? 5 : (bh > 100.0 ? 3 : 2);
         for (int iy = 0; iy <= ny; ++iy) {
             for (int ix = 0; ix <= nx; ++ix) {
                 const double x = limit.bounds.minx + bw * (static_cast<double>(ix) / static_cast<double>(nx));
@@ -733,6 +800,16 @@ bool colocar_pieza(
         anclajes.emplace_back(mx, b.miny - 1.0);
     }
 
+    // NFP selectivo: solo en huecos/cavidades (limit.active), no en patio libre.
+    if (limit.active && !variaciones.empty() && !state.fijas_buff_paths.empty()) {
+        const PathD orb = normalize_outer_at_origin(variaciones.front().poly);
+        if (orb.size() >= 3) {
+            for (const auto& buff : state.fijas_buff_paths) {
+                append_nfp_cavity_anchors(anclajes, buff, orb, limit.bounds);
+            }
+        }
+    }
+
     for (const auto& var : variaciones) {
         for (const auto& anclaje : anclajes) {
             // Siempre anclar con poly_buff: gap sólido↔sólido ≥ kerf (buff↔buff).
@@ -766,20 +843,8 @@ bool colocar_pieza(
                 continue;
             }
 
-            compact_slide_position(
-                px,
-                py,
-                var,
-                margin_px,
-                limit,
-                state.fijas_bounds,
-                state.fijas_buff_paths,
-                state.fijas_solid_paths,
-                state.fijas_es_anfitriona,
-                kerf_radio);
-
-            // Estructurales: BLF apretado (menos pasillos muertos entre VFM).
-            // Pequeñas / en cavidad: empaquetar hacia la esquina del hueco o placa.
+            // NO compact_slide aquí: en cada ancla válida el slide fino recorría
+            // toda la placa (minutos). Se desliza una sola vez la mejor candidata.
             double score;
             if (limit.active) {
                 const double lx = px - limit.bounds.minx;
@@ -807,6 +872,18 @@ bool colocar_pieza(
     if (mejor_var == nullptr) {
         return false;
     }
+
+    compact_slide_position(
+        mejor_px,
+        mejor_py,
+        *mejor_var,
+        margin_px,
+        limit,
+        state.fijas_bounds,
+        state.fijas_buff_paths,
+        state.fijas_solid_paths,
+        state.fijas_es_anfitriona,
+        kerf_radio);
 
     const auto cand_final = translate_rings_copy(mejor_var->poly, mejor_px, mejor_py);
     const auto cand_marks_final = translate_rings_copy(mejor_var->marks, mejor_px, mejor_py);
@@ -850,6 +927,7 @@ std::vector<PieceIn> orden_pizarron(std::vector<PieceIn> piezas) {
     struct GrupoOrden {
         std::string nombre;
         double area_max = 0.0;
+        size_t holes_max = 0;
         std::vector<PieceIn> piezas;
     };
 
@@ -859,8 +937,18 @@ std::vector<PieceIn> orden_pizarron(std::vector<PieceIn> piezas) {
         GrupoOrden g;
         g.nombre = kv.first;
         g.piezas = std::move(kv.second);
+        // Dentro del grupo: mayor área / más barrenos primero (bloque compacto).
+        std::sort(g.piezas.begin(), g.piezas.end(), [](const PieceIn& a, const PieceIn& b) {
+            const double aa = piece_area(a);
+            const double ab = piece_area(b);
+            if (std::abs(aa - ab) > 1e-3) {
+                return aa > ab;
+            }
+            return a.rings.size() > b.rings.size();
+        });
         for (const auto& p : g.piezas) {
             g.area_max = std::max(g.area_max, piece_area(p));
+            g.holes_max = std::max(g.holes_max, p.rings.size() > 0 ? p.rings.size() - 1 : 0);
         }
         lista.push_back(std::move(g));
     }
@@ -868,6 +956,9 @@ std::vector<PieceIn> orden_pizarron(std::vector<PieceIn> piezas) {
     std::sort(lista.begin(), lista.end(), [](const GrupoOrden& a, const GrupoOrden& b) {
         if (a.area_max != b.area_max) {
             return a.area_max > b.area_max;
+        }
+        if (a.holes_max != b.holes_max) {
+            return a.holes_max > b.holes_max;
         }
         return a.nombre < b.nombre;
     });
@@ -1346,6 +1437,11 @@ void rellenar_orificios_directo(
                 pendientes.push_back(std::move(p));
                 continue;
             }
+            // PIP selectivo: no meter guests demasiado grandes en barrenos.
+            if (piece_area(p) > kPartInPartMaxGuestMm2) {
+                pendientes.push_back(std::move(p));
+                continue;
+            }
             bool placed = false;
             for (const auto& host : state.hoja.piezas) {
                 if (host.poligonos.size() < 2) {
@@ -1450,10 +1546,10 @@ void rellenar_cavidades_abiertas_directo(
             if (!limit.active) {
                 continue;
             }
-            // Densificar ESTE canal antes de pasar a otro (máx. 12 piezas / turno).
+            // Densificar ESTE canal antes de pasar a otro (máx. 6 piezas / turno).
             int en_canal = 0;
             bool progreso = true;
-            while (progreso && en_canal < 12 && !pequenas.empty()) {
+            while (progreso && en_canal < 6 && !pequenas.empty()) {
                 progreso = false;
                 for (size_t pi = 0; pi < pequenas.size(); ++pi) {
                     PieceIn& p = pequenas[pi];
@@ -1610,6 +1706,98 @@ void rellenar_huecos_con_pequenas(
     restos = std::move(sin_colocar);
 }
 
+/** Compactación final: 1 pasada slide L/B sobre piezas ya colocadas (bajo costo). */
+void compact_slide_sheet_final(
+    PlacementState& state,
+    double w_placa,
+    double h_placa,
+    double kerf_radio,
+    double margin_px) {
+    const size_t n = state.hoja.piezas.size();
+    if (n < 2
+        || state.fijas_buff_paths.size() != n
+        || state.fijas_solid_paths.size() != n
+        || state.fijas_bounds.size() != n
+        || state.fijas_es_anfitriona.size() != n) {
+        return;
+    }
+    const LimitContext sheet_limit = make_limit_context(std::nullopt, margin_px);
+    std::vector<size_t> order(n);
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return state.hoja.piezas[a].area > state.hoja.piezas[b].area;
+    });
+
+    for (const size_t idx : order) {
+        PlacementState others;
+        others.fijas_buff_paths.reserve(n - 1);
+        others.fijas_solid_paths.reserve(n - 1);
+        others.fijas_bounds.reserve(n - 1);
+        others.fijas_es_anfitriona.reserve(n - 1);
+        for (size_t j = 0; j < n; ++j) {
+            if (j == idx) {
+                continue;
+            }
+            others.fijas_buff_paths.push_back(state.fijas_buff_paths[j]);
+            others.fijas_solid_paths.push_back(state.fijas_solid_paths[j]);
+            others.fijas_bounds.push_back(state.fijas_bounds[j]);
+            others.fijas_es_anfitriona.push_back(state.fijas_es_anfitriona[j]);
+        }
+
+        auto& piece = state.hoja.piezas[idx];
+        if (piece.poligonos.empty()) {
+            continue;
+        }
+        const Bounds bb = bounds_of_rings(piece.poligonos);
+        Variation var;
+        var.poly = translate_rings_copy(piece.poligonos, -bb.minx, -bb.miny);
+        var.marks = translate_rings_copy(piece.marcas, -bb.minx, -bb.miny);
+        var.poly_buff = buffer_rings(var.poly, kerf_radio);
+        if (var.poly_buff.empty()) {
+            var.poly_buff = buffer_rings({var.poly.front()}, kerf_radio);
+        }
+        if (var.poly_buff.empty()) {
+            continue;
+        }
+        const Bounds vb = bounds_of_rings(var.poly_buff);
+        var.w = bb.maxx - bb.minx;
+        var.h = bb.maxy - bb.miny;
+        var.b_minx = vb.minx;
+        var.b_miny = vb.miny;
+        var.b_maxx = vb.maxx;
+        var.b_maxy = vb.maxy;
+
+        double px = bb.minx;
+        double py = bb.miny;
+        compact_slide_position(
+            px,
+            py,
+            var,
+            margin_px,
+            sheet_limit,
+            others.fijas_bounds,
+            others.fijas_buff_paths,
+            others.fijas_solid_paths,
+            others.fijas_es_anfitriona,
+            kerf_radio);
+        const double dx = px - bb.minx;
+        const double dy = py - bb.miny;
+        if (std::abs(dx) < 1e-6 && std::abs(dy) < 1e-6) {
+            continue;
+        }
+        auto poly_final = translate_rings_copy(var.poly, px, py);
+        auto marks_final = translate_rings_copy(var.marks, px, py);
+        auto buff_final = translate_rings_copy(var.poly_buff, px, py);
+        piece.poligonos = std::move(poly_final);
+        piece.marcas = std::move(marks_final);
+        state.fijas_buff_paths[idx] = to_paths_d(buff_final);
+        state.fijas_solid_paths[idx] = materialize_metal(piece.poligonos);
+        state.fijas_bounds[idx] = bounds_of_rings(buff_final);
+        (void)w_placa;
+        (void)h_placa;
+    }
+}
+
 void finalizar_eficiencia(SheetOut& hoja, double w_placa, double h_placa) {
     double area_real = 0.0;
     for (const auto& p : hoja.piezas) {
@@ -1696,7 +1884,7 @@ PackResult empaquetar_una_hoja_base(
 
     // Part-in-part ANTES del patio: bridas/medianas entran a barrenos host.
     if (!no_hosts.empty()) {
-        for (int pass = 0; pass < 12 && !no_hosts.empty(); ++pass) {
+        for (int pass = 0; pass < 6 && !no_hosts.empty(); ++pass) {
             const size_t antes = no_hosts.size();
             rellenar_orificios_directo(state, no_hosts, w_placa, h_placa, kerf_override);
             if (no_hosts.size() >= antes) {
@@ -1727,15 +1915,15 @@ PackResult empaquetar_una_hoja_base(
                 if (!one.empty()) {
                     restos.push_back(std::move(one.front()));
                 }
-            } else {
-                rellenar_orificios_directo(state, pool_peq, w_placa, h_placa, kerf_override);
             }
+            // PIP de pool_peq solo en fases dedicadas (antes/después); hacerlo tras
+            // cada estructural × todos los anillos era O(n²) y bloqueaba minutos.
         }
     }
 
     // Fase 1.5a: canales abiertos C/VFM (AABB-metal).
     if (!pool_peq.empty()) {
-        for (int pass = 0; pass < 32 && !pool_peq.empty(); ++pass) {
+        for (int pass = 0; pass < 8 && !pool_peq.empty(); ++pass) {
             const size_t antes = pool_peq.size();
             rellenar_cavidades_abiertas_directo(state, pool_peq, w_placa, h_placa, kerf_override);
             if (pool_peq.size() >= antes) {
@@ -1745,7 +1933,7 @@ PackResult empaquetar_una_hoja_base(
     }
     // Fase 1.5b: orificios otra pasada.
     if (!pool_peq.empty()) {
-        for (int pass = 0; pass < 8 && !pool_peq.empty(); ++pass) {
+        for (int pass = 0; pass < 4 && !pool_peq.empty(); ++pass) {
             const size_t antes = pool_peq.size();
             rellenar_orificios_directo(state, pool_peq, w_placa, h_placa, kerf_override);
             if (pool_peq.size() >= antes) {
@@ -1756,7 +1944,7 @@ PackResult empaquetar_una_hoja_base(
 
     // Fase 2a: SOLO cavidades abiertas/cerradas + pasillos (nada de patio libre).
     if (!pool_peq.empty()) {
-        for (int pass = 0; pass < 16 && !pool_peq.empty(); ++pass) {
+        for (int pass = 0; pass < 6 && !pool_peq.empty(); ++pass) {
             const size_t antes = pool_peq.size();
             rellenar_huecos_con_pequenas(
                 state,
@@ -1773,7 +1961,7 @@ PackResult empaquetar_una_hoja_base(
     }
     // Fase 2b: exteriores + patio dominante (scrap grande entre/alrededor estructurales).
     if (!pool_peq.empty()) {
-        for (int pass = 0; pass < 16 && !pool_peq.empty(); ++pass) {
+        for (int pass = 0; pass < 6 && !pool_peq.empty(); ++pass) {
             const size_t antes = pool_peq.size();
             rellenar_huecos_con_pequenas(
                 state,
@@ -1789,7 +1977,7 @@ PackResult empaquetar_una_hoja_base(
         }
     }
 
-    // Restos: placa libre intercalando relleno de huecos/patio cada 2 piezas.
+    // Restos: placa libre; morfología intercalada cada 8 (Clipper caro con anillos).
     if (!pool_peq.empty()) {
         auto orden_peq = orden_pizarron(std::move(pool_peq));
         const LimitContext limit = make_limit_context(std::nullopt, margin_px);
@@ -1803,7 +1991,7 @@ PackResult empaquetar_una_hoja_base(
                 continue;
             }
             ++since_fill;
-            if (!cola.empty() && since_fill >= 2) {
+            if (!cola.empty() && since_fill >= 8) {
                 since_fill = 0;
                 rellenar_huecos_con_pequenas(
                     state,
@@ -1812,14 +2000,14 @@ PackResult empaquetar_una_hoja_base(
                     h_placa,
                     kerf_override,
                     margin_override,
-                    /*solo_interiores_y_pasillos=*/false);
+                    /*solo_interiores_y_pasillos=*/true);
             }
         }
     }
 
     // Última pasada: residuales en cavidades/pasillos/patio.
     if (!restos.empty()) {
-        for (int pass = 0; pass < 12 && !restos.empty(); ++pass) {
+        for (int pass = 0; pass < 4 && !restos.empty(); ++pass) {
             const size_t antes = restos.size();
             rellenar_huecos_con_pequenas(
                 state,
@@ -1834,6 +2022,36 @@ PackResult empaquetar_una_hoja_base(
             }
         }
     }
+
+    // Un retry barato solo con chicos restantes (sin rehacer el nest).
+    if (!restos.empty()) {
+        std::vector<PieceIn> chicos;
+        std::vector<PieceIn> grandes_resto;
+        chicos.reserve(restos.size());
+        for (auto& p : restos) {
+            if (piece_area(p) <= kPartInPartMaxGuestMm2 && !pieza_es_anfitriona_huecos(p)) {
+                chicos.push_back(std::move(p));
+            } else {
+                grandes_resto.push_back(std::move(p));
+            }
+        }
+        if (!chicos.empty()) {
+            rellenar_orificios_directo(state, chicos, w_placa, h_placa, kerf_override);
+            rellenar_cavidades_abiertas_directo(state, chicos, w_placa, h_placa, kerf_override);
+            rellenar_huecos_con_pequenas(
+                state,
+                chicos,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                /*solo_interiores_y_pasillos=*/false);
+        }
+        restos = std::move(grandes_resto);
+        restos.insert(restos.end(), chicos.begin(), chicos.end());
+    }
+
+    compact_slide_sheet_final(state, w_placa, h_placa, kerf_radio, margin_px);
 
     finalizar_eficiencia(state.hoja, w_placa, h_placa);
     out.hoja = std::move(state.hoja);

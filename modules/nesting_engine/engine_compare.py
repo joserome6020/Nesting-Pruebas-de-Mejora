@@ -10,8 +10,9 @@ from typing import Any, Callable, Optional
 from .engine_registry import get_engine_meta, is_engine_ready, list_engine_metas
 from .engines.types import EngineJobMetrics, NestEngineNotReadyError
 from .nest_engine_context import (
-    STEEL_ENGINE_IDS,
+    UI_STEEL_ENGINE_IDS,
     get_selected_engine_id,
+    iter_ui_steel_engine_ids,
     normalize_engine_id,
     set_active_engine_id,
     set_selected_engine_id,
@@ -197,7 +198,8 @@ def ejecutar_comparacion_motores(
     Opción B: ejecuta todos los motores de acero en paralelo sobre el mismo job.
     El cobre debe excluirse antes (pipeline externo).
     """
-    ids = list(engine_ids or STEEL_ENGINE_IDS)
+    # Por defecto sin libnest2d (oculto en UI; código retocado intacto).
+    ids = list(engine_ids or tuple(iter_ui_steel_engine_ids()) or UI_STEEL_ENGINE_IDS)
     workers = max(1, min(len(ids), int(max_workers or len(ids))))
     bundle = EngineComparisonBundle(compare_mode="parallel_full_job")
     t0 = time.perf_counter()

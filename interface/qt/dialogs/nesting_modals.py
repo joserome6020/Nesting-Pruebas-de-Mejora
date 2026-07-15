@@ -6,8 +6,10 @@ import copy
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QDialog,
     QDoubleSpinBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -735,4 +738,255 @@ def mostrar_modal_comparacion_motores(parent, bundle) -> str | None:
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
     return result["engine_id"]
+
+
+def _format_key_in(w_in: float, h_in: float) -> str:
+    a, b = sorted((round(float(w_in), 3), round(float(h_in), 3)))
+    return f"{a:.3f}x{b:.3f}"
+
+
+def agrupar_formatos_placas_inventario(datos_placas: list) -> list[dict]:
+    """Agrupa inventario por formato (pulgadas) para el selector de nesting."""
+    grupos: dict[str, dict] = {}
+    for placa in datos_placas or []:
+        try:
+            if len(placa) < 5:
+                continue
+            w_in = float(placa[3])
+            h_in = float(placa[4])
+            if w_in <= 0 or h_in <= 0:
+                continue
+            key = _format_key_in(w_in, h_in)
+            precio = float(placa[6] or 0) if len(placa) > 6 else 0.0
+            cal = str(placa[0] or "").strip()
+            mat = str(placa[1] or "").strip()
+            g = grupos.get(key)
+            if g is None:
+                grupos[key] = {
+                    "key": key,
+                    "w_in": w_in,
+                    "h_in": h_in,
+                    "count": 1,
+                    "precio_min": precio if precio > 0 else 0.0,
+                    "calibres": {cal} if cal else set(),
+                    "materiales": {mat} if mat else set(),
+                    "rows": [placa],
+                }
+            else:
+                g["count"] += 1
+                g["rows"].append(placa)
+                if precio > 0 and (g["precio_min"] <= 0 or precio < g["precio_min"]):
+                    g["precio_min"] = precio
+                if cal:
+                    g["calibres"].add(cal)
+                if mat:
+                    g["materiales"].add(mat)
+        except Exception:
+            continue
+
+    out = list(grupos.values())
+    out.sort(key=lambda g: (g["w_in"] * g["h_in"], g["precio_min"]))
+    return out
+
+
+def filtrar_datos_placas_nest_selection(datos_placas: list, selection: dict | None) -> list:
+    """
+    selection:
+      {"mode": "auto"}
+      {"mode": "manual", "items": [{"key", "w_in", "h_in", "qty": int|None}, ...]}
+    """
+    if not selection or selection.get("mode") == "auto":
+        return list(datos_placas or [])
+    items = selection.get("items") or []
+    if not items:
+        return list(datos_placas or [])
+
+    by_key: dict[str, list] = {}
+    for placa in datos_placas or []:
+        try:
+            key = _format_key_in(float(placa[3]), float(placa[4]))
+            by_key.setdefault(key, []).append(placa)
+        except Exception:
+            continue
+
+    filtradas: list = []
+    for item in items:
+        key = str(item.get("key") or _format_key_in(item.get("w_in", 0), item.get("h_in", 0)))
+        rows = list(by_key.get(key) or [])
+        if not rows:
+            continue
+        qty = item.get("qty")
+        if qty is None:
+            filtradas.extend(rows)
+            continue
+        n = max(1, int(qty))
+        # Si hay menos filas físicas, se repite la última para tipar N hojas del formato.
+        for i in range(n):
+            filtradas.append(rows[min(i, len(rows) - 1)])
+    return filtradas
+
+
+def preguntar_seleccion_placas_nesting(
+    parent,
+    datos_placas: list,
+    *,
+    engine_label: str = "SVGNest Ultra",
+) -> dict | None:
+    """
+    Selector de placas al Ejecutar Nesting (Ultra).
+    Retorna dict selection, o None si cancela.
+    """
+    formatos = agrupar_formatos_placas_inventario(datos_placas)
+    if not formatos:
+        QMessageBox.warning(
+            parent,
+            "Sin placas",
+            "No hay placas DISPONIBLE en inventario para este nesting.",
+        )
+        return None
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Selección de placas — Nesting")
+    dlg.setModal(True)
+    dlg.resize(620, 560)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+
+    lay = QVBoxLayout(dlg)
+    tit = QLabel(
+        f"PLACAS PARA {engine_label.upper()}",
+        alignment=Qt.AlignmentFlag.AlignCenter,
+    )
+    tit.setStyleSheet(f"font-weight:800;font-size:14px;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(tit)
+
+    info = QLabel(
+        "Elige los formatos y cantidades en los que trabajará el motor "
+        "(más rápido). O usa Selección Auto (inventario completo por precio/acomodo), "
+        "que puede tardar mucho más."
+    )
+    info.setWordWrap(True)
+    info.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(info)
+
+    scroll = QScrollArea()
+    scroll.setObjectName("AppScroll")
+    scroll.setWidgetResizable(True)
+    inner = QWidget()
+    inner_lay = QVBoxLayout(inner)
+    inner_lay.setSpacing(8)
+
+    rows_ui: list[dict] = []
+    for g in formatos[:60]:
+        card = QFrame()
+        card.setObjectName("HerinoxCard")
+        card.setStyleSheet(
+            f"QFrame#HerinoxCard {{ background:#FFFFFF; border:1px solid {COLOR_BORDE}; "
+            f"border-radius:8px; }}"
+        )
+        row = QHBoxLayout(card)
+        row.setContentsMargins(10, 8, 10, 8)
+
+        chk = QCheckBox(
+            f'{g["w_in"]:.1f}" × {g["h_in"]:.1f}"  ·  stock {g["count"]}  ·  '
+            f'desde ${g["precio_min"]:,.0f}'
+        )
+        chk.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:600;")
+        row.addWidget(chk, 1)
+
+        unlimited = QCheckBox("Sin límite")
+        unlimited.setChecked(True)
+        row.addWidget(unlimited)
+
+        spin = QSpinBox()
+        spin.setRange(1, 999)
+        spin.setValue(max(1, int(g["count"])))
+        spin.setEnabled(False)
+        spin.setFixedWidth(70)
+        row.addWidget(QLabel("Cant:"))
+        row.addWidget(spin)
+
+        def _toggle_lim(_checked=False, u=unlimited, s=spin):
+            s.setEnabled(not u.isChecked())
+
+        unlimited.toggled.connect(_toggle_lim)
+        inner_lay.addWidget(card)
+        rows_ui.append(
+            {
+                "chk": chk,
+                "unlimited": unlimited,
+                "spin": spin,
+                "key": g["key"],
+                "w_in": g["w_in"],
+                "h_in": g["h_in"],
+            }
+        )
+
+    inner_lay.addStretch()
+    scroll.setWidget(inner)
+    lay.addWidget(scroll, 1)
+
+    btn_row = QHBoxLayout()
+    btn_cancel = QPushButton("Cancelar")
+    apply_push_button(btn_cancel, "#64748B", font_size=11)
+    btn_auto = QPushButton("Selección Auto")
+    apply_push_button(btn_auto, COLOR_ACENTO, font_size=11, font_weight=700)
+    btn_ok = QPushButton("Usar placas seleccionadas")
+    apply_push_button(btn_ok, COLOR_EXITO, font_size=11, font_weight=700)
+    btn_row.addWidget(btn_cancel)
+    btn_row.addStretch()
+    btn_row.addWidget(btn_auto)
+    btn_row.addWidget(btn_ok)
+    lay.addLayout(btn_row)
+
+    result: dict = {"value": None}
+
+    def _accept_manual():
+        items = []
+        for r in rows_ui:
+            if not r["chk"].isChecked():
+                continue
+            qty = None if r["unlimited"].isChecked() else int(r["spin"].value())
+            items.append(
+                {
+                    "key": r["key"],
+                    "w_in": r["w_in"],
+                    "h_in": r["h_in"],
+                    "qty": qty,
+                }
+            )
+        if not items:
+            QMessageBox.warning(
+                dlg,
+                "Selección vacía",
+                "Marca al menos un formato de placa, o usa Selección Auto.",
+            )
+            return
+        result["value"] = {"mode": "manual", "items": items}
+        dlg.accept()
+
+    def _accept_auto():
+        warn = QMessageBox.warning(
+            dlg,
+            "Selección Auto — tiempo alto",
+            "Selección Auto usa el inventario completo y elige placas por "
+            "precio + acomodo (modo por defecto).\n\n"
+            "Esto puede tardar MUCHO más tiempo a costa de la selección "
+            "definitiva de placas.\n\n"
+            "¿Continuar con Selección Auto?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if warn != QMessageBox.StandardButton.Yes:
+            return
+        result["value"] = {"mode": "auto"}
+        dlg.accept()
+
+    btn_ok.clicked.connect(_accept_manual)
+    btn_auto.clicked.connect(_accept_auto)
+    btn_cancel.clicked.connect(dlg.reject)
+    _centrar_dialogo(dlg, parent)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return result["value"]
 

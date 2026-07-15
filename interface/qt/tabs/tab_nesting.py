@@ -1929,6 +1929,33 @@ class TabNesting(QWidget, TimerHost):
             if resp != QMessageBox.StandardButton.Yes:
                 return
 
+        plate_selection = None
+        if not self._wo_solo_cobre():
+            try:
+                from modules.nesting_engine.nest_engine_context import ENGINE_SVGNEST_ULTRA
+
+                steel_eid = self._steel_engine_id_para_nesteo()
+                if str(steel_eid) == ENGINE_SVGNEST_ULTRA:
+                    from interface.qt.dialogs.nesting_modals import (
+                        preguntar_seleccion_placas_nesting,
+                    )
+
+                    datos_ui = self.app.plates_manager.obtener_datos_placas()
+                    plate_selection = preguntar_seleccion_placas_nesting(
+                        self,
+                        datos_ui,
+                        engine_label="SVGNest Ultra",
+                    )
+                    if plate_selection is None:
+                        return
+            except Exception as exc:
+                QMessageBox.warning(
+                    self,
+                    "Selección de placas",
+                    f"No se pudo abrir el selector de placas:\n{exc}",
+                )
+                return
+
         self._sync_orientacion_cobre_al_motor()
         self.btn_run_nest.setEnabled(False)
         self.btn_ver_lotes.setEnabled(False)
@@ -1953,11 +1980,18 @@ class TabNesting(QWidget, TimerHost):
 
         threading.Thread(
             target=self.thread_worker,
-            args=(T, self.global_margin_val, self.global_corner_val, kerf_ui, opt_ui),
+            args=(
+                T,
+                self.global_margin_val,
+                self.global_corner_val,
+                kerf_ui,
+                opt_ui,
+                plate_selection,
+            ),
             daemon=True
         ).start()
 
-    def thread_worker(self, T, margin_val, corner_val, kerf_val, opt_val):
+    def thread_worker(self, T, margin_val, corner_val, kerf_val, opt_val, plate_selection=None):
         tiempo_inicio = time.time()
         wo_act = getattr(self.app, 'job_activo', 'PENDIENTE').strip().upper()
 
@@ -1984,6 +2018,14 @@ class TabNesting(QWidget, TimerHost):
             # =========================================================
 
             datos_placas = self.app.plates_manager.obtener_datos_placas()
+            if plate_selection and plate_selection.get("mode") == "manual":
+                from interface.qt.dialogs.nesting_modals import (
+                    filtrar_datos_placas_nest_selection,
+                )
+
+                datos_placas = filtrar_datos_placas_nest_selection(
+                    datos_placas, plate_selection
+                )
 
             steel_engine_id = None
             if not self._wo_solo_cobre():
@@ -2016,6 +2058,8 @@ class TabNesting(QWidget, TimerHost):
                 )
                 if steel_engine_id:
                     nest_kwargs["engine_id"] = steel_engine_id
+                if plate_selection is not None:
+                    nest_kwargs["plate_selection"] = plate_selection
 
                 res = self.app.motor_nesting.ejecutar_nesting_visual(
                     datos_base,
@@ -2069,6 +2113,8 @@ class TabNesting(QWidget, TimerHost):
                 )
                 if steel_engine_id:
                     nest_kwargs_lote["engine_id"] = steel_engine_id
+                if plate_selection is not None:
+                    nest_kwargs_lote["plate_selection"] = plate_selection
                 nestings_precalculados[k] = self.app.motor_nesting.ejecutar_nesting_visual(
                     datos_k,
                     datos_placas,
@@ -2736,6 +2782,56 @@ class TabNesting(QWidget, TimerHost):
         motor = getattr(self.app, "motor_nesting", None)
         return apply_saved_steel_engine(motor=motor)
 
+    def _es_engine_svgnest_ultra(self, engine_id=None) -> bool:
+        from modules.nesting_engine.nest_engine_context import (
+            ENGINE_SVGNEST_ULTRA,
+            get_active_engine_id,
+            normalize_engine_id,
+        )
+
+        eid = engine_id if engine_id is not None else get_active_engine_id()
+        return normalize_engine_id(eid) == ENGINE_SVGNEST_ULTRA
+
+    def _abrir_carga_renest(self, titulo: str, *, engine_id=None) -> bool:
+        """Abre popup de carga con tiempo; si Ultra, habilita «Aceptar mejor actual»."""
+        ultra = self._es_engine_svgnest_ultra(engine_id)
+        if hasattr(self.app, "abrir_ventana_carga"):
+            try:
+                self.app.abrir_ventana_carga(titulo, ultra_accept=ultra)
+            except TypeError:
+                self.app.abrir_ventana_carga(titulo)
+        return ultra
+
+    def _ctx_ultra_renest_enter(self, ultra: bool):
+        """Activa accept-mode Ultra + callback UI. Retorna tokens a limpiar."""
+        if not ultra:
+            return None, None
+        from interface.qt.thread_bridge import call_on_main
+        from modules.nesting_engine.nest_engine_context import (
+            set_ultra_best_callback,
+            set_ultra_renest_accept_mode,
+        )
+
+        tok_mode = set_ultra_renest_accept_mode(True)
+
+        def _on_best(resumen: str = ""):
+            if hasattr(self.app, "notificar_mejor_nest_listo"):
+                call_on_main(self.app.notificar_mejor_nest_listo, resumen)
+
+        tok_cb = set_ultra_best_callback(_on_best)
+        return tok_mode, tok_cb
+
+    def _ctx_ultra_renest_exit(self, tok_mode, tok_cb):
+        from modules.nesting_engine.nest_engine_context import (
+            reset_ultra_best_callback,
+            reset_ultra_renest_accept_mode,
+        )
+
+        if tok_cb is not None:
+            reset_ultra_best_callback(tok_cb)
+        if tok_mode is not None:
+            reset_ultra_renest_accept_mode(tok_mode)
+
     def _inventario_desde_resultado(self, resultado) -> dict:
         inventario = {}
         for hoja in (resultado or {}).get("hojas") or []:
@@ -2810,7 +2906,8 @@ class TabNesting(QWidget, TimerHost):
             tiene_rtz = bool(bloque.get("idx_retazos"))
             es_cu_largos = bool(hoja.get("modo_largos_cu"))
 
-            sub_renest = QMenu("RENESTEAR", menu)
+            # Motores como submenú (mismo patrón que calibre), no como ítems planos.
+            sub_renest = QMenu("Renestear placa", menu)
             if tiene_rtz and not es_cu_largos:
                 for eid, label in self._opciones_motores_renest():
                     sub_m = QMenu(label, sub_renest)
@@ -2833,11 +2930,10 @@ class TabNesting(QWidget, TimerHost):
                         ),
                     )
                     sub_renest.addMenu(sub_m)
-                menu.addMenu(sub_renest)
             else:
                 for eid, label in self._opciones_motores_renest():
-                    menu.addAction(
-                        f"RENESTEAR · {label}",
+                    sub_renest.addAction(
+                        label,
                         self._safe_ctx(
                             "Renestear placa",
                             lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
@@ -2845,6 +2941,7 @@ class TabNesting(QWidget, TimerHost):
                             ),
                         ),
                     )
+            menu.addMenu(sub_renest)
             menu.addAction(
                 "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
@@ -3059,10 +3156,54 @@ class TabNesting(QWidget, TimerHost):
             conteo[nom] = conteo.get(nom, 0) + q
         return conteo
 
-    def _construir_fuente_geometria_por_nombre(self, clave):
+    def _poly_desrotar_a_ejes(self, poly, marks=None):
+        """
+        Quita rotación de pose del nest (p. ej. 45° horneada) para que FORCE
+        trabaje con orientación nativa; solo aplica 0/90/180/270 después.
+        """
+        import math
+
+        from shapely import affinity
+
+        if poly is None or getattr(poly, "is_empty", True):
+            return poly, marks
+        try:
+            mrr = poly.minimum_rotated_rectangle
+            coords = list(mrr.exterior.coords)
+            if len(coords) < 3:
+                return poly, marks
+            dx = float(coords[1][0] - coords[0][0])
+            dy = float(coords[1][1] - coords[0][1])
+            ang = math.degrees(math.atan2(dy, dx))
+            # Snap al múltiplo de 90° más cercano → deshacer solo el sesgo (45°, etc.).
+            snap = round(ang / 90.0) * 90.0
+            delta = ang - snap
+            if abs(delta) < 1.0:
+                return poly, marks
+            origin = "centroid"
+            poly_u = affinity.rotate(poly, -delta, origin=origin, use_radians=False)
+            marks_u = marks
+            if marks is not None and not getattr(marks, "is_empty", True):
+                marks_u = affinity.rotate(marks, -delta, origin=origin, use_radians=False)
+            return poly_u, marks_u
+        except Exception:
+            return poly, marks
+
+    def _construir_fuente_geometria_por_nombre(self, clave, nombres_requeridos=None):
+        """
+        Mapa nombre->geometría base para renest/compensar.
+
+        Orden (rápido + orientación correcta):
+        1) Nest en memoria (sin red) + desrotar pose (quita 45° horneado).
+        2) DXF solo de nombres que aún falten.
+        """
         material_hoja = clave.split("_")[1] if "_" in clave else clave
         calibre_hoja = clave.split("_")[0] if "_" in clave else ""
         fuente = {}
+        req = None
+        if nombres_requeridos:
+            req = {self._nombre_canonico_pieza(n) for n in nombres_requeridos}
+            req.discard("")
 
         def _marks_from_raw(raw_marks):
             try:
@@ -3086,15 +3227,19 @@ class TabNesting(QWidget, TimerHost):
                 return LineString(segs[0])
             return MultiLineString(segs)
 
-        def _agregar_fuente(nom, poly, marks, cal, mat, ruta):
+        def _agregar_fuente(nom, poly, marks, cal, mat, ruta, *, desrotar=False):
             canon = self._nombre_canonico_pieza(nom)
             if not canon or canon in fuente or poly is None or getattr(poly, "is_empty", True):
+                return
+            if req is not None and canon not in req:
                 return
             from shapely import affinity
             from interface.utils_nesting import clave_orientacion_cobre_ruta, es_material_cobre
 
             poly_use = poly
             marks_use = marks
+            if desrotar:
+                poly_use, marks_use = self._poly_desrotar_a_ejes(poly_use, marks_use)
             if es_material_cobre(mat):
                 rot_deg = int(
                     (getattr(self.app, "orientacion_cobre_por_ruta", {}) or {}).get(
@@ -3132,27 +3277,15 @@ class TabNesting(QWidget, TimerHost):
                 "ruta": ruta,
             }
 
-        # 1) Fuente primaria: geometría fresca desde rutas DXF.
-        for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
-            nom = str(p_nom or "").strip()
-            if not nom:
-                continue
-            if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
-                continue
-            if not self.app.motor_nesting._coinciden(material_hoja, mat):
-                continue
-            poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
-            if not poly:
-                continue
-            _agregar_fuente(nom, poly, marks, cal, mat, ruta)
-
-        # 2) Fallback robusto: reconstruir desde piezas ya anidadas en memoria (cuando la ruta DXF falla).
+        # 1) Nest en memoria (rápido) + desrotar pose a ejes.
         grp = (self.app.resultados_nesting or {}).get(clave) or {}
         for hoja in (grp.get("hojas") or []):
             for p in (hoja.get("piezas") or []):
                 nom = str(p.get("nombre", "")).strip()
                 canon = self._nombre_canonico_pieza(nom)
                 if not canon or self._es_pieza_virtual(nom) or canon in fuente:
+                    continue
+                if req is not None and canon not in req:
                     continue
                 pols = p.get("poligonos") or []
                 if not pols or not pols[0]:
@@ -3192,9 +3325,41 @@ class TabNesting(QWidget, TimerHost):
                         p.get("calibre", calibre_hoja),
                         p.get("material", material_hoja),
                         p.get("ruta", ""),
+                        desrotar=True,
                     )
                 except Exception:
                     continue
+
+        # 2) DXF solo de lo que aún falte (no el job entero).
+        faltan = None
+        if req is not None:
+            faltan = {n for n in req if n not in fuente}
+        if faltan is None or faltan:
+            for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
+                nom = str(p_nom or "").strip()
+                canon = self._nombre_canonico_pieza(nom)
+                if not canon or canon in fuente:
+                    continue
+                if faltan is not None and canon not in faltan:
+                    continue
+                if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                    continue
+                if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                    continue
+                poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
+                if not poly:
+                    continue
+                _agregar_fuente(nom, poly, marks, cal, mat, ruta, desrotar=False)
+                if faltan is not None:
+                    faltan.discard(canon)
+                    if not faltan:
+                        break
+
+        print(
+            f"[GEOM-FUENTE] clave={clave} | nest+dxf={len(fuente)}"
+            + (f" | req={len(req)}" if req is not None else ""),
+            flush=True,
+        )
         return fuente
 
     def _build_piezas_para_renest_compensado(self, clave, cupos_compensar_por_nombre, offset_mm):
@@ -3607,12 +3772,12 @@ class TabNesting(QWidget, TimerHost):
         opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
         corner = self.global_corner_val
 
-        if hasattr(self.app, "abrir_ventana_carga"):
-            self.app.abrir_ventana_carga("Renesteando calibre completo...")
+        engine_renest = engine_id
+        ultra_renest = (not es_cobre) and self._es_engine_svgnest_ultra(engine_renest)
+        self._abrir_carga_renest("Renesteando calibre completo...", engine_id=engine_renest)
 
         sep_cu = cu_separacion_in
         largo_sin_cu = cu_largo_sin_separacion_in
-        engine_renest = engine_id
 
         def worker():
             backup_grp = copy.deepcopy((self.app.resultados_nesting or {}).get(clave))
@@ -3627,6 +3792,7 @@ class TabNesting(QWidget, TimerHost):
                     dict(Counter(str(p.get("nombre") or "") for p in piezas_pack))
                 )
             engine_token = None
+            tok_mode = tok_cb = None
             try:
                 if engine_renest and not es_cobre:
                     from modules.nesting_engine.nest_engine_context import set_active_engine_id
@@ -3634,6 +3800,7 @@ class TabNesting(QWidget, TimerHost):
                     engine_token = set_active_engine_id(engine_renest)
                     if getattr(self.app, "motor_nesting", None) is not None:
                         self.app.motor_nesting.active_engine_id = engine_renest
+                tok_mode, tok_cb = self._ctx_ultra_renest_enter(ultra_renest)
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
                 if candidata_placa:
                     datos_placas = self._filtrar_datos_placas_para_candidata(
@@ -3656,6 +3823,8 @@ class TabNesting(QWidget, TimerHost):
                     cu_separacion_in=sep_cu if es_cobre else None,
                     cu_largo_sin_separacion_in=largo_sin_cu if es_cobre else None,
                 )
+                if getattr(self.app, "tarea_abortada", lambda: False)():
+                    raise RuntimeError("Cancelado por el usuario.")
                 resultado = raw[1] if isinstance(raw, tuple) and len(raw) == 2 else raw
                 if not isinstance(resultado, dict) or resultado.get("error"):
                     raise RuntimeError(str((resultado or {}).get("error", "Sin resultado válido.")))
@@ -3699,6 +3868,7 @@ class TabNesting(QWidget, TimerHost):
 
                 self.app.after(0, on_err)
             finally:
+                self._ctx_ultra_renest_exit(tok_mode, tok_cb)
                 if engine_token is not None:
                     from modules.nesting_engine.nest_engine_context import reset_active_engine_id
 
@@ -5355,8 +5525,8 @@ class TabNesting(QWidget, TimerHost):
             self._iniciar_sesion_cambio_placa(clave, hoja)
         ses_gen = int((getattr(self, "_cambio_placa_sesion", None) or {}).get("gen", 0) or 0)
 
-        if hasattr(self.app, "abrir_ventana_carga"):
-            self.app.abrir_ventana_carga("Renesteando en placa seleccionada...")
+        ultra_renest = self._es_engine_svgnest_ultra(None)
+        self._abrir_carga_renest("Renesteando en placa seleccionada...")
 
         opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
         corner = self.global_corner_val
@@ -5367,7 +5537,9 @@ class TabNesting(QWidget, TimerHost):
         self._cambio_placa_ultimo_pack = copy.deepcopy(piezas)
 
         def worker():
+            tok_mode = tok_cb = None
             try:
+                tok_mode, tok_cb = self._ctx_ultra_renest_enter(ultra_renest)
                 nh, sobras = self.app.motor_nesting.empaquetar_una_hoja_mc(
                     piezas_worker,
                     w_mm,
@@ -5377,7 +5549,10 @@ class TabNesting(QWidget, TimerHost):
                     opt,
                     corner,
                 )
+                if getattr(self.app, "tarea_abortada", lambda: False)():
+                    raise RuntimeError("Cancelado por el usuario.")
             except Exception as exc:
+                self._ctx_ultra_renest_exit(tok_mode, tok_cb)
                 call_on_main(
                     self._on_error_cambio_placa,
                     clave,
@@ -5386,6 +5561,7 @@ class TabNesting(QWidget, TimerHost):
                 )
                 return
 
+            self._ctx_ultra_renest_exit(tok_mode, tok_cb)
             call_on_main(
                 self._on_resultado_cambio_placa,
                 clave,
@@ -5630,7 +5806,9 @@ class TabNesting(QWidget, TimerHost):
         if not resumen_canon:
             return []
 
-        fuente = self._construir_fuente_geometria_por_nombre(clave)
+        fuente = self._construir_fuente_geometria_por_nombre(
+            clave, nombres_requeridos=set(resumen_canon.keys())
+        )
         if not fuente:
             return []
 
@@ -5859,6 +6037,19 @@ class TabNesting(QWidget, TimerHost):
                             offset_mm_forzado=offset_mm_forzado,
                         )
                 else:
+                    from modules.nesting_engine.nest_engine_context import (
+                        get_active_engine_id,
+                        is_ultra_renest_accept_mode,
+                    )
+
+                    # Renest de placa: 1 pack. 8 reintentos × PIP/anillos = minutos.
+                    n_intentos = 1
+                    print(
+                        f"[RENEST-PACK] piezas={len(piezas_a_reprocesar)} | "
+                        f"intentos={n_intentos} | engine={get_active_engine_id()} | "
+                        f"ultra_accept={is_ultra_renest_accept_mode()}",
+                        flush=True,
+                    )
                     nh = self.app.motor_nesting.empaquetar_con_reintentos(
                         piezas_a_reprocesar,
                         hoja["placa_w"],
@@ -5867,7 +6058,7 @@ class TabNesting(QWidget, TimerHost):
                         m,
                         opt,
                         corner,
-                        intentos=8,
+                        intentos=n_intentos,
                         debug_tag="recalc_contexto",
                     )
                     if nh:
@@ -5972,18 +6163,18 @@ class TabNesting(QWidget, TimerHost):
             ) != QMessageBox.StandardButton.Yes:
                 return
 
-        if hasattr(self.app, "abrir_ventana_carga"):
-            if compensar_plasma:
-                titulo_carga = (
-                    "Compensando placa madre + RTZ..."
-                    if absorber_rtz
-                    else "Compensando placa..."
-                )
-            elif absorber_rtz:
-                titulo_carga = "Renesteando placa (absorbiendo RTZ)..."
-            else:
-                titulo_carga = "Renesteando placa..."
-            self.app.abrir_ventana_carga(titulo_carga)
+        if compensar_plasma:
+            titulo_carga = (
+                "Compensando placa madre + RTZ..."
+                if absorber_rtz
+                else "Compensando placa..."
+            )
+        elif absorber_rtz:
+            titulo_carga = "Renesteando placa (absorbiendo RTZ)..."
+        else:
+            titulo_carga = "Renesteando placa..."
+        ultra_renest = (not compensar_plasma) and self._es_engine_svgnest_ultra(engine_id)
+        self._abrir_carga_renest(titulo_carga, engine_id=engine_id)
 
         bloque_objetivo = bloque_previo
         idx_objetivo = bloque_objetivo.get("idx_base", -1)
@@ -5993,7 +6184,19 @@ class TabNesting(QWidget, TimerHost):
         engine_renest = engine_id
 
         def worker():
+            import time as _time
+            from concurrent.futures import ThreadPoolExecutor
+
+            from interface.qt.thread_bridge import call_on_main
+            from modules.nesting_engine.manager import (
+                _bind_pack_cancel_checker,
+                _unbind_pack_cancel_checker,
+            )
+
             engine_token = None
+            tok_mode = tok_cb = None
+            cc_bound = False
+            prev_cc = None
             try:
                 if engine_renest:
                     from modules.nesting_engine.nest_engine_context import set_active_engine_id
@@ -6001,28 +6204,91 @@ class TabNesting(QWidget, TimerHost):
                     engine_token = set_active_engine_id(engine_renest)
                     if getattr(self.app, "motor_nesting", None) is not None:
                         self.app.motor_nesting.active_engine_id = engine_renest
-                if hasattr(self.app, "actualizar_progreso"):
-                    self.app.actualizar_progreso("Preparando geometrías...", 0.1)
-                if hasattr(self.app, "actualizar_progreso"):
-                    self.app.actualizar_progreso("Extrayendo datos de piezas...", 0.3)
+                tok_mode, tok_cb = self._ctx_ultra_renest_enter(ultra_renest)
+                if getattr(self.app, "tarea_cancelada", None):
+                    prev_cc = _bind_pack_cancel_checker(self.app.tarea_cancelada)
+                    cc_bound = True
+
                 opt = self.cmb_opt.currentText()
                 corner = self.global_corner_val
                 if hasattr(self.app, "actualizar_progreso"):
-                    self.app.actualizar_progreso("Ejecutando motor...", 0.6)
-                nueva, idx_retazos_asociados, hojas_extra = self._recalcular_hoja_con_contexto(
-                    clave,
-                    hoja,
-                    k,
-                    m,
-                    opt,
-                    corner,
-                    compensar_plasma=compensar_plasma,
-                    offset_mm_forzado=offset_mm_forzado,
-                    absorber_rtz=absorber_rtz,
-                )
+                    call_on_main(
+                        self.app.actualizar_progreso,
+                        (
+                            "Ultra buscando primer acomodo nuevo..."
+                            if ultra_renest
+                            else "Ejecutando motor..."
+                        ),
+                        0.35,
+                    )
+
+                idx_retazos_asociados = bloque_previo.get("idx_retazos") or []
+                hojas_extra = []
+                nueva = None
+
+                def _do_recalc():
+                    return self._recalcular_hoja_con_contexto(
+                        clave,
+                        hoja,
+                        k,
+                        m,
+                        opt,
+                        corner,
+                        compensar_plasma=compensar_plasma,
+                        offset_mm_forzado=offset_mm_forzado,
+                        absorber_rtz=absorber_rtz,
+                    )
+
+                if ultra_renest:
+                    # Recalc en hilo: al Aceptar (solo si ya hay acomodo nuevo) no bloquea.
+                    # Importante: copiar contextvars (ultra_accept / engine) al pool worker.
+                    import contextvars
+
+                    pool = ThreadPoolExecutor(max_workers=1)
+                    _ctx = contextvars.copy_context()
+                    fut = pool.submit(_ctx.run, _do_recalc)
+                    try:
+                        while not fut.done():
+                            if getattr(self.app, "tarea_acepto_mejor", lambda: False)():
+                                break
+                            if getattr(self.app, "tarea_abortada", lambda: False)():
+                                break
+                            _time.sleep(0.15)
+                        acepto = bool(getattr(self.app, "tarea_acepto_mejor", lambda: False)())
+                        aborto = bool(getattr(self.app, "tarea_abortada", lambda: False)())
+                        if fut.done():
+                            nueva, idx_retazos_asociados, hojas_extra = fut.result()
+                        elif acepto:
+                            # Esperar el pack en vuelo (puede ser minuto+); no cortar a vacío.
+                            for _ in range(2400):  # hasta ~6 min
+                                if fut.done():
+                                    break
+                                _time.sleep(0.15)
+                            if fut.done():
+                                nueva, idx_retazos_asociados, hojas_extra = fut.result()
+                            else:
+                                raise RuntimeError(
+                                    "El motor aún no terminó el acomodo al aceptar. "
+                                    "Espere a que termine o cancele e intente de nuevo."
+                                )
+                        elif aborto:
+                            raise RuntimeError("Cancelado por el usuario.")
+                        else:
+                            nueva, idx_retazos_asociados, hojas_extra = fut.result()
+                    finally:
+                        pool.shutdown(wait=False, cancel_futures=False)
+                else:
+                    nueva, idx_retazos_asociados, hojas_extra = _do_recalc()
+
+                acepto = bool(getattr(self.app, "tarea_acepto_mejor", lambda: False)())
+                if getattr(self.app, "tarea_abortada", lambda: False)() and not acepto:
+                    raise RuntimeError("Cancelado por el usuario.")
+
+                if nueva is None or not (nueva.get("piezas") or []):
+                    raise RuntimeError("El motor no generó un acomodo válido.")
 
                 if hasattr(self.app, "actualizar_progreso"):
-                    self.app.actualizar_progreso("Actualizando vista...", 0.9)
+                    call_on_main(self.app.actualizar_progreso, "Actualizando vista...", 0.9)
 
                 conservar_rtz = bool(idx_retazos_asociados) and not absorber_rtz
 
@@ -6064,6 +6330,12 @@ class TabNesting(QWidget, TimerHost):
 
                 self.app.after(0, on_err)
             finally:
+                if cc_bound:
+                    try:
+                        _unbind_pack_cancel_checker(prev_cc)
+                    except Exception:
+                        pass
+                self._ctx_ultra_renest_exit(tok_mode, tok_cb)
                 if engine_token is not None:
                     from modules.nesting_engine.nest_engine_context import reset_active_engine_id
 
@@ -6131,7 +6403,7 @@ class TabNesting(QWidget, TimerHost):
                     m,
                     self.cmb_opt.currentText(),
                     self.global_corner_val,
-                    intentos=8,
+                    intentos=1,
                     debug_tag="recalc_local",
                     solo_completo=True,
                 )

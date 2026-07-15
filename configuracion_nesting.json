@@ -18,7 +18,6 @@
         "engines": [
             "arga_force",
             "burke_blf",
-            "libnest2d",
             "svgnest_ultra"
         ],
         "copper_external_module": true

@@ -57,6 +57,17 @@ def _es_motor_arga_force(engine_id=None) -> bool:
     eid = normalize_engine_id(engine_id if engine_id is not None else get_active_engine_id())
     return eid == ENGINE_ARGA_FORCE
 
+
+def _early_exit_sim_placa_activo() -> bool:
+    """Early-exit de candidatas: FORCE siempre; Ultra solo en Selección Auto."""
+    eid = normalize_engine_id(get_active_engine_id())
+    if eid == ENGINE_ARGA_FORCE:
+        return True
+    if eid == ENGINE_SVGNEST_ULTRA:
+        # Manual Ultra fija formatos; Auto deja _plate_formats_allowed = None.
+        return True
+    return False
+
 # Cancelación NestFab-like visible en helpers de módulo (mismo hilo / mismo proceso).
 _CANCEL_TLS = threading.local()
 
@@ -78,7 +89,12 @@ from .efficiency_metrics import (
     calcular_eficiencias_grupo,
     nombre_rtz_para_placa,
 )
-from .nest_optimization import get_engine_profile, get_nest_profile, score_placa_simulacion
+from .nest_optimization import (
+    get_engine_profile,
+    get_nest_profile,
+    score_placa_lower_bound,
+    score_placa_simulacion,
+)
 from .exporter import exportar_resultados_a_dxf
 from .cu_largos_nesting import procesar_grupo_largos_cu
 from .cu_inventory import (
@@ -105,6 +121,16 @@ TRANSFER_ROTATIONS = (0, 90, 180, 270)
 
 def _dbg_nesting(msg: str):
     try:
+        # MATCH-OK inunda I/O en jobs grandes; solo con ARGA_NEST_VERBOSE=1.
+        if msg.startswith("[MATCH-OK") or msg.startswith("[MATCH-FALLBACK"):
+            if str(os.environ.get("ARGA_NEST_VERBOSE", "")).strip() not in (
+                "1",
+                "true",
+                "TRUE",
+                "yes",
+                "YES",
+            ):
+                return
         os.makedirs(DEBUG_DIR, exist_ok=True)
         linea = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
         print(linea)
@@ -112,6 +138,42 @@ def _dbg_nesting(msg: str):
             f.write(linea + "\n")
     except Exception:
         pass
+
+
+def _plate_format_key_mm(w_mm: float, h_mm: float) -> str:
+    w_in = round(float(w_mm) / 25.4, 3)
+    h_in = round(float(h_mm) / 25.4, 3)
+    a, b = sorted((w_in, h_in))
+    return f"{a:.3f}x{b:.3f}"
+
+
+def _parse_plate_selection(selection: dict | None) -> tuple[set[str] | None, dict[str, int] | None]:
+    """Retorna (formatos_permitidos|None, limites_qty|None). None = sin restricción."""
+    if not selection or selection.get("mode") == "auto":
+        return None, None
+    items = selection.get("items") or []
+    if not items:
+        return None, None
+    allowed: set[str] = set()
+    limits: dict[str, int] = {}
+    for item in items:
+        key = str(item.get("key") or "").strip()
+        if not key:
+            try:
+                w_in = float(item.get("w_in") or 0)
+                h_in = float(item.get("h_in") or 0)
+                a, b = sorted((round(w_in, 3), round(h_in, 3)))
+                key = f"{a:.3f}x{b:.3f}"
+            except Exception:
+                continue
+        allowed.add(key)
+        qty = item.get("qty")
+        if qty is not None:
+            try:
+                limits[key] = max(1, int(qty))
+            except Exception:
+                limits[key] = 1
+    return (allowed or None), (limits or None)
 
 
 def _fmt_bounds(poly):
@@ -608,7 +670,10 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
         best = None
         best_score = -10**9
 
-        for ang in (0, 90, 180, 270):
+        # Incluye 45° solo para *inferir* pose vs DXF (nests viejos / Ultra).
+        # FORCE empaqueta solo 0/90/180/270; si no se prueba 45 aquí, un nest
+        # histórico a 45° se reescribe mal y empalma en refresh.
+        for ang in (0, 45, 90, 135, 180, 225, 270, 315):
             test_poly = affinity.rotate(poly_local, ang, origin=rot_origin)
             tminx, tminy, _, _ = test_poly.bounds
             test_poly_zero = affinity.translate(test_poly, -tminx, -tminy)
@@ -650,11 +715,17 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
                     "rot_deg": ang,
                     "shift_x": nminx - tminx,
                     "shift_y": nminy - tminy,
+                    "poly_iou": float(poly_iou),
                 }
 
                 if poly_iou >= 0.999 and marks_score >= 0.999:
                     break
 
+        # Rechazar match flojo: mejor no inventar rotación (evita empalmes en display).
+        if best is not None and float(best.get("poly_iou", 0.0) or 0.0) < 0.92:
+            return None
+        if best is not None:
+            best.pop("poly_iou", None)
         return best
     except Exception:
         return None
@@ -1728,11 +1799,11 @@ def _post_proceso_arga_seguro(
     clave="",
 ):
     """
-    Consolida placas subutilizadas (fill-first) con validación de inventario.
+    Post FORCE entre madres (absorber placa spars re-empaquetando).
 
-    El relleno de cavidades interiores sigue en el empaque C++; aquí solo se
-    mueven piezas entre madres del mismo calibre/material para eliminar hojas
-    spars (H17/H19/H23). Si el inventario se rompe, se revierte el paso.
+    Desactivado por defecto: tras un nest 51+1 repetía FORCE (~minutos) casi
+    siempre sin poder absorber, duplicando tiempo. El empaque por hoja debe
+    cerrar bien a la primera. Reactivar: ARGA_POST_REDIST=1.
     """
     if not hojas_finales or not _es_motor_arga_force():
         return hojas_finales, costo_total_lote
@@ -1740,6 +1811,14 @@ def _post_proceso_arga_seguro(
     madres_antes = sum(
         1 for h in hojas_finales if isinstance(h, dict) and not h.get("es_retazo")
     )
+    flag = str(os.environ.get("ARGA_POST_REDIST", "")).strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        _dbg_nesting(
+            f"[POST-ARGA-SKIP] clave={clave} | hojas={len(hojas_finales)} | "
+            f"madres={madres_antes} | redistribuir=off"
+        )
+        return hojas_finales, costo_total_lote
+
     _dbg_nesting(
         f"[POST-ARGA-ON] clave={clave} | hojas={len(hojas_finales)} | madres={madres_antes}"
     )
@@ -1774,8 +1853,6 @@ def _post_proceso_arga_seguro(
     except Exception as exc:
         _dbg_nesting(f"[POST-ARGA-REDIST-ERR] clave={clave} | {exc}")
 
-    # Sin pasada extra de huecos entre madres aquí: muy cara y ya se rellenan
-    # barrenos/patio al cerrar cada placa madre.
     return base, costo
 
 
@@ -1928,7 +2005,12 @@ class MotorNesting:
                 f"[NESTING ENGINE] active={self.active_engine_id} | "
                 f"backend={nesting_engine_name()} | ready={ready} | "
                 f"mode={mode} mc={profile.get('mc_iterations')} "
-                f"lookahead={profile.get('lookahead')} refine={profile.get('refine_hoja')}"
+                f"lookahead={profile.get('lookahead')} refine={profile.get('refine_hoja')} | "
+                f"hw cpus={profile.get('logical_cpus')} "
+                f"threads={profile.get('nest_threads')} "
+                f"ultra_pop={profile.get('ga_population')} "
+                f"force_seeds={profile.get('force_parallel_seeds')} "
+                f"ram={float(profile.get('ram_gb') or 0):.1f}GB"
             )
         except Exception:
             try:
@@ -2017,6 +2099,7 @@ class MotorNesting:
         mejor_parcial = None
         mejor_area = -1.0
         mejor_resto_n = len(base) + 1
+        t0_pack = time.perf_counter()
 
         for intento in range(n):
             if self._cancelado():
@@ -2029,6 +2112,7 @@ class MotorNesting:
                 random.shuffle(batch)
                 batch.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
 
+            t_try = time.perf_counter()
             nh, sobras = _safe_empaquetar_una_hoja_mc(
                 batch,
                 w,
@@ -2047,6 +2131,14 @@ class MotorNesting:
 
             n_sob = len(sobras or [])
             area = float(nh.get("area_usada", 0) or 0)
+            n_ok = len(nh.get("piezas") or [])
+            print(
+                f"[EMPAQUE-TRY] {debug_tag}|try={intento + 1}/{n} | "
+                f"colocadas={n_ok} restos={n_sob} | "
+                f"{time.perf_counter() - t_try:.1f}s "
+                f"(total {time.perf_counter() - t0_pack:.1f}s)",
+                flush=True,
+            )
             if not sobras:
                 return actualizar_eficiencias_hoja(nh)
 
@@ -2225,6 +2317,7 @@ class MotorNesting:
         config_opt="OPTIMIZAR LARGO Y ANCHO",
         wo_name="PENDIENTE",
         engine_id=None,
+        plate_selection=None,
     ):
         def notificar(msg, porcentaje):
             if progress_callback: progress_callback(msg, porcentaje)
@@ -2237,11 +2330,19 @@ class MotorNesting:
         except Exception:
             pass
 
+        allowed, limits = _parse_plate_selection(plate_selection)
+        self._plate_formats_allowed = allowed
+        self._plate_format_limits = limits
+        self._plate_format_used = {}
+
         def _release_engine_context():
             if engine_token is not None:
                 from .nest_engine_context import reset_active_engine_id
 
                 reset_active_engine_id(engine_token)
+            self._plate_formats_allowed = None
+            self._plate_format_limits = None
+            self._plate_format_used = {}
 
         if not lista_partes:
             _release_engine_context()
@@ -2556,6 +2657,11 @@ class MotorNesting:
             # Ultra (y resto): multiproceso normal. Cancel aún se propaga entre placas.
             nucleos_totales = multiprocessing.cpu_count()
             nucleos_a_usar = max(1, min(nucleos_totales - 2, total_lotes_reales))
+            # Intra-placa (GA SVGNest Ultra): reparte núcleos entre workers para no
+            # sobre-suscribir. ARGA_NEST_OMP_THREADS del usuario tiene prioridad.
+            if not str(os.environ.get("ARGA_NEST_OMP_THREADS", "")).strip():
+                intra = max(1, nucleos_totales // max(1, nucleos_a_usar))
+                os.environ["ARGA_NEST_OMP_THREADS"] = str(intra)
 
             # Evento compartido: Cancelar UI propaga a workers (cheques entre placas).
             try:
@@ -2564,6 +2670,9 @@ class MotorNesting:
             except Exception:
                 mp_manager = None
                 cancel_event = None
+
+            plate_allowed = getattr(self, "_plate_formats_allowed", None)
+            plate_limits = getattr(self, "_plate_format_limits", None)
 
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=nucleos_a_usar,
@@ -2583,6 +2692,8 @@ class MotorNesting:
                             wo_name,
                             resolved_engine,
                             cancel_event,
+                            plate_allowed,
+                            plate_limits,
                         ),
                     ): clave
                     for clave, piezas in grupos_ordenados
@@ -2971,8 +3082,70 @@ class MotorNesting:
             mejor_restos_est = []
             mejor_restos_acc = []
             mejor_placa = None
-            
+            mejor_restos_total = None
+            mejor_precio = None
+
+            formats_allowed = getattr(self, "_plate_formats_allowed", None)
+            format_limits = getattr(self, "_plate_format_limits", None) or {}
+            format_used = getattr(self, "_plate_format_used", None)
+            if format_used is None:
+                format_used = {}
+                self._plate_format_used = format_used
+
+            # Early-exit: FORCE o Ultra en Auto (sin formatos forzados a mano).
+            use_early_exit = (
+                _early_exit_sim_placa_activo()
+                and formats_allowed is None
+            )
+            area_pend_score = _area_total_piezas(pendientes_est) + _area_total_piezas(
+                accesorios
+            )
+
+            # SIM multi-placa: nunca Ultra continual (aunque renesteo Ultra esté en accept-mode).
+            from .nest_engine_context import reset_ultra_sim_bounded, set_ultra_sim_bounded
+
+            sim_bound_token = set_ultra_sim_bounded(True)
             for candidato_placa in candidatos_sim:
+                fmt_key = _plate_format_key_mm(
+                    float(candidato_placa.get("w", 0.0) or 0.0),
+                    float(candidato_placa.get("h", 0.0) or 0.0),
+                )
+                if formats_allowed is not None and fmt_key not in formats_allowed:
+                    continue
+                lim = format_limits.get(fmt_key)
+                if lim is not None and int(format_used.get(fmt_key, 0)) >= int(lim):
+                    continue
+
+                cand_precio = float(candidato_placa.get("precio", 0.0) or 0.0)
+
+                # Regla fuerte: si la mejor ya metió TODAS las piezas y esta
+                # candidata cuesta igual o más, no puede ganar → skip.
+                if (
+                    use_early_exit
+                    and mejor_restos_total == 0
+                    and mejor_precio is not None
+                    and cand_precio >= float(mejor_precio) - 1e-9
+                ):
+                    _dbg_nesting(
+                        f"[SIM-PLACA-SKIP] clave={clave} | placa_id={candidato_placa.get('id')} | "
+                        f"precio={cand_precio:.2f} >= best_precio={float(mejor_precio):.2f} | "
+                        f"best_restos=0 | early-exit-full"
+                    )
+                    continue
+
+                # Cota inferior: si ni llenando al 100% puede ganar, no nestear.
+                if use_early_exit and mejor_score < float("inf"):
+                    lb = score_placa_lower_bound(
+                        candidato_placa,
+                        area_piezas_pendientes=area_pend_score,
+                    )
+                    if lb >= mejor_score:
+                        _dbg_nesting(
+                            f"[SIM-PLACA-SKIP] clave={clave} | placa_id={candidato_placa.get('id')} | "
+                            f"lb={lb:.4f} >= best={mejor_score:.4f} | early-exit"
+                        )
+                        continue
+
                 sim_est = copy.deepcopy(pendientes_est)
                 sim_acc = copy.deepcopy(accesorios)
 
@@ -3089,6 +3262,10 @@ class MotorNesting:
                     mejor_restos_est = restos_est_out
                     mejor_restos_acc = restos_acc_out
                     mejor_placa = candidato_placa
+                    mejor_restos_total = int(restos_count)
+                    mejor_precio = float(candidato_placa.get("precio", 0.0) or 0.0)
+
+            reset_ultra_sim_bounded(sim_bound_token)
 
             if not mejor_hoja_temp:
                 _dbg_nesting(
@@ -3110,6 +3287,16 @@ class MotorNesting:
 
             hoja_ganadora = mejor_hoja_temp
             candidato_ganador = mejor_placa
+            try:
+                win_key = _plate_format_key_mm(
+                    float(candidato_ganador.get("w", 0.0) or 0.0),
+                    float(candidato_ganador.get("h", 0.0) or 0.0),
+                )
+                self._plate_format_used[win_key] = int(
+                    self._plate_format_used.get(win_key, 0)
+                ) + 1
+            except Exception:
+                pass
             forzar_sin_mini_nest = _debe_forzar_sin_mini_nest(
                 req_cal, candidato_ganador["w"], candidato_ganador["h"]
             )
@@ -5405,7 +5592,24 @@ def _nesting_worker_bootstrap():
 def _procesar_grupo_parallel_worker(job):
     """Worker de proceso: instancia limpia sin referencias a la UI Qt."""
     cancel_event = None
-    if len(job) >= 10:
+    plate_allowed = None
+    plate_limits = None
+    if len(job) >= 12:
+        (
+            clave,
+            piezas,
+            datos_placas,
+            config_kerf,
+            config_margin,
+            config_opt,
+            config_corner,
+            wo_name,
+            engine_id,
+            cancel_event,
+            plate_allowed,
+            plate_limits,
+        ) = job[:12]
+    elif len(job) >= 10:
         (
             clave,
             piezas,
@@ -5432,6 +5636,9 @@ def _procesar_grupo_parallel_worker(job):
         ) = job
     set_active_engine_id(engine_id)
     motor = MotorNesting()
+    motor._plate_formats_allowed = plate_allowed
+    motor._plate_format_limits = plate_limits
+    motor._plate_format_used = {}
     if cancel_event is not None:
         motor.set_cancel_checker(lambda: bool(cancel_event.is_set()))
     prev = _bind_pack_cancel_checker(motor._cancelado)

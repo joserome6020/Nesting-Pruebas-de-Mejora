@@ -38,7 +38,7 @@ target_include_directories(
 target_link_libraries(algorithm_cpp PRIVATE Clipper2)
 
 if(MSVC)
-    target_compile_options(algorithm_cpp PRIVATE /O2 /EHsc /W3)
+    target_compile_options(algorithm_cpp PRIVATE /O2 /EHsc /W3 /D_CRT_SECURE_NO_WARNINGS)
 else()
     target_compile_options(algorithm_cpp PRIVATE -O3)
 endif()

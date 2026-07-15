@@ -9,14 +9,22 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QMessageBox,
     QProgressBar,
+    QPushButton,
     QVBoxLayout,
 )
 
 import config
-from .theme import COLOR_GRIS_DARK, COLOR_TEXTO_SECUNDARIO, surface_dialog_stylesheet
+from .theme import (
+    COLOR_ACENTO,
+    COLOR_GRIS_DARK,
+    COLOR_TEXTO_SECUNDARIO,
+    apply_push_button,
+    surface_dialog_stylesheet,
+)
 
 _LOGO_FPS = 60
 _LOGO_INTERVAL_MS = max(1, int(round(1000 / _LOGO_FPS)))
@@ -84,10 +92,27 @@ class _BouncingLogoLabel(QLabel):
 
 
 class ProgressDialog(QDialog):
-    def __init__(self, parent, titulo: str = "Ejecutando Nesting"):
+    def __init__(
+        self,
+        parent,
+        titulo: str = "Ejecutando Nesting",
+        *,
+        ultra_accept: bool = False,
+    ):
         super().__init__(parent)
         self.setWindowTitle(titulo)
-        self.setFixedSize(500, 250)
+        self._usar_animacion = self._titulo_usa_animacion(titulo)
+        self._ultra_accept = bool(ultra_accept)
+        # Logo rebotando + tiempo (+ botón Ultra si aplica). Más alto si hay botón.
+        if self._usar_animacion and self._ultra_accept:
+            alto = 320
+        elif self._usar_animacion:
+            alto = 280
+        elif self._ultra_accept:
+            alto = 290
+        else:
+            alto = 250
+        self.setFixedSize(500, alto)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(surface_dialog_stylesheet())
@@ -97,6 +122,7 @@ class ProgressDialog(QDialog):
         self._timer.timeout.connect(self._tick_tiempo)
         self._force_close = False
         self._logo_label: _BouncingLogoLabel | None = None
+        self._aceptando = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 24, 24, 24)
@@ -130,15 +156,32 @@ class ProgressDialog(QDialog):
         lay.addWidget(self._logo_box, alignment=Qt.AlignmentFlag.AlignCenter)
         self._logo_box.hide()
 
-        self._usar_animacion = self._titulo_usa_animacion(titulo)
+        self.btn_aceptar_mejor = QPushButton("Aceptar mejor actual")
+        apply_push_button(self.btn_aceptar_mejor, COLOR_ACENTO, font_size=11, padding="8px 14px")
+        self.btn_aceptar_mejor.setEnabled(False)
+        self.btn_aceptar_mejor.setToolTip(
+            "Se activa solo cuando el motor ya tiene un acomodo NUEVO. "
+            "Al aceptarlo aplica ese resultado (no el nest anterior) y Ultra puede "
+            "haberlo mejorado más si esperas."
+        )
+        self.btn_aceptar_mejor.clicked.connect(self._on_aceptar_mejor)
+        self.btn_aceptar_mejor.hide()
+        if self._ultra_accept:
+            self.btn_aceptar_mejor.show()
+            row = QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(self.btn_aceptar_mejor)
+            row.addStretch(1)
+            lay.addLayout(row)
+
         if self._usar_animacion:
+            # Modo renesteo/carga: logo Arga rebotando + cronómetro.
             self.barra.hide()
             self.lbl_porcentaje.hide()
-            self.lbl_tiempo.hide()
             self._logo_box.show()
             QTimer.singleShot(0, self._iniciar_animacion_logo)
-        else:
-            self._timer.start(1000)
+        self.lbl_tiempo.show()
+        self._timer.start(1000)
 
         self._centrar_sobre_padre(parent)
 
@@ -152,6 +195,7 @@ class ProgressDialog(QDialog):
 
     def _titulo_usa_animacion(self, titulo: str) -> bool:
         t = str(titulo or "").upper()
+        # Solo nest "completo" usa barra/%. Renesteo/compensación: logo + tiempo.
         con_barra = (
             "EJECUTANDO NESTING",
             "OPTIMIZANDO LOTES",
@@ -179,11 +223,35 @@ class ProgressDialog(QDialog):
         self.lbl_tiempo.setText(f"Tiempo: {hh:02d}:{mm:02d}:{ss:02d}")
 
     def actualizar(self, mensaje: str, porcentaje: float) -> None:
-        if self._usar_animacion:
+        if self._aceptando:
             return
+        if not self._usar_animacion:
+            self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
+            self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
         self.lbl_mensaje.setText(mensaje)
-        self.barra.setValue(int(max(0, min(1, porcentaje)) * 100))
-        self.lbl_porcentaje.setText(f"{int(porcentaje * 100)}%")
+
+    def habilitar_aceptar_mejor(self, resumen: str = "") -> None:
+        if not self._ultra_accept or self._aceptando:
+            return
+        self.btn_aceptar_mejor.setEnabled(True)
+        if resumen:
+            self.lbl_mensaje.setText(f"Mejor acomodo listo · {resumen}")
+        else:
+            self.lbl_mensaje.setText(
+                "Mejor acomodo listo · puedes aceptarlo o seguir optimizando"
+            )
+
+    def marcar_aceptando(self) -> None:
+        self._aceptando = True
+        self.btn_aceptar_mejor.setEnabled(False)
+        self.btn_aceptar_mejor.setText("Aceptando…")
+        self.lbl_mensaje.setText("Aceptando mejor acomodo actual…")
+
+    def _on_aceptar_mejor(self) -> None:
+        parent = self.parent()
+        if parent and hasattr(parent, "aceptar_mejor_actual"):
+            parent.aceptar_mejor_actual()
+            self.marcar_aceptando()
 
     def force_close(self) -> None:
         self._force_close = True
@@ -196,13 +264,23 @@ class ProgressDialog(QDialog):
             self._force_close = False
             super().closeEvent(event)
             return
+        if self._aceptando:
+            # Cierre en curso tras aceptar: no preguntar abortar.
+            event.ignore()
+            return
         parent = self.parent()
         if parent and hasattr(parent, "cancelar_tarea_actual"):
-            res = QMessageBox.question(
-                self,
-                "Cancelar proceso",
-                "¿Desea cancelar el proceso en curso?\n\nSe detendrá el cálculo y podrá volver a ejecutarlo.",
+            msg = (
+                "¿Desea cancelar el proceso en curso?\n\n"
+                "Se detendrá el cálculo sin aplicar el resultado."
             )
+            if self._ultra_accept:
+                msg = (
+                    "¿Cancelar Ultra sin aplicar el acomodo?\n\n"
+                    "Si ya hay un mejor layout, usa «Aceptar mejor actual» "
+                    "para conservarlo."
+                )
+            res = QMessageBox.question(self, "Cancelar proceso", msg)
             if res == QMessageBox.StandardButton.Yes:
                 parent.cancelar_tarea_actual(desde_popup=True)
             else:

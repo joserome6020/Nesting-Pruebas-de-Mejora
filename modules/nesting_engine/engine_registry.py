@@ -6,7 +6,12 @@ from typing import Callable, Optional, Type
 
 from .engines import ArgaForceEngine, BurkeBlfEngine, Libnest2dEngine, SvgnestUltraEngine
 from .engines.types import NestEngineMeta, NestEngineNotReadyError, PackSheetRequest, PackSheetResult
-from .nest_engine_context import STEEL_ENGINE_IDS, get_active_engine_id, normalize_engine_id
+from .nest_engine_context import (
+    STEEL_ENGINE_IDS,
+    get_active_engine_id,
+    iter_ui_steel_engine_ids,
+    normalize_engine_id,
+)
 
 _ENGINE_CLASSES: dict[str, Type] = {
     ArgaForceEngine.META.engine_id: ArgaForceEngine,
@@ -16,8 +21,14 @@ _ENGINE_CLASSES: dict[str, Type] = {
 }
 
 
-def list_engine_metas() -> list[NestEngineMeta]:
-    return [_ENGINE_CLASSES[eid].meta() for eid in STEEL_ENGINE_IDS if eid in _ENGINE_CLASSES]
+def list_engine_metas(*, include_hidden: bool = False) -> list[NestEngineMeta]:
+    """Metas de motores. Por defecto oculta libnest2d en UI (código intacto)."""
+    ids = STEEL_ENGINE_IDS if include_hidden else tuple(iter_ui_steel_engine_ids())
+    return [_ENGINE_CLASSES[eid].meta() for eid in ids if eid in _ENGINE_CLASSES]
+
+
+def list_ui_engine_metas() -> list[NestEngineMeta]:
+    return list_engine_metas(include_hidden=False)
 
 
 def get_engine_meta(engine_id: str) -> NestEngineMeta:
@@ -36,8 +47,9 @@ def is_engine_ready(engine_id: str) -> bool:
     return bool(cls.is_ready())
 
 
-def list_ready_engine_ids() -> list[str]:
-    return [eid for eid in STEEL_ENGINE_IDS if is_engine_ready(eid)]
+def list_ready_engine_ids(*, include_hidden: bool = False) -> list[str]:
+    ids = STEEL_ENGINE_IDS if include_hidden else tuple(iter_ui_steel_engine_ids())
+    return [eid for eid in ids if is_engine_ready(eid)]
 
 
 def resolve_engine_class(engine_id: str | None = None) -> Type:

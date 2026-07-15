@@ -70,6 +70,8 @@ class SistemaNestingPro(QMainWindow):
         self.setWindowTitle("ARGA NESTING SUITE")
         self.setMinimumSize(1000, 650)
         self._cancelar_tarea_flag = threading.Event()
+        self._accept_best_flag = threading.Event()
+        self._abort_task_flag = threading.Event()
         self._nesting_executor = None
         self._ventana_carga_abierta = False
         self._progress_dialog: ProgressDialog | None = None
@@ -330,11 +332,49 @@ class SistemaNestingPro(QMainWindow):
 
     def reiniciar_cancelacion_tarea(self):
         self._cancelar_tarea_flag.clear()
+        self._accept_best_flag.clear()
+        self._abort_task_flag.clear()
 
     def tarea_cancelada(self):
         return self._cancelar_tarea_flag.is_set()
 
+    def tarea_acepto_mejor(self) -> bool:
+        return self._accept_best_flag.is_set()
+
+    def tarea_abortada(self) -> bool:
+        """True si el usuario canceló con X (no «Aceptar mejor actual»)."""
+        return self._abort_task_flag.is_set() and not self._accept_best_flag.is_set()
+
+    def aceptar_mejor_actual(self):
+        """Ultra renesteo: detiene el GA y conserva el mejor acomodo hallado."""
+        self._accept_best_flag.set()
+        self._abort_task_flag.clear()
+        self._cancelar_tarea_flag.set()
+        dlg = self._progress_dialog
+        if dlg and hasattr(dlg, "marcar_aceptando"):
+            try:
+                dlg.marcar_aceptando()
+            except Exception:
+                pass
+
+    def notificar_mejor_nest_listo(self, resumen: str = ""):
+        dlg = self._progress_dialog
+        if not dlg or not self._ventana_carga_abierta:
+            return
+
+        def _apply(d=dlg, r=resumen):
+            if self._progress_dialog is not d or not self._ventana_carga_abierta:
+                return
+            try:
+                d.habilitar_aceptar_mejor(r)
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _apply)
+
     def cancelar_tarea_actual(self, desde_popup=False):
+        if not self._accept_best_flag.is_set():
+            self._abort_task_flag.set()
         self._cancelar_tarea_flag.set()
         if self._nesting_executor is not None:
             try:
@@ -348,21 +388,25 @@ class SistemaNestingPro(QMainWindow):
     def registrar_nesting_executor(self, executor):
         self._nesting_executor = executor
 
-    def abrir_ventana_carga(self, titulo="Ejecutando Nesting"):
+    def abrir_ventana_carga(self, titulo="Ejecutando Nesting", *, ultra_accept: bool = False):
+        # Si había otro renest/nest en curso, abortarlo (evita botón Aceptar de otra placa).
         if self._ventana_carga_abierta:
+            try:
+                self._abort_task_flag.set()
+                self._cancelar_tarea_flag.set()
+            except Exception:
+                pass
             self.cerrar_ventana_carga(solicitud_usuario=False)
         self.reiniciar_cancelacion_tarea()
         if hasattr(self.motor_nesting, "set_cancel_checker"):
             self.motor_nesting.set_cancel_checker(self.tarea_cancelada)
-        self._progress_dialog = ProgressDialog(self, titulo)
+        self._progress_dialog = ProgressDialog(self, titulo, ultra_accept=bool(ultra_accept))
         self._ventana_carga_abierta = True
         self._progress_dialog.show()
 
     def actualizar_progreso(self, mensaje, porcentaje):
         dlg = self._progress_dialog
         if not dlg or not self._ventana_carga_abierta:
-            return
-        if getattr(dlg, "_usar_animacion", False):
             return
 
         def _apply(d=dlg, m=mensaje, p=porcentaje):

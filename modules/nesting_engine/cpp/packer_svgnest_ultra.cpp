@@ -3,10 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <functional>
 #include <limits>
+#include <mutex>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -23,6 +27,10 @@ constexpr double kPartInPartMaxAreaMm2 = 800'000.0;
 constexpr double kVoidMinAreaMm2 = 25.0 * 25.0;
 constexpr double kAreaEstructuralUmbralMm2 = 200.0 * 645.16;
 constexpr int kMaxGuardCavidad = 80;
+// NFP/Minkowski: barrenos densos (miles de verts) saturan Clipper. Export usa anillo exacto.
+constexpr size_t kNfpMaxHoleVerts = 48;
+constexpr size_t kNfpMaxOuterVerts = 64;
+constexpr double kNfpSimplifyEpsMm = 0.35;  // ~0.014"
 
 struct Bounds {
     double minx = 0.0;
@@ -60,6 +68,8 @@ struct CavidadAbierta {
     size_t host_idx = 0;
     std::vector<std::vector<Point2D>> rings;
 };
+
+bool pieza_cabe_en_hueco_aabb(const PieceIn& p, const Bounds& hb, double tol);
 
 PathD to_path_d(const std::vector<Point2D>& ring) {
     PathD out;
@@ -337,6 +347,79 @@ PathD invert_path(const PathD& path) {
     return out;
 }
 
+PathD simplify_path_rdp(const PathD& in, double eps, size_t max_pts) {
+    if (in.size() <= 3 || (in.size() <= max_pts && eps <= 0.0)) {
+        return in;
+    }
+    // Douglas-Peucker iterativo (evita stack profundo en barrenos densos).
+    const size_t n = in.size();
+    std::vector<char> keep(n, 0);
+    keep[0] = 1;
+    keep[n - 1] = 1;
+    std::vector<std::pair<size_t, size_t>> stack;
+    stack.emplace_back(0, n - 1);
+    const double eps2 = eps * eps;
+    while (!stack.empty()) {
+        const auto [i0, i1] = stack.back();
+        stack.pop_back();
+        double best_d2 = -1.0;
+        size_t best_i = i0;
+        const double ax = in[i0].x;
+        const double ay = in[i0].y;
+        const double bx = in[i1].x;
+        const double by = in[i1].y;
+        const double abx = bx - ax;
+        const double aby = by - ay;
+        const double ab2 = abx * abx + aby * aby;
+        for (size_t i = i0 + 1; i < i1; ++i) {
+            double d2 = 0.0;
+            if (ab2 < 1e-18) {
+                const double dx = in[i].x - ax;
+                const double dy = in[i].y - ay;
+                d2 = dx * dx + dy * dy;
+            } else {
+                const double t = ((in[i].x - ax) * abx + (in[i].y - ay) * aby) / ab2;
+                const double ux = ax + t * abx;
+                const double uy = ay + t * aby;
+                const double dx = in[i].x - ux;
+                const double dy = in[i].y - uy;
+                d2 = dx * dx + dy * dy;
+            }
+            if (d2 > best_d2) {
+                best_d2 = d2;
+                best_i = i;
+            }
+        }
+        if (best_d2 > eps2 && best_i > i0 && best_i < i1) {
+            keep[best_i] = 1;
+            stack.emplace_back(i0, best_i);
+            stack.emplace_back(best_i, i1);
+        }
+    }
+    PathD out;
+    out.reserve(std::min(n, max_pts + 2));
+    for (size_t i = 0; i < n; ++i) {
+        if (keep[i]) {
+            out.push_back(in[i]);
+        }
+    }
+    if (out.size() < 3) {
+        return in;
+    }
+    // Si aún demasiados puntos, muestreo uniforme preservando extremos.
+    if (out.size() > max_pts) {
+        PathD sampled;
+        sampled.reserve(max_pts);
+        const size_t last = out.size() - 1;
+        for (size_t k = 0; k < max_pts; ++k) {
+            const size_t idx = (k * last) / (max_pts - 1);
+            sampled.push_back(out[idx]);
+        }
+        return sampled;
+    }
+    return out;
+}
+
 PathD normalize_outer_at_origin(const std::vector<std::vector<Point2D>>& rings) {
     if (rings.empty() || rings.front().size() < 3) {
         return {};
@@ -347,12 +430,16 @@ PathD normalize_outer_at_origin(const std::vector<std::vector<Point2D>>& rings) 
         p.x -= bb.minx;
         p.y -= bb.miny;
     }
+    if (out.size() > kNfpMaxOuterVerts) {
+        out = simplify_path_rdp(out, kNfpSimplifyEpsMm, kNfpMaxOuterVerts);
+    }
     return out;
 }
 
-/** Cache NFP relativo estilo Deepnest/SVGNest: clave (A@origen, B@origen). */
+/** Cache NFP relativo estilo Deepnest/SVGNest: clave (A@origen, B@origen). Thread-safe. */
 struct NfpPairCache {
     std::unordered_map<std::uint64_t, PathsD> relative;
+    mutable std::mutex mu;
 
     static std::uint64_t hash_path(const PathD& path) {
         std::uint64_t h = 1469598103934665603ull;
@@ -368,22 +455,96 @@ struct NfpPairCache {
         return h;
     }
 
-    const PathsD& get_relative(const PathD& station_at_origin, const PathD& orbiting_norm) {
+    PathsD get_relative(const PathD& station_at_origin, const PathD& orbiting_norm) {
         const std::uint64_t key =
             hash_path(station_at_origin) ^ (hash_path(orbiting_norm) * 0x9e3779b97f4a7c15ull);
-        const auto it = relative.find(key);
-        if (it != relative.end()) {
-            return it->second;
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            const auto it = relative.find(key);
+            if (it != relative.end()) {
+                return it->second;
+            }
+        }
+        // Cache thread-local: evita que 12 hilos disparen el mismo Minkowski a la vez.
+        thread_local std::unordered_map<std::uint64_t, PathsD> tl;
+        {
+            const auto it = tl.find(key);
+            if (it != tl.end()) {
+                return it->second;
+            }
         }
         PathsD nfp;
         if (station_at_origin.size() >= 3 && orbiting_norm.size() >= 3) {
-            const PathD inv_orb = invert_path(orbiting_norm);
-            nfp = MinkowskiSum(inv_orb, station_at_origin, true, 3);
+            PathD station = station_at_origin;
+            PathD orbit = orbiting_norm;
+            if (station.size() > kNfpMaxOuterVerts) {
+                station = simplify_path_rdp(station, kNfpSimplifyEpsMm, kNfpMaxOuterVerts);
+            }
+            if (orbit.size() > kNfpMaxOuterVerts) {
+                orbit = simplify_path_rdp(orbit, kNfpSimplifyEpsMm, kNfpMaxOuterVerts);
+            }
+            const PathD inv_orb = invert_path(orbit);
+            nfp = MinkowskiSum(inv_orb, station, true, 3);
         }
-        auto [ins, _] = relative.emplace(key, std::move(nfp));
-        return ins->second;
+        tl[key] = nfp;
+        std::lock_guard<std::mutex> lock(mu);
+        auto [ins, inserted] = relative.emplace(key, nfp);
+        return inserted ? nfp : ins->second;
     }
 };
+
+int resolve_intra_threads() {
+    auto parse_pos = [](const char* raw) -> int {
+        if (raw == nullptr || raw[0] == '\0') {
+            return -1;
+        }
+        char* end = nullptr;
+        const long v = std::strtol(raw, &end, 10);
+        if (end == raw || v <= 0) {
+            return -1;
+        }
+        return static_cast<int>(std::min<long>(v, 256));
+    };
+    const int from_arga = parse_pos(std::getenv("ARGA_NEST_OMP_THREADS"));
+    if (from_arga > 0) {
+        return from_arga;
+    }
+    const int from_omp = parse_pos(std::getenv("OMP_NUM_THREADS"));
+    if (from_omp > 0) {
+        return from_omp;
+    }
+    const unsigned hc = std::thread::hardware_concurrency();
+    if (hc == 0) {
+        return 1;
+    }
+    // Deja 1 núcleo para UI/OS; el manager ajusta más bajo en multi-lote.
+    return static_cast<int>(std::max(1u, hc > 1 ? hc - 1 : 1));
+}
+
+void parallel_for_index(size_t count, int threads, const std::function<void(size_t)>& fn) {
+    if (count == 0) {
+        return;
+    }
+    const int nthreads = std::max(1, std::min(threads, static_cast<int>(count)));
+    if (nthreads <= 1) {
+        for (size_t i = 0; i < count; ++i) {
+            fn(i);
+        }
+        return;
+    }
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<size_t>(nthreads));
+    for (int t = 0; t < nthreads; ++t) {
+        workers.emplace_back([=, &fn]() {
+            for (size_t i = static_cast<size_t>(t); i < count; i += static_cast<size_t>(nthreads)) {
+                fn(i);
+            }
+        });
+    }
+    for (auto& w : workers) {
+        w.join();
+    }
+}
 
 void append_nfp_candidates(
     std::vector<std::pair<double, double>>& anclajes,
@@ -770,13 +931,17 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     return ctx;
 }
 
-/** Orificio: shrink kerf COMPLETO (2·radio). Contención = geometría exacta. */
+/** Orificio: shrink kerf COMPLETO (2·radio). Contorno NFP simplificado; kerf intacto. */
 LimitContext make_hole_limit(const std::vector<Point2D>& hole_ring, double kerf_radio) {
     LimitContext ctx;
     if (hole_ring.size() < 3) {
         return ctx;
     }
-    auto paths = to_paths_d({hole_ring});
+    PathD hole = to_path_d(hole_ring);
+    if (hole.size() > kNfpMaxHoleVerts) {
+        hole = simplify_path_rdp(hole, kNfpSimplifyEpsMm, kNfpMaxHoleVerts);
+    }
+    PathsD paths{std::move(hole)};
     const double shrink = 2.0 * kerf_radio;
     if (shrink > 1e-9) {
         paths = InflatePaths(paths, -shrink, JoinType::Miter, EndType::Polygon);
@@ -1065,6 +1230,10 @@ void try_part_in_part(
                 continue;
             }
             for (size_t hi = 1; hi < host.poligonos.size(); ++hi) {
+                const Bounds hb = bounds_of_rings({host.poligonos[hi]});
+                if (!pieza_cabe_en_hueco_aabb(p, hb, /*tol=*/2.0)) {
+                    continue;
+                }
                 const LimitContext hole_limit = make_hole_limit(host.poligonos[hi], kerf_radio);
                 if (!hole_limit.active) {
                     continue;
@@ -1519,30 +1688,44 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
 
     // Cache NFP entre evaluaciones del GA (misma idea que Deepnest nfpCache).
     NfpPairCache nfp_cache;
+    const int intra_threads = resolve_intra_threads();
 
-    auto evaluate = [&](Individual& ind) {
-        auto [state, restos] = pack_with_order(
-            piezas,
-            ind.order,
-            w_placa,
-            h_placa,
-            kerf_override,
-            margin_override,
-            limite_rings,
-            rot_step,
-            part_in_part,
-            nfp_cache);
-        ind.fitness = fitness_score(state.hoja, restos, n);
-        if (es_mejor_pack(state.hoja, restos, mejor_hoja, mejor_restos)) {
-            mejor_hoja = std::move(state.hoja);
-            mejor_restos = std::move(restos);
-            mejor_order = ind.order;
+    auto evaluate_batch = [&](std::vector<Individual>& batch) {
+        if (batch.empty()) {
+            return;
+        }
+        const size_t m = batch.size();
+        std::vector<SheetOut> hojas(m);
+        std::vector<std::vector<PieceIn>> restos_batch(m);
+
+        parallel_for_index(m, intra_threads, [&](size_t i) {
+            auto [state, restos] = pack_with_order(
+                piezas,
+                batch[i].order,
+                w_placa,
+                h_placa,
+                kerf_override,
+                margin_override,
+                limite_rings,
+                rot_step,
+                part_in_part,
+                nfp_cache);
+            batch[i].fitness = fitness_score(state.hoja, restos, n);
+            hojas[i] = std::move(state.hoja);
+            restos_batch[i] = std::move(restos);
+        });
+
+        // Reduce del mejor en serie (determinista con el mismo seed → mismos hijos).
+        for (size_t i = 0; i < m; ++i) {
+            if (es_mejor_pack(hojas[i], restos_batch[i], mejor_hoja, mejor_restos)) {
+                mejor_hoja = std::move(hojas[i]);
+                mejor_restos = std::move(restos_batch[i]);
+                mejor_order = batch[i].order;
+            }
         }
     };
 
-    for (auto& ind : pop) {
-        evaluate(ind);
-    }
+    evaluate_batch(pop);
 
     for (int gen = 1; gen < generations; ++gen) {
         std::sort(pop.begin(), pop.end(), [](const Individual& a, const Individual& b) {
@@ -1553,7 +1736,9 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
         next_gen.reserve(pop.size());
         next_gen.push_back(pop.front());
 
-        while (static_cast<int>(next_gen.size()) < population) {
+        std::vector<Individual> children;
+        children.reserve(static_cast<size_t>(std::max(0, population - 1)));
+        while (static_cast<int>(children.size()) + 1 < population) {
             const Individual& p1 = pop[static_cast<size_t>(rng() % (population / 2 + 1))];
             const Individual& p2 = pop[static_cast<size_t>(rng() % (population / 2 + 1))];
             Individual child;
@@ -1563,27 +1748,18 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
                 child.order = p1.order;
             }
             mutate_swap(child.order, rng, mutation_rate);
-            evaluate(child);
+            children.push_back(std::move(child));
+        }
+
+        evaluate_batch(children);
+        for (auto& child : children) {
             next_gen.push_back(std::move(child));
         }
         pop = std::move(next_gen);
     }
 
-    if (!mejor_order.empty()) {
-        auto [state, restos] = pack_with_order(
-            piezas,
-            mejor_order,
-            w_placa,
-            h_placa,
-            kerf_override,
-            margin_override,
-            limite_rings,
-            rot_step,
-            part_in_part,
-            nfp_cache);
-        mejor_hoja = std::move(state.hoja);
-        mejor_restos = std::move(restos);
-    }
+    // El mejor ya salió de evaluate_batch; re-pack final duplicaba el costo NFP.
+    (void)mejor_order;
 
     const double denom = w_placa * h_placa;
     mejor_hoja.eficiencia = denom > 0.0 ? (mejor_hoja.area_usada / denom) * 100.0 : 0.0;

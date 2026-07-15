@@ -150,7 +150,10 @@ def empaquetar_una_hoja_arga_base(
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
 ):
-    """Motor ARGA Base (pizarrón) — C++ packer_base."""
+    """Motor ARGA FORCE (pizarrón) — C++ packer_base; semillas en paralelo si hay CPU."""
+    import random
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     try:
         from . import algorithm_cpp
     except ImportError as exc:
@@ -162,22 +165,106 @@ def empaquetar_una_hoja_arga_base(
             "Recompila con build_cpp_engine.ps1."
         )
 
-    native_piezas = [_piece_to_native(p) for p in (piezas or [])]
+    from .nest_hardware import apply_nest_thread_env, hardware_nest_budget
+    from .nest_optimization import get_engine_profile
+
+    budget = hardware_nest_budget()
+    apply_nest_thread_env(budget)
+    seeds = int(
+        get_engine_profile("arga_force").get(
+            "force_parallel_seeds", budget["force_parallel_seeds"]
+        )
+        or 1
+    )
+    seeds = max(1, min(int(seeds), 8))
+
     limite_rings = None
     if limite_poly is not None:
         limite_rings = _rings_from_shapely_polygon(limite_poly)
 
-    hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_base(
-        native_piezas,
-        w_placa,
-        h_placa,
-        kerf_override,
-        margin_override,
-        opt_override,
-        corner_override,
-        limite_rings,
+    def _one_pack(ordered_piezas, seed_idx: int = 0):
+        import time as _time
+
+        t0 = _time.perf_counter()
+        print(f"[FORCE] semilla {seed_idx + 1}/{seeds} iniciada…", flush=True)
+        native_piezas = [_piece_to_native(p) for p in (ordered_piezas or [])]
+        hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_base(
+            native_piezas,
+            w_placa,
+            h_placa,
+            kerf_override,
+            margin_override,
+            opt_override,
+            corner_override,
+            limite_rings,
+        )
+        # Lookup contra lista original (nombres/rutas), no el orden barajado.
+        hoja, restos = _assemble_pack_result(hoja_native, restos_native, piezas)
+        n_ok = len(hoja.get("piezas") or [])
+        n_rest = len(restos or [])
+        print(
+            f"[FORCE] semilla {seed_idx + 1}/{seeds} fin · "
+            f"colocadas={n_ok} restos={n_rest} · {_time.perf_counter() - t0:.1f}s",
+            flush=True,
+        )
+        return hoja, restos
+
+    base = list(piezas or [])
+    if seeds <= 1 or len(base) <= 1:
+        return _one_pack(base, 0)
+
+    orders = [base]
+    for i in range(1, seeds):
+        batch = base.copy()
+        random.Random(1000 + i).shuffle(batch)
+        batch.sort(key=lambda x: float(x.get("area", 0) or 0), reverse=True)
+        orders.append(batch)
+
+    print(
+        f"[FORCE] semillas_paralelas={seeds} | threads_budget={budget['nest_threads']} "
+        f"| cpus={budget['logical_cpus']} | early_exit_si_completo=1",
+        flush=True,
     )
-    return _assemble_pack_result(hoja_native, restos_native, piezas)
+
+    mejor_hoja = None
+    mejor_restos = list(base)
+    mejor_score = None
+
+    def _score(hoja, restos):
+        return (
+            len(hoja.get("piezas") or []),
+            float(hoja.get("area_usada", 0) or 0),
+            -len(restos or []),
+            float(hoja.get("eficiencia", 0) or 0),
+        )
+
+    with ThreadPoolExecutor(max_workers=seeds) as pool:
+        futs = {
+            pool.submit(_one_pack, ord_, idx): idx for idx, ord_ in enumerate(orders)
+        }
+        for fut in as_completed(futs):
+            try:
+                hoja, restos = fut.result()
+            except Exception as exc:
+                print(f"[FORCE] semilla error: {exc}", flush=True)
+                continue
+            sc = _score(hoja, restos)
+            if mejor_score is None or sc > mejor_score:
+                mejor_score = sc
+                mejor_hoja, mejor_restos = hoja, restos
+            # Completo: no esperar las otras semillas (reloj ≠ número de hilos).
+            if not restos and (hoja.get("piezas") or []):
+                print(
+                    f"[FORCE] completo en semilla {futs[fut] + 1} · cancelando hermanas",
+                    flush=True,
+                )
+                for other in futs:
+                    other.cancel()
+                break
+
+    if mejor_hoja is None:
+        return _one_pack(base, 0)
+    return mejor_hoja, mejor_restos
 
 
 def _assemble_pack_result(hoja_native, restos_native, piezas):
@@ -349,16 +436,53 @@ def empaquetar_una_hoja_svgnest_ultra(
             "Recompila con build_cpp_engine.ps1."
         )
 
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from .nest_engine_context import (
+        is_ultra_renest_accept_mode,
+        is_ultra_sim_bounded,
+        notify_ultra_best_ready,
+    )
+
+    from .nest_hardware import apply_nest_thread_env, hardware_nest_budget
+
     profile = get_engine_profile("svgnest_ultra")
+    budget = hardware_nest_budget()
+    apply_nest_thread_env(budget)
     pop = max(4, min(int(ga_population or profile.get("ga_population", 30)), 60))
     gens = max(1, min(int(ga_generations or profile.get("mc_iterations", 30)), 100))
     rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 15.0))
     pip = bool(profile.get("part_in_part", True) if part_in_part is None else part_in_part)
-    # Continual NestFab: SOLO si el perfil lo pide. Tener cancel_checker NO basta:
-    # el manager lo enlaza también en SIM-PLACA y cada placa candidata se iba
-    # a un bucle de minutos (progreso/UI quietos, log sin líneas nuevas).
-    continual = bool(cancel_checker) and bool(profile.get("continual_until_user_stops", False))
+    print(
+        f"[ULTRA-HW] cpus={budget['logical_cpus']} ram={budget['ram_gb']:.1f}GB "
+        f"threads={budget['nest_threads']} pop={pop} gens={gens}",
+        flush=True,
+    )
+    # Continual NestFab:
+    # - perfil continual_until_user_stops (OFF por defecto), o
+    # - renesteo Ultra con «Aceptar mejor actual» (solo Ultra; sin semilla FORCE).
+    # Nunca en SIM-PLACA (sim_bounded): si no, cada candidata se queda en bucle.
+    renest_accept = is_ultra_renest_accept_mode() and not is_ultra_sim_bounded()
+    if renest_accept and cancel_checker is None:
+        try:
+            from .manager import _active_pack_cancel_checker
+
+            cancel_checker = _active_pack_cancel_checker()
+        except Exception:
+            cancel_checker = None
+    continual = (
+        renest_accept
+        or (
+            bool(cancel_checker)
+            and bool(profile.get("continual_until_user_stops", False))
+            and not is_ultra_sim_bounded()
+        )
+    )
     stagnation_limit = int(profile.get("continual_stagnation_rounds", 0) or 0)
+    if renest_accept:
+        # Solo UX: no degradar calidad Ultra (pop/rot/PIP = perfil completo).
+        stagnation_limit = 0
 
     native_piezas = [_piece_to_native(p) for p in (piezas or [])]
     limite_rings = None
@@ -371,7 +495,14 @@ def empaquetar_una_hoja_svgnest_ultra(
         except Exception:
             return False
 
-    def _run_cpp(generations: int, seed: int):
+    def _run_cpp(
+        generations: int,
+        seed: int,
+        *,
+        pop_n: int | None = None,
+        rot: float | None = None,
+        use_pip: bool | None = None,
+    ):
         hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
             native_piezas,
             w_placa,
@@ -381,10 +512,10 @@ def empaquetar_una_hoja_svgnest_ultra(
             opt_override,
             corner_override,
             limite_rings,
-            pop,
+            int(pop_n if pop_n is not None else pop),
             generations,
-            rot_step,
-            pip,
+            float(rot if rot is not None else rot_step),
+            bool(pip if use_pip is None else use_pip),
             seed,
         )
         return _assemble_pack_result(hoja_native, restos_native, piezas)
@@ -394,28 +525,127 @@ def empaquetar_una_hoja_svgnest_ultra(
 
     mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     mejor_restos = list(piezas or [])
-    seed = 1
-    no_improve = 0
-    # Batches cortos para reaccionar rápido a Cancelar (estilo NestFab Stop).
-    batch = max(1, min(3, gens))
+    notified_best = False
+    n_in = len(piezas or [])
 
-    while True:
-        if _cancelled():
-            break
-        hoja, restos = _run_cpp(batch, seed)
-        if _cancelled():
-            # Conserva el mejor hallado aunque el batch actual se haya cortado a medias.
-            if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
-                mejor_hoja, mejor_restos = hoja, restos
-            break
+    def _is_complete(hoja, restos) -> bool:
+        n_ok = len(hoja.get("piezas") or [])
+        n_rest = len(restos or [])
+        return n_rest == 0 and n_ok >= max(1, n_in)
+
+    def _efi_pct(hoja) -> float:
+        efi = float(hoja.get("eficiencia", 0.0) or 0.0)
+        # C++ Ultra ya devuelve %; otros caminos pueden devolver 0–1.
+        return efi if efi > 1.5 else efi * 100.0
+
+    def _consider(hoja, restos) -> bool:
+        """Actualiza mejor. True si mejoró."""
+        nonlocal mejor_hoja, mejor_restos
+        if not (hoja and (hoja.get("piezas") or [])):
+            return False
         if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
             mejor_hoja, mejor_restos = hoja, restos
-            no_improve = 0
-        else:
-            no_improve += 1
-        seed += batch
-        if stagnation_limit > 0 and no_improve >= stagnation_limit:
-            break
+            return True
+        return False
+
+    def _publish_if_complete(hoja, restos, *, label: str = "") -> None:
+        """Solo habilita Aceptar con nest COMPLETO (NestFab: nada a medias)."""
+        nonlocal notified_best
+        if not _is_complete(hoja, restos):
+            return
+        _consider(hoja, restos)
+        if not _is_complete(mejor_hoja, mejor_restos):
+            return
+        n_pz = len(mejor_hoja.get("piezas") or [])
+        pref = f"{label} · " if label else ""
+        notify_ultra_best_ready(f"{pref}{n_pz} pzas · {_efi_pct(mejor_hoja):.1f}%")
+        notified_best = True
+
+    pool = ThreadPoolExecutor(max_workers=1)
+
+    def _run_await(fn, *args, **kwargs):
+        """Espera el pack en vuelo. Aceptar/Cancelar NO tiran el resultado a medias."""
+        fut = pool.submit(fn, *args, **kwargs)
+        while not fut.done():
+            time.sleep(0.12)
+        return fut.result()
+
+    try:
+        print(
+            f"[ULTRA-RENEST] accept={renest_accept} cancel={bool(cancel_checker)} "
+            f"n_piezas={n_in} pop={pop} rot={rot_step} pip={pip} seed=ultra",
+            flush=True,
+        )
+
+        seed = 1
+        no_improve = 0
+        # Renest NestFab: 1 generación C++ por ronda (pop/rot/PIP = perfil full).
+        # Publica el mejor COMPLETO al acabar cada gen (no 8 gens en silencio).
+        # Continual genérico: batches de varias gens.
+        batch = 1 if renest_accept else max(1, min(3, gens))
+        rounds = 0
+        # Mínimo gens rondas de calidad full; si accept-mode sigue hasta Cancel/Aceptar.
+        min_rounds = max(1, int(gens))
+
+        while True:
+            if _cancelled():
+                break
+
+            t_round = time.perf_counter()
+            if renest_accept:
+                hoja, restos = _run_await(_run_cpp, batch, seed)
+            else:
+                hoja, restos = _run_cpp(batch, seed)
+
+            rounds += 1
+            n_ok = len((hoja or {}).get("piezas") or [])
+            n_rest = len(restos or [])
+            print(
+                f"[ULTRA-RENEST] round={rounds} gen_batch={batch} "
+                f"colocadas={n_ok} restos={n_rest} "
+                f"complete={_is_complete(hoja, restos)} "
+                f"{time.perf_counter() - t_round:.1f}s "
+                f"pop={pop} rot={rot_step} pip={pip}",
+                flush=True,
+            )
+
+            if n_ok > 0:
+                _consider(hoja, restos)
+                _publish_if_complete(
+                    hoja,
+                    restos,
+                    label="nuevo" if not notified_best else "mejor",
+                )
+
+            if _cancelled():
+                break
+
+            if _is_complete(hoja, restos):
+                no_improve = 0
+            else:
+                no_improve += 1
+            seed += 1
+            if renest_accept:
+                # Perfil full por gen; no corta solo: Aceptar/Cancel corta el while.
+                continue
+            if stagnation_limit > 0 and no_improve >= stagnation_limit:
+                break
+            if rounds >= min_rounds:
+                break
+    except Exception as exc:
+        print(f"[ULTRA-RENEST] mejora interrumpida: {exc}", flush=True)
+        if not (mejor_hoja.get("piezas") or []):
+            raise
+    finally:
+        pool.shutdown(wait=False, cancel_futures=False)
+
+    if renest_accept and not _is_complete(mejor_hoja, mejor_restos):
+        print(
+            f"[ULTRA-RENEST] sin completo al salir · "
+            f"colocadas={len(mejor_hoja.get('piezas') or [])} "
+            f"restos={len(mejor_restos or [])}",
+            flush=True,
+        )
 
     return mejor_hoja, mejor_restos
 

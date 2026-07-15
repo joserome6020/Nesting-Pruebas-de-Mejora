@@ -58,11 +58,15 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "accesorios_retries": 8,
         "refinar_intentos": 0,
         "continual_optimization": False,
-        "rotation_step_deg": 90,
-        "use_nfp": False,
+        "rotation_step_deg": 90,  # ortogonal: 0/90/180/270
+        "use_nfp": False,  # NFP solo en cavidades/orificios (C++)
+        "use_nfp_cavities": True,
         "use_genetic_algorithm": False,
         "group_identical": True,
         "morphology_gap_fill": True,
+        "part_in_part": True,
+        "final_compact_slide": True,
+        "leftover_small_retry": True,
         "lock_profile": True,
     },
     ENGINE_BURKE_BLF: {
@@ -112,6 +116,8 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "morphology_gap_fill": True,
         "open_cavity_fill": True,
         "common_line_lite": False,
+        # Impide que ARGA_NEST_MODE=first baje mc_iterations a 1 (mataba el GA Ultra).
+        "lock_profile": True,
     },
 }
 
@@ -141,7 +147,9 @@ def _mode_overrides() -> dict:
 
 
 def get_engine_profile(engine_id: str | None = None) -> dict:
-    """Perfil efectivo del motor (base del motor + overrides ARGA_NEST_MODE)."""
+    """Perfil efectivo del motor (base del motor + overrides ARGA_NEST_MODE + hardware)."""
+    from .nest_hardware import apply_nest_thread_env, hardware_nest_budget
+
     eid = normalize_engine_id(engine_id or DEFAULT_STEEL_ENGINE_ID)
     base = dict(ENGINE_BASE_PROFILES.get(eid, ENGINE_BASE_PROFILES[ENGINE_ARGA_FORCE]))
     mode = _mode_overrides()
@@ -159,6 +167,23 @@ def get_engine_profile(engine_id: str | None = None) -> dict:
         ):
             if key in mode:
                 base[key] = mode[key]
+
+    budget = hardware_nest_budget()
+    apply_nest_thread_env(budget)
+    base["nest_threads"] = budget["nest_threads"]
+    base["force_parallel_seeds"] = budget["force_parallel_seeds"]
+    base["plate_pool_workers"] = budget["plate_pool_workers"]
+    base["logical_cpus"] = budget["logical_cpus"]
+    base["ram_gb"] = budget["ram_gb"]
+
+    # Ultra: población ≈ hilos de la máquina (mín. perfil, máx. 48).
+    if eid == ENGINE_SVGNEST_ULTRA:
+        base_pop = int(base.get("ga_population", 12) or 12)
+        base["ga_population"] = max(base_pop, int(budget["ultra_population"]))
+
+    # Burke / Libnest: más iteraciones si hay CPU (sin pasar de 40).
+    if eid in (ENGINE_BURKE_BLF, ENGINE_LIBNEST2D) and budget["nest_threads"] >= 12:
+        base["mc_iterations"] = max(int(base.get("mc_iterations", 8) or 8), min(24, budget["nest_threads"] // 2))
 
     base["engine_id"] = eid
     return base
@@ -230,3 +255,28 @@ def score_placa_simulacion(
         penalizacion += (0.50 - efi) * float(piezas_colocadas) * 3.5
 
     return (costo_por_area * penalizacion) + penal_restos + float(lookahead_cost)
+
+
+def score_placa_lower_bound(
+    candidato_placa: dict,
+    *,
+    area_piezas_pendientes: float,
+) -> float:
+    """
+    Cota inferior segura del score (mejor caso imaginable).
+    Asume: se usa min(área piezas, área placa), efi=100%, sin restos ni lookahead.
+    Si esta cota >= mejor_score actual, nestear la candidata no puede ganar.
+    """
+    placa_area = float(candidato_placa.get("w", 0) or 0) * float(
+        candidato_placa.get("h", 0) or 0
+    )
+    precio = float(candidato_placa.get("precio", 0.0) or 0.0)
+    area_pend = max(0.0, float(area_piezas_pendientes or 0.0))
+    if placa_area <= 0.0 or area_pend <= 0.0:
+        return float("inf")
+    # Mejor área útil posible (sin scrap forzado por forma).
+    area_max = min(area_pend, placa_area)
+    if area_max <= 1e-9:
+        return float("inf")
+    # Con efi=1.0 la penalización mínima del score es 1.0 y restos/lookahead=0.
+    return precio / area_max

@@ -352,6 +352,22 @@ def completar_transform_export_hoja(hoja: dict) -> int:
     return n
 
 
+def _iou_poligonos(a_rings, b_rings) -> float:
+    """IoU entre dos anillos externos (0..1). Fallos → 0."""
+    try:
+        pa = reconstruir_poly_seguro(a_rings)
+        pb = reconstruir_poly_seguro(b_rings)
+        if pa is None or pb is None or pa.is_empty or pb.is_empty:
+            return 0.0
+        inter = float(pa.intersection(pb).area)
+        union = float(pa.union(pb).area)
+        if union <= 1e-12:
+            return 0.0
+        return inter / union
+    except Exception:
+        return 0.0
+
+
 def refrescar_poligonos_display_pieza(pieza: dict, *, force: bool = False) -> bool:
     """Sustituye poligonos en memoria por versión fiel al DXF (misma posición)."""
     if not isinstance(pieza, dict):
@@ -365,8 +381,15 @@ def refrescar_poligonos_display_pieza(pieza: dict, *, force: bool = False) -> bo
         if not completar_transform_export_pieza(pieza):
             return False
 
+    nested_before = list(pieza.get("poligonos") or [])
     pols = poligonos_display_desde_dxf(pieza)
     if not pols:
+        return False
+
+    # Guardrail anti-empalme: si el DXF reubicado no coincide con el nest, NO reescribir.
+    # (p. ej. rotación 45° mal inferida → polígonos cruzados en pantalla).
+    iou = _iou_poligonos(nested_before, pols)
+    if nested_before and iou < 0.92:
         return False
 
     pieza["poligonos"] = pols
