@@ -3202,9 +3202,14 @@ class TabNesting(QWidget, TimerHost):
         """
         Mapa nombre->geometría base para renest/compensar.
 
-        Orden (rápido + orientación correcta):
-        1) Nest en memoria (sin red) + desrotar pose (quita 45° horneado).
+        Acero:
+        1) Nest en memoria + desrotar pose (quita 45° horneado).
         2) DXF solo de nombres que aún falten.
+
+        Cobre (largos CU):
+        Siempre prioriza DXF + rotación PARTS (`orientacion_cobre_por_ruta`),
+        igual que el nest inicial. Tomar del nest ignora el giro de PARTS y
+        puede forzar otra barra.
         """
         material_hoja = clave.split("_")[1] if "_" in clave else clave
         calibre_hoja = clave.split("_")[0] if "_" in clave else ""
@@ -3213,6 +3218,7 @@ class TabNesting(QWidget, TimerHost):
         if nombres_requeridos:
             req = {self._nombre_canonico_pieza(n) for n in nombres_requeridos}
             req.discard("")
+        es_cobre = self._es_grupo_cobre(clave)
 
         def _marks_from_raw(raw_marks):
             try:
@@ -3236,7 +3242,20 @@ class TabNesting(QWidget, TimerHost):
                 return LineString(segs[0])
             return MultiLineString(segs)
 
-        def _agregar_fuente(nom, poly, marks, cal, mat, ruta, *, desrotar=False):
+        def _ruta_parte_por_canon(canon: str) -> str:
+            for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
+                if self._nombre_canonico_pieza(p_nom) != canon:
+                    continue
+                if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                    continue
+                if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                    continue
+                return str(ruta or "")
+            return ""
+
+        def _agregar_fuente(
+            nom, poly, marks, cal, mat, ruta, *, desrotar=False, aplicar_rot_cobre=True
+        ):
             canon = self._nombre_canonico_pieza(nom)
             if not canon or canon in fuente or poly is None or getattr(poly, "is_empty", True):
                 return
@@ -3249,10 +3268,13 @@ class TabNesting(QWidget, TimerHost):
             marks_use = marks
             if desrotar:
                 poly_use, marks_use = self._poly_desrotar_a_ejes(poly_use, marks_use)
-            if es_material_cobre(mat):
+            ruta_use = str(ruta or "").strip() or _ruta_parte_por_canon(canon)
+            # Solo aplicar giro PARTS sobre DXF nativo. El nest ya trae la pose
+            # colocada; reaplicar 90° la voltearía al sentido contrario.
+            if aplicar_rot_cobre and (es_material_cobre(mat) or es_cobre):
                 rot_deg = int(
                     (getattr(self.app, "orientacion_cobre_por_ruta", {}) or {}).get(
-                        clave_orientacion_cobre_ruta(ruta), 0
+                        clave_orientacion_cobre_ruta(ruta_use), 0
                     )
                 ) % 360
                 if rot_deg:
@@ -3265,6 +3287,11 @@ class TabNesting(QWidget, TimerHost):
                             marks_use = affinity.rotate(
                                 marks_use, rot_deg, origin=(cx, cy), use_radians=False
                             )
+                        print(
+                            f"[COBRE-ROT-RENEST] pieza={canon} | rot={rot_deg}° | "
+                            f"ruta={os.path.basename(ruta_use) if ruta_use else '?'}",
+                            flush=True,
+                        )
                     except Exception:
                         pass
 
@@ -3283,73 +3310,18 @@ class TabNesting(QWidget, TimerHost):
                 "area_base": float(poly_use.area),
                 "calibre": cal,
                 "material": mat,
-                "ruta": ruta,
+                "ruta": ruta_use,
             }
 
-        # 1) Nest en memoria (rápido) + desrotar pose a ejes.
-        grp = (self.app.resultados_nesting or {}).get(clave) or {}
-        for hoja in (grp.get("hojas") or []):
-            for p in (hoja.get("piezas") or []):
-                nom = str(p.get("nombre", "")).strip()
-                canon = self._nombre_canonico_pieza(nom)
-                if not canon or self._es_pieza_virtual(nom) or canon in fuente:
-                    continue
-                if req is not None and canon not in req:
-                    continue
-                pols = p.get("poligonos") or []
-                if not pols or not pols[0]:
-                    continue
-                try:
-                    from shapely.geometry import Polygon
-                    outer = []
-                    for pt in (pols[0] or []):
-                        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                            try:
-                                outer.append((float(pt[0]), float(pt[1])))
-                            except Exception:
-                                continue
-                    holes = []
-                    for h in pols[1:]:
-                        hh = []
-                        for pt in (h or []):
-                            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                                try:
-                                    hh.append((float(pt[0]), float(pt[1])))
-                                except Exception:
-                                    continue
-                        if len(hh) >= 3:
-                            holes.append(hh)
-                    if len(outer) < 3:
-                        continue
-                    poly = Polygon(outer, holes)
-                    if not poly.is_valid:
-                        poly = poly.buffer(0)
-                    if poly is None or poly.is_empty:
-                        continue
-                    marks = _marks_from_raw(p.get("marcas"))
-                    _agregar_fuente(
-                        nom,
-                        poly,
-                        marks,
-                        p.get("calibre", calibre_hoja),
-                        p.get("material", material_hoja),
-                        p.get("ruta", ""),
-                        desrotar=True,
-                    )
-                except Exception:
-                    continue
-
-        # 2) DXF solo de lo que aún falte (no el job entero).
-        faltan = None
-        if req is not None:
-            faltan = {n for n in req if n not in fuente}
-        if faltan is None or faltan:
+        def _cargar_desde_dxf(faltan_set=None):
             for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
                 nom = str(p_nom or "").strip()
                 canon = self._nombre_canonico_pieza(nom)
                 if not canon or canon in fuente:
                     continue
-                if faltan is not None and canon not in faltan:
+                if faltan_set is not None and canon not in faltan_set:
+                    continue
+                if req is not None and canon not in req:
                     continue
                 if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
                     continue
@@ -3358,14 +3330,94 @@ class TabNesting(QWidget, TimerHost):
                 poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
                 if not poly:
                     continue
-                _agregar_fuente(nom, poly, marks, cal, mat, ruta, desrotar=False)
-                if faltan is not None:
-                    faltan.discard(canon)
-                    if not faltan:
+                _agregar_fuente(
+                    nom, poly, marks, cal, mat, ruta, desrotar=False, aplicar_rot_cobre=True
+                )
+                if faltan_set is not None:
+                    faltan_set.discard(canon)
+                    if not faltan_set:
                         break
 
+        def _cargar_desde_nest(faltan_set=None, *, desrotar=True):
+            grp = (self.app.resultados_nesting or {}).get(clave) or {}
+            for hoja in (grp.get("hojas") or []):
+                for p in (hoja.get("piezas") or []):
+                    nom = str(p.get("nombre", "")).strip()
+                    canon = self._nombre_canonico_pieza(nom)
+                    if not canon or self._es_pieza_virtual(nom) or canon in fuente:
+                        continue
+                    if faltan_set is not None and canon not in faltan_set:
+                        continue
+                    if req is not None and canon not in req:
+                        continue
+                    pols = p.get("poligonos") or []
+                    if not pols or not pols[0]:
+                        continue
+                    try:
+                        from shapely.geometry import Polygon
+                        outer = []
+                        for pt in (pols[0] or []):
+                            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                                try:
+                                    outer.append((float(pt[0]), float(pt[1])))
+                                except Exception:
+                                    continue
+                        holes = []
+                        for h in pols[1:]:
+                            hh = []
+                            for pt in (h or []):
+                                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                                    try:
+                                        hh.append((float(pt[0]), float(pt[1])))
+                                    except Exception:
+                                        continue
+                            if len(hh) >= 3:
+                                holes.append(hh)
+                        if len(outer) < 3:
+                            continue
+                        poly = Polygon(outer, holes)
+                        if not poly.is_valid:
+                            poly = poly.buffer(0)
+                        if poly is None or poly.is_empty:
+                            continue
+                        marks = _marks_from_raw(p.get("marcas"))
+                        _agregar_fuente(
+                            nom,
+                            poly,
+                            marks,
+                            p.get("calibre", calibre_hoja),
+                            p.get("material", material_hoja),
+                            p.get("ruta", ""),
+                            desrotar=desrotar,
+                            # Pose del nest ya incluye orientación; no reaplicar PARTS.
+                            aplicar_rot_cobre=False,
+                        )
+                        if faltan_set is not None:
+                            faltan_set.discard(canon)
+                    except Exception:
+                        continue
+
+        if es_cobre:
+            # Cobre: misma base que nest inicial (DXF + giro PARTS).
+            _cargar_desde_dxf(None if req is None else set(req))
+            # Último recurso si falta DXF (sin reaplicar rotación).
+            if req is not None:
+                faltan_c = {n for n in req if n not in fuente}
+                if faltan_c:
+                    _cargar_desde_nest(faltan_c, desrotar=True)
+        else:
+            # 1) Nest en memoria (rápido) + desrotar pose a ejes.
+            _cargar_desde_nest(None, desrotar=True)
+            # 2) DXF solo de lo que aún falte (no el job entero).
+            faltan = None
+            if req is not None:
+                faltan = {n for n in req if n not in fuente}
+            if faltan is None or faltan:
+                _cargar_desde_dxf(faltan)
+
         print(
-            f"[GEOM-FUENTE] clave={clave} | nest+dxf={len(fuente)}"
+            f"[GEOM-FUENTE] clave={clave} | cobrecom={'dxf' if es_cobre else 'nest+dxf'} | "
+            f"n={len(fuente)}"
             + (f" | req={len(req)}" if req is not None else ""),
             flush=True,
         )
@@ -3690,6 +3742,9 @@ class TabNesting(QWidget, TimerHost):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
         if clave not in self.app.resultados_nesting:
             return QMessageBox.warning(self, "Atención", "No se encontró ese calibre/material.")
+        if self._es_grupo_cobre(clave):
+            # Antes de reconstruir geometría: PARTS → motor (rotación 90°).
+            self._sync_orientacion_cobre_al_motor()
         piezas_pack = self._build_piezas_para_renest_calibre(clave)
         build_info = getattr(self, "_renest_calibre_build_info", {}) or {}
         faltantes_geom = build_info.get("faltantes_geom") or []
@@ -6172,6 +6227,7 @@ class TabNesting(QWidget, TimerHost):
                 "Solo se pueden renestear barras madre de cobre (largos CU).",
             )
 
+        self._sync_orientacion_cobre_al_motor()
         opts_cu = self._preguntar_opts_renest_cobre(clave, hoja)
         if opts_cu is None:
             return
