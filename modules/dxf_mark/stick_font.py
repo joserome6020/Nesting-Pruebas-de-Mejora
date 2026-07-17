@@ -7,8 +7,8 @@ import math
 # Cada glifo = lista de trazos abiertos (cada trazo = lista de (x, y)).
 STICK_GLYPHS: dict[str, list[list[tuple[float, float]]]] = {
     "0": [
+        # Rectángulo cerrado sin diagonal (más eficiente en láser/STEP).
         [(0.15, 0.08), (0.85, 0.08), (0.85, 0.92), (0.15, 0.92), (0.15, 0.08)],
-        [(0.25, 0.20), (0.75, 0.80)],
     ],
     "1": [
         [(0.35, 0.75), (0.50, 0.92), (0.50, 0.08)],
