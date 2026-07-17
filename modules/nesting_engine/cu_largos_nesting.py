@@ -1,13 +1,18 @@
 """
 Nesting 1D para largos de cobre (CU).
 
-- Orientación nativa del DXF (sin rotar).
+- Orientación exacta elegida en PARTS: el empaquetador no vuelve a girar la pieza.
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Separación 3/8" entre piezas >15" de largo (eje X del DXF); piezas ≤15" sin separación
+- Separación 3/8" entre piezas > umbral de largo (eje X del DXF); piezas ≤ umbral sin separación
   salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
-  sin gap o con gap para toda la barra. El empaquetado prioriza barras homogéneas para reducir
-  hibridaciones cuando el inventario lo permite.
+  sin gap o con gap para toda la barra. Piezas con corte de orilla (más angostas que la tira)
+  o relieve/escalón lateral se fuerzan a sin_gap y solo se mezclan entre sí (no con laminas
+  rectas a ancho exacto). Si una barra sin_gap rebasa 114", el tramo sobrante se separa como
+  RTZCU con gap por defecto (la madre conserva sin_gap). Cada pieza usa su tira objetivo
+  (exacta o la mínima del catálogo que la contenga); no se sube 4"/5" a 6" solo porque el
+  lote ya abrió una tira más ancha. Si el RTZCU con gap no cabe hasta 144", las piezas
+  sobrantes abren barra(s) nueva(s) (pueden generar otro RTZCU).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
 - sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
 - con_gap: CUT_OUTER cerrado por pieza + STEP (sin CUT_CU ni líneas divisorias)
@@ -33,15 +38,21 @@ from shapely import affinity
 from .cu_inventory import es_placa_largo_cu
 from .efficiency_metrics import calcular_eficiencias_grupo
 
-TOL_ANCHO_IN_MIN = 0.02
+TOL_ANCHO_IN_MIN = 0.02  # ~1/50": DXF/medición (ej. 2.0015" sigue en tira 2")
 TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
+
+
+def _tol_ancho_mm() -> float:
+    return float(TOL_ANCHO_IN_MIN) * 25.4
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
 # Piezas con largo DXF (eje X) hasta este umbral van sin separación por defecto (el usuario puede renestear con otro valor).
 LARGO_SIN_SEPARACION_CU_IN = 10.0
 # Si ≥ este % de piezas de una barra son cortas (≤umbral) o largas (>umbral), aplica ese modo a toda la barra.
 MAYORIA_BARRA_CU_FRACCION = 0.80
+# Barras madre con menos de este avance en X se consideran "cola" para re-empaque conjunto.
+UMBRAL_COLA_LONGITUD_CU_FRAC = 0.80
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
 RELIEF_BAND_FRAC = 0.40
 RELIEF_BAND_MIN_MM = 10.0
@@ -56,6 +67,39 @@ def _dims_pieza_nativo_mm(poly) -> Optional[Tuple[float, float]]:
     if largo_x <= 0 or ancho_y <= 0:
         return None
     return largo_x, ancho_y
+
+
+def _orientar_pieza_para_catalogo(
+    poly,
+    catalogo: List[dict],
+) -> Optional[Tuple[object, float, float, dict, float, bool, float]]:
+    """
+    Conserva la orientación recibida desde PARTS y resuelve la tira compatible.
+
+    La rotación manual de cobre se aplica antes, al leer el DXF. Rotar de nuevo
+    aquí cambiaría 5" × 2" a 2" × 5" sin autorización y también rompería la
+    paridad entre nesting, renesteos y workspaces .arganest.
+
+    Devuelve (poly_orientado, len_mm, wid_mm, barra, corte_sup_mm, calibre_sup, rot_deg).
+    """
+    dims = _dims_pieza_nativo_mm(poly)
+    if dims is None or not catalogo:
+        return None
+    lx, wy = dims
+    barra, corte_sup, cal_sup = _resolver_barra_para_pieza(wy, catalogo)
+    if barra is None:
+        return None
+    minx, miny, _, _ = poly.bounds
+    poly_orientado = affinity.translate(poly, -minx, -miny)
+    return (
+        poly_orientado,
+        float(lx),
+        float(wy),
+        barra,
+        float(corte_sup),
+        bool(cal_sup),
+        0.0,
+    )
 
 
 def _estandares_ancho_in(catalogo: List[dict]) -> List[float]:
@@ -75,13 +119,15 @@ def _resolver_barra_para_pieza(
         return None, 0.0, False
 
     a_in = float(ancho_pieza_mm) / 25.4
+    tol_mm = _tol_ancho_mm()
     estandares = _estandares_ancho_in(catalogo)
     if not estandares:
         return None, 0.0, False
 
+    # Exacta: nominal ±TOL (2.0015" → 2", no 3").
     exactas = [
         b for b in catalogo
-        if float(ancho_pieza_mm) <= float(b["ancho_mm"]) + 0.01
+        if float(ancho_pieza_mm) <= float(b["ancho_mm"]) + tol_mm
         and abs(float(b["ancho_in"]) - a_in) <= TOL_ANCHO_IN_MIN
     ]
     if exactas:
@@ -90,7 +136,7 @@ def _resolver_barra_para_pieza(
 
     fitting = [
         b for b in catalogo
-        if float(b["ancho_mm"]) + 0.01 >= float(ancho_pieza_mm)
+        if float(b["ancho_mm"]) + tol_mm >= float(ancho_pieza_mm)
     ]
     if not fitting:
         return None, 0.0, True
@@ -164,11 +210,12 @@ def _colocar_pieza_nativa(
         "orig_miny": float(p_data.get("orig_miny", 0.0) or 0.0),
         "shift_x": float(x_mm),
         "shift_y": float(y_mm),
-        "rot_deg": 0.0,
+        "rot_deg": float(p_data.get("rot_deg", 0.0) or 0.0),
         "rot_origin_cx": float(p_data.get("rot_origin_cx", 0.0) or 0.0),
         "rot_origin_cy": float(p_data.get("rot_origin_cy", 0.0) or 0.0),
         "corte_superior_mm": float(corte_superior_mm),
         "calibre_superior": bool(calibre_superior),
+        "cu_forzar_sin_gap": bool(p_data.get("cu_forzar_sin_gap")),
         "y_corte_superior_mm": y_corte,
         "x_inicio_mm": float(x_mm),
         "largo_mm": float(p_data.get("len_mm") or 0.0),
@@ -606,6 +653,69 @@ def _pieza_cu_exime_separacion(
     return _largo_pieza_cu_in(item) <= max(0.0, float(largo_sin_separacion_in))
 
 
+def _exterior_item_cu(item: dict) -> list:
+    """Contorno exterior en coords locales (poly o poligonos ya colocados)."""
+    poly = item.get("poly")
+    if poly is not None and not getattr(poly, "is_empty", True):
+        try:
+            return list(poly.exterior.coords)
+        except Exception:
+            pass
+    polys = item.get("poligonos") or []
+    if polys and polys[0]:
+        return list(polys[0])
+    return []
+
+
+def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
+    """
+    True si la pieza fuerza corte láser además de la guillotina vertical:
+    - más angosta que la tira (recorte de orilla, ej. 1.75\" en 2\"), o
+    - perfil con escalón/diagonal/relieve (no lamina ortogonal a todo el ancho).
+    """
+    if bool(item.get("cu_forzar_sin_gap")):
+        return True
+    try:
+        if float(item.get("corte_superior_mm") or 0.0) > 0.5:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if bool(item.get("calibre_superior")):
+        return True
+    exterior = _exterior_item_cu(item)
+    if exterior and not _solo_cortes_guillotina_vertical(exterior):
+        return True
+    return False
+
+
+def _marcar_forzar_sin_gap(item: dict) -> dict:
+    """Calcula y fija cu_forzar_sin_gap en el dict de la pieza."""
+    out = item
+    flag = _pieza_cu_forzar_sin_gap(item)
+    if item.get("cu_forzar_sin_gap") is not True and flag:
+        out = dict(item)
+        out["cu_forzar_sin_gap"] = True
+    elif "cu_forzar_sin_gap" not in item:
+        out = dict(item)
+        out["cu_forzar_sin_gap"] = bool(flag)
+    return out
+
+
+def _familia_corte_cu(item: dict) -> str:
+    """Familias que no se mezclan en la misma barra."""
+    return "sin_gap_laser" if _pieza_cu_forzar_sin_gap(item) else "guillotina"
+
+
+def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
+    """Piezas con corte lateral solo con otras iguales; laminas exactas aparte."""
+    colocados = barra.get("colocados") or []
+    if not colocados:
+        return True
+    fam_item = _familia_corte_cu(item)
+    fams = {_familia_corte_cu(c[0]) for c in colocados}
+    return fams == {fam_item}
+
+
 def _cu_sin_separacion_efectiva(item: dict, modo_barra: str) -> bool:
     modo = str(modo_barra or "hibrido").strip().lower()
     return modo == "sin_gap"
@@ -620,10 +730,13 @@ def _modo_separacion_barra(
     - cortas (≤ umbral) → sin_gap en toda la barra
     - largas (> umbral) → con_gap entre todas las piezas
     - si no hay mayoría → separación entre todas las piezas (incl. larga+corta)
+    Piezas con corte de orilla/relieve fuerzan sin_gap (toda la barra).
     """
     n = len(items or [])
     if n <= 0:
         return "hibrido"
+    if any(_pieza_cu_forzar_sin_gap(it) for it in items):
+        return "sin_gap"
     umbral = max(1, math.ceil(n * MAYORIA_BARRA_CU_FRACCION))
     n_cortas = sum(
         1 for it in items if _pieza_cu_exime_separacion(it, largo_sin_separacion_in)
@@ -699,30 +812,6 @@ def _simular_encaje_en_barra(
     return True, gap_before, x_pos, cursor
 
 
-def _aplicar_pieza_en_barra(
-    barra: dict,
-    item: dict,
-    separacion_in: float,
-    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
-) -> bool:
-    ok, _gap, _x, cursor = _simular_encaje_en_barra(
-        barra, item, separacion_in, largo_sin_separacion_in
-    )
-    if not ok:
-        return False
-    trial = list(barra["colocados"]) + [(item, 0.0, 0.0)]
-    nuevos, cursor, modo = _recalcular_colocados_barra(
-        trial,
-        separacion_in=separacion_in,
-        largo_mm=float(barra["largo_mm"]),
-        largo_sin_separacion_in=largo_sin_separacion_in,
-    )
-    barra["colocados"] = nuevos
-    barra["cursor_x"] = cursor
-    barra["cu_modo_separacion"] = modo
-    return True
-
-
 def _encaje_en_barra(
     barra: dict,
     item: dict,
@@ -737,6 +826,52 @@ def _encaje_en_barra(
     return True, gap_before, x_pos
 
 
+def _ancho_objetivo_item_in(item: dict) -> float:
+    """Ancho de tira resuelto para la pieza (catálogo), no el Y del DXF."""
+    try:
+        objetivo = float(item.get("barra_objetivo_in") or 0.0)
+    except (TypeError, ValueError):
+        objetivo = 0.0
+    if objetivo > 0.0:
+        return objetivo
+    try:
+        return float(item.get("wid_mm") or 0.0) / 25.4
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pieza_cabe_en_ancho_barra(item: dict, barra: dict) -> bool:
+    """True solo si la tira es el ancho objetivo de la pieza.
+
+    No permite subir 4\"/5\" a 6\" porque el lote ya abrió una tira más ancha.
+    El salto de calibre (ej. 5.25\" → 6\") ya quedó fijado en barra_objetivo_in
+    al resolver contra el catálogo.
+    """
+    try:
+        wid = float(item.get("wid_mm") or 0.0)
+        ancho_b = float(barra.get("ancho_mm") or 0.0)
+        if ancho_b + _tol_ancho_mm() < wid:
+            return False
+        return abs(float(barra.get("ancho_in") or 0.0) - _ancho_objetivo_item_in(item)) <= TOL_ANCHO_IN_MIN
+    except (TypeError, ValueError):
+        return False
+
+
+def _adaptar_item_a_barra(item: dict, barra: dict) -> dict:
+    """Ajusta corte superior / calibre cuando la pieza es más angosta que su tira objetivo."""
+    out = dict(item)
+    ancho_b = float(barra.get("ancho_mm") or 0.0)
+    wid = float(item.get("wid_mm") or 0.0)
+    corte = max(0.0, ancho_b - wid)
+    out["corte_superior_mm"] = corte
+    out["calibre_superior"] = corte > 0.5
+    # Conserva el objetivo original; la tira debe coincidir con él.
+    out["barra_objetivo_in"] = _ancho_objetivo_item_in(item) or float(
+        barra.get("ancho_in") or 0.0
+    )
+    return _marcar_forzar_sin_gap(out)
+
+
 def _score_barra_para_item(
     barra: dict,
     item: dict,
@@ -744,17 +879,23 @@ def _score_barra_para_item(
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> float | None:
     """
-    Mayor puntaje = preferir barra homogénea (solo cortas o solo largas).
-    Penalizar fuertemente crear mezcla corta+larga si hay alternativa.
+    Mayor puntaje = preferir rellenar barras ya abiertas del mismo ancho objetivo.
+    Luego homogeneidad corta/larga. Familias laser/guillotina no se mezclan.
     """
+    if not _pieza_cabe_en_ancho_barra(item, barra):
+        return None
+    if not _barra_acepta_familia_corte(barra, item):
+        return None
+    item_eff = _adaptar_item_a_barra(item, barra)
     cabe, gap_before, x_pos = _encaje_en_barra(
-        barra, item, separacion_in, largo_sin_separacion_in
+        barra, item_eff, separacion_in, largo_sin_separacion_in
     )
     if not cabe:
         return None
 
     cat_barra = _categoria_barra_abierta(barra["colocados"], largo_sin_separacion_in)
-    cat_item = _categoria_pieza_cu(item, largo_sin_separacion_in)
+    cat_item = _categoria_pieza_cu(item_eff, largo_sin_separacion_in)
+    # Rellenar barra abierta del mismo ancho siempre gana frente a abrir otra tira.
     if cat_barra is None:
         score = 500.0
     elif cat_barra == cat_item:
@@ -762,12 +903,41 @@ def _score_barra_para_item(
     elif cat_barra == "mixta":
         score = 800.0
     else:
-        score = 10.0
+        score = 50.0
 
-    restante = float(barra["largo_mm"]) - (x_pos + float(item["len_mm"]))
+    restante = float(barra["largo_mm"]) - (x_pos + float(item_eff["len_mm"]))
     score -= restante * 0.002
     score -= gap_before * 0.001
     return score
+
+
+def _aplicar_pieza_en_barra(
+    barra: dict,
+    item: dict,
+    separacion_in: float,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+) -> bool:
+    if not _pieza_cabe_en_ancho_barra(item, barra):
+        return False
+    if not _barra_acepta_familia_corte(barra, item):
+        return False
+    item_eff = _adaptar_item_a_barra(item, barra)
+    ok, _gap, _x, cursor = _simular_encaje_en_barra(
+        barra, item_eff, separacion_in, largo_sin_separacion_in
+    )
+    if not ok:
+        return False
+    trial = list(barra["colocados"]) + [(item_eff, 0.0, 0.0)]
+    nuevos, cursor, modo = _recalcular_colocados_barra(
+        trial,
+        separacion_in=separacion_in,
+        largo_mm=float(barra["largo_mm"]),
+        largo_sin_separacion_in=largo_sin_separacion_in,
+    )
+    barra["colocados"] = nuevos
+    barra["cursor_x"] = cursor
+    barra["cu_modo_separacion"] = modo
+    return True
 
 
 def _gap_proyectado_en_barra(
@@ -791,7 +961,12 @@ def _recalcular_colocados_barra(
     largo_mm: float,
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[List[tuple], float, str]:
-    """Recalcula posiciones X según mayoría 80% o separación uniforme en barra mixta."""
+    """Recalcula posiciones X según mayoría 80% o separación uniforme en barra mixta.
+
+    La barra madre conserva su modo (sin_gap / con_gap). Si es sin_gap y rebasa
+    114\", el tramo sobrante se separa como RTZCU con gap por defecto (ver
+    construir_hoja_rtz_cu_virtual), pero la madre NO cambia de modo.
+    """
     if not colocados:
         return colocados, 0.0, "hibrido"
 
@@ -852,7 +1027,7 @@ def _consolidar_barras_con_pieza_sola(
     largo_sin_separacion_in: float,
     max_uso_frac: float = 0.20,
 ) -> None:
-    """Reubica piezas que quedaron solas en otra barra del mismo ancho si cabe."""
+    """Reubica piezas solas en otra barra del mismo ancho objetivo donde quepan."""
     cambiado = True
     while cambiado:
         cambiado = False
@@ -870,12 +1045,15 @@ def _consolidar_barras_con_pieza_sola(
             for j, dest in enumerate(barras_abiertas):
                 if j == i:
                     continue
-                if abs(float(dest.get("ancho_in", 0.0)) - float(barra.get("ancho_in", 0.0))) > TOL_ANCHO_IN_MIN:
-                    continue
                 if not dest.get("colocados"):
                     continue
+                if not _pieza_cabe_en_ancho_barra(item, dest):
+                    continue
+                if not _barra_acepta_familia_corte(dest, item):
+                    continue
+                item_eff = _adaptar_item_a_barra(item, dest)
                 ok, _, _, _ = _simular_encaje_en_barra(
-                    dest, item, separacion_in, largo_sin_separacion_in
+                    dest, item_eff, separacion_in, largo_sin_separacion_in
                 )
                 if not ok:
                     continue
@@ -906,32 +1084,41 @@ def empaquetar_largos_cu(
     items = []
     sin_colocar: List[dict] = []
     for p in piezas or []:
-        dims = _dims_pieza_nativo_mm(p.get("poly"))
-        if dims is None:
+        oriented = _orientar_pieza_para_catalogo(p.get("poly"), catalogo)
+        if oriented is None:
             sin_colocar.append(copy.deepcopy(p))
             continue
-        largo_x, ancho_y = dims
-        barra, corte_sup, cal_sup = _resolver_barra_para_pieza(ancho_y, catalogo)
-        if barra is None:
-            sin_colocar.append({**copy.deepcopy(p), "ancho_in": ancho_y / 25.4})
-            continue
-        items.append(
-            {
-                **copy.deepcopy(p),
-                "len_mm": largo_x,
-                "wid_mm": ancho_y,
-                "ancho_in": ancho_y / 25.4,
-                "barra_objetivo_in": float(barra["ancho_in"]),
-                "corte_superior_mm": corte_sup,
-                "calibre_superior": cal_sup,
-            }
-        )
+        poly_o, largo_x, ancho_y, barra, corte_sup, cal_sup, rot_deg = oriented
+        item = {
+            **copy.deepcopy(p),
+            "poly": poly_o,
+            "len_mm": largo_x,
+            "wid_mm": ancho_y,
+            "ancho_in": ancho_y / 25.4,
+            "barra_objetivo_in": float(barra["ancho_in"]),
+            "corte_superior_mm": corte_sup,
+            "calibre_superior": cal_sup,
+            "rot_deg": float(rot_deg),
+        }
+        item = _marcar_forzar_sin_gap(item)
+        # Marcas: rotar igual que el contorno si aplica.
+        marks = p.get("marks")
+        if marks is not None and not getattr(marks, "is_empty", True) and rot_deg:
+            marks_r = affinity.rotate(marks, 90.0, origin="centroid", use_radians=False)
+            minx, miny, _, _ = poly_o.bounds
+            # poly_o ya está en origen; alinear marks al mismo origen del poly rotado crudo.
+            # Recalcular desde poly original rotado:
+            poly_raw = affinity.rotate(p.get("poly"), 90.0, origin="centroid", use_radians=False)
+            mx0, my0, _, _ = poly_raw.bounds
+            item["marks"] = affinity.translate(marks_r, -mx0, -my0)
+        items.append(item)
 
-    # Agrupar cortas y largas por ancho de tira; dentro de cada grupo, piezas más largas primero.
+    # Agrupa por ancho objetivo; laser-sin-gap juntos; dentro, largas primero.
     items.sort(
         key=lambda x: (
-            x["barra_objetivo_in"],
-            0 if _pieza_cu_exime_separacion(x, largo_umbral) else 1,
+            float(x["barra_objetivo_in"]),
+            0 if _pieza_cu_forzar_sin_gap(x) else 1,
+            0 if not _pieza_cu_exime_separacion(x, largo_umbral) else 1,
             -x["len_mm"],
         )
     )
@@ -942,16 +1129,19 @@ def empaquetar_largos_cu(
         candidatos: dict[str, tuple[dict, float, float, float]] = {}
 
         for barra in barras_abiertas:
-            if abs(barra["ancho_in"] - item["barra_objetivo_in"]) > TOL_ANCHO_IN_MIN:
+            if not _pieza_cabe_en_ancho_barra(item, barra):
                 continue
             score = _score_barra_para_item(
                 barra, item, separacion_in, largo_umbral
             )
             if score is None:
                 continue
+            item_eff = _adaptar_item_a_barra(item, barra)
             cabe, gap_before, x_pos = _encaje_en_barra(
-                barra, item, separacion_in, largo_umbral
+                barra, item_eff, separacion_in, largo_umbral
             )
+            if not cabe:
+                continue
             if score >= 1500.0:
                 bucket = "homogenea"
             elif score >= 500.0:
@@ -966,8 +1156,14 @@ def empaquetar_largos_cu(
 
         elegido = _elegir_candidato_barra(candidatos)
 
+        # Siempre abrir tira del ancho objetivo de la pieza (no heredar 6" del lote).
         stock = next(
-            (b for b in catalogo if abs(b["ancho_in"] - item["barra_objetivo_in"]) <= TOL_ANCHO_IN_MIN),
+            (
+                b
+                for b in catalogo
+                if abs(float(b["ancho_in"]) - float(item["barra_objetivo_in"]))
+                <= TOL_ANCHO_IN_MIN
+            ),
             None,
         )
 
@@ -977,15 +1173,16 @@ def empaquetar_largos_cu(
                 continue
 
         if stock is not None:
+            item0 = _adaptar_item_a_barra(item, stock)
             barras_abiertas.append(
                 {
                     "stock": stock,
                     "largo_mm": stock["largo_mm"],
                     "ancho_mm": stock["ancho_mm"],
                     "ancho_in": stock["ancho_in"],
-                    "cursor_x": item["len_mm"],
-                    "colocados": [(item, 0.0, 0.0)],
-                    "cu_modo_separacion": _modo_separacion_barra([item], largo_umbral),
+                    "cursor_x": item0["len_mm"],
+                    "colocados": [(item0, 0.0, 0.0)],
+                    "cu_modo_separacion": _modo_separacion_barra([item0], largo_umbral),
                 }
             )
             continue
@@ -1112,6 +1309,193 @@ def empaquetar_largos_cu(
     return hojas, sin_colocar
 
 
+def _es_hoja_madre_cu(hoja: dict) -> bool:
+    return (
+        isinstance(hoja, dict)
+        and hoja.get("modo_largos_cu")
+        and not hoja.get("es_retazo")
+        and not hoja.get("cu_rtz_virtual")
+    )
+
+
+def _uso_longitudinal_hoja_cu(hoja: dict) -> float:
+    """Fracción de placa_w usada por piezas reales (eje X)."""
+    largo = float(hoja.get("placa_w") or 0.0)
+    if largo <= 0.5:
+        return 1.0
+    fin = 0.0
+    from .sheet_integrity import piezas_reales_en_hoja
+
+    for p in piezas_reales_en_hoja(hoja):
+        pols = (p or {}).get("poligonos") or []
+        if not pols or not pols[0]:
+            continue
+        xs = [float(t[0]) for t in pols[0]]
+        if xs:
+            fin = max(fin, max(xs))
+    return min(1.0, fin / largo)
+
+
+def _pack_piezas_reales_hoja_cu(hoja: dict) -> List[dict]:
+    from .cu_rtz_sin_gap import colocada_a_pack_cu
+    from .sheet_integrity import piezas_reales_en_hoja
+
+    out: List[dict] = []
+    for p in piezas_reales_en_hoja(hoja):
+        pp = colocada_a_pack_cu(p)
+        if pp is not None:
+            out.append(pp)
+    return out
+
+
+def consolidar_barras_cu_baja_ocupacion(
+    hojas: List[dict],
+    placas_ok: List[dict],
+    *,
+    separacion_in: float = DEFAULT_SEPARACION_CU_IN,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+    umbral_long_frac: float = UMBRAL_COLA_LONGITUD_CU_FRAC,
+    dbg_fn: Optional[Callable[[str], None]] = None,
+    max_pasadas: int = 12,
+) -> List[dict]:
+    """Re-empaqueta juntas varias barras madre del mismo ancho con poco avance en X.
+
+    Típico tras derrame RTZCU: dos barras ~50% que caben mejor en una (o dos
+    con RTZCU) si se nestean las piezas en un solo lote.
+    """
+    _log = dbg_fn or (lambda _msg: None)
+    out = list(hojas or [])
+    sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
+    largo_umbral = max(
+        0.0,
+        float(
+            largo_sin_separacion_in
+            if largo_sin_separacion_in is not None
+            else LARGO_SIN_SEPARACION_CU_IN
+        ),
+    )
+    umbral = max(0.35, min(0.95, float(umbral_long_frac)))
+
+    for pasada in range(max(1, int(max_pasadas or 1))):
+        por_ancho: Dict[float, List[tuple[int, dict, float]]] = {}
+        for i, h in enumerate(out):
+            if not _es_hoja_madre_cu(h):
+                continue
+            uso = _uso_longitudinal_hoja_cu(h)
+            key = round(float(h.get("placa_h") or 0.0), 1)
+            por_ancho.setdefault(key, []).append((i, h, uso))
+
+        fusion_hecha = False
+        for _ancho_key, grupo in por_ancho.items():
+            bajas = [(i, h, u) for i, h, u in grupo if u < umbral - 1e-6]
+            if len(bajas) < 2:
+                continue
+
+            pack: List[dict] = []
+            quitar: set[int] = set()
+            for i, h, _u in sorted(bajas, key=lambda t: t[0]):
+                quitar.add(i)
+                pack.extend(_pack_piezas_reales_hoja_cu(h))
+            if len(pack) < 2:
+                continue
+
+            nuevas, sin = empaquetar_largos_cu(
+                pack,
+                placas_ok,
+                separacion_in=sep_in,
+                largo_sin_separacion_in=largo_umbral,
+            )
+            if sin or not nuevas:
+                continue
+            if len(nuevas) >= len(quitar):
+                # Sin mejora en número de barras: solo aceptar si sube el mínimo uso longitudinal.
+                uso_viejos = [u for _i, _h, u in bajas]
+                uso_nuevos = [_uso_longitudinal_hoja_cu(h) for h in nuevas if _es_hoja_madre_cu(h)]
+                if not uso_nuevos:
+                    continue
+                if min(uso_nuevos) <= min(uso_viejos) + 0.02:
+                    continue
+
+            _log(
+                f"[CU-LARGOS][COLA] pasada={pasada + 1} | ancho={_ancho_key:.1f}mm | "
+                f"barras {len(quitar)} → {len(nuevas)} | piezas={len(pack)}"
+            )
+            out = [h for k, h in enumerate(out) if k not in quitar]
+            out.extend(nuevas)
+            fusion_hecha = True
+            break
+
+        if not fusion_hecha:
+            break
+    return out
+
+
+def resolver_derrames_rtz_cu(
+    hojas: List[dict],
+    placas_ok: List[dict],
+    *,
+    separacion_in: float = DEFAULT_SEPARACION_CU_IN,
+    largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
+    dbg_fn: Optional[Callable[[str], None]] = None,
+    max_iter: int = 24,
+) -> Tuple[List[dict], List[dict]]:
+    """Si el RTZCU con gap no cabe, derrama sobrantes a barra(s) nueva(s).
+
+    Las barras nuevas se empaquetan con la misma lógica LARGOS CU y pueden
+    volver a generar RTZCU (bucle hasta estabilizar).
+    """
+    from .cu_rtz_sin_gap import aplicar_rtz_sin_gap_a_hoja_con_derrame
+
+    _log = dbg_fn or (lambda _msg: None)
+    out = list(hojas or [])
+    sin_colocar: List[dict] = []
+    sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
+    largo_umbral = max(
+        0.0,
+        float(
+            largo_sin_separacion_in
+            if largo_sin_separacion_in is not None
+            else LARGO_SIN_SEPARACION_CU_IN
+        ),
+    )
+
+    for it in range(max(1, int(max_iter or 1))):
+        derrame: List[dict] = []
+        for h in out:
+            if not isinstance(h, dict):
+                continue
+            if h.get("es_retazo") or h.get("cu_rtz_virtual"):
+                continue
+            if not h.get("modo_largos_cu"):
+                continue
+            _activo, overflow = aplicar_rtz_sin_gap_a_hoja_con_derrame(h)
+            if overflow:
+                derrame.extend(overflow)
+
+        if not derrame:
+            if it > 0:
+                _log(f"[CU-LARGOS][RTZ-DERRAME] estable tras {it} pasada(s)")
+            break
+
+        _log(
+            f"[CU-LARGOS][RTZ-DERRAME] pasada={it + 1} | "
+            f"piezas={len(derrame)} → empaquetar barras nuevas"
+        )
+        nuevas, sin = empaquetar_largos_cu(
+            derrame,
+            placas_ok,
+            separacion_in=sep_in,
+            largo_sin_separacion_in=largo_umbral,
+        )
+        if nuevas:
+            out.extend(nuevas)
+        if sin:
+            sin_colocar.extend(sin)
+            _log(f"[CU-LARGOS][RTZ-DERRAME] sin colocar tras derrame: {len(sin)}")
+            break
+    return out, sin_colocar
+
+
 def procesar_grupo_largos_cu(
     clave: str,
     piezas: List[dict],
@@ -1146,6 +1530,32 @@ def procesar_grupo_largos_cu(
         separacion_in=sep_in,
         largo_sin_separacion_in=largo_umbral,
     )
+    # RTZCU con gap: lo que no cabe en el tramo → barras nuevas (pueden generar otro RTZCU).
+    hojas, sin_derrame = resolver_derrames_rtz_cu(
+        hojas,
+        placas_ok,
+        separacion_in=sep_in,
+        largo_sin_separacion_in=largo_umbral,
+        dbg_fn=_log,
+    )
+    hojas = consolidar_barras_cu_baja_ocupacion(
+        hojas,
+        placas_ok,
+        separacion_in=sep_in,
+        largo_sin_separacion_in=largo_umbral,
+        dbg_fn=_log,
+    )
+    hojas, sin_derrame2 = resolver_derrames_rtz_cu(
+        hojas,
+        placas_ok,
+        separacion_in=sep_in,
+        largo_sin_separacion_in=largo_umbral,
+        dbg_fn=_log,
+    )
+    if sin_derrame2:
+        sin_derrame = list(sin_derrame or []) + list(sin_derrame2)
+    if sin_derrame:
+        sin_colocar = list(sin_colocar or []) + list(sin_derrame)
     if sin_colocar:
         detalle = []
         for p in sin_colocar:

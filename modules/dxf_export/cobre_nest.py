@@ -1,8 +1,9 @@
 """
 Exportación DXF de hojas de cobre (madre + RTZCU).
 
-Canal aislado del nesteo acero: sin Plate/BORDE_RETAZO, orientación vertical
-sin_gap (CyPTube) y seccionado según madre/RTZ definidos en el nesting.
+Canal aislado del nesteo acero: sin Plate/BORDE_RETAZO.
+- Madre sin_gap: orientación vertical CyPTube + cortes segmentados.
+- RTZCU / con_gap: horizontal, CUT_OUTER cerrado por pieza → STEP (misma lógica).
 """
 from __future__ import annotations
 
@@ -42,8 +43,19 @@ from modules.nesting_engine.dxf_export_log import (
 )
 
 
-def _filtrar_placements_cobre(placements: list | None) -> list[dict]:
-    """Quita artefactos del canal acero (Plate retazo, tatuajes REF)."""
+def _filtrar_placements_cobre(placements: list | None, sheet: dict | None = None) -> list[dict]:
+    """Quita artefactos del canal acero y piezas/cortes de zona RTZCU en madre."""
+    sheet = sheet if isinstance(sheet, dict) else {}
+    madre_sin_rtz = bool(sheet.get("modo_largos_cu")) and not sheet.get("cu_rtz_virtual")
+    try:
+        inicio_rtz = float(sheet.get("cu_rtz_inicio_mm") or 0.0)
+    except (TypeError, ValueError):
+        inicio_rtz = 0.0
+    if madre_sin_rtz and sheet.get("cu_rtz_activo") and inicio_rtz <= 0.5:
+        from modules.nesting_engine.cu_rtz_sin_gap import rtz_zona_inicio_mm
+
+        inicio_rtz = float(rtz_zona_inicio_mm())
+
     out: list[dict] = []
     for p in placements or []:
         if not isinstance(p, dict):
@@ -57,6 +69,18 @@ def _filtrar_placements_cobre(placements: list | None) -> list[dict]:
             continue
         if nom.startswith("TATUAJE__") and "RTZCU" in nom.upper():
             continue
+        if p.get("cu_zona_rtz"):
+            continue
+        if madre_sin_rtz and inicio_rtz > 0.5:
+            # Defensa: geom/placement cuyo X empieza en zona RTZ.
+            outer = p.get("outer") or []
+            if outer:
+                try:
+                    minx = min(float(pt[0]) for pt in outer)
+                    if minx >= inicio_rtz - 0.5:
+                        continue
+                except Exception:
+                    pass
         out.append(p)
     return out
 
@@ -64,9 +88,25 @@ def _filtrar_placements_cobre(placements: list | None) -> list[dict]:
 def _preparar_sheet_cobre(sheet: dict | None) -> dict[str, Any]:
     s = dict(sheet or {})
     s.setdefault("modo_largos_cu", True)
-    if _sheet_is_sin_gap(s):
-        # Incluye RTZCU: misma orientación vertical que la madre.
+    if s.get("cu_rtz_virtual"):
+        # RTZCU: misma lógica STEP que con_gap (horizontal, contorno cerrado).
+        s["cu_modo_separacion_barra"] = "con_gap"
+        s["export_3d_format"] = "step"
+        s.pop("cu_export_vertical", None)
+    elif _sheet_is_sin_gap(s):
+        # Solo madre sin_gap → CyPTube vertical.
         s["cu_export_vertical"] = True
+        # Si hay RTZCU, acotar largo DXF al tramo madre.
+        try:
+            from modules.nesting_engine.cu_rtz_sin_gap import largo_export_madre_cu_mm
+
+            largo_m = largo_export_madre_cu_mm(s)
+            if largo_m is not None and largo_m > 0.5:
+                s["length"] = float(largo_m)
+                s["cu_rtz_inicio_mm"] = float(s.get("cu_rtz_inicio_mm") or largo_m)
+                s["cu_rtz_activo"] = True
+        except Exception:
+            pass
     return s
 
 
@@ -84,7 +124,7 @@ def export_cobre_hoja_to_dxf(
     Exporta una hoja de cobre (madre o RTZCU) sin mezclar lógica de acero.
     """
     sheet_work = _preparar_sheet_cobre(sheet)
-    placements_work = _filtrar_placements_cobre(placements)
+    placements_work = _filtrar_placements_cobre(placements, sheet_work)
     sin_gap = _sheet_is_sin_gap(sheet_work)
     rtz_virtual = bool(sheet_work.get("cu_rtz_virtual"))
     canal_tag = "NESTEOS DE COBRE"

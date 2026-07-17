@@ -18,11 +18,15 @@ from shapely.geometry import Polygon
 
 from modules.nest_exporter import export_nest_to_dxf
 from modules.dxf_export.cobre_nest import export_cobre_hoja_to_dxf
-from modules.nesting_engine.cu_largos_nesting import empaquetar_largos_cu
+from modules.nesting_engine.cu_largos_nesting import (
+    empaquetar_largos_cu,
+    procesar_grupo_largos_cu,
+)
 from modules.nesting_engine.cu_rtz_sin_gap import (
     CU_SIN_GAP_LARGO_CORTE_MAX_IN,
     asignar_rtz_cu_sin_gap_ids,
 )
+from modules.nesting_engine.efficiency_metrics import contar_piezas_grupo, contar_piezas_hoja
 from modules.nesting_engine.sheet_numbering import asignar_numeracion_global_hojas
 from modules.nesting_engine.sheet_integrity import validar_colocacion_completa
 
@@ -137,7 +141,20 @@ def test_cobre_con_gap() -> None:
 
 
 def test_cobre_sin_gap_rtz_nesting() -> None:
-    """Piezas cortas → sin_gap; madre ≤114\"; overflow con piezas en RTZCU."""
+    """Piezas cortas ≤114\" → sin_gap; overflow >114\" → madre sin_gap + RTZCU con gap real."""
+    # 10 × 8\" = 80\" < 114\" → permanece sin_gap, sin RTZCU.
+    piezas_cortas = [_piece(f"S{i}", 8.0) for i in range(10)]
+    hojas_ok, sin_ok = empaquetar_largos_cu(
+        piezas_cortas,
+        [_barra_stock()],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin_ok
+    assert hojas_ok
+    assert hojas_ok[0].get("cu_modo_separacion_barra") == "sin_gap"
+
+    # 16 × 8\" = 128\" > 114\": madre sigue sin_gap y genera RTZCU (con gap por defecto).
     piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
     hojas, sin = empaquetar_largos_cu(
         piezas,
@@ -151,47 +168,408 @@ def test_cobre_sin_gap_rtz_nesting() -> None:
     resultados = {"0.25_CU": {"hojas": hojas}}
     asignar_numeracion_global_hojas(resultados, "W.O. TEST", sobrescribir=True)
     n_rtz = asignar_rtz_cu_sin_gap_ids(resultados)
-    assert n_rtz >= 1, "debe haber al menos un RTZ de cobre"
 
-    h = hojas[0]
-    assert h.get("cu_modo_separacion_barra") == "sin_gap"
-    if h.get("cu_rtz_activo"):
-        assert float(h.get("cu_fin_piezas_mm") or 0) / 25.4 <= CU_SIN_GAP_LARGO_CORTE_MAX_IN + 0.05
+    # La madre conserva sin_gap; el overflow >114\" se separa como RTZCU.
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual")]
+    virtuales = [h for h in hojas if h.get("cu_rtz_virtual")]
+    modos = {str(h.get("cu_modo_separacion_barra") or "") for h in madres}
+    assert "sin_gap" in modos, f"madre debe seguir sin_gap, modos={modos}"
+    assert n_rtz > 0, "overflow sin_gap >114\" debe crear RTZCU"
+    assert virtuales, "sin hojas RTZCU virtuales"
+    # RTZCU ya no hereda sin_gap: usa gap por defecto / STEP.
+    assert all(
+        v.get("cu_modo_separacion_barra") == "con_gap" for v in virtuales
+    ), "RTZCU debe quedar con_gap"
+    assert all(
+        v.get("export_3d_format") == "step" for v in virtuales
+    ), "RTZCU debe exportar STEP"
 
-    rtz_piezas = h.get("cu_rtz_piezas_hoja") or []
-    assert h.get("cu_rtz_activo") == bool(rtz_piezas), "RTZ solo si hay piezas overflow"
-    if rtz_piezas:
-        assert len(rtz_piezas) >= 1
-        rtz_id = str(h.get("cu_rtz_id") or "")
-        assert rtz_id.startswith("RTZCU"), rtz_id
+    # Piezas del RTZCU deben quedar re-espaciadas con gap (no pegadas).
+    gap_mm = 0.375 * 25.4
+    for v in virtuales:
+        reales = [
+            p
+            for p in (v.get("piezas") or [])
+            if isinstance(p, dict)
+            and str(p.get("nombre") or "").startswith("P")
+        ]
+        if len(reales) < 2:
+            continue
+        xs = []
+        for p in reales:
+            pols = p.get("poligonos") or []
+            if not pols or not pols[0]:
+                continue
+            xs.append(min(float(t[0]) for t in pols[0]))
+        xs.sort()
+        for a, b in zip(xs, xs[1:]):
+            # Entre inicios: largo_pieza(8\") + gap; al menos gap entre fin e inicio.
+            assert b - a >= 8.0 * 25.4 + gap_mm - 1.0, (
+                f"RTZCU sin gap real entre piezas: dx={b - a:.1f}"
+            )
 
     pool = [{"nombre": f"P{i}"} for i in range(16)]
-    ok, msg = validar_colocacion_completa(
-        pool, [h for h in hojas if not h.get("cu_rtz_virtual")]
-    )
+    ok, msg = validar_colocacion_completa(pool, madres)
     assert ok, f"validación inventario falló: {msg}"
 
+
+def test_rtz_derrame_abre_barra_nueva() -> None:
+    """Si RTZCU con gap no cabe, derrama a barra nueva y conserva inventario."""
+    # 36 × 4\" = 144\" pegadas (sin_gap). ~8 piezas caen past 114\";
+    # con gap solo caben ~7 → 1+ derraman a barra nueva.
+    piezas = [_piece(f"D{i}", 4.0) for i in range(36)]
+    stock = [_barra_stock(4.0) for _ in range(6)]
+    clave, res = procesar_grupo_largos_cu(
+        "0.25_CU",
+        piezas,
+        stock,
+        wo_name="W.O. DERRAME",
+        exigir_colocacion_total=True,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not res.get("error"), res.get("error")
+    madres0 = [
+        h
+        for h in (res.get("hojas") or [])
+        if isinstance(h, dict) and not h.get("es_retazo") and not h.get("cu_rtz_virtual")
+    ]
+    assert len(madres0) >= 2, f"esperado >=2 barras tras derrame, got {len(madres0)}"
+
+    resultados = {clave: res}
+    asignar_numeracion_global_hojas(resultados, "W.O. DERRAME", sobrescribir=True)
+    n_rtz = asignar_rtz_cu_sin_gap_ids(resultados)
+    assert n_rtz >= 1, "debe existir al menos un RTZCU en la barra madre llena"
+    assert not res.get("cu_rtz_derrame_sin_barra"), res.get("cu_rtz_derrame_sin_barra")
+
+    madres = [
+        h
+        for h in (res.get("hojas") or [])
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual")
+    ]
+    # Ninguna pieza real debe rebasar el largo físico de la solera.
+    for h in madres:
+        if h.get("es_retazo"):
+            continue
+        lim = float(h.get("placa_w") or 0.0) + 0.5
+        for p in h.get("piezas") or []:
+            if not isinstance(p, dict):
+                continue
+            nom = str(p.get("nombre") or "")
+            if not nom.startswith("D"):
+                continue
+            pols = p.get("poligonos") or []
+            if not pols or not pols[0]:
+                continue
+            maxx = max(float(t[0]) for t in pols[0])
+            assert maxx <= lim, f"{nom} maxx={maxx/25.4:.2f}\" > barra {lim/25.4:.2f}\""
+
+    pool = [{"nombre": f"D{i}"} for i in range(36)]
+    ok, msg = validar_colocacion_completa(pool, madres)
+    assert ok, f"inventario tras derrame: {msg}"
+
+
+def test_consolidar_cola_barras_derrame() -> None:
+    """Dos barras madre con poco avance en X (mismo ancho) se re-empaquetan juntas."""
+    stock = [_barra_stock(6.0)]
+    # PARTS ya trae avance 3.75" en X sobre tira de 6"; no se autoriza girarla.
+    lote_a = [_piece(f"T{i}", 3.75, 6.0) for i in range(20)]
+    lote_b = [_piece(f"U{i}", 3.75, 6.0) for i in range(10)]
+    h_a, _ = empaquetar_largos_cu(lote_a, stock, separacion_in=0.375, largo_sin_separacion_in=10.0)
+    h_b, _ = empaquetar_largos_cu(lote_b, stock, separacion_in=0.375, largo_sin_separacion_in=10.0)
+    assert h_a and h_b
+    from modules.nesting_engine.cu_largos_nesting import (
+        _uso_longitudinal_hoja_cu,
+        consolidar_barras_cu_baja_ocupacion,
+    )
+
+    hojas = list(h_a) + list(h_b)
+    assert len(hojas) == 2
+    usos_antes = [_uso_longitudinal_hoja_cu(h) for h in hojas]
+    assert all(u < 0.85 for u in usos_antes)
+
+    compactas = consolidar_barras_cu_baja_ocupacion(
+        hojas,
+        stock,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    madres = [h for h in compactas if not h.get("cu_rtz_virtual") and not h.get("es_retazo")]
+    assert len(madres) == 1, f"esperada 1 barra compacta, got {len(madres)}"
+    assert _uso_longitudinal_hoja_cu(madres[0]) > max(usos_antes) - 0.05
+
+    pool = [{"nombre": f"T{i}"} for i in range(20)] + [{"nombre": f"U{i}"} for i in range(10)]
+    ok, msg = validar_colocacion_completa(pool, madres)
+    assert ok, msg
+
+
+def test_cobre_respeta_orientacion_parts() -> None:
+    """Una pieza 5×2 visible en PARTS conserva 5\" en X; no se optimiza como 2×5."""
+    piezas = [_piece(f"O{i}", 5.0, 2.0) for i in range(8)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock(6.0)],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    reales = [
+        p
+        for h in hojas
+        for p in (h.get("piezas") or [])
+        if str((p or {}).get("nombre") or "").startswith("O")
+    ]
+    assert len(reales) == 8
+    for p in reales:
+        pol = (p.get("poligonos") or [[]])[0]
+        xs = [float(pt[0]) for pt in pol]
+        ys = [float(pt[1]) for pt in pol]
+        assert abs((max(xs) - min(xs)) / 25.4 - 5.0) < 0.02
+        assert abs((max(ys) - min(ys)) / 25.4 - 2.0) < 0.02
+        assert float(p.get("rot_deg") or 0.0) == 0.0
+
+
+def test_pieza_2p0015_usa_barra_2in() -> None:
+    """2.0015\" de DXF no debe saltar a tira 3\" si existe 2\"."""
+    from modules.nesting_engine.cu_largos_nesting import _orientar_pieza_para_catalogo, _normalizar_barras
+
+    poly = Polygon(
+        [
+            (0, 0),
+            (5.0 * 25.4, 0),
+            (5.0 * 25.4, 2.0015 * 25.4),
+            (0, 2.0015 * 25.4),
+        ]
+    )
+    catalogo = _normalizar_barras([_barra_stock(2.0), _barra_stock(3.0), _barra_stock(6.0)])
+    oriented = _orientar_pieza_para_catalogo(poly, catalogo)
+    assert oriented is not None
+    _poly, _lx, _wy, barra, _corte, cal_sup, _rot = oriented
+    assert abs(float(barra["ancho_in"]) - 2.0) <= 0.02, barra
+    assert not cal_sup
+
+    piezas = [
+        {
+            "nombre": "OVER2",
+            "poly": poly,
+            "marks": None,
+            "area": float(poly.area),
+            "calibre": "CU",
+            "material": "CU",
+            "ruta": "",
+        }
+    ]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock(2.0), _barra_stock(3.0)],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual")]
+    assert abs(float(madres[0].get("placa_h") or 0.0) / 25.4 - 2.0) < 0.05
+
+
+def test_no_sube_4in_a_6in_por_lote_mixto() -> None:
+    """Piezas de 4\" no deben ir a solera 6\" solo porque el lote también tiene 6\"."""
+    piezas = [_piece(f"W6-{i}", 16.0, 6.0) for i in range(2)] + [
+        _piece(f"W4-{i}", 16.0, 4.0) for i in range(4)
+    ]
+    stock = [_barra_stock(4.0), _barra_stock(6.0)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        stock,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual") and not h.get("es_retazo")]
+    anchos = sorted({round(float(h.get("placa_h") or 0.0) / 25.4, 2) for h in madres})
+    assert 4.0 in anchos, f"faltó tira 4\": {anchos}"
+    assert 6.0 in anchos, f"faltó tira 6\": {anchos}"
+
+    for h in madres:
+        ancho_bar = float(h.get("placa_h") or 0.0) / 25.4
+        for p in h.get("piezas") or []:
+            nom = str((p or {}).get("nombre") or "")
+            if not nom.startswith("W"):
+                continue
+            pol = (p.get("poligonos") or [[]])[0]
+            ys = [float(pt[1]) for pt in pol]
+            wid = (max(ys) - min(ys)) / 25.4
+            if nom.startswith("W4-"):
+                assert abs(wid - 4.0) < 0.05, nom
+                assert abs(ancho_bar - 4.0) < 0.05, f"{nom} en barra {ancho_bar}\""
+            if nom.startswith("W6-"):
+                assert abs(wid - 6.0) < 0.05, nom
+                assert abs(ancho_bar - 6.0) < 0.05, f"{nom} en barra {ancho_bar}\""
+
+
+def test_reconciliar_no_consume_rtzcu_virtual() -> None:
+    """sanitizar/reconciliar no debe comer piezas dos veces por RTZCU virtual."""
+    from modules.nesting_engine.sheet_integrity import sanitizar_hojas_grupo
+
+    pool = [{"nombre": f"P{i}"} for i in range(16)]
+    piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock()],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    resultados = {"0.25_CU": {"hojas": hojas, "piezas_pool": pool, "piezas_pool_engine": True}}
+    asignar_numeracion_global_hojas(resultados, "W.O. RECON", sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+    grp = resultados["0.25_CU"]
+    n_antes = sum(
+        1
+        for h in grp["hojas"]
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    )
+    sanitizar_hojas_grupo(pool, grp["hojas"], clave="0.25_CU")
+    n_despues = sum(
+        1
+        for h in grp["hojas"]
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    )
+    assert n_despues == n_antes, f"reconciliar eliminó barras: {n_antes} -> {n_despues}"
+    ok, msg = validar_colocacion_completa(pool, grp["hojas"])
+    assert ok, msg
+    assert contar_piezas_grupo(grp) == 16
+
+
+def test_conteo_no_duplica_rtzcu_virtual() -> None:
+    """PIEZAS TOTALES / contar_piezas_grupo no suma piezas del RTZCU virtual."""
+    from modules.nesting_engine.efficiency_metrics import contar_piezas_grupo, contar_piezas_hoja
+
+    piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock()],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    resultados = {"0.25_CU": {"hojas": hojas}}
+    asignar_numeracion_global_hojas(resultados, "W.O. COUNT", sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual")]
     virtuales = [h for h in hojas if h.get("cu_rtz_virtual")]
-    if rtz_piezas:
-        assert len(virtuales) >= 1, "falta hoja RTZ (ACCESORIOS) con piezas"
-        assert len(virtuales[0].get("piezas") or []) >= 1
-        assert "-H" in str(virtuales[0].get("placa_id") or "")
+    assert virtuales, "debe haber RTZCU virtual para el caso overflow"
+    n_madres = sum(contar_piezas_hoja(h) for h in madres)
+    n_virt = sum(contar_piezas_hoja(h) for h in virtuales)
+    assert n_virt > 0
+    n_grupo = contar_piezas_grupo(resultados["0.25_CU"])
+    assert n_grupo == 16, f"esperado 16, got {n_grupo} (madres={n_madres} virt={n_virt})"
+    assert n_grupo == n_madres, "grupo debe igualar solo madres (sin virtual)"
+
+
+def test_dxf_madre_excluye_piezas_rtzcu() -> None:
+    """DXF placa madre no incluye piezas/cortes de zona RTZCU (van al STEP propio)."""
+    from modules.nesting_engine.cu_rtz_sin_gap import pieza_excluida_dxf_madre_cu
+    from modules.dxf_export.cobre_nest import _filtrar_placements_cobre, _preparar_sheet_cobre
+
+    piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [_barra_stock()],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    resultados = {"0.25_CU": {"hojas": hojas}}
+    asignar_numeracion_global_hojas(resultados, "W.O. MADRE", sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+
+    madre = next(h for h in hojas if not h.get("cu_rtz_virtual") and h.get("cu_rtz_activo"))
+    virtual = next(h for h in hojas if h.get("cu_rtz_virtual"))
+    n_rtz_flag = sum(
+        1
+        for p in (madre.get("piezas") or [])
+        if isinstance(p, dict) and p.get("cu_zona_rtz") and str(p.get("nombre") or "").startswith("P")
+    )
+    assert n_rtz_flag > 0
+    assert virtual.get("piezas")
+
+    excluidas = [
+        p
+        for p in (madre.get("piezas") or [])
+        if isinstance(p, dict) and pieza_excluida_dxf_madre_cu(p, madre)
+    ]
+    assert excluidas, "debe excluir piezas/cortes RTZ de la madre"
+    assert all(
+        pieza_excluida_dxf_madre_cu(p, madre) for p in excluidas
+    )
+
+    # Simula placements como el exporter (sin filtro) y aplica filtro cobre.
+    placements_brutos = []
+    for p in madre.get("piezas") or []:
+        nom = str(p.get("nombre") or "")
+        if not nom.startswith("P") and not nom.startswith("CU_CORTE__"):
+            continue
+        pols = p.get("poligonos") or []
+        if not pols or not pols[0]:
+            continue
+        placements_brutos.append(
+            {
+                "part_name": nom,
+                "outer": pols[0],
+                "holes": [],
+                "cu_largos_piece": nom.startswith("P"),
+                "cu_zona_rtz": bool(p.get("cu_zona_rtz")),
+            }
+        )
+    sheet = {
+        "length": float(madre.get("placa_w") or 0),
+        "width": float(madre.get("placa_h") or 0),
+        "modo_largos_cu": True,
+        "cu_modo_separacion_barra": "sin_gap",
+        "export_3d_format": "dxf",
+        "cu_rtz_activo": True,
+        "cu_rtz_inicio_mm": float(madre.get("cu_rtz_inicio_mm") or 0),
+        "placa_w": float(madre.get("placa_w") or 0),
+    }
+    sheet_prep = _preparar_sheet_cobre(sheet)
+    assert float(sheet_prep["length"]) <= float(madre.get("cu_rtz_inicio_mm") or 0) + 0.5
+    filtrados = _filtrar_placements_cobre(placements_brutos, sheet_prep)
+    nombres_f = {str(p.get("part_name") or "") for p in filtrados}
+    for p in madre.get("piezas") or []:
+        if p.get("cu_zona_rtz") and str(p.get("nombre") or "").startswith("P"):
+            assert str(p.get("nombre")) not in nombres_f
+
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, "madre_no_rtz.dxf")
+        export_cobre_hoja_to_dxf(
+            out,
+            sheet_prep,
+            filtrados,
+            title="MADRE SIN RTZ",
+            strict=False,
+        )
+        assert os.path.isfile(out)
+        used = _used_layers(out)
+        assert "CUT_CU" not in used
+        assert "BAR_START" in used
 
 
 def test_export_rtz_cu_dxf() -> None:
-    """DXF aparte para tramo RTZ de cobre (nombre RTZCU{n}-H{m})."""
+    """RTZCU: misma logica STEP que con_gap (horizontal, CUT_OUTER cerrado; no vertical)."""
     inicio = 114.0 * 25.4
     pieza_rtz = {
         "nombre": "P-OVER",
         "poligonos": [
             [
-                (inicio, 0.0),
-                (inicio + 8.0 * 25.4, 0.0),
-                (inicio + 8.0 * 25.4, 4.0 * 25.4),
-                (inicio, 4.0 * 25.4),
+                (0.0, 0.0),
+                (8.0 * 25.4, 0.0),
+                (8.0 * 25.4, 4.0 * 25.4),
+                (0.0, 4.0 * 25.4),
             ]
         ],
         "area": 8.0 * 4.0 * 25.4 * 25.4,
+        "cu_sin_separacion": False,
+        "cu_modo_separacion_barra": "con_gap",
     }
     madre = {
         "modo_largos_cu": True,
@@ -205,19 +583,38 @@ def test_export_rtz_cu_dxf() -> None:
         "cu_rtz_piezas_hoja": [pieza_rtz],
         "placa_h": 4 * 25.4,
         "sheet_seq": 3,
+        "separacion_cu_in": 0.375,
     }
     from modules.nesting_engine.cu_rtz_sin_gap import construir_hoja_rtz_cu_virtual
+    from modules.nest_exporter import (
+        _sheet_export_sin_gap_vertical,
+        _sheet_is_sin_gap,
+        _sheet_cu_exporta_cortes_segmentados,
+    )
 
     virtual = construir_hoja_rtz_cu_virtual(madre)
     assert virtual and virtual.get("cu_rtz_virtual")
+    assert virtual.get("cu_modo_separacion_barra") == "con_gap"
+    assert virtual.get("export_3d_format") == "step"
+
     sheet = {
         "length": float(virtual["placa_w"]),
         "width": float(virtual["placa_h"]),
         "modo_largos_cu": True,
+        # Aunque alguien pase sin_gap, el canal cobre debe forzar STEP/con_gap.
         "cu_modo_separacion_barra": "sin_gap",
         "export_3d_format": "dxf",
         "cu_rtz_virtual": True,
     }
+    from modules.dxf_export.cobre_nest import _preparar_sheet_cobre
+
+    sheet_prep = _preparar_sheet_cobre(sheet)
+    assert sheet_prep.get("cu_modo_separacion_barra") == "con_gap"
+    assert sheet_prep.get("export_3d_format") == "step"
+    assert not _sheet_is_sin_gap(sheet_prep)
+    assert not _sheet_export_sin_gap_vertical(sheet_prep)
+    assert not _sheet_cu_exporta_cortes_segmentados(sheet_prep)
+
     span = 8.0 * 25.4
     ancho = 4.0 * 25.4
     margin = 8.0
@@ -257,18 +654,21 @@ def test_export_rtz_cu_dxf() -> None:
         assert os.path.isfile(out)
         used = _used_layers(out)
         assert "Plate" not in used, "RTZ cobre: sin capa Plate de acero"
-        assert "CUT_OUTER" in used or "CUT_INNER" in used
-        assert "BAR_START" in used, "RTZCU: barra independiente con marcador inicio"
+        assert "CUT_OUTER" in used, "RTZCU STEP: CUT_OUTER cerrado por pieza"
+        assert "CUT_CU" not in used, "RTZCU STEP: sin CUT_CU"
+        assert "BAR_START" in used, "RTZCU: marcador inicio barra (horizontal)"
         doc = ezdxf.readfile(out)
-        ys = []
+        # Horizontal: bbox width (X) ~ largo pieza, height (Y) ~ ancho barra.
+        xs, ys = [], []
         for e in doc.modelspace():
-            if str(getattr(e.dxf, "layer", "")) != "CUT_OUTER":
-                continue
-            if e.dxftype() == "LINE":
-                ys.extend([float(e.dxf.start.y), float(e.dxf.end.y)])
-        assert ys, "sin geometría CUT_OUTER"
-        ymax = max(ys)
-        assert ymax <= 8.0 * 25.4 + 5.0, f"RTZ vertical debe caber en ~8\": ymax={ymax/25.4:.2f}\""
+            if e.dxftype() == "LWPOLYLINE" and str(e.dxf.layer) == "CUT_OUTER":
+                for pt in e.get_points("xy"):
+                    xs.append(float(pt[0]))
+                    ys.append(float(pt[1]))
+        assert xs and ys
+        assert max(xs) - min(xs) > max(ys) - min(ys), (
+            "RTZCU no debe exportarse vertical (CyPTube); debe quedar horizontal como con_gap"
+        )
 
 
 def test_cobre_sin_gap_dxf_madre_sin_rtz_ni_cut_cu() -> None:
@@ -336,14 +736,36 @@ def test_numeracion_cobre_ignora_rtz_virtual() -> None:
         numeracion_hojas_es_consistente,
     )
 
-    piezas = [_piece(f"P{i}", 8.0) for i in range(16)]
-    hojas, sin = empaquetar_largos_cu(
-        piezas,
-        [_barra_stock()],
-        separacion_in=0.375,
-        largo_sin_separacion_in=10.0,
-    )
-    assert not sin and hojas
+    # Hoja madre sin_gap legacy con piezas past 114\" (RTZCU) para probar numeración.
+    lim = CU_SIN_GAP_LARGO_CORTE_MAX_IN * 25.4
+    piezas_hoja = []
+    x = 0.0
+    for i in range(8):
+        L = 20.0 * 25.4
+        piezas_hoja.append(
+            {
+                "nombre": f"P{i}",
+                "poligonos": [[(x, 0), (x + L, 0), (x + L, 4 * 25.4), (x, 4 * 25.4), (x, 0)]],
+                "marcas": [],
+                "area": L * 4 * 25.4,
+                "calibre": "CU",
+                "material": "CU",
+            }
+        )
+        x += L
+    assert x > lim + 1.0
+
+    hoja = {
+        "piezas": piezas_hoja,
+        "placa_id": "CU-4x144",
+        "placa_w": 144.0 * 25.4,
+        "placa_h": 4.0 * 25.4,
+        "es_retazo": False,
+        "modo_largos_cu": True,
+        "cu_modo_separacion_barra": "sin_gap",
+        "sheet_uid": "uid-madre-1",
+    }
+    hojas = [hoja]
 
     wo = "W.O. 7 X6"
     resultados = {"0.25_CU": {"hojas": hojas, "modo_largos_cu": True}}
@@ -354,6 +776,7 @@ def test_numeracion_cobre_ignora_rtz_virtual() -> None:
     virtuales = [h for h in hojas if h.get("cu_rtz_virtual")]
     assert madres, "sin hojas madre"
     assert virtuales, "sin hojas RTZ virtual"
+    assert virtuales[0].get("cu_modo_separacion_barra") == "con_gap"
 
     max_h = max(int(h["sheet_seq"]) for h in madres)
     assert max_h == len(madres), f"madres deben ser H1..H{len(madres)}, max={max_h}"
@@ -377,6 +800,66 @@ def test_numeracion_cobre_ignora_rtz_virtual() -> None:
     assert numeracion_hojas_es_consistente(resultados, wo)
 
 
+def test_corte_orilla_y_relieve_fuerzan_sin_gap() -> None:
+    """1.75\" en 2\" o perfil con escalón → sin_gap; lamina exacta larga → con_gap; no se mezclan."""
+    # Largas (>10\") angostas: deben forzar sin_gap pese al umbral de largo.
+    angostas = [_piece(f"N175-{i}", 16.0, 1.75) for i in range(4)]
+    exactas = [_piece(f"E200-{i}", 16.0, 2.0) for i in range(4)]
+    # Escalón lateral a ancho de tira 2\" (no solo guillotina vertical).
+    lx = 12.0 * 25.4
+    wy = 2.0 * 25.4
+    step = Polygon(
+        [
+            (0, 0),
+            (lx, 0),
+            (lx, wy * 0.55),
+            (lx * 0.55, wy * 0.55),
+            (lx * 0.55, wy),
+            (0, wy),
+        ]
+    )
+    escalon = {
+        "nombre": "STEP-1",
+        "poly": step,
+        "marks": None,
+        "area": float(step.area),
+        "calibre": "CU",
+        "material": "CU",
+        "ruta": "",
+    }
+    stock = [_barra_stock(2.0)]
+    hojas, sin = empaquetar_largos_cu(
+        angostas + exactas + [escalon],
+        stock,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual") and not h.get("es_retazo")]
+
+    def _nombres(h):
+        return [
+            str(p.get("nombre") or "")
+            for p in (h.get("piezas") or [])
+            if str(p.get("nombre") or "").startswith(("N175-", "E200-", "STEP-"))
+        ]
+
+    for h in madres:
+        noms = _nombres(h)
+        if not noms:
+            continue
+        modo = str(h.get("cu_modo_separacion_barra") or "")
+        has_narrow = any(n.startswith("N175-") for n in noms)
+        has_exact = any(n.startswith("E200-") for n in noms)
+        has_step = any(n.startswith("STEP-") for n in noms)
+        assert not (has_narrow and has_exact), f"mezcla angosta+exacta: {noms}"
+        assert not (has_step and has_exact), f"mezcla escalón+exacta: {noms}"
+        if has_narrow or has_step:
+            assert modo == "sin_gap", f"debe sin_gap {noms} modo={modo}"
+        if has_exact and not has_narrow and not has_step:
+            assert modo == "con_gap", f"exactas largas → con_gap, modo={modo} {noms}"
+
+
 def main() -> int:
     test_laser_normal_sin_capas_cobre()
     print("[OK] 1/5 Nesteo láser normal: sin capas cobre fantasma")
@@ -385,16 +868,43 @@ def main() -> int:
     print("[OK] 2/5 Cobre con_gap: CUT_OUTER cerrado + BAR_START (sin CUT_CU ni divisorias)")
 
     test_cobre_sin_gap_rtz_nesting()
-    print("[OK] 3/5 Cobre sin_gap: madre ≤114\", RTZCU con piezas overflow")
+    print("[OK] 3/7 Cobre: <=114\" sin_gap; overflow >114\" madre sin_gap + RTZCU con_gap")
+
+    test_rtz_derrame_abre_barra_nueva()
+    print("[OK] 4/8 RTZCU con gap: derrame abre barra nueva y conserva inventario")
+
+    test_consolidar_cola_barras_derrame()
+    print("[OK] 5/11 Cola CU: barras baja ocupacion se compactan")
+
+    test_cobre_respeta_orientacion_parts()
+    print("[OK] 6/12 Orientacion CU: 5x2 en PARTS permanece 5x2 en nesting")
+
+    test_pieza_2p0015_usa_barra_2in()
+    print("[OK] 7/12 Tolerancia ancho: 2.0015\" usa tira 2\" (no 3\")")
+
+    test_no_sube_4in_a_6in_por_lote_mixto()
+    print("[OK] 7b/13 Ancho CU: 4\" no sube a 6\" en lote mixto")
+
+    test_corte_orilla_y_relieve_fuerzan_sin_gap()
+    print("[OK] 7c/14 Corte orilla/relieve CU => sin_gap y sin mezclar con lamina exacta")
+
+    test_reconciliar_no_consume_rtzcu_virtual()
+    print("[OK] 8/12 Reconciliar: RTZCU virtual no consume piezas del pool")
+
+    test_conteo_no_duplica_rtzcu_virtual()
+    print("[OK] 9/13 Conteo: RTZCU virtual no duplica PIEZAS TOTALES")
+
+    test_dxf_madre_excluye_piezas_rtzcu()
+    print("[OK] 10/13 DXF madre: excluye piezas/cortes zona RTZCU")
 
     test_export_rtz_cu_dxf()
-    print("[OK] 4/5 DXF RTZ cobre: archivo separado RTZCU-Hn")
+    print("[OK] 11/13 DXF RTZCU: con_gap/STEP horizontal (CUT_OUTER cerrado, no vertical)")
 
     test_cobre_sin_gap_dxf_madre_sin_rtz_ni_cut_cu()
-    print("[OK] 5/6 DXF madre sin_gap: BAR_START sí; CUT_CU y overlays RTZ no")
+    print("[OK] 12/13 DXF madre sin_gap: BAR_START sí; CUT_CU y overlays RTZ no")
 
     test_numeracion_cobre_ignora_rtz_virtual()
-    print("[OK] 6/6 Numeración cobre: RTZCU no consume H global (refresco UI)")
+    print("[OK] 13/13 Numeración cobre: RTZCU no consume H global (refresco UI)")
 
     print("\n=== TODAS LAS PRUEBAS PASARON ===")
     return 0

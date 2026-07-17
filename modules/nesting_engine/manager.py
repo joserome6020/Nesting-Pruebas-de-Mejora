@@ -59,6 +59,19 @@ def _es_motor_arga_force(engine_id=None) -> bool:
     return eid == ENGINE_ARGA_FORCE
 
 
+def _clave_es_cobre(clave) -> bool:
+    """True si la clave de grupo es cobre (independiente del motor de acero)."""
+    s = str(clave or "").strip().upper()
+    if not s:
+        return False
+    if s.endswith("_CU") or s.endswith("|CU") or "| CU" in s:
+        return True
+    if "_" in s:
+        mat = s.split("_", 1)[1]
+        return bool(es_material_cobre(mat))
+    return bool(es_material_cobre(s))
+
+
 def _early_exit_sim_placa_activo() -> bool:
     """Early-exit de candidatas: FORCE/LITE; Ultra en Selección Auto."""
     eid = normalize_engine_id(get_active_engine_id())
@@ -2600,168 +2613,218 @@ class MotorNesting:
             for clave, piezas in grupos.items()
             if piezas
         }
-        grupos_ordenados = sorted(
-            grupos_con_piezas.items(),
-            key=lambda kv: _orden_clave_nesting(kv[0]),
+
+        # Cobre = canal propio (largos CU). Nunca entra a Ultra / perfiles de motor acero.
+        grupos_cobre = {
+            k: v for k, v in grupos_con_piezas.items() if _clave_es_cobre(k)
+        }
+        grupos_acero = {
+            k: v for k, v in grupos_con_piezas.items() if not _clave_es_cobre(k)
+        }
+        grupos_cobre_ord = sorted(
+            grupos_cobre.items(), key=lambda kv: _orden_clave_nesting(kv[0])
+        )
+        grupos_acero_ord = sorted(
+            grupos_acero.items(), key=lambda kv: _orden_clave_nesting(kv[0])
         )
 
         total_lotes_reales = len(grupos_con_piezas)
+        n_cobre = len(grupos_cobre_ord)
+        n_acero = len(grupos_acero_ord)
 
         if total_lotes_reales == 0:
             _dbg_nesting("[ABORT] No hay grupos válidos para enviar a multiproceso")
             return {"error": "No hay grupos válidos para procesar."}
 
-        nest_profile = get_engine_profile(resolved_engine)
-        nestfab_continual = (
-            normalize_engine_id(resolved_engine) == ENGINE_SVGNEST_ULTRA
-            and bool(nest_profile.get("continual_until_user_stops"))
+        _dbg_nesting(
+            f"[SPLIT-MATERIAL] cobre={n_cobre} | acero={n_acero} | "
+            f"engine_acero={resolved_engine}"
         )
 
-        # NestFab continuo (opcional): Ultra en hilo actual para que Cancelar deje el mejor.
-        # Por defecto está OFF en el perfil: las sims multi-placa usan GA acotado.
-        if nestfab_continual:
-            notificar(
-                "SVGNest Ultra: mejora continua (Cancelar = aceptar lo mejor)...",
-                0.16,
-            )
-            prev_cc = _bind_pack_cancel_checker(self._cancelado)
-            try:
-                for i, (clave, piezas) in enumerate(grupos_ordenados):
-                    if self._cancelado():
-                        notificar(
-                            "Nesting detenido: se conserva lo calculado hasta ahora.",
-                            0.16 + (i / max(1, total_lotes_reales)) * 0.84,
-                        )
-                        break
+        # --- 1) Cobre primero: sin motor, sin kerf/margin/opt/corner de UI ---
+        if grupos_cobre_ord:
+            notificar("Nesteando cobre (largos CU)...", 0.16)
+            for i, (clave, piezas) in enumerate(grupos_cobre_ord):
+                if self._cancelado():
                     notificar(
-                        f"Ultra optimizando lote {i + 1}/{total_lotes_reales}: {clave}",
+                        "Nesting detenido: se conserva lo calculado hasta ahora.",
                         0.16 + (i / max(1, total_lotes_reales)) * 0.84,
                     )
-                    try:
-                        clave_w, resultado_grupo = self._procesar_grupo_parallel(
-                            clave,
-                            piezas,
-                            datos_placas,
-                            config_kerf,
-                            config_margin,
-                            config_opt,
-                            config_corner,
-                            wo_name,
-                        )
-                        resultados[clave_w or clave] = resultado_grupo
-                    except Exception as exc:
-                        print(f"Error en Lote {clave}: {exc}")
-                        resultados[clave] = {"error": f"Error en cálculo: {exc}"}
-            finally:
-                _unbind_pack_cancel_checker(prev_cc)
-        else:
-            # Ultra (y resto): multiproceso normal. Cancel aún se propaga entre placas.
-            nucleos_totales = multiprocessing.cpu_count()
-            nucleos_a_usar = max(1, min(nucleos_totales - 2, total_lotes_reales))
-            # Intra-placa (GA SVGNest Ultra): reparte núcleos entre workers para no
-            # sobre-suscribir. ARGA_NEST_OMP_THREADS del usuario tiene prioridad.
-            if not str(os.environ.get("ARGA_NEST_OMP_THREADS", "")).strip():
-                intra = max(1, nucleos_totales // max(1, nucleos_a_usar))
-                os.environ["ARGA_NEST_OMP_THREADS"] = str(intra)
-
-            # Evento compartido: Cancelar UI propaga a workers (cheques entre placas).
-            try:
-                mp_manager = multiprocessing.Manager()
-                cancel_event = mp_manager.Event()
-            except Exception:
-                mp_manager = None
-                cancel_event = None
-
-            plate_allowed = getattr(self, "_plate_formats_allowed", None)
-            plate_limits = getattr(self, "_plate_format_limits", None)
-
-            with concurrent.futures.ProcessPoolExecutor(
-                max_workers=nucleos_a_usar,
-                initializer=_nesting_worker_bootstrap,
-            ) as executor:
-                futuros = {
-                    executor.submit(
-                        _procesar_grupo_parallel_worker,
-                        (
-                            clave,
-                            piezas,
-                            datos_placas,
-                            config_kerf,
-                            config_margin,
-                            config_opt,
-                            config_corner,
-                            wo_name,
-                            resolved_engine,
-                            cancel_event,
-                            plate_allowed,
-                            plate_limits,
-                        ),
-                    ): clave
-                    for clave, piezas in grupos_ordenados
-                }
-
-                pendientes = set(futuros.keys())
-                completados = 0
-                while pendientes:
-                    if self._cancelado():
-                        if cancel_event is not None:
-                            try:
-                                cancel_event.set()
-                            except Exception:
-                                pass
-                        for fut in list(pendientes):
-                            fut.cancel()
-                        notificar(
-                            "Nesting cancelado: deteniendo workers...",
-                            0.16 + (completados / max(1, total_lotes_reales)) * 0.84,
-                        )
-                        break
-
-                    done, not_done = concurrent.futures.wait(
-                        pendientes,
-                        timeout=0.4,
-                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    break
+                notificar(
+                    f"Cobre largos {i + 1}/{n_cobre}: {clave}",
+                    0.16 + (i / max(1, total_lotes_reales)) * 0.84,
+                )
+                try:
+                    clave_w, resultado_grupo = self._procesar_grupo_parallel(
+                        clave,
+                        piezas,
+                        datos_placas,
+                        0.0,  # kerf ignorado en CU
+                        0.0,  # margin ignorado en CU
+                        "LARGOS CU",
+                        "INFERIOR IZQUIERDA",
+                        wo_name,
+                        cu_routing_override="largos",
                     )
-                    if not done:
-                        continue
+                    resultados[clave_w or clave] = resultado_grupo
+                except Exception as exc:
+                    print(f"Error en Lote cobre {clave}: {exc}")
+                    resultados[clave] = {"error": f"Error en cálculo cobre: {exc}"}
 
-                    for futuro in done:
-                        pendientes.discard(futuro)
-                        clave = futuros[futuro]
+        # --- 2) Acero: motor seleccionado (Ultra / Force / etc.) ---
+        if grupos_acero_ord and not self._cancelado():
+            nest_profile = get_engine_profile(resolved_engine)
+            nestfab_continual = (
+                normalize_engine_id(resolved_engine) == ENGINE_SVGNEST_ULTRA
+                and bool(nest_profile.get("continual_until_user_stops"))
+            )
+            base_pct = 0.16 + (n_cobre / max(1, total_lotes_reales)) * 0.84
+
+            if nestfab_continual:
+                notificar(
+                    "SVGNest Ultra: mejora continua (Cancelar = aceptar lo mejor)...",
+                    base_pct,
+                )
+                prev_cc = _bind_pack_cancel_checker(self._cancelado)
+                try:
+                    for i, (clave, piezas) in enumerate(grupos_acero_ord):
+                        if self._cancelado():
+                            notificar(
+                                "Nesting detenido: se conserva lo calculado hasta ahora.",
+                                base_pct + (i / max(1, n_acero)) * (1.0 - base_pct),
+                            )
+                            break
+                        notificar(
+                            f"Ultra optimizando lote acero {i + 1}/{n_acero}: {clave}",
+                            base_pct + (i / max(1, n_acero)) * (1.0 - base_pct),
+                        )
                         try:
-                            raw_result = futuro.result()
-
-                            if raw_result is None:
-                                raise RuntimeError("El worker regresó None")
-
-                            if isinstance(raw_result, tuple) and len(raw_result) == 2:
-                                clave_worker, resultado_grupo = raw_result
-                                if not clave_worker:
-                                    clave_worker = clave
-                                resultados[clave] = resultado_grupo
-                            elif isinstance(raw_result, dict):
-                                resultados[clave] = raw_result
-                            else:
-                                raise RuntimeError(
-                                    f"Salida inesperada del worker: tipo={type(raw_result).__name__}"
-                                )
-
+                            clave_w, resultado_grupo = self._procesar_grupo_parallel(
+                                clave,
+                                piezas,
+                                datos_placas,
+                                config_kerf,
+                                config_margin,
+                                config_opt,
+                                config_corner,
+                                wo_name,
+                            )
+                            resultados[clave_w or clave] = resultado_grupo
                         except Exception as exc:
                             print(f"Error en Lote {clave}: {exc}")
                             resultados[clave] = {"error": f"Error en cálculo: {exc}"}
+                finally:
+                    _unbind_pack_cancel_checker(prev_cc)
+            else:
+                # Multiproceso normal solo para acero.
+                nucleos_totales = multiprocessing.cpu_count()
+                nucleos_a_usar = max(1, min(nucleos_totales - 2, n_acero))
+                if not str(os.environ.get("ARGA_NEST_OMP_THREADS", "")).strip():
+                    intra = max(1, nucleos_totales // max(1, nucleos_a_usar))
+                    os.environ["ARGA_NEST_OMP_THREADS"] = str(intra)
 
-                        completados += 1
-                        progreso_actual = 0.16 + (completados / total_lotes_reales) * 0.84
-                        notificar(
-                            f"Lotes procesados: {completados}/{total_lotes_reales}",
-                            progreso_actual,
-                        )
-
-            if mp_manager is not None:
                 try:
-                    mp_manager.shutdown()
+                    mp_manager = multiprocessing.Manager()
+                    cancel_event = mp_manager.Event()
                 except Exception:
-                    pass
+                    mp_manager = None
+                    cancel_event = None
+
+                plate_allowed = getattr(self, "_plate_formats_allowed", None)
+                plate_limits = getattr(self, "_plate_format_limits", None)
+
+                with concurrent.futures.ProcessPoolExecutor(
+                    max_workers=nucleos_a_usar,
+                    initializer=_nesting_worker_bootstrap,
+                ) as executor:
+                    futuros = {
+                        executor.submit(
+                            _procesar_grupo_parallel_worker,
+                            (
+                                clave,
+                                piezas,
+                                datos_placas,
+                                config_kerf,
+                                config_margin,
+                                config_opt,
+                                config_corner,
+                                wo_name,
+                                resolved_engine,
+                                cancel_event,
+                                plate_allowed,
+                                plate_limits,
+                            ),
+                        ): clave
+                        for clave, piezas in grupos_acero_ord
+                    }
+
+                    pendientes = set(futuros.keys())
+                    completados = 0
+                    while pendientes:
+                        if self._cancelado():
+                            if cancel_event is not None:
+                                try:
+                                    cancel_event.set()
+                                except Exception:
+                                    pass
+                            for fut in list(pendientes):
+                                fut.cancel()
+                            notificar(
+                                "Nesting cancelado: deteniendo workers...",
+                                base_pct
+                                + (completados / max(1, n_acero)) * (1.0 - base_pct),
+                            )
+                            break
+
+                        done, not_done = concurrent.futures.wait(
+                            pendientes,
+                            timeout=0.4,
+                            return_when=concurrent.futures.FIRST_COMPLETED,
+                        )
+                        if not done:
+                            continue
+
+                        for futuro in done:
+                            pendientes.discard(futuro)
+                            clave = futuros[futuro]
+                            try:
+                                raw_result = futuro.result()
+
+                                if raw_result is None:
+                                    raise RuntimeError("El worker regresó None")
+
+                                if isinstance(raw_result, tuple) and len(raw_result) == 2:
+                                    clave_worker, resultado_grupo = raw_result
+                                    if not clave_worker:
+                                        clave_worker = clave
+                                    resultados[clave] = resultado_grupo
+                                elif isinstance(raw_result, dict):
+                                    resultados[clave] = raw_result
+                                else:
+                                    raise RuntimeError(
+                                        f"Salida inesperada del worker: tipo={type(raw_result).__name__}"
+                                    )
+
+                            except Exception as exc:
+                                print(f"Error en Lote {clave}: {exc}")
+                                resultados[clave] = {"error": f"Error en cálculo: {exc}"}
+
+                            completados += 1
+                            progreso_actual = (
+                                base_pct
+                                + (completados / max(1, n_acero)) * (1.0 - base_pct)
+                            )
+                            notificar(
+                                f"Acero procesado: {completados}/{n_acero}",
+                                progreso_actual,
+                            )
+
+                if mp_manager is not None:
+                    try:
+                        mp_manager.shutdown()
+                    except Exception:
+                        pass
 
         notificar("Construyendo modelos visuales...", 1.0)
         self._ultima_auditoria_dxf = {
@@ -2769,7 +2832,10 @@ class MotorNesting:
             "ok": total_dxf,
             "omitidos": [],
         }
+        # Motor de acero no aplica a cobre; se documenta solo para trazabilidad UI.
         resultados["_nest_engine_id"] = resolved_engine
+        if grupos_cobre:
+            resultados["_nest_cobre_engine"] = "largos_cu"
         return resultados
 
     def ejecutar_comparacion_motores_visual(
@@ -2930,11 +2996,13 @@ class MotorNesting:
             )
             return clave, {"error": f"Sin placa. No se halló inventario para {req_cal} {req_mat}."}
 
-        if str(req_mat).strip().upper() == "CU":
+        if str(req_mat).strip().upper() == "CU" or es_material_cobre(req_mat):
+            # Cobre largos: canal propio. Ignora motor de acero, kerf, margin, opt y corner.
             placas_largos = inventario_barras_largos_cu(placas_ok)
             _dbg_nesting(
                 f"[CU-LARGOS] clave={clave} | barras={len(placas_largos)} | "
-                f"override={str(cu_routing_override or '').strip() or 'auto'}"
+                f"override={str(cu_routing_override or '').strip() or 'auto'} | "
+                f"(motor/kerf/margin/opt/corner NO aplican)"
             )
             if not placas_largos:
                 return clave, {

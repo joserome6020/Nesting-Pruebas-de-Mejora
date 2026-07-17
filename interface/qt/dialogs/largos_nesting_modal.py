@@ -32,7 +32,7 @@ from interface.largos_nesting_service import (
     vista_barra_para_unidad_mrl,
     preparar_barra_para_canvas,
 )
-from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content
+from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content, layout_ensure_bottom_stretch
 from interface.qt.thread_bridge import call_on_main
 from interface.qt.theme import COLOR_GRIS_DARK, COLOR_TEXTO_TITULO, apply_push_button, surface_dialog_stylesheet
 from interface.qt.widgets.herinox_switch import HerinoxSwitch
@@ -342,6 +342,7 @@ class LargosNestingDialog(QDialog):
             self._incluir_mrl[key] = key not in excl_mrl
             self._mrl_units_layout.addWidget(fila)
 
+        layout_ensure_bottom_stretch(self._mrl_units_layout)
         self._actualizar_tabla_mrl()
 
         if self._mrl_unidades:

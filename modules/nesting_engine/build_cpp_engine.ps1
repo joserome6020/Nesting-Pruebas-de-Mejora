@@ -510,6 +510,16 @@ try {
     }
 
     Copy-Item $pyd.FullName -Destination (Join-Path $Root "algorithm_cpp.pyd") -Force
+    # Python 3.1x carga el tag abi (cp314-win_amd64) antes que algorithm_cpp.pyd.
+    $tagName = $pyd.Name
+    if ($tagName -match '^algorithm_cpp\..+\.pyd$') {
+        Copy-Item $pyd.FullName -Destination (Join-Path $Root $tagName) -Force
+    } else {
+        $pyTag = & $PythonExe -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX') or '')"
+        if ($pyTag) {
+            Copy-Item $pyd.FullName -Destination (Join-Path $Root ("algorithm_cpp" + $pyTag.Trim())) -Force
+        }
+    }
     Write-Host "OK: $($pyd.Name) -> $Root" -ForegroundColor Green
     $ProjectRoot = Split-Path -Parent (Split-Path -Parent $Root)
     Push-Location $ProjectRoot

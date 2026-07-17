@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -459,6 +460,7 @@ class TabSheets(QWidget, TimerHost):
             row.setObjectName("SheetRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
             row.setFixedHeight(54)
+            row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             row_lay = QGridLayout(row)
             row_lay.setContentsMargins(self._SHEET_GRID_MARGIN_H, 8, self._SHEET_GRID_MARGIN_H, 8)
             self._apply_sheet_grid_columns(row_lay)

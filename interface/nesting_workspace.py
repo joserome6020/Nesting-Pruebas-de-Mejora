@@ -440,6 +440,9 @@ def construir_payload_workspace_lote_export(
         "source_dxf_paths": _extraer_rutas_dxf(editable_inputs or datos_partes),
         "source_dxf_paths_by_lote": _extraer_rutas_por_lote(editable_inputs_by_lote),
         "meta_pdf_por_ruta": getattr(tab.app, "meta_pdf_por_ruta", {}),
+        "orientacion_cobre_por_ruta": dict(
+            getattr(tab.app, "orientacion_cobre_por_ruta", {}) or {}
+        ),
         "wo_reales_por_lote": {0: str(n_wo)},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
@@ -507,6 +510,9 @@ def construir_payload_workspace(tab):
         "source_dxf_paths_by_lote": _extraer_rutas_por_lote(editable_inputs_by_lote),
 
         "meta_pdf_por_ruta": getattr(tab.app, "meta_pdf_por_ruta", {}),
+        "orientacion_cobre_por_ruta": dict(
+            getattr(tab.app, "orientacion_cobre_por_ruta", {}) or {}
+        ),
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
@@ -863,6 +869,15 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     tab.app.resultados_multilote = payload.get("resultados_multilote", []) or []
     tab.app.datos_partes_actuales = datos_partes
     tab.app.meta_pdf_por_ruta = payload.get("meta_pdf_por_ruta", {}) or {}
+    # Rotación manual de piezas CU (PARTS): debe sobrevivir guardar/abrir .arganest
+    # para que cualquier renesteo respete la orientación elegida por el usuario.
+    try:
+        tab.app.orientacion_cobre_por_ruta = {
+            str(k): int(v) % 360
+            for k, v in (payload.get("orientacion_cobre_por_ruta") or {}).items()
+        }
+    except Exception:
+        tab.app.orientacion_cobre_por_ruta = {}
     tab.app.job_activo = payload.get("job_activo", "NESTING")
     tab.app.ultimos_escenarios = payload.get("ultimos_escenarios", []) or []
 

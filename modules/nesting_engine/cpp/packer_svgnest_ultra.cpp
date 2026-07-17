@@ -10,6 +10,7 @@
 #include <numeric>
 #include <optional>
 #include <random>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -855,11 +856,50 @@ std::vector<int> build_rotation_angles(double step_deg) {
     return angles;
 }
 
-/** ARGA taller: piezas grandes solo ortogonales (evita diagonales con desperdicio). */
+/** NestFab Tilt: ±N° alrededor de ortogonales (grano). Env ARGA_ULTRA_TILT_DEG. */
+double resolve_tilt_deg() {
+    const char* raw = std::getenv("ARGA_ULTRA_TILT_DEG");
+    if (!raw || !*raw) {
+        return 0.0;
+    }
+    try {
+        const double v = std::stod(raw);
+        if (!std::isfinite(v) || v <= 0.0) {
+            return 0.0;
+        }
+        return std::min(15.0, v);
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+std::vector<int> build_rotation_angles_with_tilt(double step_deg, double tilt_deg) {
+    auto angles = build_rotation_angles(step_deg);
+    if (tilt_deg <= 0.05) {
+        return angles;
+    }
+    const int t = std::max(1, static_cast<int>(std::round(tilt_deg)));
+    std::vector<int> out = angles;
+    // Tilt NestFab: solo sobre base ortogonal (0/90/180/270).
+    for (int base : {0, 90, 180, 270}) {
+        for (int s : {-t, t}) {
+            int a = (base + s) % 360;
+            if (a < 0) {
+                a += 360;
+            }
+            out.push_back(a);
+        }
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+/** ARGA taller: piezas grandes ortogonales (+tilt); chicas permiten Any fino (1°+). */
 double effective_rotation_step_for_piece(
     double profile_step_deg,
     const std::vector<std::vector<Point2D>>& poly_src) {
-    double step = std::max(5.0, std::min(profile_step_deg, 90.0));
+    double step = std::max(1.0, std::min(profile_step_deg, 90.0));
     if (poly_src.empty()) {
         return step;
     }
@@ -873,6 +913,7 @@ double effective_rotation_step_for_piece(
     if (area >= kMidAreaMm2) {
         return std::max(45.0, step);
     }
+    // Piezas chicas: Any NestFab-like (hasta 1°)
     return step;
 }
 
@@ -891,7 +932,8 @@ std::vector<Variation> build_variaciones_fine(
 
     const Point2D centroid = polygon_centroid(poly_src.front());
     const double eff_step = effective_rotation_step_for_piece(rotation_step_deg, poly_src);
-    const auto angles = build_rotation_angles(eff_step);
+    const double tilt = resolve_tilt_deg();
+    const auto angles = build_rotation_angles_with_tilt(eff_step, tilt);
 
     for (const int angulo : angles) {
         auto poly_rot = poly_src;
@@ -1680,7 +1722,8 @@ PackResult empaquetar_una_hoja_svgnest_ultra(
     const size_t n = piezas.size();
     const int population = std::max(4, std::min(ga_population, 60));
     const int generations = std::max(1, std::min(ga_generations, 100));
-    const double rot_step = std::max(5.0, std::min(rotation_step_deg, 90.0));
+    // NestFab Any: chicas pueden bajar a 1°; estructurales siguen en effective_rotation_step.
+    const double rot_step = std::max(1.0, std::min(rotation_step_deg, 90.0));
 
     std::mt19937 rng(ga_seed != 0 ? ga_seed : static_cast<std::uint32_t>(std::random_device{}()));
     std::uniform_real_distribution<double> prob(0.0, 1.0);

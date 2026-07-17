@@ -1,4 +1,7 @@
-"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + BAR_START (sin MARK/Plate/CUT_CU/3D; MARK rompe CyPTube)."""
+"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + BAR_START (sin MARK/Plate/CUT_CU).
+
+Marcaje stick (LINE) solo en canales que generan STEP (acero / cobre con_gap).
+"""
 from __future__ import annotations
 
 import os

@@ -1,4 +1,4 @@
-"""Motor 4 — SVGNest Ultra (NFP + GA + optimización continua)."""
+"""Motor 4 — SVGNest Ultra (prueba fast-first)."""
 from __future__ import annotations
 
 import time
@@ -11,13 +11,13 @@ class SvgnestUltraEngine:
         engine_id="svgnest_ultra",
         display_name="SVGNest Ultra",
         description=(
-            "Deepnest/SVGNest: NFP cacheado + GA + score bbox + "
-            "part-in-part + cavidades VFM/C (perfil taller)."
+            "Prueba fast-first: 1 gen / 90° / pop chica → refine corto si hay restos. "
+            "ARGA_ULTRA_FAST_FIRST=0 desactiva."
         ),
         phase=4,
         status="ready",
-        inspiration="Deepnest / SVGNest / NestFab + morfología ARGA",
-        supports_continual_optimization=False,
+        inspiration="Deepnest / SVGNest + morfología ARGA (fast-first trial)",
+        supports_continual_optimization=True,
     )
 
     @classmethod
@@ -51,8 +51,11 @@ class SvgnestUltraEngine:
                 corner_override=request.corner_override,
                 limite_poly=request.limite_poly,
                 ga_generations=request.mc_iterations or profile.get("mc_iterations", 30),
-                ga_population=profile.get("ga_population", 30),
-                rotation_step_deg=profile.get("rotation_step_deg", 15.0),
+                ga_population=profile.get("ga_population", 8),
+                rotation_step_deg=profile.get(
+                    "fast_first_rotation_deg",
+                    profile.get("rotation_step_deg", 90.0),
+                ),
                 part_in_part=profile.get("part_in_part", True),
                 cancel_checker=request.cancel_checker,
             )

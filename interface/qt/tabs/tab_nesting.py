@@ -871,6 +871,16 @@ class TabNesting(QWidget, TimerHost):
             # También dejamos copia base en AutoDXF para mantener trazabilidad física
             shutil.copy2(ruta_origen, ruta_raw_destino)
 
+            # Solo inyecta stick si el DXF aún no trae marcaje del script.
+            try:
+                from modules.dxf_mark.inject import tiene_marcaje_stick
+                from modules.dxf_mark.pipeline import aplicar_marcaje_nesting
+
+                if not tiene_marcaje_stick(ruta_origen):
+                    aplicar_marcaje_nesting(ruta_processed_destino)
+            except Exception:
+                pass
+
             return ruta_processed_destino
 
         # Caso 3: tipo desconocido -> fallback conservador
@@ -1595,9 +1605,17 @@ class TabNesting(QWidget, TimerHost):
         )
 
         acciones_ok = not es_retazo
+        es_cu = self._es_grupo_cobre(clave) or bool((hoja or {}).get("modo_largos_cu"))
         self.btn_panel_renest_placa.setEnabled(acciones_ok)
-        self.btn_panel_cambiar_placa.setEnabled(acciones_ok)
+        # Cobre: solo renesteo (gap/largo). Sin cambiar placa / transferencias de acero.
+        self.btn_panel_cambiar_placa.setEnabled(acciones_ok and not es_cu)
         self.btn_panel_renest_calibre.setEnabled(bool(clave))
+        if hasattr(self, "btn_panel_renest_placa"):
+            self.btn_panel_renest_placa.setText(
+                "RENESTEAR POR BARRA" if es_cu else "RENESTEAR ESTA PLACA"
+            )
+        if hasattr(self, "btn_panel_renest_calibre"):
+            self.btn_panel_renest_calibre.setText("RENESTEAR CALIBRE COMPLETO")
 
     def _actualizar_seccion_pieza_seleccionada(self, piezas=None):
         if not hasattr(self, "lbl_pieza_sel"):
@@ -1683,6 +1701,13 @@ class TabNesting(QWidget, TimerHost):
             return
         if not self._ctx_hoja_valida(hoja, "Cambiar placa"):
             return
+        if self._es_grupo_cobre(clave) or bool((hoja or {}).get("modo_largos_cu")):
+            return QMessageBox.information(
+                self,
+                "Cobre",
+                "En cobre solo se puede renestear la barra (gap / umbral de largo).\n"
+                "Cambiar placa madre aplica únicamente a placas de acero.",
+            )
         candidata = self._mostrar_dialogo_placa_inventario(
             clave,
             hoja,
@@ -1944,6 +1969,7 @@ class TabNesting(QWidget, TimerHost):
                         self,
                         datos_ui,
                         engine_label="SVGNest Ultra",
+                        datos_partes=getattr(self.app, "datos_partes_actuales", None),
                     )
                     if plate_selection is None:
                         return
@@ -2686,8 +2712,8 @@ class TabNesting(QWidget, TimerHost):
                     )
                     btn.clicked.connect(lambda checked=False, h=hoja, c=clave: self.dibujar_hoja_full(h, c))
                     fila_lay.addWidget(btn)
-                    if not es_grupo_cu:
-                        self._bind_menu_renestear_placa(btn, clave, hoja)
+                    # Cobre y acero: clic derecho en la barra/placa para renestear.
+                    self._bind_menu_renestear_placa(btn, clave, hoja)
 
                     if (
                         not es_retazo
@@ -2885,6 +2911,13 @@ class TabNesting(QWidget, TimerHost):
                     lambda c=clave: self.renestear_calibre_completo_ui(c),
                 ),
             )
+            menu.addAction(
+                "RENESTEAR POR BARRA",
+                self._safe_ctx(
+                    "Renestear por barra cobre",
+                    lambda c=clave: self._renestear_por_barra_cobre_ui(c),
+                ),
+            )
             menu.exec(widget.mapToGlobal(pos))
 
         for w in (header, lbl_header):
@@ -2901,56 +2934,59 @@ class TabNesting(QWidget, TimerHost):
             if not self._ctx_hoja_valida(hoja, "Menú de placa"):
                 return
             menu = QMenu(self)
-            bloque = self._desglosar_bloque_placa_mini(clave, hoja)
-            tiene_rtz = bool(bloque.get("idx_retazos"))
             es_cu_largos = bool(hoja.get("modo_largos_cu")) or self._es_grupo_cobre(clave)
 
-            # Cobre largos: gap/umbral (mismo diálogo que renest de calibre).
+            # Cobre: SOLO renesteo con gap/umbral. Sin transferencias, motores ni
+            # "cambiar de placa" (lógicas exclusivas del módulo de acero).
             if es_cu_largos:
                 menu.addAction(
-                    "RENESTEAR BARRA COBRE (gap / umbral)",
+                    "RENESTEAR POR BARRA",
                     self._safe_ctx(
                         "Renestear barra cobre",
                         lambda c=clave, h=hoja: self._renestear_solo_barra_cobre(c, h),
                     ),
                 )
+                menu.exec(btn.mapToGlobal(pos))
+                return
+
+            bloque = self._desglosar_bloque_placa_mini(clave, hoja)
+            tiene_rtz = bool(bloque.get("idx_retazos"))
+            # Motores como submenú (mismo patrón que calibre), no como ítems planos.
+            sub_renest = QMenu("Renestear placa", menu)
+            if tiene_rtz:
+                for eid, label in self._opciones_motores_renest():
+                    sub_m = QMenu(label, sub_renest)
+                    sub_m.addAction(
+                        "CON RTZ (conservar retazo)",
+                        self._safe_ctx(
+                            "Renestear con RTZ",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, absorber_rtz=False, engine_id=e
+                            ),
+                        ),
+                    )
+                    sub_m.addAction(
+                        "SIN RTZ (piezas a placa madre)",
+                        self._safe_ctx(
+                            "Renestear sin RTZ",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, absorber_rtz=True, engine_id=e
+                            ),
+                        ),
+                    )
+                    sub_renest.addMenu(sub_m)
             else:
-                # Motores como submenú (mismo patrón que calibre), no como ítems planos.
-                sub_renest = QMenu("Renestear placa", menu)
-                if tiene_rtz:
-                    for eid, label in self._opciones_motores_renest():
-                        sub_m = QMenu(label, sub_renest)
-                        sub_m.addAction(
-                            "CON RTZ (conservar retazo)",
-                            self._safe_ctx(
-                                "Renestear con RTZ",
-                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
-                                    c, h, absorber_rtz=False, engine_id=e
-                                ),
+                for eid, label in self._opciones_motores_renest():
+                    sub_renest.addAction(
+                        label,
+                        self._safe_ctx(
+                            "Renestear placa",
+                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                c, h, engine_id=e
                             ),
-                        )
-                        sub_m.addAction(
-                            "SIN RTZ (piezas a placa madre)",
-                            self._safe_ctx(
-                                "Renestear sin RTZ",
-                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
-                                    c, h, absorber_rtz=True, engine_id=e
-                                ),
-                            ),
-                        )
-                        sub_renest.addMenu(sub_m)
-                else:
-                    for eid, label in self._opciones_motores_renest():
-                        sub_renest.addAction(
-                            label,
-                            self._safe_ctx(
-                                "Renestear placa",
-                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
-                                    c, h, engine_id=e
-                                ),
-                            ),
-                        )
-                menu.addMenu(sub_renest)
+                        ),
+                    )
+            menu.addMenu(sub_renest)
             menu.addAction(
                 "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
@@ -2958,19 +2994,15 @@ class TabNesting(QWidget, TimerHost):
                     lambda c=clave, h=hoja: abrir_modal_transferencia_masiva(self, c, h),
                 ),
             )
-            if not es_cu_largos and not self._es_grupo_cobre(clave):
-                menu.addAction(
-                    "COMPENSAR PLASMA",
-                    self._safe_ctx(
-                        "Compensación",
-                        lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
-                    ),
-                )
-            info_grupo = (self.app.resultados_nesting or {}).get(clave)
-            puede_sobrante_forzado = (
-                not hoja_excluida_de_rtz_sobrante(hoja)
-                and not self._es_grupo_cobre(clave, info_grupo)
+            menu.addAction(
+                "COMPENSAR PLASMA",
+                self._safe_ctx(
+                    "Compensación",
+                    lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
+                ),
             )
+            info_grupo = (self.app.resultados_nesting or {}).get(clave)
+            puede_sobrante_forzado = not hoja_excluida_de_rtz_sobrante(hoja)
             if puede_sobrante_forzado:
                 menu.addSeparator()
                 if hoja_es_sobrante_sin_compra(hoja):
@@ -3134,6 +3166,9 @@ class TabNesting(QWidget, TimerHost):
         hojas = grp.get("hojas") or []
         conteo = {}
         for hoja in hojas:
+            # RTZCU virtual duplica piezas ya presentes en la madre.
+            if isinstance(hoja, dict) and hoja.get("cu_rtz_virtual"):
+                continue
             for p in (hoja.get("piezas") or []):
                 nom = self._nombre_canonico_pieza(p.get("nombre", ""))
                 if not nom or self._es_pieza_virtual(nom):
@@ -3816,16 +3851,24 @@ class TabNesting(QWidget, TimerHost):
         if QMessageBox.question(self, titulo, detalle) != QMessageBox.StandardButton.Yes:
             return
 
-        try:
-            k = self._kerf_efectivo()
-        except Exception:
-            return QMessageBox.critical(self, "Error", "Kerf inválido.")
+        # Cobre: parámetros fijos del módulo LARGOS CU (no kerf/margin/opt de motores acero).
+        if es_cobre:
+            k, m = 0.0, 0.0
+            opt, corner = "LARGOS CU", "INFERIOR IZQUIERDA"
+        else:
+            try:
+                k = self._kerf_efectivo()
+            except Exception:
+                return QMessageBox.critical(self, "Error", "Kerf inválido.")
+            m = self.global_margin_val
+            opt = (
+                self.cmb_opt.currentText()
+                if hasattr(self, "cmb_opt")
+                else "OPTIMIZAR LARGO Y ANCHO"
+            )
+            corner = self.global_corner_val
 
-        m = self.global_margin_val
-        opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
-        corner = self.global_corner_val
-
-        engine_renest = engine_id
+        engine_renest = None if es_cobre else engine_id
         ultra_renest = (not es_cobre) and self._es_engine_svgnest_ultra(engine_renest)
         self._abrir_carga_renest("Renesteando calibre completo...", engine_id=engine_renest)
 
@@ -4651,13 +4694,14 @@ class TabNesting(QWidget, TimerHost):
 
         fila_ign = QFrame(parent)
         fila_ign.setStyleSheet("background:#111827;border:1px solid #374151;border-radius:8px;")
+        fila_ign.setMaximumHeight(42)
         ign_lay = QHBoxLayout(fila_ign)
         ign_lay.setContentsMargins(10, 6, 10, 6)
+        ign_lay.setSpacing(10)
 
         lbl = QLabel("COBRE — IGNORAR DEDUCCIÓN INVENTARIO")
         lbl.setStyleSheet("color:#9CA3AF;font-size:12px;font-weight:700;")
         ign_lay.addWidget(lbl)
-        ign_lay.addStretch()
 
         sw = HerinoxSwitch(
             label_on="ON · Sobrante",
@@ -4668,6 +4712,7 @@ class TabNesting(QWidget, TimerHost):
             lambda checked, c=clave, g=info: self._toggle_ignorar_deduccion_cu_grupo(c, g, checked)
         )
         ign_lay.addWidget(sw)
+        ign_lay.addStretch(1)
         scroll_add_widget(parent, fila_ign)
 
     def _toggle_ignorar_deduccion_placa(self, clave, hoja, ignorar: bool):
@@ -4691,13 +4736,14 @@ class TabNesting(QWidget, TimerHost):
 
         fila_ign = QFrame(parent)
         fila_ign.setStyleSheet("background:#F8FAFC;border:none;border-radius:8px;")
+        fila_ign.setMaximumHeight(42)
         ign_lay = QHBoxLayout(fila_ign)
         ign_lay.setContentsMargins(10, 6, 10, 6)
+        ign_lay.setSpacing(10)
 
         lbl = QLabel(f"IGNORAR DEDUCCIÓN  |  REAL {efi_real:.1f}%")
         lbl.setStyleSheet("color:#64748B;font-size:12px;")
         ign_lay.addWidget(lbl)
-        ign_lay.addStretch()
 
         sw = HerinoxSwitch(
             label_on="ON · Sobrante",
@@ -4706,6 +4752,7 @@ class TabNesting(QWidget, TimerHost):
         )
         sw.toggled.connect(lambda checked, c=clave, h=hoja: self._toggle_ignorar_deduccion_placa(c, h, checked))
         ign_lay.addWidget(sw)
+        ign_lay.addStretch(1)
 
         parent.layout().addWidget(fila_ign)
 
@@ -4892,6 +4939,8 @@ class TabNesting(QWidget, TimerHost):
         grp = (datos or {}).get(clave, {})
         inventario = {}
         for hoja in (grp.get("hojas") or []):
+            if isinstance(hoja, dict) and hoja.get("cu_rtz_virtual"):
+                continue
             for nom, cnt in self._resumen_piezas_reales_hoja(hoja).items():
                 inventario[nom] = inventario.get(nom, 0) + int(cnt)
         return inventario
@@ -6212,7 +6261,140 @@ class TabNesting(QWidget, TimerHost):
         )
         return preguntar_separacion_cobre_renest(self, valor_sep, valor_largo)
 
-    def _renestear_solo_barra_cobre(self, clave, hoja):
+    def _listar_barras_madre_cobre(self, clave):
+        """Barras madre CU del calibre (excluye retazos / RTZCU virtual)."""
+        grp = (self.app.resultados_nesting or {}).get(clave) or {}
+        hojas = grp.get("hojas") or []
+        out = []
+        for i, h in enumerate(hojas):
+            if not isinstance(h, dict):
+                continue
+            if h.get("es_retazo") or h.get("cu_rtz_virtual"):
+                continue
+            if not (h.get("modo_largos_cu") or self._es_grupo_cobre(clave, grp)):
+                continue
+            pid = str(h.get("placa_id") or h.get("sheet_code") or f"P#{i + 1}")
+            try:
+                n_pzas = int(contar_piezas_hoja(h) or 0)
+            except Exception:
+                n_pzas = sum(
+                    1
+                    for p in (h.get("piezas") or [])
+                    if isinstance(p, dict)
+                    and not self._es_pieza_virtual(str(p.get("nombre") or ""))
+                )
+            modo = str(h.get("cu_modo_separacion_barra") or "").strip().lower() or "-"
+            out.append(
+                {
+                    "idx": i,
+                    "hoja": h,
+                    "label": f"{pid}  ·  {n_pzas} pzas  ·  {modo}",
+                }
+            )
+        return out
+
+    def _renestear_por_barra_cobre_ui(self, clave):
+        """Menú de calibre CU: elegir una o varias barras y renestearlas con el diálogo de gap."""
+        if not getattr(self.app, "resultados_nesting", None):
+            return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
+        if clave not in (self.app.resultados_nesting or {}):
+            return QMessageBox.warning(
+                self, "Atención", "Material no encontrado en el resultado actual."
+            )
+        if not self._es_grupo_cobre(clave):
+            return QMessageBox.information(
+                self,
+                "Renestear por barra",
+                "Esta opción solo aplica a grupos de cobre (largos CU).",
+            )
+
+        from interface.qt.dialogs.nesting_modals import preguntar_barras_cobre_renest
+
+        candidatas = self._listar_barras_madre_cobre(clave)
+        if not candidatas:
+            return QMessageBox.warning(
+                self, "Atención", "No hay barras madre de cobre para renestear."
+            )
+
+        idxs = preguntar_barras_cobre_renest(self, candidatas)
+        if not idxs:
+            return
+
+        by_idx = {int(b["idx"]): b["hoja"] for b in candidatas}
+        # Snapshots: al renestar secuencial el índice de hojas puede cambiar.
+        hojas_sel = [copy.deepcopy(by_idx[i]) for i in idxs if i in by_idx]
+        if not hojas_sel:
+            return
+
+        opts_cu = self._preguntar_opts_renest_cobre(clave, hojas_sel[0])
+        if opts_cu is None:
+            return
+        cu_separacion_in, cu_largo_sin_separacion_in = opts_cu
+
+        labels = [
+            str(h.get("placa_id") or h.get("sheet_code") or "?") for h in hojas_sel
+        ]
+        lista_txt = ", ".join(labels[:8]) + ("…" if len(labels) > 8 else "")
+        if (
+            QMessageBox.question(
+                self,
+                "Renestear por barra",
+                f"Se reacomodarán {len(hojas_sel)} barra(s): {lista_txt}\n"
+                f"(gap {cu_separacion_in:g}\", piezas ≤{cu_largo_sin_separacion_in:g}\" sin gap).\n\n"
+                "Misma lógica que el renesteo de calibre, aplicada solo a las barras elegidas.\n\n"
+                "¿Continuar?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        self._cu_renest_barra_queue = [
+            {
+                "clave": clave,
+                "hoja": h,
+                "opts_cu": (cu_separacion_in, cu_largo_sin_separacion_in),
+            }
+            for h in hojas_sel
+        ]
+        self._kick_cu_renest_barra_queue()
+
+    def _kick_cu_renest_barra_queue(self):
+        """Procesa la siguiente barra de la cola de renesteo CU (una a la vez)."""
+        cola = getattr(self, "_cu_renest_barra_queue", None) or []
+        if not cola:
+            return
+        item = cola.pop(0)
+        self._cu_renest_barra_queue = cola
+        clave = item.get("clave")
+        hoja_snap = item.get("hoja")
+        opts = item.get("opts_cu")
+        # Resolver hoja actual por sheet_uid / placa_id (el grupo pudo cambiar).
+        hoja_act = None
+        grp = (self.app.resultados_nesting or {}).get(clave) or {}
+        uid = str((hoja_snap or {}).get("sheet_uid") or "")
+        pid = str((hoja_snap or {}).get("placa_id") or "")
+        for h in grp.get("hojas") or []:
+            if not isinstance(h, dict) or h.get("es_retazo") or h.get("cu_rtz_virtual"):
+                continue
+            if uid and str(h.get("sheet_uid") or "") == uid:
+                hoja_act = h
+                break
+            if pid and str(h.get("placa_id") or "") == pid:
+                hoja_act = h
+                break
+        if hoja_act is None:
+            hoja_act = hoja_snap
+        self._renestear_solo_barra_cobre(
+            clave,
+            hoja_act,
+            opts_cu=opts,
+            skip_confirm=True,
+            on_done=self._kick_cu_renest_barra_queue,
+        )
+
+    def _renestear_solo_barra_cobre(
+        self, clave, hoja, *, opts_cu=None, skip_confirm=False, on_done=None
+    ):
         """Renestea una barra CU con la misma lógica LARGOS (gap / umbral ajustables)."""
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
@@ -6228,13 +6410,14 @@ class TabNesting(QWidget, TimerHost):
             )
 
         self._sync_orientacion_cobre_al_motor()
-        opts_cu = self._preguntar_opts_renest_cobre(clave, hoja)
         if opts_cu is None:
-            return
+            opts_cu = self._preguntar_opts_renest_cobre(clave, hoja)
+            if opts_cu is None:
+                return
         cu_separacion_in, cu_largo_sin_separacion_in = opts_cu
 
         pid = str(hoja.get("placa_id") or hoja.get("sheet_code") or "?")
-        if (
+        if not skip_confirm and (
             QMessageBox.question(
                 self,
                 "Renestear barra cobre",
@@ -6248,6 +6431,7 @@ class TabNesting(QWidget, TimerHost):
             return
 
         bloque_previo = self._desglosar_bloque_placa_mini(clave, hoja)
+        # Madre ya incluye piezas de zona RTZ; absorber_rtz duplicaría las del virtual.
         resumen_esperado = self._inventario_piezas_canonico(
             self._resumen_bloque_placa_y_rtz(bloque_previo, absorber_rtz=False)
         )
@@ -6268,15 +6452,12 @@ class TabNesting(QWidget, TimerHost):
                 f"Esperadas: {n_esp} · Generadas: {len(piezas_pack)}.",
             )
 
-        try:
-            k = self._kerf_efectivo()
-        except Exception:
-            k = 0.0
-        m = self.global_margin_val
-        opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
-        corner = self.global_corner_val
+        # Módulo LARGOS CU: sin kerf/margin/opt/corner de motores de acero.
+        k, m = 0.0, 0.0
+        opt, corner = "LARGOS CU", "INFERIOR IZQUIERDA"
 
         idx_objetivo = bloque_previo.get("idx_base", -1)
+        idx_rtz_asoc = list(bloque_previo.get("idx_retazos") or [])
         hoja_ref = hoja
         backup_grupo = self._snapshot_grupo_nesting(clave)
         inventario_antes = self._inventario_piezas_grupo(clave)
@@ -6340,6 +6521,7 @@ class TabNesting(QWidget, TimerHost):
                     _extra=list(hojas_extra),
                     _sep=sep_cu,
                     _largo=largo_sin_cu,
+                    _idx_rtz=list(idx_rtz_asoc),
                 ):
                     aplicado = self.finalizar_recalc(
                         _nueva,
@@ -6352,8 +6534,12 @@ class TabNesting(QWidget, TimerHost):
                         inventario_antes=inventario_antes,
                         resumen_esperado=resumen_esperado,
                         hojas_adicionales=_extra or None,
+                        eliminar_rtz_asociados=bool(_idx_rtz),
+                        idx_retazos_asociados=_idx_rtz or None,
                     )
                     if not aplicado:
+                        if callable(on_done):
+                            on_done()
                         return
                     grp = (self.app.resultados_nesting or {}).get(clave)
                     if isinstance(grp, dict) and grp.get("modo_largos_cu"):
@@ -6367,12 +6553,15 @@ class TabNesting(QWidget, TimerHost):
                         hojas_grp = grp.get("hojas") or []
                         if 0 <= int(idx_objetivo) < len(hojas_grp):
                             self.dibujar_hoja_full(hojas_grp[int(idx_objetivo)], clave)
+                    if callable(on_done):
+                        on_done()
 
                 self.app.after(0, on_ok)
             except Exception as e:
                 def on_err(msg=str(e)):
                     if hasattr(self.app, "cerrar_ventana_carga"):
                         self.app.cerrar_ventana_carga()
+                    self._cu_renest_barra_queue = []
                     self._abortar_y_restaurar_nesting(
                         clave,
                         backup_grupo,
@@ -6384,6 +6573,24 @@ class TabNesting(QWidget, TimerHost):
                 self.app.after(0, on_err)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _filtrar_placas_ancho_barra_cu(self, datos_placas, ancho_barra_mm: float):
+        """Deja solo tiras CU del mismo ancho que la barra (evita bajar a tira más angosta)."""
+        if not datos_placas or ancho_barra_mm <= 0.5:
+            return list(datos_placas or [])
+        ancho_in = float(ancho_barra_mm) / 25.4
+        filtradas = []
+        extraer = getattr(self.app.motor_nesting, "_extraer_numero", None)
+        for placa in datos_placas:
+            try:
+                d1 = float(extraer(placa[3])) if callable(extraer) else float(placa[3])
+                d2 = float(extraer(placa[4])) if callable(extraer) else float(placa[4])
+            except Exception:
+                continue
+            # En largos CU una cota es ~144" (largo) y la otra el ancho de tira.
+            if abs(d1 - ancho_in) <= 0.06 or abs(d2 - ancho_in) <= 0.06:
+                filtradas.append(placa)
+        return filtradas if filtradas else list(datos_placas or [])
 
     def renestear_solo_placa(
         self,
@@ -7636,14 +7843,8 @@ class TabNesting(QWidget, TimerHost):
                         for fam, counts in sorted(step_resumen.items()):
                             n_dxf = int(counts.get("dxf") or 0)
                             n_step = int(counts.get("step") or 0)
-                            n_iges = int(counts.get("iges") or 0)
                             if n_dxf > 0:
-                                partes = []
-                                if n_step:
-                                    partes.append(f"{n_step} STEP")
-                                if n_iges:
-                                    partes.append(f"{n_iges} IGES")
-                                detalle = ", ".join(partes) if partes else "0 3D"
+                                detalle = f"{n_step} STEP" if n_step else "0 STEP"
                                 lineas_step.append(f"  • {fam}: {detalle} / {n_dxf} DXF")
                         if lineas_step:
                             mensaje_final += "\n\nArchivos 3D:\n" + "\n".join(lineas_step)

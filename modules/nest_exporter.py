@@ -1277,7 +1277,7 @@ def _export_cu_inner_and_marks(
     """Inner/marks cobre largos desde polígonos del nest (mm placa, 1:1 con visor)."""
     added = False
     bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
-    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    # Cobre sin_gap (CyPTube): DXF sin MARK; el grabado STEP no aplica a este canal.
     if _sheet_is_sin_gap(sheet):
         draw_marks = False
     if draw_holes:
@@ -1296,8 +1296,7 @@ def _export_cu_inner_and_marks(
             mk_t = _transform_poly(mk, tx=0.0, ty=0.0, rot_deg=0.0)
             if _sheet_export_sin_gap_vertical(sheet):
                 mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
-            if mk_t:
-                _add_lwpolyline(msp, mk_t, layer="MARK", closed=False)
+            if mk_t and _add_mark_open_segments(msp, mk_t, layer="MARK"):
                 added = True
     return added
 
@@ -1318,7 +1317,7 @@ def _export_cu_largos_from_source(
         _solo_cortes_guillotina_vertical,
     )
 
-    # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+    # Cobre sin_gap (CyPTube): DXF sin MARK; solo STEP (con_gap / acero) lleva marcaje.
     if _sheet_is_sin_gap(sheet):
         draw_marks = False
 
@@ -1518,6 +1517,24 @@ def _add_lwpolyline(msp, points, layer, closed=True):
     msp.add_lwpolyline(points, dxfattribs={"layer": layer, "closed": bool(closed)})
 
 
+def _add_mark_open_segments(msp, points, layer: str = "MARK") -> int:
+    """Marcaje stick: segmentos LINE abiertos (FreeCAD Edges / Part.makeLine)."""
+    if not points or len(points) < 2:
+        return 0
+    added = 0
+    for i in range(len(points) - 1):
+        try:
+            x1, y1 = float(points[i][0]), float(points[i][1])
+            x2, y2 = float(points[i + 1][0]), float(points[i + 1][1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if abs(x2 - x1) < 1e-12 and abs(y2 - y1) < 1e-12:
+            continue
+        msp.add_line((x1, y1), (x2, y2), dxfattribs={"layer": layer})
+        added += 1
+    return added
+
+
 def _export_placed_geometry(
     msp, p, *, doc=None, draw_holes=True, draw_marks=True, sheet=None
 ) -> bool:
@@ -1585,7 +1602,7 @@ def _export_placed_geometry(
                 else:
                     _export_ring_exact(msp, h_t, hole_layer, closed=True)
 
-        # Cobre sin_gap (CyPTube): la capa MARK genera conflictos; se omite el marcaje.
+        # Cobre sin_gap (CyPTube): DXF sin MARK.
         if draw_marks and _sheet_is_sin_gap(sheet):
             draw_marks = False
         if draw_marks:
@@ -1603,7 +1620,7 @@ def _export_placed_geometry(
                 if _sheet_export_sin_gap_vertical(sheet):
                     mk_t = _transform_poly_sin_gap_vertical(mk_t, bw)
                 if mk_t:
-                    _add_lwpolyline(msp, mk_t, layer=marks_layer, closed=False)
+                    _add_mark_open_segments(msp, mk_t, layer=marks_layer)
 
     return has_outer or bool(marks)
 
@@ -1698,20 +1715,23 @@ def _canal_es_cama_laser(canal: str | None) -> bool:
 def _sheet_is_sin_gap(sheet: dict | None) -> bool:
     if not isinstance(sheet, dict):
         return False
+    # RTZCU siempre con_gap / STEP (nunca CyPTube vertical).
+    if sheet.get("cu_rtz_virtual"):
+        return False
     return (
         str(sheet.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
     )
 
 
 def _sheet_export_sin_gap_vertical(sheet: dict | None) -> bool:
-    """Rotación vertical CyPTube en DXF (madre y RTZCU cuando cu_export_vertical)."""
+    """Rotación vertical CyPTube en DXF (solo madre sin_gap; RTZCU nunca)."""
     if not _sheet_is_sin_gap(sheet):
+        return False
+    if isinstance(sheet, dict) and sheet.get("cu_rtz_virtual"):
         return False
     if isinstance(sheet, dict) and sheet.get("cu_export_vertical"):
         return True
-    return not (
-        isinstance(sheet, dict) and sheet.get("cu_rtz_virtual")
-    )
+    return True
 
 
 def _bar_width_mm(sheet: dict | None, fallback: float = 0.0) -> float:

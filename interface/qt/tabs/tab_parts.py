@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -318,6 +319,7 @@ class TabParts(QWidget, TimerHost):
             row.setObjectName("PartsRowAlt" if idx % 2 else "PartsRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
             row.setFixedHeight(48)
+            row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             row.orig_name = row.objectName()
             row.orig_color = color_fondo
             row_lay = QGridLayout(row)

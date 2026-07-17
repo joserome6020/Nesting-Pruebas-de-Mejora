@@ -422,7 +422,15 @@ def empaquetar_una_hoja_svgnest_ultra(
     part_in_part=None,
     cancel_checker=None,
 ):
-    """Motor SVGNest Ultra — GA + NFP + rotación fina + optimización continua opcional."""
+    """
+    SVGNest Ultra — prueba fast-first.
+
+    1) Nest rápido: 1 gen, pop chica, 90°, un seed.
+    2) Refine corto opcional (pocas gens) solo si quedan restos o profile lo pide.
+    3) Continual NestFab solo en renest Accept (no en pack diario).
+
+    Desactivar prueba: ARGA_ULTRA_FAST_FIRST=0
+    """
     from .nest_optimization import get_engine_profile
 
     try:
@@ -436,6 +444,7 @@ def empaquetar_una_hoja_svgnest_ultra(
             "Recompila con build_cpp_engine.ps1."
         )
 
+    import os
     import time
     from concurrent.futures import ThreadPoolExecutor
 
@@ -444,25 +453,51 @@ def empaquetar_una_hoja_svgnest_ultra(
         is_ultra_sim_bounded,
         notify_ultra_best_ready,
     )
-
     from .nest_hardware import apply_nest_thread_env, hardware_nest_budget
 
     profile = get_engine_profile("svgnest_ultra")
     budget = hardware_nest_budget()
     apply_nest_thread_env(budget)
-    pop = max(4, min(int(ga_population or profile.get("ga_population", 30)), 60))
-    gens = max(1, min(int(ga_generations or profile.get("mc_iterations", 30)), 100))
-    rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 15.0))
+
+    env_ff = str(os.environ.get("ARGA_ULTRA_FAST_FIRST", "1")).strip().lower()
+    fast_first = bool(profile.get("fast_first", True)) and env_ff not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+    # Cap duro en fast-first: hardware no debe inflar pop a 18+ (mata el tiempo).
+    pop_req = int(ga_population or profile.get("ga_population", 12))
+    if fast_first:
+        pop = max(4, min(pop_req, int(profile.get("fast_first_pop", 8) or 8), 12))
+        rot_step = float(
+            rotation_step_deg
+            if rotation_step_deg is not None
+            else profile.get("fast_first_rotation_deg", 90.0)
+        )
+        first_gens = max(1, int(profile.get("fast_first_gens", 1) if profile.get("fast_first_gens") is not None else 1))
+        _rg = profile.get("fast_first_refine_gens", 2)
+        refine_gens = max(0, int(0 if _rg is None else _rg))
+    else:
+        pop = max(4, min(pop_req, 60))
+        rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 30.0))
+        first_gens = 1
+        refine_gens = max(1, min(int(ga_generations or profile.get("mc_iterations", 6)), 100))
+
+    gens_profile = max(1, min(int(ga_generations or profile.get("mc_iterations", 6)), 100))
     pip = bool(profile.get("part_in_part", True) if part_in_part is None else part_in_part)
+
+    # Sin tilt en prueba rápida.
+    prev_tilt = os.environ.pop("ARGA_ULTRA_TILT_DEG", None)
+
     print(
-        f"[ULTRA-HW] cpus={budget['logical_cpus']} ram={budget['ram_gb']:.1f}GB "
-        f"threads={budget['nest_threads']} pop={pop} gens={gens}",
+        f"[ULTRA-HW] fast_first={int(fast_first)} cpus={budget['logical_cpus']} "
+        f"threads={budget['nest_threads']} pop={pop} rot={rot_step} "
+        f"first_gens={first_gens} refine_gens={refine_gens}",
         flush=True,
     )
-    # Continual NestFab:
-    # - perfil continual_until_user_stops (OFF por defecto), o
-    # - renesteo Ultra con «Aceptar mejor actual» (solo Ultra; sin semilla FORCE).
-    # Nunca en SIM-PLACA (sim_bounded): si no, cada candidata se queda en bucle.
+
     renest_accept = is_ultra_renest_accept_mode() and not is_ultra_sim_bounded()
     if renest_accept and cancel_checker is None:
         try:
@@ -471,18 +506,6 @@ def empaquetar_una_hoja_svgnest_ultra(
             cancel_checker = _active_pack_cancel_checker()
         except Exception:
             cancel_checker = None
-    continual = (
-        renest_accept
-        or (
-            bool(cancel_checker)
-            and bool(profile.get("continual_until_user_stops", False))
-            and not is_ultra_sim_bounded()
-        )
-    )
-    stagnation_limit = int(profile.get("continual_stagnation_rounds", 0) or 0)
-    if renest_accept:
-        # Solo UX: no degradar calidad Ultra (pop/rot/PIP = perfil completo).
-        stagnation_limit = 0
 
     native_piezas = [_piece_to_native(p) for p in (piezas or [])]
     limite_rings = None
@@ -504,23 +527,28 @@ def empaquetar_una_hoja_svgnest_ultra(
         use_pip: bool | None = None,
         seed_order=None,
     ):
-        raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
-            native_piezas,
-            w_placa,
-            h_placa,
-            kerf_override,
-            margin_override,
-            opt_override,
-            corner_override,
-            limite_rings,
-            int(pop_n if pop_n is not None else pop),
-            generations,
-            float(rot if rot is not None else rot_step),
-            bool(pip if use_pip is None else use_pip),
-            seed,
-            list(seed_order) if seed_order else None,
+        args = dict(
+            piezas=native_piezas,
+            w_placa=w_placa,
+            h_placa=h_placa,
+            kerf_override=kerf_override,
+            margin_override=margin_override,
+            opt_override=opt_override,
+            corner_override=corner_override,
+            limite_rings=limite_rings,
+            ga_population=int(pop_n if pop_n is not None else pop),
+            ga_generations=int(generations),
+            rotation_step_deg=float(rot if rot is not None else rot_step),
+            part_in_part=bool(pip if use_pip is None else use_pip),
+            ga_seed=int(seed),
         )
-        # Compat: builds viejos (hoja, restos) vs nuevos (hoja, restos, orden).
+        try:
+            raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
+                **args,
+                seed_order=list(seed_order) if seed_order else None,
+            )
+        except TypeError:
+            raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(**args)
         if isinstance(raw, (list, tuple)) and len(raw) >= 3:
             hoja_native, restos_native, orden_native = raw[0], raw[1], raw[2]
         else:
@@ -530,205 +558,99 @@ def empaquetar_una_hoja_svgnest_ultra(
         orden = [int(x) for x in (orden_native or [])]
         return hoja, restos, orden
 
-    if not continual:
-        # Pack diario Ultra (NestFab-like acotado): exploración corta → refine desde mejor.
-        # No abre bucle infinito (SIM-PLACA / jobs); presupuesto fijo de gens.
-        explor_gens = 1 if gens <= 2 else min(2, gens)
-        hoja, restos, orden = _run_cpp(explor_gens, 1)
-        mejor_h, mejor_r, mejor_o = hoja, restos, orden
-        refine_gens = max(gens, 4)
-        if (mejor_h.get("piezas") or []) and mejor_o:
-            h2, r2, o2 = _run_cpp(refine_gens, 2, seed_order=mejor_o)
-            if _svgnest_is_better(h2, r2, mejor_h, mejor_r):
-                mejor_h, mejor_r, mejor_o = h2, r2, o2
-            # Si quedó 1 resto: 2 pases extra de refine (evitar 2ª placa al 8%).
-            if len(mejor_r or []) == 1 and mejor_o:
-                for extra_seed in (3, 4):
-                    if _cancelled():
-                        break
-                    h3, r3, o3 = _run_cpp(
-                        max(6, refine_gens), extra_seed, seed_order=mejor_o
-                    )
-                    if _svgnest_is_better(h3, r3, mejor_h, mejor_r):
-                        mejor_h, mejor_r, mejor_o = h3, r3, o3
-                    if not (mejor_r or []):
-                        break
-        print(
-            f"[ULTRA-PACK] explor={explor_gens} refine={refine_gens} "
-            f"colocadas={len(mejor_h.get('piezas') or [])} restos={len(mejor_r or [])}",
-            flush=True,
-        )
-        return mejor_h, mejor_r
-
-    mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
-    mejor_restos = list(piezas or [])
-    mejor_orden: list[int] | None = None
-    notified_best = False
-    mejoras = 0  # veces que el mejor completo mejoró (NestFab: progreso visible)
-    n_in = len(piezas or [])
-
-    def _is_complete(hoja, restos) -> bool:
-        n_ok = len(hoja.get("piezas") or [])
-        n_rest = len(restos or [])
-        return n_rest == 0 and n_ok >= max(1, n_in)
-
-    def _efi_pct(hoja) -> float:
-        efi = float(hoja.get("eficiencia", 0.0) or 0.0)
-        # C++ Ultra ya devuelve %; otros caminos pueden devolver 0–1.
-        return efi if efi > 1.5 else efi * 100.0
-
-    def _consider(hoja, restos, orden=None) -> bool:
-        """Actualiza mejor. True si mejoró."""
-        nonlocal mejor_hoja, mejor_restos, mejor_orden
-        if not (hoja and (hoja.get("piezas") or [])):
-            return False
-        if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
-            mejor_hoja, mejor_restos = hoja, restos
-            if orden and len(orden) == n_in:
-                mejor_orden = list(orden)
-            return True
-        return False
-
-    def _publish_best(*, label: str = "") -> None:
-        """Habilita Aceptar + contador de mejoras (solo nest COMPLETO)."""
-        nonlocal notified_best
-        if not _is_complete(mejor_hoja, mejor_restos):
-            return
-        n_pz = len(mejor_hoja.get("piezas") or [])
-        pref = f"{label} · " if label else ""
-        notify_ultra_best_ready(
-            f"{pref}{n_pz} pzas · {_efi_pct(mejor_hoja):.1f}% · mejoras={mejoras}"
-        )
-        notified_best = True
-
-    pool = ThreadPoolExecutor(max_workers=1)
-
-    def _run_await(fn, *args, **kwargs):
-        """Lanza un round C++. Si el usuario Acepta/Cancela y ya hay mejor
-        completo, NO espera el round en curso (puede durar 10–20 min)."""
-        fut = pool.submit(fn, *args, **kwargs)
-        while not fut.done():
-            if _cancelled():
-                if _is_complete(mejor_hoja, mejor_restos):
-                    print(
-                        "[ULTRA-RENEST] Aceptar/Cancel: usando mejor ya listo · "
-                        "no esperar generación C++ en curso",
-                        flush=True,
-                    )
-                else:
-                    print(
-                        "[ULTRA-RENEST] Cancel sin completo · "
-                        "abortando espera del round en curso",
-                        flush=True,
-                    )
-                # El pack C++ puede seguir unos segundos en background;
-                # la UI ya no queda bloqueada.
-                return None
-            time.sleep(0.12)
-        return fut.result()
-
     try:
-        print(
-            f"[ULTRA-RENEST] accept={renest_accept} cancel={bool(cancel_checker)} "
-            f"n_piezas={n_in} pop={pop} rot={rot_step} pip={pip} seed=ultra "
-            f"refine_from_best=1",
-            flush=True,
-        )
+        # --- Pack diario / SIM: fast-first (sin bucle infinito) ---
+        if not renest_accept:
+            t0 = time.perf_counter()
+            hoja, restos, orden = _run_cpp(first_gens, 1)
+            t_first = time.perf_counter() - t0
+            mejor_h, mejor_r, mejor_o = hoja, restos, orden
 
-        seed = 1
-        no_improve = 0
-        rounds = 0
-        # Mínimo gens rondas de calidad full; si accept-mode sigue hasta Cancel/Aceptar.
-        min_rounds = max(1, int(gens))
-
-        while True:
-            if _cancelled():
-                break
-
-            # 1er completo: exploración rápida (1 gen). Luego refina desde ese orden
-            # con varias gens (estilo NestFab continual).
-            refining = bool(
-                renest_accept
-                and mejor_orden
-                and _is_complete(mejor_hoja, mejor_restos)
+            # Refine corto SOLO si hay restos y presupuesto > 0.
+            do_refine = (
+                refine_gens > 0
+                and bool(mejor_o)
+                and bool(mejor_h.get("piezas"))
+                and (bool(mejor_r) or not fast_first)
             )
-            if renest_accept:
-                batch = max(4, min(int(gens), 12)) if refining else 1
-            else:
-                batch = max(1, min(3, gens))
-            seed_ord = mejor_orden if refining else None
+            if do_refine and not _cancelled():
+                # En fast-first: refine acotado; sin fast-first usa gens_profile.
+                rg = refine_gens if fast_first else max(refine_gens, gens_profile)
+                h2, r2, o2 = _run_cpp(rg, 2, seed_order=mejor_o)
+                if _svgnest_is_better(h2, r2, mejor_h, mejor_r):
+                    mejor_h, mejor_r, mejor_o = h2, r2, o2
 
-            t_round = time.perf_counter()
-            if renest_accept:
-                pack = _run_await(
-                    _run_cpp, batch, seed, seed_order=seed_ord
-                )
-                if pack is None:
-                    break
-                hoja, restos, orden = pack
-            else:
-                hoja, restos, orden = _run_cpp(batch, seed)
-
-            rounds += 1
-            n_ok = len((hoja or {}).get("piezas") or [])
-            n_rest = len(restos or [])
             print(
-                f"[ULTRA-RENEST] round={rounds} gen_batch={batch} "
-                f"colocadas={n_ok} restos={n_rest} "
-                f"complete={_is_complete(hoja, restos)} "
-                f"refine={int(refining)} "
-                f"{time.perf_counter() - t_round:.1f}s "
-                f"pop={pop} rot={rot_step} pip={pip}",
+                f"[ULTRA-FAST] first={t_first:.2f}s total={time.perf_counter()-t0:.2f}s "
+                f"placed={len(mejor_h.get('piezas') or [])} restos={len(mejor_r or [])} "
+                f"pop={pop} rot={rot_step} refine={int(do_refine)}",
                 flush=True,
             )
+            return mejor_h, mejor_r
 
-            if n_ok > 0:
-                improved = _consider(hoja, restos, orden)
-                if _is_complete(mejor_hoja, mejor_restos):
-                    if improved:
-                        if notified_best:
+        # --- Renest Accept: continual ligero hasta Cancel ---
+        mejor_hoja = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
+        mejor_restos = list(piezas or [])
+        mejor_orden: list[int] | None = None
+        notified_best = False
+        mejoras = 0
+        n_in = len(piezas or [])
+
+        def _is_complete(hoja, restos) -> bool:
+            return len(restos or []) == 0 and len(hoja.get("piezas") or []) >= max(1, n_in)
+
+        def _efi_pct(hoja) -> float:
+            efi = float(hoja.get("eficiencia", 0.0) or 0.0)
+            return efi if efi > 1.5 else efi * 100.0
+
+        def _consider(hoja, restos, orden=None) -> bool:
+            nonlocal mejor_hoja, mejor_restos, mejor_orden
+            if not (hoja and (hoja.get("piezas") or [])):
+                return False
+            if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
+                mejor_hoja, mejor_restos = hoja, restos
+                if orden and len(orden) == n_in:
+                    mejor_orden = list(orden)
+                return True
+            return False
+
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            seed = 1
+            while not _cancelled():
+                refining = bool(mejor_orden and _is_complete(mejor_hoja, mejor_restos))
+                batch = 2 if refining else first_gens
+                seed_ord = mejor_orden if refining else None
+                fut = pool.submit(_run_cpp, batch, seed, seed_order=seed_ord)
+                while not fut.done():
+                    if _cancelled():
+                        break
+                    time.sleep(0.1)
+                if _cancelled() and not fut.done():
+                    break
+                if fut.done():
+                    try:
+                        hoja, restos, orden = fut.result()
+                    except Exception as exc:
+                        print(f"[ULTRA-RENEST] fail: {exc}", flush=True)
+                        seed += 1
+                        continue
+                    improved = _consider(hoja, restos, orden)
+                    if _is_complete(mejor_hoja, mejor_restos):
+                        if improved and notified_best:
                             mejoras += 1
-                        elif _is_complete(hoja, restos):
-                            # Primer completo: mejoras=0 (base), Aceptar ya disponible.
-                            pass
-                        _publish_best(label="mejor" if notified_best else "nuevo")
-                    elif not notified_best and _is_complete(hoja, restos):
-                        _publish_best(label="nuevo")
-                    elif notified_best:
-                        # Misma calidad: refrescar contador/efi actual.
-                        _publish_best(label="mejor")
-
-            if _cancelled():
-                break
-
-            if _is_complete(hoja, restos):
-                no_improve = 0
-            else:
-                no_improve += 1
-            seed += 1
-            if renest_accept:
-                # Continual hasta Aceptar/Cancel; tras base completa → refine.
-                continue
-            if stagnation_limit > 0 and no_improve >= stagnation_limit:
-                break
-            if rounds >= min_rounds:
-                break
-    except Exception as exc:
-        print(f"[ULTRA-RENEST] mejora interrumpida: {exc}", flush=True)
-        if not (mejor_hoja.get("piezas") or []):
-            raise
+                        notify_ultra_best_ready(
+                            f"{len(mejor_hoja.get('piezas') or [])} pzas · "
+                            f"{_efi_pct(mejor_hoja):.1f}% · mejoras={mejoras}"
+                        )
+                        notified_best = True
+                seed += 1
+        finally:
+            pool.shutdown(wait=False, cancel_futures=False)
+        return mejor_hoja, mejor_restos
     finally:
-        pool.shutdown(wait=False, cancel_futures=False)
-
-    if renest_accept and not _is_complete(mejor_hoja, mejor_restos):
-        print(
-            f"[ULTRA-RENEST] sin completo al salir · "
-            f"colocadas={len(mejor_hoja.get('piezas') or [])} "
-            f"restos={len(mejor_restos or [])}",
-            flush=True,
-        )
-
-    return mejor_hoja, mejor_restos
+        if prev_tilt is not None:
+            os.environ["ARGA_ULTRA_TILT_DEG"] = prev_tilt
 
 
 def empaquetar_una_hoja_legacy_mc(

@@ -1860,6 +1860,8 @@ class TabNesting(ctk.CTkFrame):
         hojas = grp.get("hojas") or []
         conteo = {}
         for hoja in hojas:
+            if isinstance(hoja, dict) and hoja.get("cu_rtz_virtual"):
+                continue
             for p in (hoja.get("piezas") or []):
                 nom = self._nombre_canonico_pieza(p.get("nombre", ""))
                 if not nom or self._es_pieza_virtual(nom):

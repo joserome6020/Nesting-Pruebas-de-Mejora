@@ -150,7 +150,12 @@ def calcular_eficiencias_hoja(hoja, hojas_grupo=None) -> dict:
             "eficiencia": min(100.0, efi_directa),
         }
 
-    area_rtz = sum(area_piezas_reales_hoja(r) for r in rtz_map.get(idx, []))
+    # RTZCU virtual es copia visual: las piezas ya están en la madre (no sumar área).
+    area_rtz = sum(
+        area_piezas_reales_hoja(r)
+        for r in rtz_map.get(idx, [])
+        if not (r or {}).get("cu_rtz_virtual")
+    )
     area_total_fisica = area_piezas + area_rtz
     efi_directa = (area_piezas / area_placa * 100.0) if area_placa > 0.0 else 0.0
     efi_real = (area_total_fisica / area_placa * 100.0) if area_placa > 0.0 else 0.0
@@ -188,7 +193,11 @@ def calcular_eficiencias_grupo(hojas) -> dict:
         actualizar_eficiencias_hoja(hoja, hojas_grupo=hojas)
 
         area_m = area_piezas_reales_hoja(hoja)
-        area_r = sum(area_piezas_reales_hoja(r) for r in rtz_map.get(i, []))
+        area_r = sum(
+            area_piezas_reales_hoja(r)
+            for r in rtz_map.get(i, [])
+            if not (r or {}).get("cu_rtz_virtual")
+        )
         area_placa = _area_placa_rect(hoja)
 
         area_solo_madre += area_m
@@ -228,33 +237,32 @@ def _es_pieza_contable(pieza) -> bool:
 
 
 def contar_piezas_hoja(hoja) -> int:
-    piezas = (hoja or {}).get("piezas") or []
-    excl_rtz_en_madre = bool((hoja or {}).get("modo_largos_cu")) and not (
-        (hoja or {}).get("cu_rtz_virtual") or (hoja or {}).get("es_retazo")
-    )
+    """Cuenta piezas reales de UNA hoja (vista local, p.ej. label de placa/RTZCU).
+
+    En barras madre CU las piezas de zona RTZ siguen en la madre: aquí se cuentan.
+    La hoja virtual RTZCU también reporta su propio conteo local (para ACCESORIOS),
+    pero el total del grupo NO debe sumarla otra vez (ver contar_piezas_grupo).
+    """
     n = 0
-    for p in piezas:
+    for p in (hoja or {}).get("piezas") or []:
         if not _es_pieza_contable(p):
-            continue
-        if excl_rtz_en_madre and p.get("cu_zona_rtz"):
             continue
         n += 1
     return n
 
 
 def contar_piezas_grupo(info_grupo) -> int:
+    """Total de piezas del calibre sin duplicar RTZCU virtual (copia de la madre)."""
     if not isinstance(info_grupo, dict):
         return 0
     total = 0
     for hoja in info_grupo.get("hojas") or []:
         if not isinstance(hoja, dict):
             continue
+        # RTZCU virtual = mismas piezas que ya están en la madre con cu_zona_rtz.
         if hoja.get("cu_rtz_virtual"):
-            total += contar_piezas_hoja(hoja)
-        elif not hoja.get("es_retazo"):
-            total += contar_piezas_hoja(hoja)
-        else:
-            total += contar_piezas_hoja(hoja)
+            continue
+        total += contar_piezas_hoja(hoja)
     return total
 
 

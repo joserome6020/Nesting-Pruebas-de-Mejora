@@ -289,9 +289,19 @@ def _consumir_fifo(buckets: dict[str, deque], nombre: str) -> bool:
     return False
 
 
+def _hojas_consumen_inventario_bloque(madre, rtzs) -> list:
+    """Hojas que consumen piezas del pool (RTZCU virtual es solo vista, no inventario)."""
+    out = [madre]
+    for h in rtzs or []:
+        if isinstance(h, dict) and h.get("cu_rtz_virtual"):
+            continue
+        out.append(h)
+    return out
+
+
 def _bloque_consumible(buckets: dict[str, deque], madre, rtzs) -> bool:
     trial = _clone_buckets(buckets)
-    for h in [madre] + list(rtzs or []):
+    for h in _hojas_consumen_inventario_bloque(madre, rtzs):
         for p in piezas_reales_en_hoja(h):
             if not _consumir_fifo(trial, str(p.get("nombre") or "")):
                 return False
@@ -299,7 +309,7 @@ def _bloque_consumible(buckets: dict[str, deque], madre, rtzs) -> bool:
 
 
 def _commit_bloque(buckets: dict[str, deque], madre, rtzs) -> None:
-    for h in [madre] + list(rtzs or []):
+    for h in _hojas_consumen_inventario_bloque(madre, rtzs):
         for p in piezas_reales_en_hoja(h):
             _consumir_fifo(buckets, str(p.get("nombre") or ""))
 
@@ -375,6 +385,8 @@ def validar_colocacion_completa(
     )
     colocado = Counter()
     for hoja in hojas or []:
+        if isinstance(hoja, dict) and hoja.get("cu_rtz_virtual"):
+            continue
         for p in piezas_reales_en_hoja(hoja):
             nom = str(p.get("nombre") or "").strip()
             if nom:

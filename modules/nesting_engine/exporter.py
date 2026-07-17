@@ -74,9 +74,12 @@ def _hoja_cobre_export_3d(hoja: dict) -> str:
     """
     Formato 3D por hoja cobre:
     - sin_gap (piezas pegadas): solo DXF láser → 'dxf'
-    - con_gap: STEP por pieza → 'step'
+    - con_gap / RTZCU: STEP por pieza → 'step'
     """
     if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
+        return "step"
+    # RTZCU: misma lógica STEP que con_gap (nunca CyPTube vertical / solo divisorias).
+    if hoja.get("cu_rtz_virtual"):
         return "step"
     if str(hoja.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap":
         return "dxf"
@@ -107,6 +110,8 @@ def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
                 if not nombre:
                     continue
                 fmt = str(item.get("export_3d_format") or "step").strip().lower()
+                if fmt in ("iges", "igs"):
+                    fmt = "step"
                 if not _cu_dxf_requiere_3d(fmt):
                     continue
                 formato[nombre] = fmt
@@ -114,13 +119,12 @@ def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
 
 
 def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
-    """Copia STEP/IGES generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
+    """Copia STEP generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
     dest = os.path.join(out_dir, "3D NESTING")
     os.makedirs(dest, exist_ok=True)
     copiados = 0
     step_dirs = [
         rutas.get("nesteos_cobre_step"),
-        rutas.get("nesteos_cobre_iges"),
         rutas.get("robot_laser_step_A"),
         rutas.get("robot_laser_step_B"),
         rutas.get("robot_plasma_step_A"),
@@ -129,16 +133,15 @@ def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
     for step_dir in step_dirs:
         if not step_dir or not os.path.isdir(step_dir):
             continue
-        for pattern in ("*.step", "*.iges", "*.igs"):
-            for cad_path in glob.glob(os.path.join(step_dir, pattern)):
-                dest_path = os.path.join(dest, os.path.basename(cad_path))
-                try:
-                    shutil.copy2(cad_path, dest_path)
-                    copiados += 1
-                except Exception as exc:
-                    print(
-                        f"[3D][WARN] No se pudo copiar {cad_path} -> {dest_path}: {exc}"
-                    )
+        for cad_path in glob.glob(os.path.join(step_dir, "*.step")):
+            dest_path = os.path.join(dest, os.path.basename(cad_path))
+            try:
+                shutil.copy2(cad_path, dest_path)
+                copiados += 1
+            except Exception as exc:
+                print(
+                    f"[3D][WARN] No se pudo copiar {cad_path} -> {dest_path}: {exc}"
+                )
     return copiados
 
 
@@ -165,7 +168,6 @@ def _auditar_steps_en_rutas(
     for etiqueta, dxf_key, step_key in familias:
         dxf_dir = os.path.normpath(str(rutas.get(dxf_key) or "").strip())
         step_dir = os.path.normpath(str(rutas.get(step_key) or "").strip())
-        iges_dir = os.path.normpath(str(rutas.get("nesteos_cobre_iges") or "").strip())
         candidatos_dxf = _listar_dxfs_en_carpeta(dxf_dir) if dxf_dir else []
         n_dxf = len(candidatos_dxf)
         n_dxf_3d = n_dxf
@@ -176,7 +178,6 @@ def _auditar_steps_en_rutas(
                 if _cu_dxf_requiere_3d(fmt_map.get(os.path.basename(p), "step"))
             )
         n_step = 0
-        n_iges = 0
         if dxf_dir and fmt_map and etiqueta == "NESTEOS DE COBRE":
             try:
                 from freecad_runner import _cad_path_for_dxf
@@ -186,28 +187,20 @@ def _auditar_steps_en_rutas(
                     fmt = fmt_map.get(nombre, "step")
                     if not _cu_dxf_requiere_3d(fmt):
                         continue
-                    out_dir = iges_dir if fmt == "iges" else step_dir
-                    cad_path = _cad_path_for_dxf(
-                        dxf_path,
-                        out_dir,
-                        "iges" if fmt == "iges" else "step",
-                    )
+                    # Solo STEP (IGES ya no se genera).
+                    cad_path = _cad_path_for_dxf(dxf_path, step_dir, "step")
                     if os.path.isfile(cad_path) and os.path.getsize(cad_path) > 512:
-                        if fmt == "iges":
-                            n_iges += 1
-                        else:
-                            n_step += 1
+                        n_step += 1
             except Exception:
                 pass
         else:
             if step_dir and os.path.isdir(step_dir):
                 n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
-        if n_dxf > 0 or n_step > 0 or n_iges > 0:
+        if n_dxf > 0 or n_step > 0:
             resumen[etiqueta] = {
                 "dxf": n_dxf,
                 "dxf_3d": n_dxf_3d,
                 "step": n_step,
-                "iges": n_iges,
             }
     return resumen
 
@@ -218,7 +211,7 @@ def _validar_steps_tras_export(
     log_fn=None,
     cu_formato_por_dxf: dict[str, str] | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Falla el export si había DXF de cobre/láser y no se generó el 3D esperado."""
+    """Falla el export si había DXF de cobre/láser y no se generó el STEP esperado."""
     _log = log_fn or (lambda _msg: None)
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
     resumen = _auditar_steps_en_rutas(rutas, cu_formato_por_dxf=cu_formato_por_dxf)
@@ -226,20 +219,15 @@ def _validar_steps_tras_export(
         n_dxf = int(counts.get("dxf") or 0)
         n_dxf_3d = int(counts.get("dxf_3d") if counts.get("dxf_3d") is not None else n_dxf)
         n_step = int(counts.get("step") or 0)
-        n_iges = int(counts.get("iges") or 0)
-        n_3d = n_step + n_iges
         if n_dxf <= 0:
             continue
-        detalle_3d = f"{n_step} STEP"
-        if n_iges:
-            detalle_3d += f", {n_iges} IGES"
         _log(
-            f"3D audit [{etiqueta}]: {detalle_3d} / {n_dxf_3d} DXF con 3D"
+            f"3D audit [{etiqueta}]: {n_step} STEP / {n_dxf_3d} DXF con 3D"
             + (f" ({n_dxf - n_dxf_3d} solo DXF)" if n_dxf > n_dxf_3d else "")
         )
         if n_dxf_3d <= 0:
             continue
-        if n_3d <= 0:
+        if n_step <= 0:
             step_dir = rutas.get(
                 {
                     "NESTEOS DE COBRE": "nesteos_cobre_step",
@@ -250,10 +238,10 @@ def _validar_steps_tras_export(
             )
             log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
             raise RuntimeError(
-                f"FreeCAD no generó archivos 3D en {etiqueta} ({n_dxf_3d} DXF con 3D, 0 STEP/IGES). "
+                f"FreeCAD no generó archivos STEP en {etiqueta} ({n_dxf_3d} DXF con 3D, 0 STEP). "
                 f"Revisa el log: {log_hint}"
             )
-        if n_3d < n_dxf_3d:
+        if n_step < n_dxf_3d:
             step_dir = os.path.normpath(
                 str(
                     rutas.get(
@@ -291,17 +279,9 @@ def _validar_steps_tras_export(
                             fmt = fmt_map.get(nombre, "step")
                             if not _cu_dxf_requiere_3d(fmt):
                                 continue
-                            out_dir = (
-                                os.path.normpath(str(rutas.get("nesteos_cobre_iges") or "").strip())
-                                if fmt == "iges"
-                                else step_dir
-                            )
-                        else:
-                            fmt = "step"
-                            out_dir = step_dir
-                        if not out_dir:
+                        if not step_dir:
                             continue
-                        cad_path = _cad_path_for_dxf(dxf_path, out_dir, fmt)
+                        cad_path = _cad_path_for_dxf(dxf_path, step_dir, "step")
                         if not _cad_is_current(dxf_path, cad_path):
                             faltantes.append(nombre)
                 except Exception:
@@ -313,7 +293,7 @@ def _validar_steps_tras_export(
                 else ""
             )
             _log(
-                f"WARN [{etiqueta}]: 3D incompletos ({detalle_3d} / {n_dxf_3d})."
+                f"WARN [{etiqueta}]: STEP incompletos ({n_step} / {n_dxf_3d})."
                 f"{detalle_faltantes} "
                 "Re-exportar reanuda solo los pendientes."
             )
@@ -748,7 +728,7 @@ def lanzar_freecad_robotica(
             }.get(dxf_key, ""),
         )
         out_dir = os.path.normpath(str(rutas.get(out_key or step_key, "") or "").strip())
-        cad_label = "IGES" if str(export_format).lower() in ("iges", "igs") else "STEP"
+        cad_label = "STEP"
         candidatos = _listar_dxfs_en_carpeta(dxf_dir)
         if callable(dxf_filter):
             candidatos = [p for p in candidatos if dxf_filter(p)]
@@ -787,7 +767,7 @@ def lanzar_freecad_robotica(
             return "dxf"
         return "step"
 
-    # CAMA LASER (acero): solo DXF — no genera STEP/IGES.
+    # CAMA LASER (acero): solo DXF — no genera STEP.
 
     # NESTEOS DE COBRE (largos CU: madre + RTZCU)
     if es_cobre and rutas.get("nesteos_cobre_dxf"):
@@ -903,7 +883,6 @@ def exportar_resultados_a_dxf(
         "robot_laser_step_B": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"),
         "robot_plasma_step_A": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"),
         "robot_plasma_step_B": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"),
-        "nesteos_cobre_iges": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "IGES"),
     }
 
     for r in rutas.values():
@@ -927,7 +906,12 @@ def exportar_resultados_a_dxf(
         wo_label=wo_label,
     )
     asignar_numeracion_global_hojas(resultados, order_label_global, sobrescribir=True)
-    from .cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids, es_overlay_rtz_cu
+    from .cu_rtz_sin_gap import (
+        asignar_rtz_cu_sin_gap_ids,
+        es_overlay_rtz_cu,
+        largo_export_madre_cu_mm,
+        pieza_excluida_dxf_madre_cu,
+    )
 
     asignar_rtz_cu_sin_gap_ids(resultados)
 
@@ -993,11 +977,20 @@ def exportar_resultados_a_dxf(
             hoja["pqart_exports"] = []
 
             if bool(hoja.get("modo_largos_cu")):
-                hoja["export_3d_format"] = _hoja_cobre_export_3d(hoja)
+                if hoja.get("cu_rtz_virtual"):
+                    hoja["cu_modo_separacion_barra"] = "con_gap"
+                    hoja["export_3d_format"] = "step"
+                else:
+                    hoja["export_3d_format"] = _hoja_cobre_export_3d(hoja)
                 if hoja["export_3d_format"] == "dxf":
                     log(
                         f"hoja {hoja.get('sheet_code') or sheet_seq}: cobre sin separación "
                         f"(sin_gap) → solo DXF (BAR_START; sin Plate, CUT_CU ni 3D)"
+                    )
+                elif hoja.get("cu_rtz_virtual"):
+                    log(
+                        f"hoja {hoja.get('sheet_code') or sheet_seq}: RTZCU → "
+                        f"con_gap / STEP (horizontal, CUT_OUTER cerrado; sin vertical CyPTube)"
                     )
 
             sheet_info = {
@@ -1012,7 +1005,17 @@ def exportar_resultados_a_dxf(
                     hoja.get("cu_modo_separacion_barra") or ""
                 ),
                 "cu_rtz_virtual": bool(hoja.get("cu_rtz_virtual")),
+                "cu_rtz_activo": bool(hoja.get("cu_rtz_activo")),
+                "cu_rtz_inicio_mm": float(hoja.get("cu_rtz_inicio_mm") or 0.0),
             }
+            # Madre sin_gap + RTZCU: el DXF de la madre solo cubre hasta el inicio RTZ.
+            if es_cu_hoja and not es_cu_rtz_virtual:
+                largo_madre = largo_export_madre_cu_mm(hoja)
+                if largo_madre is not None and largo_madre > 0.5:
+                    sheet_info["length"] = float(largo_madre)
+                    sheet_info["cu_rtz_inicio_mm"] = float(largo_madre)
+                    sheet_info["cu_rtz_activo"] = True
+                    w_mm = float(largo_madre)
             _cu_bar_w = float(h_mm)
             _cu_bar_l = float(w_mm)
 
@@ -1064,7 +1067,8 @@ def exportar_resultados_a_dxf(
                 if es_overlay_rtz_cu(nom):
                     continue
 
-                if es_cu_hoja and not es_cu_rtz_virtual and pz.get("cu_zona_rtz"):
+                # Madre CU: nada de zona RTZCU (piezas, overlays ni CU_CORTE del retazo).
+                if es_cu_hoja and not es_cu_rtz_virtual and pieza_excluida_dxf_madre_cu(pz, hoja):
                     continue
 
                 if nom.startswith("TATUAJE_"):
