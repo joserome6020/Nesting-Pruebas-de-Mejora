@@ -6,11 +6,13 @@ Nesting 1D para largos de cobre (CU).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
 - Separación 3/8" entre piezas > umbral de largo (eje X del DXF); piezas ≤ umbral sin separación
   salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
-  sin gap o con gap para toda la barra. Si una barra sin_gap rebasa 114", el tramo sobrante
-  se separa como RTZCU con gap por defecto (la madre conserva sin_gap). Cada pieza usa su
-  tira objetivo (exacta o la mínima del catálogo que la contenga); no se sube 4"/5" a 6"
-  solo porque el lote ya abrió una tira más ancha. Si el RTZCU con gap no cabe hasta 144",
-  las piezas sobrantes abren barra(s) nueva(s) (pueden generar otro RTZCU).
+  sin gap o con gap para toda la barra. Piezas con corte de orilla (más angostas que la tira)
+  o relieve/escalón lateral se fuerzan a sin_gap y solo se mezclan entre sí (no con laminas
+  rectas a ancho exacto). Si una barra sin_gap rebasa 114", el tramo sobrante se separa como
+  RTZCU con gap por defecto (la madre conserva sin_gap). Cada pieza usa su tira objetivo
+  (exacta o la mínima del catálogo que la contenga); no se sube 4"/5" a 6" solo porque el
+  lote ya abrió una tira más ancha. Si el RTZCU con gap no cabe hasta 144", las piezas
+  sobrantes abren barra(s) nueva(s) (pueden generar otro RTZCU).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
 - sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
 - con_gap: CUT_OUTER cerrado por pieza + STEP (sin CUT_CU ni líneas divisorias)
@@ -213,6 +215,7 @@ def _colocar_pieza_nativa(
         "rot_origin_cy": float(p_data.get("rot_origin_cy", 0.0) or 0.0),
         "corte_superior_mm": float(corte_superior_mm),
         "calibre_superior": bool(calibre_superior),
+        "cu_forzar_sin_gap": bool(p_data.get("cu_forzar_sin_gap")),
         "y_corte_superior_mm": y_corte,
         "x_inicio_mm": float(x_mm),
         "largo_mm": float(p_data.get("len_mm") or 0.0),
@@ -650,6 +653,69 @@ def _pieza_cu_exime_separacion(
     return _largo_pieza_cu_in(item) <= max(0.0, float(largo_sin_separacion_in))
 
 
+def _exterior_item_cu(item: dict) -> list:
+    """Contorno exterior en coords locales (poly o poligonos ya colocados)."""
+    poly = item.get("poly")
+    if poly is not None and not getattr(poly, "is_empty", True):
+        try:
+            return list(poly.exterior.coords)
+        except Exception:
+            pass
+    polys = item.get("poligonos") or []
+    if polys and polys[0]:
+        return list(polys[0])
+    return []
+
+
+def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
+    """
+    True si la pieza fuerza corte láser además de la guillotina vertical:
+    - más angosta que la tira (recorte de orilla, ej. 1.75\" en 2\"), o
+    - perfil con escalón/diagonal/relieve (no lamina ortogonal a todo el ancho).
+    """
+    if bool(item.get("cu_forzar_sin_gap")):
+        return True
+    try:
+        if float(item.get("corte_superior_mm") or 0.0) > 0.5:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if bool(item.get("calibre_superior")):
+        return True
+    exterior = _exterior_item_cu(item)
+    if exterior and not _solo_cortes_guillotina_vertical(exterior):
+        return True
+    return False
+
+
+def _marcar_forzar_sin_gap(item: dict) -> dict:
+    """Calcula y fija cu_forzar_sin_gap en el dict de la pieza."""
+    out = item
+    flag = _pieza_cu_forzar_sin_gap(item)
+    if item.get("cu_forzar_sin_gap") is not True and flag:
+        out = dict(item)
+        out["cu_forzar_sin_gap"] = True
+    elif "cu_forzar_sin_gap" not in item:
+        out = dict(item)
+        out["cu_forzar_sin_gap"] = bool(flag)
+    return out
+
+
+def _familia_corte_cu(item: dict) -> str:
+    """Familias que no se mezclan en la misma barra."""
+    return "sin_gap_laser" if _pieza_cu_forzar_sin_gap(item) else "guillotina"
+
+
+def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
+    """Piezas con corte lateral solo con otras iguales; laminas exactas aparte."""
+    colocados = barra.get("colocados") or []
+    if not colocados:
+        return True
+    fam_item = _familia_corte_cu(item)
+    fams = {_familia_corte_cu(c[0]) for c in colocados}
+    return fams == {fam_item}
+
+
 def _cu_sin_separacion_efectiva(item: dict, modo_barra: str) -> bool:
     modo = str(modo_barra or "hibrido").strip().lower()
     return modo == "sin_gap"
@@ -664,10 +730,13 @@ def _modo_separacion_barra(
     - cortas (≤ umbral) → sin_gap en toda la barra
     - largas (> umbral) → con_gap entre todas las piezas
     - si no hay mayoría → separación entre todas las piezas (incl. larga+corta)
+    Piezas con corte de orilla/relieve fuerzan sin_gap (toda la barra).
     """
     n = len(items or [])
     if n <= 0:
         return "hibrido"
+    if any(_pieza_cu_forzar_sin_gap(it) for it in items):
+        return "sin_gap"
     umbral = max(1, math.ceil(n * MAYORIA_BARRA_CU_FRACCION))
     n_cortas = sum(
         1 for it in items if _pieza_cu_exime_separacion(it, largo_sin_separacion_in)
@@ -800,7 +869,7 @@ def _adaptar_item_a_barra(item: dict, barra: dict) -> dict:
     out["barra_objetivo_in"] = _ancho_objetivo_item_in(item) or float(
         barra.get("ancho_in") or 0.0
     )
-    return out
+    return _marcar_forzar_sin_gap(out)
 
 
 def _score_barra_para_item(
@@ -811,9 +880,11 @@ def _score_barra_para_item(
 ) -> float | None:
     """
     Mayor puntaje = preferir rellenar barras ya abiertas del mismo ancho objetivo.
-    Luego homogeneidad corta/larga.
+    Luego homogeneidad corta/larga. Familias laser/guillotina no se mezclan.
     """
     if not _pieza_cabe_en_ancho_barra(item, barra):
+        return None
+    if not _barra_acepta_familia_corte(barra, item):
         return None
     item_eff = _adaptar_item_a_barra(item, barra)
     cabe, gap_before, x_pos = _encaje_en_barra(
@@ -847,6 +918,8 @@ def _aplicar_pieza_en_barra(
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> bool:
     if not _pieza_cabe_en_ancho_barra(item, barra):
+        return False
+    if not _barra_acepta_familia_corte(barra, item):
         return False
     item_eff = _adaptar_item_a_barra(item, barra)
     ok, _gap, _x, cursor = _simular_encaje_en_barra(
@@ -976,6 +1049,8 @@ def _consolidar_barras_con_pieza_sola(
                     continue
                 if not _pieza_cabe_en_ancho_barra(item, dest):
                     continue
+                if not _barra_acepta_familia_corte(dest, item):
+                    continue
                 item_eff = _adaptar_item_a_barra(item, dest)
                 ok, _, _, _ = _simular_encaje_en_barra(
                     dest, item_eff, separacion_in, largo_sin_separacion_in
@@ -1025,6 +1100,7 @@ def empaquetar_largos_cu(
             "calibre_superior": cal_sup,
             "rot_deg": float(rot_deg),
         }
+        item = _marcar_forzar_sin_gap(item)
         # Marcas: rotar igual que el contorno si aplica.
         marks = p.get("marks")
         if marks is not None and not getattr(marks, "is_empty", True) and rot_deg:
@@ -1037,10 +1113,11 @@ def empaquetar_largos_cu(
             item["marks"] = affinity.translate(marks_r, -mx0, -my0)
         items.append(item)
 
-    # Agrupa por ancho objetivo; dentro del mismo ancho, largas primero.
+    # Agrupa por ancho objetivo; laser-sin-gap juntos; dentro, largas primero.
     items.sort(
         key=lambda x: (
             float(x["barra_objetivo_in"]),
+            0 if _pieza_cu_forzar_sin_gap(x) else 1,
             0 if not _pieza_cu_exime_separacion(x, largo_umbral) else 1,
             -x["len_mm"],
         )

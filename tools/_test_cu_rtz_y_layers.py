@@ -800,6 +800,66 @@ def test_numeracion_cobre_ignora_rtz_virtual() -> None:
     assert numeracion_hojas_es_consistente(resultados, wo)
 
 
+def test_corte_orilla_y_relieve_fuerzan_sin_gap() -> None:
+    """1.75\" en 2\" o perfil con escalón → sin_gap; lamina exacta larga → con_gap; no se mezclan."""
+    # Largas (>10\") angostas: deben forzar sin_gap pese al umbral de largo.
+    angostas = [_piece(f"N175-{i}", 16.0, 1.75) for i in range(4)]
+    exactas = [_piece(f"E200-{i}", 16.0, 2.0) for i in range(4)]
+    # Escalón lateral a ancho de tira 2\" (no solo guillotina vertical).
+    lx = 12.0 * 25.4
+    wy = 2.0 * 25.4
+    step = Polygon(
+        [
+            (0, 0),
+            (lx, 0),
+            (lx, wy * 0.55),
+            (lx * 0.55, wy * 0.55),
+            (lx * 0.55, wy),
+            (0, wy),
+        ]
+    )
+    escalon = {
+        "nombre": "STEP-1",
+        "poly": step,
+        "marks": None,
+        "area": float(step.area),
+        "calibre": "CU",
+        "material": "CU",
+        "ruta": "",
+    }
+    stock = [_barra_stock(2.0)]
+    hojas, sin = empaquetar_largos_cu(
+        angostas + exactas + [escalon],
+        stock,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual") and not h.get("es_retazo")]
+
+    def _nombres(h):
+        return [
+            str(p.get("nombre") or "")
+            for p in (h.get("piezas") or [])
+            if str(p.get("nombre") or "").startswith(("N175-", "E200-", "STEP-"))
+        ]
+
+    for h in madres:
+        noms = _nombres(h)
+        if not noms:
+            continue
+        modo = str(h.get("cu_modo_separacion_barra") or "")
+        has_narrow = any(n.startswith("N175-") for n in noms)
+        has_exact = any(n.startswith("E200-") for n in noms)
+        has_step = any(n.startswith("STEP-") for n in noms)
+        assert not (has_narrow and has_exact), f"mezcla angosta+exacta: {noms}"
+        assert not (has_step and has_exact), f"mezcla escalón+exacta: {noms}"
+        if has_narrow or has_step:
+            assert modo == "sin_gap", f"debe sin_gap {noms} modo={modo}"
+        if has_exact and not has_narrow and not has_step:
+            assert modo == "con_gap", f"exactas largas → con_gap, modo={modo} {noms}"
+
+
 def main() -> int:
     test_laser_normal_sin_capas_cobre()
     print("[OK] 1/5 Nesteo láser normal: sin capas cobre fantasma")
@@ -824,6 +884,9 @@ def main() -> int:
 
     test_no_sube_4in_a_6in_por_lote_mixto()
     print("[OK] 7b/13 Ancho CU: 4\" no sube a 6\" en lote mixto")
+
+    test_corte_orilla_y_relieve_fuerzan_sin_gap()
+    print("[OK] 7c/14 Corte orilla/relieve CU => sin_gap y sin mezclar con lamina exacta")
 
     test_reconciliar_no_consume_rtzcu_virtual()
     print("[OK] 8/12 Reconciliar: RTZCU virtual no consume piezas del pool")
