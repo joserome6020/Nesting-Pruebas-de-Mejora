@@ -1,4 +1,4 @@
-import os, sys, glob, traceback, importlib, re
+import os, sys, glob, traceback, importlib, re, math
 
 _log_dir = os.getenv("FREECAD_LOG_DIR") or os.path.join(
     os.getenv("FREECAD_STEP_OUT") or os.getcwd(), "_logs"
@@ -89,40 +89,117 @@ def _should_imprint_per_piece(mark_count: int) -> bool:
     return int(mark_count) >= PER_PIECE_MARK_THRESHOLD
 
 
-def _build_mark_ribbons(mark_edges_m, vector_marcas_z, vec_up, mark_mode):
+def _normalize_mark_mode(raw: str) -> str:
+    """ENGRAVE=ranuras (cut); IMPRINT=legacy fuse de caras 0-grosor."""
+    m = str(raw or "ENGRAVE").strip().upper()
+    if m in ("CUT", "GROOVE", "ENGRAVE", "BOOLEAN", "CARVE"):
+        return "ENGRAVE"
+    if m in ("IMPRINT", "FUSE", "LEGACY"):
+        return "IMPRINT"
+    return "ENGRAVE"
+
+
+def _mark_mode_applies_to_solid(mark_mode: str) -> bool:
+    return _normalize_mark_mode(mark_mode) in ("ENGRAVE", "IMPRINT")
+
+
+def _edge_xy_endpoints(edge):
+    try:
+        vs = list(edge.Vertexes)
+    except Exception:
+        return None
+    if len(vs) < 2:
+        return None
+    return vs[0].Point, vs[-1].Point
+
+
+def _build_mark_groove_tool(edge, z_bottom: float, height: float, width: float):
+    """Prisma rectangular a lo largo de un segmento MARK (unidades XY del DXF)."""
+    if width <= 1e-9 or height <= 1e-9:
+        return None
+    ends = _edge_xy_endpoints(edge)
+    if not ends:
+        return None
+    p1, p2 = ends
+    dx = float(p2.x - p1.x)
+    dy = float(p2.y - p1.y)
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return None
+    pad = min(width * 0.2, length * 0.08)
+    box = Part.makeBox(length + 2.0 * pad, width, height)
+    box.translate(App.Vector(-pad, -0.5 * width, 0.0))
+    box.rotate(App.Vector(0, 0, 0), App.Vector(0, 0, 1), math.degrees(math.atan2(dy, dx)))
+    box.translate(App.Vector(float(p1.x), float(p1.y), float(z_bottom)))
+    return box
+
+
+def _build_mark_ribbons(
+    mark_edges_m,
+    vector_marcas_z,
+    vec_up,
+    mark_mode,
+    *,
+    width: float = 0.02,
+):
     ribbons = []
-    if not mark_edges_m or mark_mode != "IMPRINT":
+    if not mark_edges_m:
+        return ribbons
+    mode = _normalize_mark_mode(mark_mode)
+    z0 = float(getattr(vector_marcas_z, "z", 0.0))
+    h = abs(float(getattr(vec_up, "z", vec_up)))
+    if h <= 1e-12:
         return ribbons
     for edge in mark_edges_m:
         try:
-            e_rib = edge.copy()
-            e_rib.translate(vector_marcas_z)
-            rib = e_rib.extrude(vec_up)
-            if rib and not rib.isNull():
-                ribbons.append(rib)
+            if mode == "ENGRAVE":
+                tool = _build_mark_groove_tool(edge, z0, h, float(width))
+                if tool is not None and not tool.isNull():
+                    ribbons.append(tool)
+            else:
+                e_rib = edge.copy()
+                e_rib.translate(vector_marcas_z)
+                rib = e_rib.extrude(vec_up)
+                if rib and not rib.isNull():
+                    ribbons.append(rib)
         except Exception:
             pass
     return ribbons
 
 
-def _apply_imprint_ribbons_on_solid(solid, ribbons, *, chunk=100):
+def _apply_imprint_ribbons_on_solid(solid, ribbons, *, chunk=100, mark_mode="ENGRAVE"):
     if not ribbons or solid is None or solid.isNull():
         return solid
+    mode = _normalize_mark_mode(mark_mode)
     out = solid
     for i in range(0, len(ribbons), chunk):
         bloque = ribbons[i : i + chunk]
         try:
             comp_rib = Part.makeCompound(bloque)
-            temp_shape = out.generalFuse([comp_rib])[0]
+            if mode == "ENGRAVE":
+                temp_shape = out.cut(comp_rib)
+            else:
+                temp_shape = out.generalFuse([comp_rib])[0]
             temp_shape = _solo_solidos(temp_shape)
-            if temp_shape and not temp_shape.isNull():
+            if (
+                temp_shape
+                and not temp_shape.isNull()
+                and float(getattr(temp_shape, "Volume", 0.0) or 0.0) > 1e-6
+            ):
                 out = temp_shape
         except Exception:
             for rib in bloque:
                 try:
-                    temp_shape = out.generalFuse([rib])[0]
+                    if mode == "ENGRAVE":
+                        temp_shape = out.cut(rib)
+                    else:
+                        temp_shape = out.generalFuse([rib])[0]
                     temp_shape = _solo_solidos(temp_shape)
-                    if temp_shape and not temp_shape.isNull():
+                    if (
+                        temp_shape
+                        and not temp_shape.isNull()
+                        and float(getattr(temp_shape, "Volume", 0.0) or 0.0) > 1e-6
+                    ):
                         out = temp_shape
                 except Exception:
                     pass
@@ -832,7 +909,7 @@ def _edges_from_wires(wires):
     return edges
 
 
-def _imprint_edges_on_bar(solid, edges, shift, top_z, rib_h_mm, *, chunk=100):
+def _imprint_edges_on_bar(solid, edges, shift, top_z, rib_h_mm, *, chunk=100, width=0.02):
     """Graba aristas en la cara superior del sólido (contornos / marcas)."""
     if not edges or solid is None or solid.isNull():
         return solid
@@ -848,11 +925,16 @@ def _imprint_edges_on_bar(solid, edges, shift, top_z, rib_h_mm, *, chunk=100):
         return solid
     vector_marcas_z = App.Vector(0, 0, float(top_z))
     vec_up = App.Vector(0, 0, float(rib_h_mm))
-    ribbons = _build_mark_ribbons(shifted, vector_marcas_z, vec_up, "IMPRINT")
+    mark_mode = _normalize_mark_mode(_env_str("FREECAD_MARK_MODE", "ENGRAVE"))
+    ribbons = _build_mark_ribbons(
+        shifted, vector_marcas_z, vec_up, mark_mode, width=float(width)
+    )
     if not ribbons:
         return solid
     try:
-        out = _apply_imprint_ribbons_on_solid(solid, ribbons, chunk=chunk)
+        out = _apply_imprint_ribbons_on_solid(
+            solid, ribbons, chunk=chunk, mark_mode=mark_mode
+        )
         return _solo_solidos(out)
     except Exception:
         return solid
@@ -933,15 +1015,17 @@ def _build_cyptube_flatbar_iges(
 
     if cut_edges:
         print(f"[{name}] IGES CypTube: imprint {len(cut_edges)} aristas de corte...")
+        cut_w = _env_float("FREECAD_CYPTUBE_CUT_WIDTH", 0.015)
         result = _imprint_edges_on_bar(
-            result, cut_edges, shift, mark_top_z, cut_rib_h, chunk=150
+            result, cut_edges, shift, mark_top_z, cut_rib_h, chunk=150, width=cut_w
         )
 
     if mark_edges:
+        mark_w = _env_float("FREECAD_MARK_WIDTH", 0.02)
         if n_marks <= PER_PIECE_MARK_THRESHOLD:
             print(f"[{name}] IGES CypTube: imprint {n_marks} marcas...")
             result = _imprint_edges_on_bar(
-                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=100
+                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=100, width=mark_w
             )
         else:
             print(
@@ -949,7 +1033,7 @@ def _build_cyptube_flatbar_iges(
                 f"(umbral {PER_PIECE_MARK_THRESHOLD})"
             )
             result = _imprint_edges_on_bar(
-                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=80
+                result, mark_edges, shift, mark_top_z, mark_rib_h, chunk=80, width=mark_w
             )
 
     result = _cyptube_rotate_length_to_z(result, pivot)
@@ -1202,26 +1286,38 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
     # ==========================================================
     # PASO 2: MARCAJE — placa entera (legacy) o diferido por pieza (modo C)
     # ==========================================================
-    mark_mode = _env_str("FREECAD_MARK_MODE", "IMPRINT").strip().upper()
+    mark_mode = _normalize_mark_mode(_env_str("FREECAD_MARK_MODE", "ENGRAVE"))
     mark_z_offset = _env_float("FREECAD_MARK_Z_OFFSET", -0.5)
     rib_h = _env_float("FREECAD_MARK_RIB_H", 1.0)
+    # Ancho de ranura en unidades XY del modelo (con SCALE=1 / IN ≈ 0.02").
+    mark_width = _env_float("FREECAD_MARK_WIDTH", 0.02)
     vector_marcas_z = App.Vector(0, 0, dz_final + thk_mm + mark_z_offset)
     vec_up = App.Vector(0, 0, rib_h)
     per_piece_marks = _should_imprint_per_piece(len(mark_e_m))
+    # ENGRAVE: siempre en pieza final para que el cookie-cut no degrade el texto.
+    if mark_mode == "ENGRAVE" and mark_e_m:
+        per_piece_marks = True
 
     if per_piece_marks:
         print(
             f"[{name}] FASE=C (sólidos->marcas por pieza) | "
-            f"marcas={len(mark_e_m)} | modo={mark_mode}"
+            f"marcas={len(mark_e_m)} | modo={mark_mode} | ancho={mark_width}"
         )
-    elif mark_e_m:
+    elif mark_e_m and _mark_mode_applies_to_solid(mark_mode):
         try:
-            ribbons = _build_mark_ribbons(mark_e_m, vector_marcas_z, vec_up, mark_mode)
-            print(f"[{name}] MARK MODE = {mark_mode} | Ribbons a fusionar: {len(ribbons)}")
+            ribbons = _build_mark_ribbons(
+                mark_e_m, vector_marcas_z, vec_up, mark_mode, width=mark_width
+            )
+            print(
+                f"[{name}] MARK MODE = {mark_mode} | Herramientas: {len(ribbons)} "
+                f"(ancho={mark_width})"
+            )
             if ribbons:
-                plate_solid = _apply_imprint_ribbons_on_solid(plate_solid, ribbons, chunk=100)
+                plate_solid = _apply_imprint_ribbons_on_solid(
+                    plate_solid, ribbons, chunk=100, mark_mode=mark_mode
+                )
         except Exception as e:
-            print(f"[{name}] ERROR en proceso IMPRINT (placa): {e}")
+            print(f"[{name}] ERROR en proceso {mark_mode} (placa): {e}")
 
     # ==========================================================
     # PASO 3: EXTRACCIÓN CON EL CORTADOR DE GALLETAS (OUTER)
@@ -1234,10 +1330,14 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
 
         if not outer_w_m:
             piece = _solo_solidos(plate_solid)
-            if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+            if per_piece_marks and mark_e_m and _mark_mode_applies_to_solid(mark_mode):
                 piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
-                ribbons = _build_mark_ribbons(piece_marks, vector_marcas_z, vec_up, mark_mode)
-                piece = _apply_imprint_ribbons_on_solid(piece, ribbons, chunk=50)
+                ribbons = _build_mark_ribbons(
+                    piece_marks, vector_marcas_z, vec_up, mark_mode, width=mark_width
+                )
+                piece = _apply_imprint_ribbons_on_solid(
+                    piece, ribbons, chunk=50, mark_mode=mark_mode
+                )
             if hasattr(piece, "Volume") and piece.Volume > 1e-6:
                 parts.append(piece)
         else:
@@ -1254,14 +1354,18 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
                     # Obligamos a que la pieza final no tenga basura superficial
                     piece = _solo_solidos(piece)
 
-                    if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+                    if per_piece_marks and mark_e_m and _mark_mode_applies_to_solid(mark_mode):
                         piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
                         if piece_marks:
                             ribbons = _build_mark_ribbons(
-                                piece_marks, vector_marcas_z, vec_up, mark_mode
+                                piece_marks,
+                                vector_marcas_z,
+                                vec_up,
+                                mark_mode,
+                                width=mark_width,
                             )
                             piece = _apply_imprint_ribbons_on_solid(
-                                piece, ribbons, chunk=50
+                                piece, ribbons, chunk=50, mark_mode=mark_mode
                             )
 
                     if hasattr(piece, "Volume") and piece.Volume > 1e-6:
@@ -1272,10 +1376,14 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         if not parts:
             # Pieza única (DXF fuente) o plate = único contorno: exportar el plate ya perforado.
             piece = _solo_solidos(plate_solid)
-            if per_piece_marks and mark_e_m and mark_mode == "IMPRINT":
+            if per_piece_marks and mark_e_m and _mark_mode_applies_to_solid(mark_mode):
                 piece_marks = _marks_for_piece(mark_e_m, piece.BoundBox, margin=1.5)
-                ribbons = _build_mark_ribbons(piece_marks, vector_marcas_z, vec_up, mark_mode)
-                piece = _apply_imprint_ribbons_on_solid(piece, ribbons, chunk=50)
+                ribbons = _build_mark_ribbons(
+                    piece_marks, vector_marcas_z, vec_up, mark_mode, width=mark_width
+                )
+                piece = _apply_imprint_ribbons_on_solid(
+                    piece, ribbons, chunk=50, mark_mode=mark_mode
+                )
             if hasattr(piece, "Volume") and piece.Volume > 1e-6:
                 parts.append(piece)
 
