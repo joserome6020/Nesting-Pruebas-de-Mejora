@@ -15,7 +15,15 @@ from matplotlib.patches import Circle, Polygon
 from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from interface.qt.cad_graphics_view import CadPartGraphicsView
 from interface.qt.dxf_part_loader import load_dxf_part
@@ -109,9 +117,11 @@ class VisorDXF:
         row.setContentsMargins(14, 10, 14, 10)
         row.setSpacing(18)
 
-        def _metric(caption: str, attr_name: str, stretch: int = 0):
+        def _metric(caption: str, attr_name: str):
             wrap = QWidget()
             wrap.setStyleSheet("background:transparent;")
+            # Tamaño natural: evita que LARGO/ANCHO/etc. se estiren a todo el ancho.
+            wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(0, 0, 0, 0)
             wl.setSpacing(1)
@@ -120,16 +130,19 @@ class VisorDXF:
             val = QLabel("-")
             val.setStyleSheet("color:#E2E8F0;font-size:13px;font-weight:700;background:transparent;")
             val.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            val.setMinimumWidth(72)
             wl.addWidget(cap)
             wl.addWidget(val)
             setattr(self, attr_name, val)
-            row.addWidget(wrap, stretch)
+            row.addWidget(wrap, 0)
 
         _metric("LARGO (X)", "lbl_width")
         _metric("ANCHO (Y)", "lbl_height")
-        _metric("AREA NETA", "lbl_area", stretch=1)
+        _metric("AREA NETA", "lbl_area")
         _metric("PERIMETRO", "lbl_perim")
-        _metric("REFERENCIA", "lbl_ref", stretch=2)
+        _metric("REFERENCIA", "lbl_ref")
+        self.lbl_ref.setMinimumWidth(120)
+        row.addStretch(1)
 
     def actualizar_datos(self, min_x, max_x, min_y, max_y, perimetro, valido, area=None, referencia=""):
         if not valido:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, Qt, Signal
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from interface.qt.theme import COLOR_ACENTO, COLOR_ACENTO_TEXTO, COLOR_TEXTO_MUTED
 
@@ -96,6 +96,7 @@ class HerinoxSwitch(QWidget):
         super().__init__(parent)
         self._label_on = label_on
         self._label_off = label_off
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

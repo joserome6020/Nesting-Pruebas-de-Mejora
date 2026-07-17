@@ -1,8 +1,10 @@
 """Helpers para migrar patrones Tk/CTk a widgets Qt."""
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QComboBox, QLineEdit, QPushButton, QLabel, QWidget, QScrollArea, QVBoxLayout
+
+from interface.qt.layout_helpers import layout_ensure_bottom_stretch, layout_insert_before_stretch
 
 
 class TimerHost:
@@ -54,16 +56,28 @@ def clear_layout(layout):
 
 
 def scroll_clear(scroll: QScrollArea):
+    """Limpia el scroll y deja stretch final para que pocas filas no se alarguen."""
     w = scroll.widget()
     if w and w.layout():
         clear_layout(w.layout())
+        lay = w.layout()
+        if isinstance(lay, QVBoxLayout):
+            lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+            layout_ensure_bottom_stretch(lay)
 
 
 def scroll_add_widget(scroll: QScrollArea, widget: QWidget):
+    """Añade un widget empaquetado arriba (antes del stretch final)."""
     inner = scroll.widget()
     if inner is None:
         inner = QWidget()
         scroll.setWidget(inner)
-        inner.setLayout(QVBoxLayout())
-        inner.layout().setContentsMargins(0, 0, 0, 0)
-    inner.layout().addWidget(widget)
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        lay.addStretch(1)
+    lay = inner.layout()
+    if isinstance(lay, QVBoxLayout):
+        layout_insert_before_stretch(lay, widget)
+    else:
+        lay.addWidget(widget)

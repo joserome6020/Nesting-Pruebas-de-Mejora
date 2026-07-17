@@ -36,6 +36,13 @@ if __name__ == "__main__":
     if getattr(sys, "frozen", False):
         # CWD estable junto al .exe (otras PCs, accesos directos, doble clic).
         os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+    # Pre-cargar stdlib de red ANTES de PySide6: en Python 3.14 + Shiboken,
+    # importar urllib.request después de Qt puede colgarse en inspect.getsource
+    # (parece freeze; Ctrl+C deja el traceback que veías en herinox_sync).
+    import http.client  # noqa: F401
+    import urllib.parse  # noqa: F401
+    import urllib.request  # noqa: F401
+
     from PySide6.QtWidgets import QApplication
     from interface.qt.theme import apply_theme
     from interface.qt.main_window import SistemaNestingPro

@@ -546,6 +546,7 @@ def push_button_stylesheet(
     *,
     hover: str | None = None,
     font_size: int = 12,
+    font_weight: int | str = 600,
     padding: str = "8px 14px",
     radius: int = 8,
 ) -> str:
@@ -565,9 +566,10 @@ def push_button_stylesheet(
         hover_border = _shade(bg, 0.05)
         pressed_bg = _shade(bg, -0.1)
 
+    fw = str(font_weight).strip() or "600"
     base = (
         f"background:{bg};color:{fg};border:1px solid {border};"
-        f"border-radius:{radius}px;padding:{padding};font-weight:600;font-size:{font_size}px;"
+        f"border-radius:{radius}px;padding:{padding};font-weight:{fw};font-size:{font_size}px;"
     )
     return (
         f"QPushButton{{{base}}}"

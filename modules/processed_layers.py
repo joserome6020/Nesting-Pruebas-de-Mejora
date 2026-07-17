@@ -319,6 +319,35 @@ class ProcesadorDXF:
                 f"  > Outer: {len(outer_cortes)} | Inner: {len(inner_cortes)} | "
                 f"Descartados abiertos: {abiertos_descartados}",
             )
+
+            # Marcaje stick (código de pieza) en capa MARK del DXF procesado.
+            # Si el origen ya venía marcado por el .py AutoDXF, solo se procesa (no reinyecta).
+            try:
+                from modules.dxf_mark.inject import tiene_marcaje_stick
+                from modules.dxf_mark.pipeline import aplicar_marcaje_nesting
+
+                ya_marcado = tiene_marcaje_stick(ruta_entrada)
+                result = aplicar_marcaje_nesting(
+                    ruta_salida_real,
+                    origen_ya_marcado=ya_marcado,
+                )
+                if result.already_marked:
+                    self._escribir_log(
+                        ruta_reporte,
+                        "  > MARK stick: omitido (DXF origen ya traía marcaje del script)",
+                    )
+                else:
+                    self._escribir_log(
+                        ruta_reporte,
+                        f"  > MARK stick: '{result.mark_text}' "
+                        f"(alto_vis={result.height_du:.3f} u, piezas={result.components_marked})",
+                    )
+            except Exception as mark_exc:
+                self._escribir_log(
+                    ruta_reporte,
+                    f"  > MARK stick OMITIDO: {mark_exc}",
+                )
+
             return True
 
         except Exception as e:

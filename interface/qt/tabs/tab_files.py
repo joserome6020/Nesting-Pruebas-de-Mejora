@@ -450,6 +450,8 @@ class TabFiles(QWidget):
         scroll.setWidget(inner)
         inner_lay = QVBoxLayout(inner)
         inner_lay.setSpacing(8)
+        inner_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        inner_lay.addStretch(1)
         root = QVBoxLayout(dlg)
         root.setContentsMargins(16, 16, 16, 16)
         root.addWidget(scroll)
@@ -520,6 +522,7 @@ class TabFiles(QWidget):
         inner = QWidget()
         lista = QVBoxLayout(inner)
         lista.setSpacing(8)
+        lista.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(inner)
         root.addWidget(scroll, 1)
 

@@ -3,7 +3,15 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QFrame, QGraphicsDropShadowEffect, QScrollArea, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 def _soft_shadow(widget: QWidget, blur: int = 20, y_offset: int = 3, alpha: int = 10) -> None:
@@ -76,9 +84,40 @@ def make_scroll(parent: QWidget | None = None) -> QScrollArea:
 
 
 def make_scroll_content() -> tuple[QWidget, QVBoxLayout]:
+    """Contenido de scroll empaquetado arriba (sin alargar filas cuando hay pocas)."""
     inner = QWidget()
     inner.setObjectName("ScrollContent")
+    # Preferred vertical: el stretch final absorbe el sobrante del viewport.
+    inner.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
     lay = QVBoxLayout(inner)
     lay.setContentsMargins(4, 4, 8, 8)
     lay.setSpacing(4)
+    lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+    lay.addStretch(1)
     return inner, lay
+
+
+def layout_insert_before_stretch(layout: QVBoxLayout, widget: QWidget) -> None:
+    """Inserta un widget antes del stretch final (crea uno si no existe)."""
+    if layout is None or widget is None:
+        return
+    idx = layout.count() - 1
+    if idx >= 0:
+        item = layout.itemAt(idx)
+        if item is not None and item.spacerItem() is not None:
+            layout.insertWidget(idx, widget)
+            return
+    layout.addWidget(widget)
+    layout.addStretch(1)
+
+
+def layout_ensure_bottom_stretch(layout: QVBoxLayout) -> None:
+    """Asegura un único stretch al final del layout (idempotente)."""
+    if layout is None:
+        return
+    n = layout.count()
+    if n > 0:
+        item = layout.itemAt(n - 1)
+        if item is not None and item.spacerItem() is not None:
+            return
+    layout.addStretch(1)

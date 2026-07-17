@@ -9,7 +9,7 @@ Implementación nativa del empaquetado por hoja con **Clipper2** y registro de m
 | `arga_force` | ARGA FORCE | 1 | **Activo** (`packer_base.cpp`) — alias legacy: `arga_base` |
 | `burke_blf` | Burke BLF + NFP | 2 | **Activo** (`packer_burke_blf.cpp`) |
 | `libnest2d` | libnest2d | 3 | **Activo** (`packer_libnest2d.cpp`) |
-| `svgnest_ultra` | SVGNest Ultra (default) | 4 | **Activo** — NestFab-class: NFP+GA+15°+PIP+cavidades VFM (`packer_svgnest_ultra.cpp`) |
+| `svgnest_ultra` | SVGNest Ultra (default) | 4 | **Activo** — NestFab-class: NFP+GA+continual+multi-seed+Any/tilt+common-line+PIP/VFM (`packer_svgnest_ultra.cpp`) |
 
 El **cobre (CU)** no usa estos motores: pipeline externo `cu_largos_nesting.py`.
 

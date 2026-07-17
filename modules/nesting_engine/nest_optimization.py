@@ -97,30 +97,32 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "selector": "largest_area_first",
     },
     ENGINE_SVGNEST_ULTRA: {
-        "mc_iterations": 8,
+        # Prueba fast-first: nest usable en 1 gen / 90° / pop chica.
+        # Si no convence: ARGA_ULTRA_FAST_FIRST=0 o quitar fast_first.
+        "mc_iterations": 6,
         "mc_lookahead_iterations": 2,
         "lookahead": False,
         "refine_hoja": True,
         "accesorios_retries": 8,
         "refinar_intentos": 6,
         "continual_optimization": False,
-        # Desactivado: con cancel_checker el manager lo enlazaba también en SIM-PLACA
-        # y cada candidato de placa se quedaba minutos en bucle NestFab (log mudo al 25%).
         "continual_until_user_stops": False,
         "continual_stagnation_rounds": 2,
-        # Paso de perfil para piezas chicas; C++ fuerza 90° en ≥200 in² y 45° en 80–200.
         "rotation_step_deg": 30,
         "use_nfp": True,
         "use_genetic_algorithm": True,
-        "ga_population": 12,
+        "ga_population": 8,
         "ga_mutation_rate": 0.15,
         "part_in_part": True,
         "morphology_gap_fill": True,
         "open_cavity_fill": True,
         "common_line_lite": False,
-        # Impide que ARGA_NEST_MODE=first baje mc_iterations a 1 (mataba el GA Ultra).
+        "fast_first": True,
+        "fast_first_pop": 8,
+        "fast_first_gens": 1,
+        "fast_first_refine_gens": 2,
+        "fast_first_rotation_deg": 90.0,
         "lock_profile": True,
-        # Pack diario: exploración + refine (algorithm_bridge); renest usa Accept.
         "pack_explore_then_refine": True,
     },
     # Respaldo: MC clásico 3 pases explore→refine (rápido, decente).
@@ -196,10 +198,14 @@ def get_engine_profile(engine_id: str | None = None) -> dict:
     base["logical_cpus"] = budget["logical_cpus"]
     base["ram_gb"] = budget["ram_gb"]
 
-    # Ultra: población ≈ hilos de la máquina (mín. perfil, máx. 48).
+    # Ultra: en fast-first no inflar pop con hardware (era causa de lentitud).
     if eid == ENGINE_SVGNEST_ULTRA:
-        base_pop = int(base.get("ga_population", 12) or 12)
-        base["ga_population"] = max(base_pop, int(budget["ultra_population"]))
+        if bool(base.get("fast_first", True)):
+            cap = int(base.get("fast_first_pop", 8) or 8)
+            base["ga_population"] = max(4, min(int(base.get("ga_population", 8) or 8), cap))
+        else:
+            base_pop = int(base.get("ga_population", 12) or 12)
+            base["ga_population"] = max(base_pop, int(budget["ultra_population"]))
 
     # Burke / Libnest: más iteraciones si hay CPU (sin pasar de 40).
     if eid in (ENGINE_BURKE_BLF, ENGINE_LIBNEST2D) and budget["nest_threads"] >= 12:

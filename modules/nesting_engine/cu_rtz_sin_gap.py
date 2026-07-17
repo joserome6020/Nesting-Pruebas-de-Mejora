@@ -1,27 +1,36 @@
 """
-RTZ especial de cobre sin_gap (nesting, PDF, visor y export DXF).
+RTZ especial de cobre sin_gap (nesting, PDF, visor y export DXF/STEP).
 
-La solera física mide 144"; en barras sin_gap la máquina solo procesa 114"
-en la placa madre. El tramo 114"–144" es RTZCU con piezas (segundo procesado).
+La solera física mide 144"; en barras sin_gap la máquina prioriza ≤114"
+en la placa madre (primer procesado). Las piezas que rebasan ese límite
+pasan a RTZCU (segundo procesado, con_gap → STEP).
 
-- UI: placa madre + fila (ACCESORIOS) como nesteo normal.
-- PDF: una sola página por barra (madre + zona RTZ).
-- DXF: dos archivos por barra (madre + RTZ), ambos con sufijo Hn.
+El inicio del RTZCU NO es una línea fija en 114\": empieza al terminar la
+última pieza de la madre + gap por defecto (puede quedar antes o después
+de 114\" según cómo llenó la madre).
+
+Si con gap no caben todas las piezas del tramo RTZ hasta el final de la
+solera (144\"), las que sobran se derraman a barra(s) nueva(s) — que a su
+vez pueden llenarse y generar otro RTZCU.
 """
 from __future__ import annotations
 
 import copy
 from typing import List
 
-from .geometry_parser import generar_texto_vectorial
+from shapely import affinity
+from shapely.geometry import LineString
+from shapely.ops import unary_union
+
+from .geometry_parser import generar_texto_vectorial, reconstruir_poly_seguro
 
 # Solera estándar de cobre (inventario).
 CU_BAR_LARGO_IN = 144.0
-# Máximo que entra en la máquina láser (placa madre / primer procesado).
+# Máximo preferente que entra en la máquina láser (placa madre / primer procesado).
 CU_SIN_GAP_LASER_ZONA_MAX_IN = 114.0
-# Máximo empaquetado en eje X de la placa madre (sin_gap).
+# Máximo empaquetado en eje X de la placa madre (sin_gap) — umbral de clasificación.
 CU_SIN_GAP_LARGO_CORTE_MAX_IN = CU_SIN_GAP_LASER_ZONA_MAX_IN
-# Tramo físico reservado para RTZCU (114" → 144").
+# Tramo físico reservado para RTZCU (referencia 114\" → 144\").
 CU_SIN_GAP_RTZ_ZONA_MAX_IN = CU_BAR_LARGO_IN - CU_SIN_GAP_LASER_ZONA_MAX_IN
 # Alias histórico / documentación.
 CU_SIN_GAP_LASER_ZONA_NOMINAL_IN = CU_SIN_GAP_LASER_ZONA_MAX_IN
@@ -64,6 +73,78 @@ def es_overlay_rtz_cu(nombre: str) -> bool:
         return True
     return bool((n.startswith("RETAZO_GUILLOTINA__") or n.startswith("TATUAJE__")) and es_rtz_cu_id(n.split("__", 1)[-1]))
 
+
+def _bbox_pieza_xy(pieza: dict) -> tuple[float | None, float | None, float | None, float | None]:
+    pols = (pieza or {}).get("poligonos") or []
+    if not pols or not pols[0]:
+        return None, None, None, None
+    xs = [float(t[0]) for t in pols[0]]
+    ys = [float(t[1]) for t in pols[0]]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def pieza_excluida_dxf_madre_cu(pieza: dict, hoja: dict | None = None) -> bool:
+    """True si la pieza/corte pertenece al RTZCU y NO debe ir en el DXF de la madre.
+
+    La madre solo corta el primer tramo (≤114\" / hasta inicio RTZ). Las piezas
+    cu_zona_rtz y sus CU_CORTE van al STEP/DXF del RTZCU virtual.
+    """
+    if not isinstance(pieza, dict):
+        return False
+    nom = str(pieza.get("nombre") or "")
+    if es_overlay_rtz_cu(nom) or nom.startswith("RTZCU_ZONA__"):
+        return True
+    if pieza.get("cu_zona_rtz"):
+        return True
+
+    hoja = hoja if isinstance(hoja, dict) else {}
+    if not hoja.get("modo_largos_cu") or hoja.get("cu_rtz_virtual"):
+        return False
+    if not hoja.get("cu_rtz_activo"):
+        return False
+
+    try:
+        inicio = float(hoja.get("cu_rtz_inicio_mm") or 0.0)
+    except (TypeError, ValueError):
+        inicio = 0.0
+    if inicio <= 0.5:
+        inicio = rtz_zona_inicio_mm()
+
+    minx, _miny, maxx, _maxy = _bbox_pieza_xy(pieza)
+    if minx is None:
+        return False
+    # Pieza/corte cuyo contorno empieza en la zona RTZ (o casi).
+    if float(minx) >= float(inicio) - 0.5:
+        return True
+    # Pieza real casi toda en RTZ (por si el flag se perdió).
+    if (
+        maxx is not None
+        and _es_pieza_real_cu(nom)
+        and float(maxx) > float(inicio) + 0.5
+        and float(minx) >= float(inicio) - 25.4
+    ):
+        return True
+    return False
+
+
+def largo_export_madre_cu_mm(hoja: dict) -> float | None:
+    """Largo X del DXF madre: hasta el inicio del RTZCU (no toda la solera 144\")."""
+    if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
+        return None
+    if hoja.get("cu_rtz_virtual") or hoja.get("es_retazo"):
+        return None
+    if not hoja.get("cu_rtz_activo"):
+        return None
+    try:
+        inicio = float(hoja.get("cu_rtz_inicio_mm") or 0.0)
+    except (TypeError, ValueError):
+        inicio = 0.0
+    if inicio <= 0.5:
+        return None
+    placa_w = float(hoja.get("placa_w") or 0.0)
+    if placa_w <= 0.5:
+        return float(inicio)
+    return min(float(inicio), placa_w)
 
 def _rect_poligono(x0: float, y0: float, x1: float, y1: float) -> list:
     return [
@@ -129,13 +210,183 @@ def _pieza_coords_rtz_relativas(pieza: dict, origen_x_mm: float) -> dict:
     p["poligonos"] = _desplazar_poligonos_x(p.get("poligonos") or [], dx)
     p["marcas"] = _desplazar_marcas_x(p.get("marcas") or [], dx)
     p["cu_zona_rtz"] = True
+    # RTZCU: gap por defecto (no sin_gap).
+    p["cu_sin_separacion"] = False
+    p["cu_modo_separacion_barra"] = "con_gap"
     return p
+
+
+def _sep_gap_mm(separacion_in: float | None) -> float:
+    try:
+        sep = float(separacion_in)
+    except (TypeError, ValueError):
+        sep = 0.375
+    if sep < 0:
+        sep = 0.375
+    return sep * 25.4
+
+
+def _relayout_piezas_rtz_con_gap(
+    piezas_rel: list[dict],
+    *,
+    separacion_in: float = 0.375,
+) -> tuple[list[dict], float]:
+    """Re-espacia piezas RTZCU con gap por defecto (misma lógica con_gap → STEP).
+
+    Las piezas llegan con posiciones relativas heredadas del nesting sin_gap
+    (pegadas). Aquí se vuelven a colocar desde X=0 con la separación de cobre.
+    """
+    if not piezas_rel:
+        return [], 0.0
+
+    gap_mm = _sep_gap_mm(separacion_in)
+    ordered = sorted(
+        [p for p in piezas_rel if isinstance(p, dict)],
+        key=lambda p: (_bbox_x_mm(p)[0] is None, _bbox_x_mm(p)[0] or 0.0),
+    )
+    out: list[dict] = []
+    cursor = 0.0
+    for i, p in enumerate(ordered):
+        minx, maxx = _bbox_x_mm(p)
+        if minx is None or maxx is None:
+            p2 = copy.deepcopy(p)
+            p2["cu_sin_separacion"] = False
+            p2["cu_modo_separacion_barra"] = "con_gap"
+            p2["cu_zona_rtz"] = True
+            out.append(p2)
+            continue
+        largo = max(0.0, float(maxx) - float(minx))
+        if i > 0:
+            cursor += gap_mm
+        dx = cursor - float(minx)
+        p2 = copy.deepcopy(p)
+        p2["poligonos"] = _desplazar_poligonos_x(p2.get("poligonos") or [], dx)
+        p2["marcas"] = _desplazar_marcas_x(p2.get("marcas") or [], dx)
+        p2["cu_sin_separacion"] = False
+        p2["cu_modo_separacion_barra"] = "con_gap"
+        p2["cu_zona_rtz"] = True
+        out.append(p2)
+        cursor += largo
+    return out, cursor
+
+
+def _partir_rtz_por_disponible(
+    piezas_madre: list[dict],
+    *,
+    disponible_mm: float,
+    separacion_in: float = 0.375,
+) -> tuple[list[dict], list[dict]]:
+    """Parte piezas RTZ (refs en madre) en las que caben con gap y las que derraman."""
+    if not piezas_madre:
+        return [], []
+    gap_mm = _sep_gap_mm(separacion_in)
+    disponible = max(0.0, float(disponible_mm))
+    ordered = sorted(
+        [p for p in piezas_madre if isinstance(p, dict)],
+        key=lambda p: (_bbox_x_mm(p)[0] is None, _bbox_x_mm(p)[0] or 0.0),
+    )
+    fitted: list[dict] = []
+    cursor = 0.0
+    for i, p in enumerate(ordered):
+        minx, maxx = _bbox_x_mm(p)
+        if minx is None or maxx is None:
+            fitted.append(p)
+            continue
+        largo = max(0.0, float(maxx) - float(minx))
+        need = largo if not fitted else (gap_mm + largo)
+        if cursor + need > disponible + 0.5:
+            return fitted, ordered[i:]
+        if fitted:
+            cursor += gap_mm
+        cursor += largo
+        fitted.append(p)
+    return fitted, []
+
+
+def _rebuild_marks_geom_cu(marcas) -> LineString | object:
+    lineas = []
+    for mk in marcas or []:
+        try:
+            if mk and len(mk) >= 2:
+                ls = LineString(mk)
+                if not ls.is_empty and ls.length > 0:
+                    lineas.append(ls)
+        except Exception:
+            pass
+    if not lineas:
+        return LineString()
+    try:
+        return unary_union(lineas)
+    except Exception:
+        return lineas[0]
+
+
+def colocada_a_pack_cu(pieza: dict) -> dict | None:
+    """Convierte pieza colocada (poligonos absolutos) a formato pack de largos CU."""
+    if not isinstance(pieza, dict):
+        return None
+    if not _es_pieza_real_cu(str(pieza.get("nombre") or "")):
+        return None
+    poly = reconstruir_poly_seguro(pieza.get("poligonos") or [])
+    if poly is None or poly.is_empty:
+        return None
+    marks_geom = _rebuild_marks_geom_cu(pieza.get("marcas") or [])
+    minx, miny, _, _ = poly.bounds
+    return {
+        "nombre": str(pieza.get("nombre") or ""),
+        "poly": affinity.translate(poly, -minx, -miny),
+        "marks": (
+            affinity.translate(marks_geom, -minx, -miny)
+            if marks_geom is not None and not getattr(marks_geom, "is_empty", True)
+            else LineString()
+        ),
+        "area": float(pieza.get("area", poly.area) or poly.area),
+        "calibre": pieza.get("calibre", ""),
+        "material": pieza.get("material", ""),
+        "ruta": pieza.get("ruta", ""),
+    }
+
+
+def _sincronizar_piezas_rtz_en_madre(
+    hoja: dict,
+    piezas_rtz_rel: list[dict],
+    *,
+    origen_abs_mm: float,
+) -> None:
+    """Actualiza en la madre las piezas RTZ con layout con_gap (origen = fin madre + gap)."""
+    if not isinstance(hoja, dict) or not piezas_rtz_rel:
+        return
+    origen = float(origen_abs_mm)
+    madres_rtz = [
+        p
+        for p in (hoja.get("piezas") or [])
+        if isinstance(p, dict)
+        and p.get("cu_zona_rtz")
+        and _es_pieza_real_cu(str(p.get("nombre") or ""))
+    ]
+    # Mismo criterio de orden que el relayout (por X).
+    madres_rtz = sorted(
+        madres_rtz,
+        key=lambda p: (_bbox_x_mm(p)[0] is None, _bbox_x_mm(p)[0] or 0.0),
+    )
+    if len(madres_rtz) != len(piezas_rtz_rel):
+        return
+    for p_madre, p_rel in zip(madres_rtz, piezas_rtz_rel):
+        p_madre["poligonos"] = _desplazar_poligonos_x(
+            copy.deepcopy(p_rel.get("poligonos") or []), origen
+        )
+        p_madre["marcas"] = _desplazar_marcas_x(
+            copy.deepcopy(p_rel.get("marcas") or []), origen
+        )
+        p_madre["cu_sin_separacion"] = False
+        p_madre["cu_modo_separacion_barra"] = "con_gap"
+        p_madre["cu_zona_rtz"] = True
 
 
 def extraer_piezas_rtz_cu(hoja: dict) -> tuple[list[dict], float, float]:
     """
     Post-proceso: clasifica piezas ya nesteadas en la barra completa (144\").
-    Devuelve (piezas con X relativo desde 0, minx_abs, maxx_abs).
+    Devuelve (piezas con X relativo desde 0 ya con_gap, minx_abs_original, maxx_abs_gapped).
     """
     if not isinstance(hoja, dict):
         return [], 0.0, 0.0
@@ -169,14 +420,31 @@ def extraer_piezas_rtz_cu(hoja: dict) -> tuple[list[dict], float, float]:
         return [], 0.0, 0.0
 
     minx_rtz = min(mins_x)
-    maxx_rtz = max(maxs_x)
     piezas_rtz: list[dict] = []
     for p in hoja.get("piezas") or []:
         if not isinstance(p, dict) or not p.get("cu_zona_rtz"):
             continue
+        if not _es_pieza_real_cu(str(p.get("nombre") or "")):
+            # Overlays u otros: solo desplazar relativos (sin gap).
+            piezas_rtz.append(_pieza_coords_rtz_relativas(p, minx_rtz))
+            continue
         piezas_rtz.append(_pieza_coords_rtz_relativas(p, minx_rtz))
 
-    return piezas_rtz, minx_rtz, maxx_rtz
+    # Solo piezas reales entran al relayout con_gap; overlays se descartan del span útil.
+    reales = [
+        p
+        for p in piezas_rtz
+        if _es_pieza_real_cu(str(p.get("nombre") or ""))
+    ]
+    try:
+        sep_cu = float(hoja.get("separacion_cu_in"))
+    except (TypeError, ValueError):
+        sep_cu = 0.375
+    if sep_cu < 0:
+        sep_cu = 0.375
+
+    reales_gap, largo_gap = _relayout_piezas_rtz_con_gap(reales, separacion_in=sep_cu)
+    return reales_gap, minx_rtz, float(minx_rtz) + float(largo_gap)
 
 
 def construir_overlays_rtz_cu(
@@ -229,13 +497,17 @@ def construir_overlays_rtz_cu(
 
 def construir_hoja_rtz_cu_virtual(madre: dict) -> dict | None:
     """
-    Hoja retazo virtual para UI (ACCESORIOS) y export DXF del tramo RTZ.
+    Hoja retazo virtual para UI (ACCESORIOS) y export DXF/STEP del tramo RTZ.
+    Siempre con_gap → STEP (horizontal, CUT_OUTER cerrado); no CyPTube vertical.
     No genera página aparte en el PDF.
     """
     if not isinstance(madre, dict) or madre.get("es_retazo"):
         return None
+    # Solo piezas reales: sin CU_CORTE / divisorias del nesting sin_gap.
     piezas_rtz = [
-        p for p in (madre.get("cu_rtz_piezas_hoja") or []) if isinstance(p, dict)
+        p
+        for p in (madre.get("cu_rtz_piezas_hoja") or [])
+        if isinstance(p, dict) and _es_pieza_real_cu(str(p.get("nombre") or ""))
     ]
     if not piezas_rtz:
         return None
@@ -249,11 +521,18 @@ def construir_hoja_rtz_cu_virtual(madre: dict) -> dict | None:
     if largo_mm <= 0.5 or ancho_mm <= 0.5:
         return None
 
-    gx = float(madre.get("cu_rtz_minx_mm") or madre.get("cu_rtz_inicio_mm") or rtz_zona_inicio_mm())
+    gx = float(madre.get("cu_rtz_inicio_mm") or rtz_zona_inicio_mm())
     borde = _rect_poligono(0.0, 0.0, largo_mm, ancho_mm)
     area_usada = sum(float(p.get("area") or 0.0) for p in piezas_rtz)
     area_rtz = largo_mm * ancho_mm
     efi = (area_usada / area_rtz * 100.0) if area_rtz > 0 else 0.0
+
+    try:
+        sep_cu = float(madre.get("separacion_cu_in"))
+    except (TypeError, ValueError):
+        sep_cu = 0.375
+    if sep_cu < 0:
+        sep_cu = 0.375
 
     return {
         "piezas": copy.deepcopy(piezas_rtz),
@@ -271,8 +550,10 @@ def construir_hoja_rtz_cu_virtual(madre: dict) -> dict | None:
         "es_retazo": True,
         "cu_rtz_virtual": True,
         "modo_largos_cu": True,
-        "cu_modo_separacion_barra": str(madre.get("cu_modo_separacion_barra") or "sin_gap"),
-        "export_3d_format": "dxf",
+        # RTZCU: misma lógica STEP que con_gap (nunca sin_gap / vertical).
+        "cu_modo_separacion_barra": "con_gap",
+        "separacion_cu_in": sep_cu,
+        "export_3d_format": "step",
         "global_x": gx,
         "global_y": 0.0,
         "retazo_tipo": "HOLE",
@@ -285,65 +566,211 @@ def construir_hoja_rtz_cu_virtual(madre: dict) -> dict | None:
     }
 
 
-def aplicar_rtz_sin_gap_a_hoja(hoja: dict) -> bool:
-    """Activa RTZCU solo si hay piezas reales más allá de 114\" (post-proceso)."""
-    if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
-        return False
-    if hoja.get("es_retazo") or hoja.get("cu_rtz_virtual"):
-        return False
-    if not aplica_rtz_sin_gap(str(hoja.get("cu_modo_separacion_barra") or "")):
-        hoja["cu_rtz_activo"] = False
-        hoja.pop("cu_rtz_piezas_hoja", None)
-        return False
+def _gap_rtz_mm(hoja: dict | None = None) -> float:
+    """Gap por defecto entre fin de madre e inicio de primera pieza RTZCU."""
+    try:
+        sep = float((hoja or {}).get("separacion_cu_in"))
+    except (TypeError, ValueError, AttributeError):
+        sep = 0.375
+    if sep < 0:
+        sep = 0.375
+    return sep * 25.4
 
-    largo_mm = float(hoja.get("placa_w") or 0.0)
-    ancho_mm = float(hoja.get("placa_h") or 0.0)
-    if largo_mm <= 0 or ancho_mm <= 0:
-        return False
 
-    inicio_rtz = rtz_zona_inicio_mm()
-    piezas_rtz, minx_rtz, maxx_rtz = extraer_piezas_rtz_cu(hoja)
-    hoja["cu_rtz_piezas_hoja"] = piezas_rtz
-    if not piezas_rtz:
-        hoja["cu_rtz_activo"] = False
-        hoja.pop("cu_rtz_id", None)
-        hoja.pop("cu_rtz_largo_mm", None)
-        return False
-
-    largo_span = maxx_rtz - minx_rtz
-    largo_overlay = max(0.0, maxx_rtz - inicio_rtz)
-    if largo_span <= 0.5:
-        hoja["cu_rtz_activo"] = False
-        hoja["cu_rtz_piezas_hoja"] = []
-        return False
-
-    fin_madre = inicio_rtz
-    for p in hoja.get("piezas") or []:
+def _fin_piezas_madre_mm(hoja: dict) -> float:
+    """X máximo de piezas reales que NO son zona RTZ (fin de placa madre)."""
+    fin = 0.0
+    for p in (hoja or {}).get("piezas") or []:
         if not isinstance(p, dict) or p.get("cu_zona_rtz"):
             continue
         if not _es_pieza_real_cu(str(p.get("nombre") or "")):
             continue
         _minx, maxx = _bbox_x_mm(p)
         if maxx is not None:
-            fin_madre = max(fin_madre, maxx)
+            fin = max(fin, float(maxx))
+    return fin
 
-    n_reales_rtz = sum(
-        1
-        for p in piezas_rtz
-        if _es_pieza_real_cu(str(p.get("nombre") or ""))
+
+def _calcular_inicio_rtz_mm(
+    hoja: dict,
+    *,
+    fin_madre_mm: float,
+    largo_rtz_mm: float,
+    largo_barra_mm: float,
+) -> float:
+    """
+    Inicio del bloque RTZCU: justo después de la madre + gap.
+
+    - Si la madre no llenó hasta 114\", el RTZ puede empezar antes de 114\".
+    - Si con gap el bloque no cabe hasta el final de la solera, se corre hacia
+      atrás (sin solapar la madre) para aprovechar el tramo disponible.
+    """
+    gap = _gap_rtz_mm(hoja)
+    inicio = float(fin_madre_mm) + gap
+    largo_rtz = max(0.0, float(largo_rtz_mm))
+    largo_bar = float(largo_barra_mm)
+
+    if largo_rtz > 0.5 and largo_bar > 0.5:
+        # Si no cabe hacia el final, empezar antes (hasta fin_madre+gap mínimo).
+        if inicio + largo_rtz > largo_bar + 0.5:
+            inicio_min = float(fin_madre_mm) + gap
+            inicio_cab = max(0.0, largo_bar - largo_rtz)
+            inicio = max(inicio_min, inicio_cab) if inicio_cab >= inicio_min else inicio_min
+
+    return max(0.0, inicio)
+
+
+def aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja: dict) -> tuple[bool, list[dict]]:
+    """Activa RTZCU; si con gap no caben todas, quita el sobrante y lo devuelve como pack.
+
+    Returns:
+        (activo, derrame_pack): piezas que no cupieron en el tramo RTZ (origen local).
+    """
+    if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
+        return False, []
+    if hoja.get("es_retazo") or hoja.get("cu_rtz_virtual"):
+        return False, []
+    if not aplica_rtz_sin_gap(str(hoja.get("cu_modo_separacion_barra") or "")):
+        hoja["cu_rtz_activo"] = False
+        hoja.pop("cu_rtz_piezas_hoja", None)
+        return False, []
+
+    largo_mm = float(hoja.get("placa_w") or 0.0)
+    ancho_mm = float(hoja.get("placa_h") or 0.0)
+    if largo_mm <= 0 or ancho_mm <= 0:
+        return False, []
+
+    limite = rtz_zona_inicio_mm()
+    try:
+        sep_cu = float(hoja.get("separacion_cu_in"))
+    except (TypeError, ValueError):
+        sep_cu = 0.375
+    if sep_cu < 0:
+        sep_cu = 0.375
+
+    # Clasificar piezas reales más allá de 114\".
+    for p in hoja.get("piezas") or []:
+        if not isinstance(p, dict):
+            continue
+        if not _es_pieza_real_cu(str(p.get("nombre") or "")):
+            continue
+        if pieza_es_rtz_sin_gap(p, limite):
+            p["cu_zona_rtz"] = True
+        else:
+            p.pop("cu_zona_rtz", None)
+
+    rtz_madre = [
+        p
+        for p in (hoja.get("piezas") or [])
+        if isinstance(p, dict)
+        and p.get("cu_zona_rtz")
+        and _es_pieza_real_cu(str(p.get("nombre") or ""))
+    ]
+    if not rtz_madre:
+        hoja["cu_rtz_activo"] = False
+        hoja.pop("cu_rtz_piezas_hoja", None)
+        hoja.pop("cu_rtz_id", None)
+        hoja.pop("cu_rtz_largo_mm", None)
+        return False, []
+
+    fin_madre = _fin_piezas_madre_mm(hoja)
+    gap = _gap_rtz_mm(hoja)
+    disponible = max(0.0, largo_mm - (fin_madre + gap))
+
+    fitted_madre, overflow_madre = _partir_rtz_por_disponible(
+        rtz_madre,
+        disponible_mm=disponible,
+        separacion_in=sep_cu,
     )
+
+    derrame_pack: list[dict] = []
+    if overflow_madre:
+        ids_out = {id(p) for p in overflow_madre}
+        nombres_out = {
+            str(p.get("nombre") or "")
+            for p in overflow_madre
+            if str(p.get("nombre") or "")
+        }
+        for p in overflow_madre:
+            pack = colocada_a_pack_cu(p)
+            if pack is not None:
+                derrame_pack.append(pack)
+        # Quitar piezas derramadas y cortes auxiliares ligados a ellas.
+        hoja["piezas"] = [
+            p
+            for p in (hoja.get("piezas") or [])
+            if id(p) not in ids_out
+            and not _es_corte_auxiliar_de_nombres(p, nombres_out)
+        ]
+        for p in overflow_madre:
+            p.pop("cu_zona_rtz", None)
+
+    if not fitted_madre:
+        hoja["cu_rtz_activo"] = False
+        hoja.pop("cu_rtz_piezas_hoja", None)
+        hoja.pop("cu_rtz_id", None)
+        hoja.pop("cu_rtz_largo_mm", None)
+        return False, derrame_pack
+
+    # Relayout con_gap de las que sí caben (coords relativas desde 0).
+    minx_rtz = min(
+        (mx for mx, _ in (_bbox_x_mm(p) for p in fitted_madre) if mx is not None),
+        default=0.0,
+    )
+    piezas_rel = [_pieza_coords_rtz_relativas(p, minx_rtz) for p in fitted_madre]
+    piezas_rtz, largo_span = _relayout_piezas_rtz_con_gap(
+        piezas_rel, separacion_in=sep_cu
+    )
+    if largo_span <= 0.5:
+        hoja["cu_rtz_activo"] = False
+        hoja["cu_rtz_piezas_hoja"] = []
+        return False, derrame_pack
+
+    inicio_rtz = _calcular_inicio_rtz_mm(
+        hoja,
+        fin_madre_mm=fin_madre,
+        largo_rtz_mm=largo_span,
+        largo_barra_mm=largo_mm,
+    )
+
+    _sincronizar_piezas_rtz_en_madre(hoja, piezas_rtz, origen_abs_mm=inicio_rtz)
+    hoja["cu_rtz_piezas_hoja"] = piezas_rtz
+
+    maxx_abs = inicio_rtz + largo_span
+    largo_overlay = max(0.0, min(largo_span, max(0.0, largo_mm - inicio_rtz)))
+    n_reales_rtz = len(piezas_rtz)
+
     hoja["cu_rtz_activo"] = True
     hoja["cu_rtz_inicio_mm"] = inicio_rtz
-    hoja["cu_rtz_minx_mm"] = minx_rtz
-    hoja["cu_rtz_maxx_mm"] = maxx_rtz
-    hoja["cu_rtz_fin_piezas_mm"] = maxx_rtz
+    hoja["cu_rtz_minx_mm"] = inicio_rtz
+    hoja["cu_rtz_maxx_mm"] = maxx_abs
+    hoja["cu_rtz_fin_piezas_mm"] = maxx_abs
     hoja["cu_fin_piezas_mm"] = fin_madre
     hoja["cu_rtz_largo_mm"] = largo_span
     hoja["cu_rtz_overlay_largo_mm"] = largo_overlay
     hoja["cu_rtz_largo_in"] = largo_span / 25.4
     hoja["cu_bar_largo_in"] = largo_mm / 25.4
     hoja["cu_rtz_cant_piezas"] = n_reales_rtz
-    return True
+    return True, derrame_pack
+
+
+def _es_corte_auxiliar_de_nombres(pieza: dict, nombres: set[str]) -> bool:
+    """Cortes CU_CORTE / guillotinas ligadas a piezas derramadas."""
+    if not nombres or not isinstance(pieza, dict):
+        return False
+    nom = str(pieza.get("nombre") or "")
+    if not nom.startswith("CU_CORTE__"):
+        return False
+    for n in nombres:
+        if n and n in nom:
+            return True
+    return False
+
+
+def aplicar_rtz_sin_gap_a_hoja(hoja: dict) -> bool:
+    """Activa RTZCU si hay piezas reales más allá del límite máquina (114\")."""
+    activo, _derrame = aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja)
+    return activo
 
 
 def insertar_hojas_rtz_cu_virtuales(hojas: list) -> None:
@@ -377,7 +804,7 @@ def insertar_hojas_rtz_cu_virtuales(hojas: list) -> None:
 
 
 def sincronizar_overlays_rtz_cu_madre(madre: dict, virtual: dict) -> None:
-    """REF + guillotina en madre (guillotina fija 114\", ancho = piezas RTZ)."""
+    """REF + guillotina en madre (inicio = fin madre + gap; no línea fija 114\")."""
     if not isinstance(madre, dict) or not isinstance(virtual, dict):
         return
     rid = str(madre.get("cu_rtz_id") or virtual.get("placa_id") or "").strip()
@@ -447,7 +874,13 @@ def asignar_rtz_cu_sin_gap_ids(resultados) -> int:
                 continue
             if not aplica_rtz_sin_gap(str(hoja.get("cu_modo_separacion_barra") or "")):
                 continue
-            aplicar_rtz_sin_gap_a_hoja(hoja)
+            # Derrame ya debió resolverse en procesar_grupo_largos_cu; aquí solo layout/IDs.
+            activo, derrame = aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja)
+            if derrame:
+                # Seguridad: no debería ocurrir si el packing ya derramó a barras nuevas.
+                grupo.setdefault("cu_rtz_derrame_sin_barra", []).extend(
+                    str(p.get("nombre") or "?") for p in derrame
+                )
             if not hoja.get("cu_rtz_activo"):
                 continue
 

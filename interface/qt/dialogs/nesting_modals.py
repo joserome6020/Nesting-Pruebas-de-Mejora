@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDoubleSpinBox,
     QFrame,
@@ -33,7 +34,11 @@ from interface.qt.theme import (
     apply_push_button,
     surface_dialog_stylesheet,
 )
-from utils_nesting import format_clave_calibre_display
+from interface.utils_nesting import (
+    _espesor_pulgadas_desde_texto,
+    es_material_cobre,
+    format_clave_calibre_display,
+)
 
 
 def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
@@ -107,6 +112,86 @@ def preguntar_separacion_cobre_renest(
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
     return float(spin_sep.value()), float(spin_lim.value())
+
+
+def preguntar_barras_cobre_renest(
+    parent,
+    barras: list[dict],
+) -> list[int] | None:
+    """
+    Selector de barras madre CU para renesteo parcial.
+    `barras` = [{idx, label}, ...]. Retorna índices seleccionados o None.
+    """
+    if not barras:
+        return None
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Renestear por barra")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(420)
+    dlg.setMinimumHeight(280)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+
+    lay = QVBoxLayout(dlg)
+    tit = QLabel("SELECCIONE BARRAS A RENESTEAR", alignment=Qt.AlignmentFlag.AlignCenter)
+    tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(tit)
+    hint = QLabel(
+        "Misma configuración de gap/umbral que el renesteo de calibre, "
+        "aplicada solo a las barras elegidas."
+    )
+    hint.setWordWrap(True)
+    hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(hint)
+
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    inner = QWidget()
+    inner_lay = QVBoxLayout(inner)
+    inner_lay.setContentsMargins(4, 4, 4, 4)
+    checks: list[tuple[QCheckBox, int]] = []
+    for b in barras:
+        idx = int(b.get("idx", -1))
+        label = str(b.get("label") or f"Barra #{idx + 1}")
+        cb = QCheckBox(label)
+        cb.setChecked(False)
+        inner_lay.addWidget(cb)
+        checks.append((cb, idx))
+    inner_lay.addStretch(1)
+    scroll.setWidget(inner)
+    lay.addWidget(scroll, 1)
+
+    row_sel = QHBoxLayout()
+    btn_all = QPushButton("Todas")
+    btn_none = QPushButton("Ninguna")
+    apply_push_button(btn_all, COLOR_GRIS_DARK, font_size=10)
+    apply_push_button(btn_none, COLOR_GRIS_DARK, font_size=10)
+    row_sel.addWidget(btn_all)
+    row_sel.addWidget(btn_none)
+    row_sel.addStretch(1)
+    lay.addLayout(row_sel)
+
+    btns = QHBoxLayout()
+    btn_cancel = QPushButton("Cancelar")
+    btn_ok = QPushButton("Continuar")
+    apply_push_button(btn_ok, COLOR_ACENTO, font_size=11)
+    apply_push_button(btn_cancel, COLOR_GRIS_DARK, font_size=11)
+    btns.addStretch(1)
+    btns.addWidget(btn_cancel)
+    btns.addWidget(btn_ok)
+    lay.addLayout(btns)
+
+    btn_all.clicked.connect(lambda: [c.setChecked(True) for c, _ in checks])
+    btn_none.clicked.connect(lambda: [c.setChecked(False) for c, _ in checks])
+    btn_cancel.clicked.connect(dlg.reject)
+    btn_ok.clicked.connect(dlg.accept)
+    _centrar_dialogo(dlg, parent)
+
+    if dlg.exec() != QDialog.DialogCode.Accepted:
+        return None
+    selected = [idx for cb, idx in checks if cb.isChecked() and idx >= 0]
+    return selected or None
 
 
 def abrir_modal_configuracion(parent):
@@ -745,12 +830,34 @@ def _format_key_in(w_in: float, h_in: float) -> str:
     return f"{a:.3f}x{b:.3f}"
 
 
-def agrupar_formatos_placas_inventario(datos_placas: list) -> list[dict]:
-    """Agrupa inventario por formato (pulgadas) para el selector de nesting."""
+def _coinciden_placa(val1, val2) -> bool:
+    try:
+        from modules.nesting_engine.manager import MotorNesting
+
+        return bool(MotorNesting._coinciden(val1, val2))
+    except Exception:
+        return str(val1 or "").strip().upper() == str(val2 or "").strip().upper()
+
+
+def agrupar_formatos_placas_inventario(
+    datos_placas: list,
+    *,
+    calibre: str | None = None,
+    material: str | None = None,
+) -> list[dict]:
+    """Agrupa inventario por formato (pulgadas). Opcionalmente filtra por calibre/material."""
     grupos: dict[str, dict] = {}
+    cal_f = str(calibre or "").strip()
+    mat_f = str(material or "").strip()
     for placa in datos_placas or []:
         try:
             if len(placa) < 5:
+                continue
+            cal = str(placa[0] or "").strip()
+            mat = str(placa[1] or "").strip()
+            if cal_f and not _coinciden_placa(cal_f, cal):
+                continue
+            if mat_f and not _coinciden_placa(mat_f, mat):
                 continue
             w_in = float(placa[3])
             h_in = float(placa[4])
@@ -758,8 +865,6 @@ def agrupar_formatos_placas_inventario(datos_placas: list) -> list[dict]:
                 continue
             key = _format_key_in(w_in, h_in)
             precio = float(placa[6] or 0) if len(placa) > 6 else 0.0
-            cal = str(placa[0] or "").strip()
-            mat = str(placa[1] or "").strip()
             g = grupos.get(key)
             if g is None:
                 grupos[key] = {
@@ -789,11 +894,66 @@ def agrupar_formatos_placas_inventario(datos_placas: list) -> list[dict]:
     return out
 
 
+def _grupos_requeridos_piezas(datos_partes: list | None) -> list[dict]:
+    """Agrupa piezas por calibre+material (excluye cobre/largos)."""
+    grupos: dict[str, dict] = {}
+    for fila in datos_partes or []:
+        try:
+            if len(fila) < 4:
+                continue
+            material = str(fila[1] or "").strip()
+            if es_material_cobre(material):
+                continue
+            calibre = str(fila[3] or "").strip()
+            if not calibre and not material:
+                continue
+            try:
+                qty = int(fila[2] or 0)
+            except Exception:
+                qty = 1
+            key = f"{calibre}|{material}".upper()
+            g = grupos.get(key)
+            if g is None:
+                grupos[key] = {
+                    "calibre": calibre,
+                    "material": material,
+                    "qty_piezas": max(0, qty),
+                    "n_skus": 1,
+                }
+            else:
+                g["qty_piezas"] += max(0, qty)
+                g["n_skus"] += 1
+        except Exception:
+            continue
+
+    out = list(grupos.values())
+
+    def _sort_key(g: dict):
+        esp = _espesor_pulgadas_desde_texto(g.get("calibre") or "")
+        return (
+            esp if esp is not None else float("inf"),
+            str(g.get("material") or "").upper(),
+            str(g.get("calibre") or "").upper(),
+        )
+
+    out.sort(key=_sort_key)
+    return out
+
+
+def _etiqueta_formato_catalogo(g: dict) -> str:
+    precio = float(g.get("precio_min") or 0)
+    precio_txt = f"desde ${precio:,.0f}" if precio > 0 else "sin precio"
+    return (
+        f'{g["w_in"]:.1f}" × {g["h_in"]:.1f}"'
+        f'  ·  stock {g["count"]}  ·  {precio_txt}'
+    )
+
+
 def filtrar_datos_placas_nest_selection(datos_placas: list, selection: dict | None) -> list:
     """
     selection:
       {"mode": "auto"}
-      {"mode": "manual", "items": [{"key", "w_in", "h_in", "qty": int|None}, ...]}
+      {"mode": "manual", "items": [{"key", "w_in", "h_in", "qty", "calibre?", "material?"}, ...]}
     """
     if not selection or selection.get("mode") == "auto":
         return list(datos_placas or [])
@@ -813,6 +973,20 @@ def filtrar_datos_placas_nest_selection(datos_placas: list, selection: dict | No
     for item in items:
         key = str(item.get("key") or _format_key_in(item.get("w_in", 0), item.get("h_in", 0)))
         rows = list(by_key.get(key) or [])
+        cal = str(item.get("calibre") or "").strip()
+        mat = str(item.get("material") or "").strip()
+        if cal or mat:
+            filtered = []
+            for placa in rows:
+                try:
+                    if cal and not _coinciden_placa(cal, placa[0]):
+                        continue
+                    if mat and not _coinciden_placa(mat, placa[1]):
+                        continue
+                    filtered.append(placa)
+                except Exception:
+                    continue
+            rows = filtered
         if not rows:
             continue
         qty = item.get("qty")
@@ -831,13 +1005,16 @@ def preguntar_seleccion_placas_nesting(
     datos_placas: list,
     *,
     engine_label: str = "SVGNest Ultra",
+    datos_partes: list | None = None,
 ) -> dict | None:
     """
     Selector de placas al Ejecutar Nesting (Ultra).
+
+    Primero lista los calibres/materiales que exigen las piezas; en cada uno,
+    un desplegable con placas compatibles del catálogo.
     Retorna dict selection, o None si cancela.
     """
-    formatos = agrupar_formatos_placas_inventario(datos_placas)
-    if not formatos:
+    if not agrupar_formatos_placas_inventario(datos_placas):
         QMessageBox.warning(
             parent,
             "Sin placas",
@@ -845,10 +1022,15 @@ def preguntar_seleccion_placas_nesting(
         )
         return None
 
+    requerimientos = _grupos_requeridos_piezas(datos_partes)
+    if not requerimientos:
+        # Sin piezas tipables: un bloque genérico con todo el catálogo.
+        requerimientos = [{"calibre": "", "material": "", "qty_piezas": 0, "n_skus": 0}]
+
     dlg = QDialog(parent)
     dlg.setWindowTitle("Selección de placas — Nesting")
     dlg.setModal(True)
-    dlg.resize(620, 560)
+    dlg.resize(680, 580)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -860,9 +1042,9 @@ def preguntar_seleccion_placas_nesting(
     lay.addWidget(tit)
 
     info = QLabel(
-        "Elige los formatos y cantidades en los que trabajará el motor "
-        "(más rápido). O usa Selección Auto (inventario completo por precio/acomodo), "
-        "que puede tardar mucho más."
+        "Calibres y materiales que exigen las piezas. En cada uno elige "
+        "placa(s) del catálogo (más rápido). O usa Selección Auto "
+        "(inventario completo por precio/acomodo), más lento."
     )
     info.setWordWrap(True)
     info.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
@@ -873,51 +1055,116 @@ def preguntar_seleccion_placas_nesting(
     scroll.setWidgetResizable(True)
     inner = QWidget()
     inner_lay = QVBoxLayout(inner)
-    inner_lay.setSpacing(8)
+    inner_lay.setSpacing(10)
 
-    rows_ui: list[dict] = []
-    for g in formatos[:60]:
+    group_ui: list[dict] = []
+
+    def _add_plate_pick_row(host_lay: QVBoxLayout, formatos: list[dict], picks: list) -> None:
+        row_w = QWidget()
+        row = QHBoxLayout(row_w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        combo = QComboBox()
+        combo.setMinimumWidth(280)
+        combo.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+        for g in formatos:
+            combo.addItem(_etiqueta_formato_catalogo(g), g)
+        if not formatos:
+            combo.addItem("(Sin placas compatibles en catálogo)", None)
+            combo.setEnabled(False)
+
+        unlimited = QCheckBox("Sin límite")
+        unlimited.setChecked(True)
+
+        spin = QSpinBox()
+        spin.setRange(1, 999)
+        spin.setValue(1)
+        spin.setEnabled(False)
+        spin.setFixedWidth(70)
+
+        def _toggle_lim(_checked=False, u=unlimited, s=spin):
+            s.setEnabled(not u.isChecked())
+
+        unlimited.toggled.connect(_toggle_lim)
+
+        row.addWidget(QLabel("Placa:"), 0)
+        row.addWidget(combo, 1)
+        row.addWidget(unlimited, 0)
+        row.addWidget(QLabel("Cant:"), 0)
+        row.addWidget(spin, 0)
+        host_lay.addWidget(row_w)
+        picks.append({"combo": combo, "unlimited": unlimited, "spin": spin})
+
+    for req in requerimientos:
+        cal = str(req.get("calibre") or "").strip()
+        mat = str(req.get("material") or "").strip()
+        formatos = agrupar_formatos_placas_inventario(
+            datos_placas, calibre=cal or None, material=mat or None
+        )
+        # Si el filtro deja vacío (p.ej. material normalizado distinto), mostrar catálogo completo.
+        if not formatos and (cal or mat):
+            formatos = agrupar_formatos_placas_inventario(datos_placas)
+
         card = QFrame()
         card.setObjectName("HerinoxCard")
         card.setStyleSheet(
             f"QFrame#HerinoxCard {{ background:#FFFFFF; border:1px solid {COLOR_BORDE}; "
             f"border-radius:8px; }}"
         )
-        row = QHBoxLayout(card)
-        row.setContentsMargins(10, 8, 10, 8)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(12, 10, 12, 10)
+        card_lay.setSpacing(8)
 
-        chk = QCheckBox(
-            f'{g["w_in"]:.1f}" × {g["h_in"]:.1f}"  ·  stock {g["count"]}  ·  '
-            f'desde ${g["precio_min"]:,.0f}'
-        )
-        chk.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:600;")
-        row.addWidget(chk, 1)
+        if cal or mat:
+            clave = f"{cal}_{mat}" if cal and mat else (cal or mat)
+            titulo_req = format_clave_calibre_display(clave) or clave
+        else:
+            titulo_req = "Catálogo general"
+        qty_pz = int(req.get("qty_piezas") or 0)
+        n_skus = int(req.get("n_skus") or 0)
+        if qty_pz > 0:
+            sub = f"{qty_pz} pieza(s)"
+            if n_skus > 0:
+                sub += f" · {n_skus} SKU(s)"
+            hdr_txt = f"{titulo_req}  ·  {sub}"
+        else:
+            hdr_txt = titulo_req
 
-        unlimited = QCheckBox("Sin límite")
-        unlimited.setChecked(True)
-        row.addWidget(unlimited)
+        hdr = QLabel(hdr_txt)
+        hdr.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};font-weight:700;font-size:12px;")
+        card_lay.addWidget(hdr)
 
-        spin = QSpinBox()
-        spin.setRange(1, 999)
-        spin.setValue(max(1, int(g["count"])))
-        spin.setEnabled(False)
-        spin.setFixedWidth(70)
-        row.addWidget(QLabel("Cant:"))
-        row.addWidget(spin)
+        picks_host = QVBoxLayout()
+        picks_host.setSpacing(6)
+        card_lay.addLayout(picks_host)
 
-        def _toggle_lim(_checked=False, u=unlimited, s=spin):
-            s.setEnabled(not u.isChecked())
+        picks: list[dict] = []
+        _add_plate_pick_row(picks_host, formatos, picks)
 
-        unlimited.toggled.connect(_toggle_lim)
+        btn_add = QPushButton("+ Otra placa del catálogo")
+        apply_push_button(btn_add, COLOR_GRIS_DARK, font_size=10, font_weight=600)
+        btn_add.setEnabled(bool(formatos))
+
+        def _on_add(_checked=False, lay_p=picks_host, fmts=formatos, pk=picks):
+            _add_plate_pick_row(lay_p, fmts, pk)
+
+        btn_add.clicked.connect(_on_add)
+        card_lay.addWidget(btn_add, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        if not formatos:
+            warn = QLabel("No hay placas compatibles en inventario para este calibre/material.")
+            warn.setStyleSheet("color:#B45309;font-size:11px;")
+            warn.setWordWrap(True)
+            card_lay.addWidget(warn)
+
         inner_lay.addWidget(card)
-        rows_ui.append(
+        group_ui.append(
             {
-                "chk": chk,
-                "unlimited": unlimited,
-                "spin": spin,
-                "key": g["key"],
-                "w_in": g["w_in"],
-                "h_in": g["h_in"],
+                "calibre": cal,
+                "material": mat,
+                "picks": picks,
+                "formatos": formatos,
             }
         )
 
@@ -942,23 +1189,33 @@ def preguntar_seleccion_placas_nesting(
 
     def _accept_manual():
         items = []
-        for r in rows_ui:
-            if not r["chk"].isChecked():
-                continue
-            qty = None if r["unlimited"].isChecked() else int(r["spin"].value())
-            items.append(
-                {
-                    "key": r["key"],
-                    "w_in": r["w_in"],
-                    "h_in": r["h_in"],
-                    "qty": qty,
-                }
-            )
+        seen: set[tuple] = set()
+        for g in group_ui:
+            for pick in g["picks"]:
+                data = pick["combo"].currentData()
+                if not isinstance(data, dict):
+                    continue
+                key = str(data.get("key") or "")
+                dedupe = (key, g["calibre"], g["material"])
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                qty = None if pick["unlimited"].isChecked() else int(pick["spin"].value())
+                items.append(
+                    {
+                        "key": key,
+                        "w_in": float(data["w_in"]),
+                        "h_in": float(data["h_in"]),
+                        "qty": qty,
+                        "calibre": g["calibre"],
+                        "material": g["material"],
+                    }
+                )
         if not items:
             QMessageBox.warning(
                 dlg,
                 "Selección vacía",
-                "Marca al menos un formato de placa, o usa Selección Auto.",
+                "Elige al menos una placa del catálogo por calibre, o usa Selección Auto.",
             )
             return
         result["value"] = {"mode": "manual", "items": items}
