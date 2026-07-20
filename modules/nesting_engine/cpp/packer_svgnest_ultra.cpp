@@ -895,10 +895,19 @@ std::vector<int> build_rotation_angles_with_tilt(double step_deg, double tilt_de
     return out;
 }
 
-/** ARGA taller: piezas grandes ortogonales (+tilt); chicas permiten Any fino (1°+). */
+/** ARGA taller: producción siempre ortogonal (0/90/180/270).
+ *  Free-rot NestFab (1°/30°/45°) solo con ARGA_ULTRA_FREE_ROT=1. */
 double effective_rotation_step_for_piece(
     double profile_step_deg,
     const std::vector<std::vector<Point2D>>& poly_src) {
+    const char* free_rot = std::getenv("ARGA_ULTRA_FREE_ROT");
+    const bool allow_free =
+        free_rot && free_rot[0] &&
+        (free_rot[0] == '1' || free_rot[0] == 't' || free_rot[0] == 'T' ||
+         free_rot[0] == 'y' || free_rot[0] == 'Y');
+    if (!allow_free) {
+        return 90.0;
+    }
     double step = std::max(1.0, std::min(profile_step_deg, 90.0));
     if (poly_src.empty()) {
         return step;
@@ -913,7 +922,7 @@ double effective_rotation_step_for_piece(
     if (area >= kMidAreaMm2) {
         return std::max(45.0, step);
     }
-    // Piezas chicas: Any NestFab-like (hasta 1°)
+    // Piezas chicas: Any NestFab-like (hasta 1°) — solo con FREE_ROT
     return step;
 }
 

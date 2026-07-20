@@ -481,7 +481,7 @@ def empaquetar_una_hoja_svgnest_ultra(
         refine_gens = max(0, int(0 if _rg is None else _rg))
     else:
         pop = max(4, min(pop_req, 60))
-        rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 30.0))
+        rot_step = float(rotation_step_deg or profile.get("rotation_step_deg", 90.0))
         first_gens = 1
         refine_gens = max(1, min(int(ga_generations or profile.get("mc_iterations", 6)), 100))
 

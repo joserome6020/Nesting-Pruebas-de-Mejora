@@ -212,7 +212,7 @@ def _ruta_dxf_vigente(pieza: dict) -> bool:
 def normalizar_sello_transform_export(pieza: dict) -> bool:
     """
     Marca _transform_export_ok si la pieza ya trae transform export completa
-    (p. ej. nest recién hecho o .arganest guardado con cache DXF).
+    y el AABB nest coincide con el DXF @ rot (evita sellos viejos desalineeados).
     """
     if not isinstance(pieza, dict) or _es_pieza_virtual_nombre(pieza.get("nombre")):
         return True
@@ -225,6 +225,33 @@ def normalizar_sello_transform_export(pieza: dict) -> bool:
         return False
     if not _pieza_tiene_campos_transform(pieza):
         return False
+
+    # Validar que el sello no sea un rot/shift inventado sobre polígono nest distinto.
+    try:
+        loaded = _cargar_poly_local_dxf(str(pieza.get("ruta") or "").strip())
+        final_poly = reconstruir_poly_seguro(nested)
+        if loaded is None or final_poly is None or final_poly.is_empty:
+            return False
+        poly_local, _, _, _ = loaded
+        rot_origin = (
+            float(pieza.get("rot_origin_cx", 0.0) or 0.0),
+            float(pieza.get("rot_origin_cy", 0.0) or 0.0),
+        )
+        if abs(rot_origin[0]) < 1e-9 and abs(rot_origin[1]) < 1e-9:
+            rot_origin = _origen_rotacion(poly_local)
+        placed_bounds = _dxf_placed_bounds(
+            poly_local,
+            float(pieza.get("rot_deg", 0.0) or 0.0),
+            rot_origin,
+            float(pieza.get("shift_x", 0.0) or 0.0),
+            float(pieza.get("shift_y", 0.0) or 0.0),
+        )
+        if not _aabb_size_match(final_poly.bounds, placed_bounds):
+            invalidar_sello_transform_export(pieza)
+            return False
+    except Exception:
+        return False
+
     pieza["_transform_export_ok"] = True
     return True
 
@@ -262,6 +289,26 @@ def pieza_necesita_geom_dxf(pieza: dict) -> bool:
         return False
     nested = pieza.get("poligonos") or []
     return bool(nested and nested[0] and len(nested[0]) >= 3)
+
+
+def _aabb_size_match(bounds_a, bounds_b, *, tol_mm: float | None = None) -> bool:
+    """True si dos AABB tienen el mismo ancho/alto (rotación rígida del mismo DXF)."""
+    if not bounds_a or not bounds_b:
+        return False
+    aw = float(bounds_a[2]) - float(bounds_a[0])
+    ah = float(bounds_a[3]) - float(bounds_a[1])
+    bw = float(bounds_b[2]) - float(bounds_b[0])
+    bh = float(bounds_b[3]) - float(bounds_b[1])
+    tol = float(tol_mm) if tol_mm is not None else max(8.0, 0.02 * max(aw, ah, bw, bh, 1.0))
+    return abs(aw - bw) <= tol and abs(ah - bh) <= tol
+
+
+def _dxf_placed_bounds(poly_local, rot_deg: float, rot_origin, shift_x: float, shift_y: float):
+    rotated = affinity.rotate(poly_local, float(rot_deg), origin=rot_origin)
+    placed = affinity.translate(rotated, float(shift_x), float(shift_y))
+    if placed is None or getattr(placed, "is_empty", True):
+        return None
+    return placed.bounds
 
 
 def completar_transform_export_pieza(pieza: dict) -> bool:
@@ -330,6 +377,14 @@ def completar_transform_export_pieza(pieza: dict) -> bool:
                 _TRANSFORM_ROT_CACHE[cache_key] = {"rot_deg": rot_deg}
                 if len(_TRANSFORM_ROT_CACHE) > _TRANSFORM_CACHE_MAX:
                     _TRANSFORM_ROT_CACHE.pop(next(iter(_TRANSFORM_ROT_CACHE)))
+
+    placed_bounds = _dxf_placed_bounds(
+        poly_local, rot_deg, rot_origin, shift_x, shift_y
+    )
+    if not _aabb_size_match(final_poly.bounds, placed_bounds):
+        # Nest vs DXF desalineeado: no sellar transform (export debe fallar claro).
+        invalidar_sello_transform_export(pieza)
+        return False
 
     pieza["orig_minx"] = float(orig_minx)
     pieza["orig_miny"] = float(orig_miny)

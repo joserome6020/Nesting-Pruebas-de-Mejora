@@ -511,17 +511,121 @@ def _origen_rotacion_pieza(poly):
         return (0.0, 0.0)
 
 
+def _cargar_poly_exact_desde_ruta(ruta: str):
+    """Carga poly/marks en coords locales (min→0) + origen DXF, para sync export."""
+    ruta = str(ruta or "").strip()
+    if not ruta or not os.path.isfile(ruta):
+        return None
+    try:
+        poly, marks = recuperar_geometria_robusta(ruta)
+    except Exception:
+        return None
+    if poly is None or getattr(poly, "is_empty", True):
+        return None
+    minx, miny, _, _ = poly.bounds
+    poly_local = affinity.translate(poly, -minx, -miny)
+    marks_local = marks
+    if marks is not None and not getattr(marks, "is_empty", True):
+        marks_local = affinity.translate(marks, -minx, -miny)
+    return poly_local, marks_local, float(minx), float(miny)
+
+
+def _aplicar_match_dxf_a_pieza(p_orig: dict, p_final: dict, *, clave: str = "") -> bool:
+    """
+    Tras nest / transfer / renest: fija rot ortogonal y reescribe anillos desde DXF.
+    Si el AABB del nest no coincide con el DXF, marca mismatch (export abortará).
+    """
+    from .display_geometry import invalidar_sello_transform_export
+
+    if not isinstance(p_final, dict) or _is_virtual_piece(str(p_final.get("nombre") or "")):
+        return False
+
+    invalidar_sello_transform_export(p_final)
+
+    src = dict(p_orig or {}) if isinstance(p_orig, dict) else {}
+    ruta = str(src.get("ruta") or p_final.get("ruta") or "").strip()
+    if ruta:
+        p_final["ruta"] = ruta
+        p_final["prefer_source_dxf"] = True
+
+    poly_local = src.get("poly_exact") or src.get("poly")
+    marks_local = src.get("marks_exact") or src.get("marks")
+    orig_minx = src.get("orig_minx")
+    orig_miny = src.get("orig_miny")
+
+    if (poly_local is None or getattr(poly_local, "is_empty", True)) and ruta:
+        loaded = _cargar_poly_exact_desde_ruta(ruta)
+        if loaded is not None:
+            poly_local, marks_local, orig_minx, orig_miny = loaded
+
+    if poly_local is None or getattr(poly_local, "is_empty", True):
+        return False
+
+    if orig_minx is not None:
+        p_final["orig_minx"] = float(orig_minx)
+    if orig_miny is not None:
+        p_final["orig_miny"] = float(orig_miny)
+
+    src_for_infer = {
+        "poly": poly_local,
+        "poly_exact": poly_local,
+        "marks": marks_local,
+        "marks_exact": marks_local,
+        "ruta": ruta,
+        "orig_minx": p_final.get("orig_minx", 0.0),
+        "orig_miny": p_final.get("orig_miny", 0.0),
+    }
+    transform = _inferir_transformacion_desde_resultado(src_for_infer, p_final)
+    rot_origin = _origen_rotacion_pieza(poly_local)
+    p_final["rot_origin_cx"] = float(rot_origin[0])
+    p_final["rot_origin_cy"] = float(rot_origin[1])
+
+    if not transform:
+        p_final["_dxf_geom_mismatch"] = True
+        p_final.pop("_transform_export_ok", None)
+        _dbg_nesting(
+            f"[DXF-MISMATCH] clave={clave or '?'} | "
+            f"nombre={p_final.get('nombre')} | nest≠DXF (renest/migrar requerido)"
+        )
+        return False
+
+    p_final["rot_deg"] = float(transform["rot_deg"])
+    p_final["shift_x"] = float(transform["shift_x"])
+    p_final["shift_y"] = float(transform["shift_y"])
+    p_final.pop("_dxf_geom_mismatch", None)
+
+    placed = affinity.translate(
+        affinity.rotate(poly_local, float(transform["rot_deg"]), origin=rot_origin),
+        float(transform["shift_x"]),
+        float(transform["shift_y"]),
+    )
+    p_final["poligonos"] = poligonos_desde_shapely(placed)
+
+    if marks_local is not None and not getattr(marks_local, "is_empty", True):
+        mk = affinity.translate(
+            affinity.rotate(marks_local, float(transform["rot_deg"]), origin=rot_origin),
+            float(transform["shift_x"]),
+            float(transform["shift_y"]),
+        )
+        lista = _marks_geom_to_lista(mk)
+        if lista:
+            p_final["marcas"] = lista
+
+    p_final["_transform_export_ok"] = True
+    return True
+
+
 def enriquecer_piezas_hoja_con_fuentes(hoja: dict, piezas_origen: list) -> int:
     """
     Asocia ruta DXF, origen y transformación a piezas ya colocadas en una hoja.
-    Usado tras renest de placa (empaquetar_con_reintentos / recalcular_hoja_full).
-    Devuelve cuántas piezas reales se enriquecieron.
+    Usado tras renest de placa / transfer / cualquier motor.
+    Devuelve cuántas piezas reales se sincronizaron con DXF.
     """
-    if not isinstance(hoja, dict) or not piezas_origen:
+    if not isinstance(hoja, dict):
         return 0
 
     source_map: dict[str, list] = {}
-    for p_orig in piezas_origen:
+    for p_orig in piezas_origen or []:
         if not isinstance(p_orig, dict):
             continue
         base = _piece_name_base(p_orig.get("nombre"))
@@ -540,37 +644,11 @@ def enriquecer_piezas_hoja_con_fuentes(hoja: dict, piezas_origen: list) -> int:
 
         base = _piece_name_base(nombre_final)
         candidatos = source_map.get(base, [])
-        if not candidatos:
-            continue
-
-        p_orig = candidatos.pop(0)
-        ruta = str(p_orig.get("ruta") or "").strip()
-        if not ruta:
-            continue
-
-        if p_orig.get("debug_id"):
+        p_orig = candidatos.pop(0) if candidatos else {"ruta": p_final.get("ruta")}
+        if isinstance(p_orig, dict) and p_orig.get("debug_id"):
             p_final["debug_id"] = p_orig.get("debug_id")
-
-        p_final["ruta"] = ruta
-        p_final["orig_minx"] = p_orig.get("orig_minx", 0.0)
-        p_final["orig_miny"] = p_orig.get("orig_miny", 0.0)
-
-        transform = _inferir_transformacion_desde_resultado(p_orig, p_final)
-        rot_origin = _origen_rotacion_pieza(p_orig.get("poly_exact") or p_orig.get("poly"))
-        p_final["rot_origin_cx"] = rot_origin[0]
-        p_final["rot_origin_cy"] = rot_origin[1]
-
-        if transform:
-            p_final["rot_deg"] = transform["rot_deg"]
-            p_final["shift_x"] = transform["shift_x"]
-            p_final["shift_y"] = transform["shift_y"]
-        else:
-            p_final["rot_deg"] = 0.0
-            p_final["shift_x"] = 0.0
-            p_final["shift_y"] = 0.0
-
-        _colocar_geometria_exacta_en_pieza(p_orig, p_final, transform)
-        enriquecidas += 1
+        if _aplicar_match_dxf_a_pieza(p_orig, p_final):
+            enriquecidas += 1
 
     return enriquecidas
 
@@ -617,39 +695,27 @@ def aplicar_rutas_catalogo_en_hoja(hoja: dict, catalogo: dict[str, str]) -> int:
 
 def enriquecer_hoja_export_desde_partes(hoja: dict, clave: str, datos_partes) -> int:
     """
-    Antes de export DXF: solo completa rutas DXF faltantes desde PARTS.
-    No re-infiere transformaciones (corrompe shift si poligonos ya están en placa).
+    Antes de export DXF: completa rutas faltantes y sincroniza piezas sin sello DXF.
     """
     if not isinstance(hoja, dict) or not datos_partes:
         return 0
     catalogo = catalogo_rutas_desde_datos_partes(datos_partes, clave)
-    return aplicar_rutas_catalogo_en_hoja(hoja, catalogo)
+    aplicadas = aplicar_rutas_catalogo_en_hoja(hoja, catalogo)
+    synced = 0
+    for pz in hoja.get("piezas") or []:
+        if _is_virtual_piece(str(pz.get("nombre") or "")):
+            continue
+        if pz.get("_transform_export_ok") and not pz.get("_dxf_geom_mismatch"):
+            continue
+        if _aplicar_match_dxf_a_pieza({"ruta": pz.get("ruta")}, pz, clave=str(clave or "")):
+            synced += 1
+    return aplicadas + synced
 
 
 def _colocar_geometria_exacta_en_pieza(p_orig: dict, p_final: dict, transform: dict | None):
-    """
-    No reescribe poligonos: la posición la define el motor de nesting.
-    Solo completa marcas si el motor no devolvió ninguna.
-    """
-    marcas_motor = list(p_final.get("marcas") or [])
-    if marcas_motor:
-        return
-
-    pe = p_orig.get("poly_exact") or p_orig.get("poly")
-    if pe is None or pe.is_empty:
-        return
-
-    rot = float((transform or {}).get("rot_deg", 0.0) or 0.0)
-    sx = float((transform or {}).get("shift_x", 0.0) or 0.0)
-    sy = float((transform or {}).get("shift_y", 0.0) or 0.0)
-    origin = _origen_rotacion_pieza(pe)
-
-    me = p_orig.get("marks_exact") or p_orig.get("marks")
-    if me is not None and not getattr(me, "is_empty", True):
-        mk = affinity.translate(affinity.rotate(me, rot, origin=origin), sx, sy)
-        lista = _marks_geom_to_lista(mk)
-        if lista:
-            p_final["marcas"] = lista
+    """Compat: sincroniza anillos desde DXF cuando el match ortogonal es válido."""
+    del transform  # la fuente de verdad es el match nest↔DXF
+    _aplicar_match_dxf_a_pieza(p_orig or {}, p_final)
 
 
 def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
@@ -684,13 +750,29 @@ def _inferir_transformacion_desde_resultado(p_orig: dict, p_final: dict):
         best = None
         best_score = -10**9
 
-        # Incluye 45° solo para *inferir* pose vs DXF (nests viejos / Ultra).
-        # FORCE empaqueta solo 0/90/180/270; si no se prueba 45 aquí, un nest
-        # histórico a 45° se reescribe mal y empalma en refresh.
-        for ang in (0, 45, 90, 135, 180, 225, 270, 315):
+        # Solo ortogonales en producción. Diagonales (45°…) desalineeaban nest vs DXF
+        # y el export 1:1 terminaba fuera de placa con el visor "viendo" el polígono nest.
+        # Lab/legacy: ARGA_ALLOW_DIAGONAL_ROT=1.
+        _diag = str(os.environ.get("ARGA_ALLOW_DIAGONAL_ROT", "") or "").strip().lower()
+        if _diag in ("1", "true", "yes", "on"):
+            angulos = (0, 45, 90, 135, 180, 225, 270, 315)
+        else:
+            angulos = (0, 90, 180, 270)
+
+        fn_w = float(final_poly_zero.bounds[2] - final_poly_zero.bounds[0])
+        fn_h = float(final_poly_zero.bounds[3] - final_poly_zero.bounds[1])
+        size_tol = max(8.0, 0.02 * max(fn_w, fn_h, 1.0))
+
+        for ang in angulos:
             test_poly = affinity.rotate(poly_local, ang, origin=rot_origin)
             tminx, tminy, _, _ = test_poly.bounds
             test_poly_zero = affinity.translate(test_poly, -tminx, -tminy)
+
+            tw = float(test_poly_zero.bounds[2] - test_poly_zero.bounds[0])
+            th = float(test_poly_zero.bounds[3] - test_poly_zero.bounds[1])
+            # El DXF fuente debe coincidir en AABB con el nest (misma pieza, rot rígida).
+            if abs(tw - fn_w) > size_tol or abs(th - fn_h) > size_tol:
+                continue
 
             # IoU del polígono completo, no solo exterior
             inter_area = test_poly_zero.intersection(final_poly_zero).area
@@ -3887,40 +3969,19 @@ class MotorNesting:
                     if p_orig.get("debug_id"):
                         p_final["debug_id"] = p_orig.get("debug_id")
 
-                    p_final['ruta'] = p_orig.get('ruta')
-                    p_final['orig_minx'] = p_orig.get('orig_minx', 0.0)
-                    p_final['orig_miny'] = p_orig.get('orig_miny', 0.0)
-
-                    transform = _inferir_transformacion_desde_resultado(p_orig, p_final)
-
-                    rot_origin = _origen_rotacion_pieza(
-                        p_orig.get("poly_exact") or p_orig.get("poly")
-                    )
-                    p_final["rot_origin_cx"] = rot_origin[0]
-                    p_final["rot_origin_cy"] = rot_origin[1]
-
-                    if transform:
-                        p_final['rot_deg'] = transform['rot_deg']
-                        p_final['shift_x'] = transform['shift_x']
-                        p_final['shift_y'] = transform['shift_y']
-
+                    ok_match = _aplicar_match_dxf_a_pieza(p_orig, p_final, clave=clave)
+                    if ok_match:
                         _dbg_nesting(
                             f"[MATCH-OK] clave={clave} | nombre_final={nombre_final} | "
-                            f"rot={p_final['rot_deg']} | "
-                            f"shift_x={p_final['shift_x']:.3f} | "
-                            f"shift_y={p_final['shift_y']:.3f}"
+                            f"rot={p_final.get('rot_deg')} | "
+                            f"shift_x={float(p_final.get('shift_x', 0) or 0):.3f} | "
+                            f"shift_y={float(p_final.get('shift_y', 0) or 0):.3f}"
                         )
                     else:
-                        p_final['rot_deg'] = 0.0
-                        p_final['shift_x'] = 0.0
-                        p_final['shift_y'] = 0.0
-
                         _dbg_nesting(
                             f"[MATCH-FALLBACK] clave={clave} | nombre_final={nombre_final} | "
-                            f"se aplicó fallback neutro"
+                            f"nest≠DXF (export bloqueará hasta renest/migrar)"
                         )
-
-                    _colocar_geometria_exacta_en_pieza(p_orig, p_final, transform)
                     n_holes = max(0, len(p_final.get("poligonos") or []) - 1)
                     n_marks = len(p_final.get("marcas") or [])
                     _dbg_nesting(
@@ -3977,7 +4038,7 @@ class MotorNesting:
             marks_geom = LineString()
 
         minx, miny, _, _ = poly.bounds
-        return {
+        out = {
             "nombre": str(p.get("nombre", "")),
             "poly": affinity.translate(poly, -minx, -miny),
             "marks": affinity.translate(marks_geom, -minx, -miny) if not marks_geom.is_empty else marks_geom,
@@ -3985,6 +4046,18 @@ class MotorNesting:
             "calibre": p.get("calibre", ""),
             "material": p.get("material", ""),
         }
+        # Preservar vínculo DXF en migrar/renest (todos los motores).
+        ruta = str(p.get("ruta") or "").strip()
+        if ruta:
+            out["ruta"] = ruta
+            out["prefer_source_dxf"] = True
+            out["orig_minx"] = float(p.get("orig_minx", 0.0) or 0.0)
+            out["orig_miny"] = float(p.get("orig_miny", 0.0) or 0.0)
+            if p.get("poly_exact") is not None:
+                out["poly_exact"] = p.get("poly_exact")
+            if p.get("marks_exact") is not None:
+                out["marks_exact"] = p.get("marks_exact")
+        return out
 
     def _piezas_reales_en_hoja(self, hoja):
         piezas = []
@@ -4674,14 +4747,30 @@ class MotorNesting:
             marks_placed = affinity.translate(marks_local, px, py)
             marcas = _marks_geom_to_lista(marks_placed) or marcas
 
-        return {
+        out = {
             "nombre": str(pieza_orig.get("nombre", "") or ""),
             "poligonos": poligonos_desde_shapely(poly_placed),
             "marcas": marcas,
             "area": float(pieza_orig.get("area", poly_placed.area) or poly_placed.area),
             "calibre": pieza_orig.get("calibre", ""),
             "material": pieza_orig.get("material", ""),
+            "rot_deg": float(var.get("rot", 0) or 0),
         }
+        for key in (
+            "ruta",
+            "prefer_source_dxf",
+            "orig_minx",
+            "orig_miny",
+            "poly_exact",
+            "marks_exact",
+            "debug_id",
+        ):
+            if key in pieza_orig and pieza_orig.get(key) is not None:
+                out[key] = pieza_orig.get(key)
+
+        # Sync rígido nest↔DXF (misma regla que motores de nest).
+        _aplicar_match_dxf_a_pieza(pieza_orig, out)
+        return out
 
     def _evaluar_posicion_transfer(
         self,
@@ -5186,6 +5275,13 @@ class MotorNesting:
         overlays_dest = self._extraer_overlays_hoja(hoja_destino)
         overlays_orig = self._extraer_overlays_hoja(origen_hoja)
         mover_ids = {id(p) for p in piezas_mover}
+        # Fuentes DXF antes de reemplazar anillos del packer/migrar.
+        fuentes_dxf = []
+        for p in list(hoja_destino.get("piezas") or []) + list(
+            origen_hoja.get("piezas") or []
+        ) + list(piezas_mover or []):
+            if isinstance(p, dict) and not _is_virtual_piece(str(p.get("nombre") or "")):
+                fuentes_dxf.append(p)
 
         hojas_orig = origen_grupo.get("hojas") if isinstance(origen_grupo, dict) else None
         nueva_orig, params_o = self._renest_origen_tras_transferencia(
@@ -5234,6 +5330,11 @@ class MotorNesting:
             self._ajustar_piezas_pool_cross_wo(
                 origen_grupo, dest_grupo, piezas_mover
             )
+
+        # Tras migrar/renest: re-sincronizar DXF en hojas tocadas (todos los motores).
+        enriquecer_piezas_hoja_con_fuentes(hoja_destino, fuentes_dxf)
+        if not misma_hoja:
+            enriquecer_piezas_hoja_con_fuentes(origen_hoja, fuentes_dxf)
 
     def _quitar_piezas_de_pool(self, grupo, piezas_mover):
         if not isinstance(grupo, dict) or not grupo.get("piezas_pool_engine"):

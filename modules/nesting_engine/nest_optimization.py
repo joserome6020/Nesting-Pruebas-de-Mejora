@@ -108,7 +108,7 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "continual_optimization": False,
         "continual_until_user_stops": False,
         "continual_stagnation_rounds": 2,
-        "rotation_step_deg": 30,
+        "rotation_step_deg": 90,  # producción: solo 0/90/180/270 (export 1:1 DXF)
         "use_nfp": True,
         "use_genetic_algorithm": True,
         "ga_population": 8,

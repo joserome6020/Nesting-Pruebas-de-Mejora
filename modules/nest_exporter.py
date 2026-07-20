@@ -499,9 +499,15 @@ def _resolve_placement_matrix(
     part_doc, p: dict, sheet: dict | None = None
 ) -> Matrix44:
     """Elige la transformación que alinea el DXF fuente con el contorno colocado en el nest."""
+    if bool(p.get("_dxf_geom_mismatch")):
+        raise DxfExportValidationError(
+            f"{_piece_label(p)}: geometría nest no coincide con DXF fuente "
+            f"(tras nest/migrar/renest). Renestee o reubique la pieza."
+        )
     outer_bounds = _poly_bounds(p.get("outer") or p.get("outer_poly"))
     resolved = _resolve_placement(p)
     candidates: list[Matrix44] = []
+    label = _piece_label(p)
 
     def _add_candidate(placement: dict) -> None:
         candidates.append(_build_placement_matrix(placement, sheet))
@@ -529,6 +535,7 @@ def _resolve_placement_matrix(
 
     seen: set[tuple] = set()
     best = candidates[0] if candidates else _build_placement_matrix(resolved, sheet)
+    best_src_bounds = None
     align_bounds = _nest_bounds_for_matrix_check(outer_bounds, sheet) if outer_bounds else None
     for m in candidates:
         m2 = _refine_placement_matrix(part_doc, outer_bounds, m, sheet=sheet)
@@ -547,8 +554,30 @@ def _resolve_placement_matrix(
         ):
             return m2
         best = m2
-    m_final = _refine_placement_matrix(part_doc, outer_bounds, best, sheet=sheet)
-    return m_final
+        best_src_bounds = src_bounds
+
+    # Nunca alinear solo por esquina si el DXF no coincide en tamaño con el nest:
+    # eso exportaba corte fuera de placa con el visor "viendo" el polígono nest.
+    if outer_bounds and not _matrix_maps_nest_bounds(
+        part_doc, best, outer_bounds, tol=ALIGN_TOL_MM, sheet=sheet
+    ):
+        nest_bb = align_bounds or outer_bounds
+        src_bb = best_src_bounds or _transformed_outer_bounds(part_doc, best)
+        def _wh(b):
+            if not b:
+                return (0.0, 0.0)
+            return (
+                float(b[2]) - float(b[0]),
+                float(b[3]) - float(b[1]),
+            )
+        nw, nh = _wh(nest_bb)
+        sw, sh = _wh(src_bb)
+        raise DxfExportValidationError(
+            f"{label}: geometría nest no coincide con DXF fuente "
+            f"(nest {nw:.1f}×{nh:.1f} mm vs DXF {sw:.1f}×{sh:.1f} mm). "
+            f"Renestee la hoja; no se exporta un corte desalineeado."
+        )
+    return _refine_placement_matrix(part_doc, outer_bounds, best, sheet=sheet)
 
 
 def _write_native_entity(msp, entity, layer: str) -> int:
