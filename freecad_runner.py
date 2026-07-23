@@ -149,6 +149,17 @@ def _resolve_freecad_executable() -> str | None:
     return valid[0]
 
 
+def freecad_listo_para_step(*, prefer_verde: bool = True) -> bool:
+    """
+    True si hay FreeCAD.exe + macro (generador_verde / batch) usables.
+    Sin conflicto con el Suite: FreeCAD corre en proceso aparte (LGPL).
+    """
+    return bool(
+        _resolve_freecad_executable()
+        and _resolve_macro_script(prefer_verde=prefer_verde)
+    )
+
+
 def _resolve_macro_script(*, prefer_verde: bool = False) -> str | None:
     explicit = [
         os.getenv("FREECAD_SCRIPT"),

@@ -6,13 +6,15 @@ Nesting 1D para largos de cobre (CU).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
 - Separación 3/8" entre piezas > umbral de largo (eje X del DXF); piezas ≤ umbral sin separación
   salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
-  sin gap o con gap para toda la barra. Piezas con corte de orilla (más angostas que la tira)
-  o relieve/escalón lateral se fuerzan a sin_gap y solo se mezclan entre sí (no con laminas
-  rectas a ancho exacto). Si una barra sin_gap rebasa 114", el tramo sobrante se separa como
-  RTZCU con gap por defecto (la madre conserva sin_gap). Cada pieza usa su tira objetivo
-  (exacta o la mínima del catálogo que la contenga); no se sube 4"/5" a 6" solo porque el
-  lote ya abrió una tira más ancha. Si el RTZCU con gap no cabe hasta 144", las piezas
-  sobrantes abren barra(s) nueva(s) (pueden generar otro RTZCU).
+  sin gap o con gap para toda la barra. Perfil relieve/Z (escalón/diagonal) fuerza sin_gap,
+  se prioriza al inicio y NUNCA va a RTZCU (si no cabe en ≤114\", abre barra nueva).
+  Rectángulos con orilla o laminas verticales exactas SÍ pueden ir a RTZCU: además se
+  permiten en la cola de una barra relieve/Z (mismo ancho) para llenar el sobrante hasta
+  144\" con gap (esas piezas se marcan cu_zona_rtz). No al revés: Z no se mete en barras
+  solo-orilla. Si una barra sin_gap de solo verticales/orilla rebasa 114\", el tramo
+  sobrante también es RTZCU. Cada pieza usa su tira objetivo (exacta o la mínima del
+  catálogo); no se sube 4"/5" a 6" solo porque el lote ya abrió una tira más ancha.
+  Si el RTZCU con gap no cabe hasta 144", las sobrantes abren barra(s) nueva(s).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
 - sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
 - con_gap: CUT_OUTER cerrado por pieza + STEP (sin CUT_CU ni líneas divisorias)
@@ -216,6 +218,9 @@ def _colocar_pieza_nativa(
         "corte_superior_mm": float(corte_superior_mm),
         "calibre_superior": bool(calibre_superior),
         "cu_forzar_sin_gap": bool(p_data.get("cu_forzar_sin_gap")),
+        "cu_perfil_relieve": bool(
+            p_data.get("cu_perfil_relieve", p_data.get("cu_forzar_sin_gap"))
+        ),
         "y_corte_superior_mm": y_corte,
         "x_inicio_mm": float(x_mm),
         "largo_mm": float(p_data.get("len_mm") or 0.0),
@@ -667,53 +672,99 @@ def _exterior_item_cu(item: dict) -> list:
     return []
 
 
+def _pieza_cu_es_relieve_z(item: dict) -> bool:
+    """True solo para perfil tipo Z / escalón / diagonal (no rectángulo ortogonal).
+
+    El simple recorte de orilla (pieza rectangular más angosta que la tira) NO cuenta:
+    esas pueden usar gap normal y entrar a RTZCU.
+    """
+    exterior = _exterior_item_cu(item)
+    if not exterior:
+        return False
+    return not _solo_cortes_guillotina_vertical(exterior)
+
+
 def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
     """
-    True si la pieza fuerza corte láser además de la guillotina vertical:
-    - más angosta que la tira (recorte de orilla, ej. 1.75\" en 2\"), o
-    - perfil con escalón/diagonal/relieve (no lamina ortogonal a todo el ancho).
+    True si la pieza fuerza sin_gap y queda excluida de RTZCU:
+    solo perfiles con relieve/escalón/Z (corte láser además de guillotina vertical).
+
+    Rectángulos con orilla superior (corte_superior / calibre_superior) ya no fuerzan
+    sin_gap: siguen la regla de gap por largo y pueden ir a RTZCU.
     """
-    if bool(item.get("cu_forzar_sin_gap")):
-        return True
-    try:
-        if float(item.get("corte_superior_mm") or 0.0) > 0.5:
-            return True
-    except (TypeError, ValueError):
-        pass
-    if bool(item.get("calibre_superior")):
-        return True
+    # Flag legacy: solo respétalo si además hay perfil de relieve, o no hay geometría.
     exterior = _exterior_item_cu(item)
-    if exterior and not _solo_cortes_guillotina_vertical(exterior):
+    if exterior:
+        return _pieza_cu_es_relieve_z(item)
+    if bool(item.get("cu_forzar_sin_gap")):
         return True
     return False
 
 
 def _marcar_forzar_sin_gap(item: dict) -> dict:
-    """Calcula y fija cu_forzar_sin_gap en el dict de la pieza."""
-    out = item
+    """Calcula y fija cu_forzar_sin_gap (solo relieve/Z)."""
+    out = dict(item) if not isinstance(item, dict) else item
     flag = _pieza_cu_forzar_sin_gap(item)
-    if item.get("cu_forzar_sin_gap") is not True and flag:
-        out = dict(item)
-        out["cu_forzar_sin_gap"] = True
-    elif "cu_forzar_sin_gap" not in item:
+    if item.get("cu_forzar_sin_gap") is not flag or "cu_forzar_sin_gap" not in item:
         out = dict(item)
         out["cu_forzar_sin_gap"] = bool(flag)
+        out["cu_perfil_relieve"] = bool(flag)
+    elif "cu_perfil_relieve" not in item:
+        out = dict(item)
+        out["cu_perfil_relieve"] = bool(flag)
     return out
 
 
 def _familia_corte_cu(item: dict) -> str:
-    """Familias que no se mezclan en la misma barra."""
+    """Familias de corte: relieve/Z vs resto (vertical/orilla)."""
     return "sin_gap_laser" if _pieza_cu_forzar_sin_gap(item) else "guillotina"
 
 
 def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
-    """Piezas con corte lateral solo con otras iguales; laminas exactas aparte."""
+    """Relieve/Z juntos; orilla/vertical juntos; orilla/vertical puede rellenar cola de Z.
+
+    No se permite meter relieve/Z en una barra que ya solo tiene guillotina.
+    Una vez hay Z + orilla, siguen pudiendo entrar más orillas/verticales.
+    """
     colocados = barra.get("colocados") or []
     if not colocados:
         return True
     fam_item = _familia_corte_cu(item)
     fams = {_familia_corte_cu(c[0]) for c in colocados}
-    return fams == {fam_item}
+    if fam_item == "sin_gap_laser":
+        # Relieve/Z solo en barras sin piezas ortogonales aún.
+        return fams == {"sin_gap_laser"}
+    # guillotina: sola, o rellenando / siguiendo cola de barra con relieve/Z.
+    if fams == {"guillotina"}:
+        return True
+    if "sin_gap_laser" in fams:
+        return True
+    return False
+
+
+def _barra_tiene_relieve_cu(colocados: List[tuple] | None) -> bool:
+    return any(_pieza_cu_forzar_sin_gap(c[0]) for c in (colocados or []))
+
+
+def _gap_mm_entre_piezas_cu(
+    modo: str,
+    prev_item: dict | None,
+    next_item: dict | None,
+    separacion_in: float,
+    *,
+    tiene_relieve: bool,
+) -> float:
+    """Gap entre piezas; en barra relieve la cola ortogonal siempre lleva separación."""
+    if prev_item is None or next_item is None:
+        return 0.0
+    if tiene_relieve:
+        prev_z = _pieza_cu_forzar_sin_gap(prev_item)
+        next_z = _pieza_cu_forzar_sin_gap(next_item)
+        if prev_z and next_z:
+            return 0.0
+        # Z→orilla u orilla→orilla: gap (van / siguen en RTZCU).
+        return max(0.0, float(separacion_in or 0.0)) * 25.4
+    return _gap_mm_segun_modo(modo, prev_item, next_item, separacion_in)
 
 
 def _cu_sin_separacion_efectiva(item: dict, modo_barra: str) -> bool:
@@ -730,7 +781,8 @@ def _modo_separacion_barra(
     - cortas (≤ umbral) → sin_gap en toda la barra
     - largas (> umbral) → con_gap entre todas las piezas
     - si no hay mayoría → separación entre todas las piezas (incl. larga+corta)
-    Piezas con corte de orilla/relieve fuerzan sin_gap (toda la barra).
+    Piezas con relieve/Z fuerzan sin_gap (toda la barra).
+    Orilla rectangular ya no fuerza sin_gap (sigue mayoría 80% / hibrido).
     """
     n = len(items or [])
     if n <= 0:
@@ -809,6 +861,14 @@ def _simular_encaje_en_barra(
     else:
         prev_item, prev_x, _ = nuevos[-2]
         gap_before = x_pos - (prev_x + float(prev_item["len_mm"]))
+    # Relieve/Z: solo dentro de zona máquina (114"); no empujar a RTZCU.
+    # Orilla rectangular SÍ puede pasar de 114\" hacia RTZCU.
+    if _pieza_cu_forzar_sin_gap(item):
+        from .cu_rtz_sin_gap import rtz_zona_inicio_mm
+
+        x_end = x_pos + float(item.get("len_mm") or 0.0)
+        if x_end > float(rtz_zona_inicio_mm()) + 0.5:
+            return False, 0.0, 0.0, cursor
     return True, gap_before, x_pos, cursor
 
 
@@ -905,6 +965,12 @@ def _score_barra_para_item(
     else:
         score = 50.0
 
+    # Preferir llenar cola RTZCU de barras relieve/Z antes que abrir tira nueva.
+    if _barra_tiene_relieve_cu(barra.get("colocados")) and not _pieza_cu_forzar_sin_gap(
+        item_eff
+    ):
+        score += 3000.0
+
     restante = float(barra["largo_mm"]) - (x_pos + float(item_eff["len_mm"]))
     score -= restante * 0.002
     score -= gap_before * 0.001
@@ -972,6 +1038,7 @@ def _recalcular_colocados_barra(
 
     items = [c[0] for c in colocados]
     modo = _modo_separacion_barra(items, largo_sin_separacion_in)
+    tiene_relieve = any(_pieza_cu_forzar_sin_gap(it) for it in items)
     nuevos: List[tuple] = []
     cursor = 0.0
     for i, item in enumerate(items):
@@ -980,7 +1047,13 @@ def _recalcular_colocados_barra(
             nuevos.append((item_mod, 0.0, 0.0))
             cursor = float(item["len_mm"])
             continue
-        gap = _gap_mm_segun_modo(modo, items[i - 1], item, separacion_in)
+        gap = _gap_mm_entre_piezas_cu(
+            modo,
+            items[i - 1],
+            item,
+            separacion_in,
+            tiene_relieve=tiene_relieve,
+        )
         x_pos = cursor + gap
         item_mod = {**item, "cu_modo_separacion_barra": modo}
         nuevos.append((item_mod, x_pos, 0.0))
@@ -1216,6 +1289,7 @@ def empaquetar_largos_cu(
         piezas_hoja = []
         area_usada = 0.0
         requiere_corte_sup = False
+        tiene_relieve_barra = _barra_tiene_relieve_cu(barra.get("colocados"))
 
         piezas_reales: List[dict] = []
         for p_data, x_mm, y_mm in barra["colocados"]:
@@ -1226,6 +1300,11 @@ def empaquetar_largos_cu(
                 corte_superior_mm=float(p_data.get("corte_superior_mm") or 0.0),
                 calibre_superior=bool(p_data.get("calibre_superior")),
             )
+            # Orilla/vertical en cola de barra Z → RTZCU (no DXF madre CyPTube).
+            if tiene_relieve_barra and not _pieza_cu_forzar_sin_gap(p_data):
+                p_final["cu_zona_rtz"] = True
+                p_final["cu_sin_separacion"] = False
+                p_final["cu_modo_separacion_barra"] = "con_gap"
             piezas_hoja.append(p_final)
             piezas_reales.append(p_final)
             area_usada += float(p_final.get("area") or 0.0)
@@ -1316,6 +1395,71 @@ def _es_hoja_madre_cu(hoja: dict) -> bool:
         and not hoja.get("es_retazo")
         and not hoja.get("cu_rtz_virtual")
     )
+
+
+def ordenar_hojas_largos_cu_por_ancho(hojas: List[dict] | None) -> List[dict]:
+    """Ordena barras madre de cobre de menor a mayor ancho (1.75\" → 6\").
+
+    Las hojas virtuales RTZCU quedan inmediatamente después de su madre.
+    """
+    if not hojas:
+        return list(hojas or [])
+
+    madres: List[dict] = []
+    virtuales: List[dict] = []
+    otros: List[dict] = []
+    for h in hojas:
+        if not isinstance(h, dict):
+            otros.append(h)
+            continue
+        if h.get("cu_rtz_virtual"):
+            virtuales.append(h)
+            continue
+        if h.get("modo_largos_cu") and not h.get("es_retazo"):
+            madres.append(h)
+            continue
+        otros.append(h)
+
+    madres.sort(
+        key=lambda h: (
+            float(h.get("placa_h") or 0.0),
+            str(h.get("placa_id") or ""),
+            -float(h.get("area_usada") or 0.0),
+        )
+    )
+
+    by_uid: Dict[object, List[dict]] = {}
+    by_seq: Dict[object, List[dict]] = {}
+    huerfanos: List[dict] = []
+    for v in virtuales:
+        uid = v.get("madre_sheet_uid")
+        seq = v.get("sheet_seq")
+        if uid is not None:
+            by_uid.setdefault(uid, []).append(v)
+        elif seq is not None:
+            by_seq.setdefault(seq, []).append(v)
+        else:
+            huerfanos.append(v)
+
+    out: List[dict] = []
+    usados: set[int] = set()
+    for h in madres:
+        out.append(h)
+        for grupo in (
+            by_uid.get(h.get("sheet_uid")) or [],
+            by_seq.get(h.get("sheet_seq")) or [],
+        ):
+            for v in grupo:
+                vid = id(v)
+                if vid in usados:
+                    continue
+                out.append(v)
+                usados.add(vid)
+    for v in virtuales:
+        if id(v) not in usados:
+            out.append(v)
+    out.extend(otros)
+    return out
 
 
 def _uso_longitudinal_hoja_cu(hoja: dict) -> float:
@@ -1556,6 +1700,7 @@ def procesar_grupo_largos_cu(
         sin_derrame = list(sin_derrame or []) + list(sin_derrame2)
     if sin_derrame:
         sin_colocar = list(sin_colocar or []) + list(sin_derrame)
+    hojas = ordenar_hojas_largos_cu_por_ancho(hojas)
     if sin_colocar:
         detalle = []
         for p in sin_colocar:

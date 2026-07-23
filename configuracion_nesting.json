@@ -13,7 +13,7 @@
     },
     "algorithm": "Bottom-Left (Estándar)",
     "nest_engine_registry": {
-        "default_steel_engine": "arga_force",
+        "default_steel_engine": "arga_lite",
         "compare_mode": "parallel_full_job",
         "engines": [
             "arga_force",

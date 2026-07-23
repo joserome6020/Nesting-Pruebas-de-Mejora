@@ -5,6 +5,13 @@ La solera física mide 144"; en barras sin_gap la máquina prioriza ≤114"
 en la placa madre (primer procesado). Las piezas que rebasan ese límite
 pasan a RTZCU (segundo procesado, con_gap → STEP).
 
+Excepción exclusiva cobre: piezas con perfil relieve/Z (escalón/diagonal, no
+rectángulo ortogonal) NUNCA van a RTZCU. Esas se priorizan dentro de los 114"
+y, si no caben, abren barra nueva. Las rectangulares con solo orilla superior
+(más angostas que la tira) y las laminas verticales exactas SÍ pueden pasar a
+RTZCU con gap — también para rellenar la cola libre de una barra relieve/Z
+(mismo ancho) aunque el tramo empiece antes de 114\".
+
 El inicio del RTZCU NO es una línea fija en 114\": empieza al terminar la
 última pieza de la madre + gap por defecto (puede quedar antes o después
 de 114\" según cómo llenó la madre).
@@ -58,6 +65,31 @@ def rtz_zona_fin_mm(largo_barra_mm: float | None = None) -> float:
 
 def aplica_rtz_sin_gap(modo_barra: str) -> bool:
     return str(modo_barra or "").strip().lower() == "sin_gap"
+
+
+def pieza_prohibida_en_rtzcu(pieza: dict) -> bool:
+    """True si la pieza no puede ir a RTZCU (solo relieve/Z).
+
+    Rectángulos con orilla superior (corte_superior) SÍ pueden ir a RTZCU.
+    """
+    if not isinstance(pieza, dict):
+        return False
+    if bool(pieza.get("cu_perfil_relieve")):
+        return True
+    # Tras el cambio de reglas, cu_forzar_sin_gap solo se setea para relieve/Z.
+    if bool(pieza.get("cu_forzar_sin_gap")):
+        return True
+    # Fallback geométrico: contorno no ortogonal (Z/escalón), sin usar orilla sola.
+    pols = (pieza.get("poligonos") or [])
+    if pols and pols[0]:
+        try:
+            from .cu_largos_nesting import _solo_cortes_guillotina_vertical
+
+            if not _solo_cortes_guillotina_vertical(list(pols[0])):
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def es_rtz_cu_id(rtz_id: str) -> bool:
@@ -171,10 +203,15 @@ def _bbox_x_mm(pieza: dict) -> tuple[float | None, float | None]:
 
 
 def pieza_es_rtz_sin_gap(pieza: dict, limite_mm: float | None = None) -> bool:
-    """Pieza completa al RTZ si su contorno termina después del límite máquina (114\")."""
+    """Pieza candidata a RTZ si termina después del límite máquina (114\").
+
+    Piezas con corte lateral/relieve quedan excluidas (ver pieza_prohibida_en_rtzcu).
+    """
     if not isinstance(pieza, dict):
         return False
     if not _es_pieza_real_cu(str(pieza.get("nombre") or "")):
+        return False
+    if pieza_prohibida_en_rtzcu(pieza):
         return False
     _minx, maxx = _bbox_x_mm(pieza)
     if maxx is None:
@@ -344,6 +381,12 @@ def colocada_a_pack_cu(pieza: dict) -> dict | None:
         "calibre": pieza.get("calibre", ""),
         "material": pieza.get("material", ""),
         "ruta": pieza.get("ruta", ""),
+        "cu_forzar_sin_gap": bool(pieza.get("cu_forzar_sin_gap")),
+        "cu_perfil_relieve": bool(
+            pieza.get("cu_perfil_relieve", pieza.get("cu_forzar_sin_gap"))
+        ),
+        "corte_superior_mm": float(pieza.get("corte_superior_mm") or 0.0),
+        "calibre_superior": bool(pieza.get("calibre_superior")),
     }
 
 
@@ -649,15 +692,46 @@ def aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja: dict) -> tuple[bool, list[dict]
         sep_cu = 0.375
 
     # Clasificar piezas reales más allá de 114\".
+    # Relieve/Z: fuera de RTZCU → derrame a barra nueva.
+    # Orilla rectangular: sí puede marcarse RTZCU.
+    derrame_pack: list[dict] = []
+    prohibidas_past: list[dict] = []
     for p in hoja.get("piezas") or []:
         if not isinstance(p, dict):
             continue
         if not _es_pieza_real_cu(str(p.get("nombre") or "")):
             continue
-        if pieza_es_rtz_sin_gap(p, limite):
+        _minx, maxx = _bbox_x_mm(p)
+        past_limite = maxx is not None and maxx > limite + 0.5
+        if past_limite and pieza_prohibida_en_rtzcu(p):
+            p.pop("cu_zona_rtz", None)
+            prohibidas_past.append(p)
+        elif pieza_prohibida_en_rtzcu(p):
+            p.pop("cu_zona_rtz", None)
+        elif pieza_es_rtz_sin_gap(p, limite) or p.get("cu_zona_rtz"):
+            # cu_zona_rtz ya marcado: orilla/vertical en cola de barra relieve/Z
+            # (puede empezar antes de 114\" al terminar la madre Z).
             p["cu_zona_rtz"] = True
         else:
             p.pop("cu_zona_rtz", None)
+
+    if prohibidas_past:
+        ids_proh = {id(p) for p in prohibidas_past}
+        nombres_proh = {
+            str(p.get("nombre") or "")
+            for p in prohibidas_past
+            if str(p.get("nombre") or "")
+        }
+        for p in prohibidas_past:
+            pack = colocada_a_pack_cu(p)
+            if pack is not None:
+                derrame_pack.append(pack)
+        hoja["piezas"] = [
+            p
+            for p in (hoja.get("piezas") or [])
+            if id(p) not in ids_proh
+            and not _es_corte_auxiliar_de_nombres(p, nombres_proh)
+        ]
 
     rtz_madre = [
         p
@@ -671,7 +745,7 @@ def aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja: dict) -> tuple[bool, list[dict]
         hoja.pop("cu_rtz_piezas_hoja", None)
         hoja.pop("cu_rtz_id", None)
         hoja.pop("cu_rtz_largo_mm", None)
-        return False, []
+        return False, derrame_pack
 
     fin_madre = _fin_piezas_madre_mm(hoja)
     gap = _gap_rtz_mm(hoja)
@@ -683,7 +757,6 @@ def aplicar_rtz_sin_gap_a_hoja_con_derrame(hoja: dict) -> tuple[bool, list[dict]
         separacion_in=sep_cu,
     )
 
-    derrame_pack: list[dict] = []
     if overflow_madre:
         ids_out = {id(p) for p in overflow_madre}
         nombres_out = {

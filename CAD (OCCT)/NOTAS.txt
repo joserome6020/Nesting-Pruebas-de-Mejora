@@ -1,0 +1,29 @@
+CAD (OCCT) — laboratorio paralelo (NO es el flujo de producción)
+
+Objetivo
+- Anidar el motor 3D Open CASCADE (OCCT) dentro del proyecto.
+- Probar exportación STEP / visualización fuera del pipeline FreeCAD.
+- Si no resulta viable, se sigue con FreeCAD sin impacto.
+
+Qué hay aquí
+- Open CASCADE NO se copia como árbol C++ completo (cientos de MB / GB).
+  Se usa el mismo kernel vía bindings Python: paquete cadquery-ocp → import OCP.*
+  Ese es el motor geométrico que FreeCAD también usa por debajo.
+- engine/     wrappers: runtime, STEP write/read, mallado, rutas job
+- experiments/ scripts de smoke / prototipos (aislados de main.py)
+- out/        salidas de prueba (STEP, etc.); no son entregables de producción
+
+UI
+- Botón NESTING → «VER STEP» abre interface/qt/dialogs/step_viewer.py
+  (lista STEPs del último export + VTK). Sigue siendo experimental.
+
+Cómo correr smoke test
+  python "CAD (OCCT)/experiments/01_smoke_box_step.py"
+
+Dependencia
+  ver requirements-occt.txt  (cadquery-ocp)
+
+Regla
+  Nada de esta carpeta debe importarse desde freecad_runner / generador_verde
+  para producción. El botón VER STEP sí usa engine/* solo para visualización
+  y no toca FreeCAD.

@@ -213,6 +213,135 @@ def test_cobre_sin_gap_rtz_nesting() -> None:
     assert ok, f"validación inventario falló: {msg}"
 
 
+def test_orilla_no_entra_rtzcu_abre_barra() -> None:
+    """Orilla rectangular SÍ puede pasar a RTZCU (ya no está prohibida)."""
+    piezas = [_piece(f"OR{i}", 8.0, ancho_in=3.5) for i in range(20)]
+    stock = [_barra_stock(4.0) for _ in range(8)]
+    clave, res = procesar_grupo_largos_cu(
+        "0.25_CU",
+        piezas,
+        stock,
+        wo_name="W.O. ORILLA",
+        exigir_colocacion_total=True,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not res.get("error"), res.get("error")
+    resultados = {clave: res}
+    asignar_numeracion_global_hojas(resultados, "W.O. ORILLA", sobrescribir=True)
+    n_rtz = asignar_rtz_cu_sin_gap_ids(resultados)
+    assert n_rtz >= 1, "orilla rectangular debe poder crear RTZCU"
+    virtuales = [h for h in (res.get("hojas") or []) if h.get("cu_rtz_virtual")]
+    assert virtuales, "esperado RTZCU virtual con orillas"
+    for v in virtuales:
+        orillas = [
+            p
+            for p in (v.get("piezas") or [])
+            if str((p or {}).get("nombre") or "").startswith("OR")
+        ]
+        assert orillas, "RTZCU debe poder contener orilla rectangular"
+
+
+def test_relieve_z_no_entra_rtzcu() -> None:
+    """Perfil Z/escalón: sin_gap, priorizado, y nunca en RTZCU."""
+    lx = 12.0 * 25.4
+    wy = 4.0 * 25.4
+
+    def _z(nombre: str):
+        poly = Polygon(
+            [
+                (0, 0),
+                (lx, 0),
+                (lx, wy * 0.45),
+                (lx * 0.5, wy * 0.45),
+                (lx * 0.5, wy),
+                (0, wy),
+            ]
+        )
+        return {
+            "nombre": nombre,
+            "poly": poly,
+            "marks": None,
+            "area": float(poly.area),
+            "calibre": "CU",
+            "material": "CU",
+            "ruta": "",
+        }
+
+    piezas = [_z(f"Z{i}") for i in range(12)]
+    stock = [_barra_stock(4.0) for _ in range(6)]
+    clave, res = procesar_grupo_largos_cu(
+        "0.25_CU",
+        piezas,
+        stock,
+        wo_name="W.O. Z",
+        exigir_colocacion_total=True,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not res.get("error"), res.get("error")
+    madres = [
+        h
+        for h in (res.get("hojas") or [])
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    ]
+    assert len(madres) >= 2, "relieve >114\" debe abrir barras nuevas"
+    for h in madres:
+        assert h.get("cu_modo_separacion_barra") == "sin_gap"
+        for p in h.get("piezas") or []:
+            if str(p.get("nombre") or "").startswith("Z"):
+                assert p.get("cu_forzar_sin_gap") or p.get("cu_perfil_relieve")
+                assert not p.get("cu_zona_rtz")
+                pols = p.get("poligonos") or []
+                if pols and pols[0]:
+                    maxx = max(float(t[0]) for t in pols[0])
+                    assert maxx <= CU_SIN_GAP_LARGO_CORTE_MAX_IN * 25.4 + 1.0
+
+    resultados = {clave: res}
+    asignar_numeracion_global_hojas(resultados, "W.O. Z", sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+    for v in (res.get("hojas") or []):
+        if not v.get("cu_rtz_virtual"):
+            continue
+        for p in v.get("piezas") or []:
+            assert not str((p or {}).get("nombre") or "").startswith("Z")
+
+
+def test_pieza_175_usa_barra_175_si_existe() -> None:
+    """Con SCO028 (1.75\") en catálogo, pieza 1.75\" no debe subir a barra 2\"."""
+    from modules.nesting_engine.cu_inventory import es_placa_largo_cu, inventario_barras_largos_cu
+
+    bar_175 = _barra_stock(1.75)
+    bar_2 = _barra_stock(2.0)
+    assert es_placa_largo_cu(bar_175), "1.75x144 debe ser barra largos CU válida"
+    inv = inventario_barras_largos_cu([bar_175, bar_2, _barra_stock(4.0)])
+    anchos = sorted({round(min(float(p["w"]), float(p["h"])) / 25.4, 4) for p in inv})
+    assert 1.75 in anchos, f"inventario debe incluir 1.75, got {anchos}"
+
+    piezas = [_piece("P175", 12.0, ancho_in=1.75) for _ in range(3)]
+    hojas, sin = empaquetar_largos_cu(
+        piezas,
+        [bar_175, bar_2],
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not sin and hojas
+    madres = [h for h in hojas if not h.get("cu_rtz_virtual") and not h.get("es_retazo")]
+    for h in madres:
+        ancho_bar = float(h.get("placa_h") or 0.0) / 25.4
+        assert abs(ancho_bar - 1.75) <= 0.02, (
+            f"pieza 1.75 debe ir en barra 1.75, got Ancho={ancho_bar:.3f}\""
+        )
+        for p in h.get("piezas") or []:
+            if str(p.get("nombre") or "").startswith("P175"):
+                assert float(p.get("corte_superior_mm") or 0.0) <= 0.5, (
+                    "no debe haber corte de orilla si la tira es exacta 1.75"
+                )
+                assert not p.get("cu_forzar_sin_gap"), (
+                    "1.75 en 1.75 no debe forzar sin_gap por orilla"
+                )
+
+
 def test_rtz_derrame_abre_barra_nueva() -> None:
     """Si RTZCU con gap no cabe, derrama a barra nueva y conserva inventario."""
     # 36 × 4\" = 144\" pegadas (sin_gap). ~8 piezas caen past 114\";
@@ -801,11 +930,12 @@ def test_numeracion_cobre_ignora_rtz_virtual() -> None:
 
 
 def test_corte_orilla_y_relieve_fuerzan_sin_gap() -> None:
-    """1.75\" en 2\" o perfil con escalón → sin_gap; lamina exacta larga → con_gap; no se mezclan."""
-    # Largas (>10\") angostas: deben forzar sin_gap pese al umbral de largo.
+    """Relieve/Z → sin_gap; orilla rectangular ya NO fuerza sin_gap; exactas largas → con_gap.
+
+    Orilla/exactas SÍ pueden compartir barra con relieve si van a la cola RTZCU.
+    """
     angostas = [_piece(f"N175-{i}", 16.0, 1.75) for i in range(4)]
     exactas = [_piece(f"E200-{i}", 16.0, 2.0) for i in range(4)]
-    # Escalón lateral a ancho de tira 2\" (no solo guillotina vertical).
     lx = 12.0 * 25.4
     wy = 2.0 * 25.4
     step = Polygon(
@@ -852,12 +982,138 @@ def test_corte_orilla_y_relieve_fuerzan_sin_gap() -> None:
         has_narrow = any(n.startswith("N175-") for n in noms)
         has_exact = any(n.startswith("E200-") for n in noms)
         has_step = any(n.startswith("STEP-") for n in noms)
-        assert not (has_narrow and has_exact), f"mezcla angosta+exacta: {noms}"
-        assert not (has_step and has_exact), f"mezcla escalón+exacta: {noms}"
-        if has_narrow or has_step:
-            assert modo == "sin_gap", f"debe sin_gap {noms} modo={modo}"
-        if has_exact and not has_narrow and not has_step:
+        if has_step:
+            assert modo == "sin_gap", f"relieve debe sin_gap {noms} modo={modo}"
+            for p in h.get("piezas") or []:
+                n = str(p.get("nombre") or "")
+                if n.startswith(("N175-", "E200-")):
+                    assert p.get("cu_zona_rtz"), (
+                        f"orilla/exacta en barra Z debe ir a RTZCU: {n}"
+                    )
+        if has_exact and not has_step:
             assert modo == "con_gap", f"exactas largas → con_gap, modo={modo} {noms}"
+        if has_narrow and not has_step:
+            assert modo == "con_gap", f"orilla larga → con_gap, modo={modo} {noms}"
+            for p in h.get("piezas") or []:
+                if str(p.get("nombre") or "").startswith("N175-"):
+                    assert not p.get("cu_forzar_sin_gap")
+                    assert float(p.get("corte_superior_mm") or 0) > 0.5
+
+
+def test_z_rellena_cola_con_orilla_rtzcu() -> None:
+    """Barras Z subutilizadas deben absorber orillas del mismo ancho como RTZCU."""
+    lx = 10.0 * 25.4
+    wy = 6.0 * 25.4
+
+    def _z(nombre: str):
+        poly = Polygon(
+            [
+                (0, 0),
+                (lx, 0),
+                (lx, wy * 0.45),
+                (lx * 0.5, wy * 0.45),
+                (lx * 0.5, wy),
+                (0, wy),
+            ]
+        )
+        return {
+            "nombre": nombre,
+            "poly": poly,
+            "marks": None,
+            "area": float(poly.area),
+            "calibre": "CU",
+            "material": "CU",
+            "ruta": "",
+        }
+
+    # ~7 Z (70\") + orillas 5.25x3.75 que antes abrían barra propia tipo H257.
+    piezas_z = [_z(f"Z{i}") for i in range(7)]
+    orillas = [_piece(f"OR{i}", 5.25, 3.75) for i in range(24)]
+    stock = [_barra_stock(6.0) for _ in range(12)]
+    clave, res = procesar_grupo_largos_cu(
+        "0.25_CU",
+        piezas_z + orillas,
+        stock,
+        wo_name="W.O. FILL",
+        exigir_colocacion_total=True,
+        separacion_in=0.375,
+        largo_sin_separacion_in=10.0,
+    )
+    assert not res.get("error"), res.get("error")
+    resultados = {clave: res}
+    asignar_numeracion_global_hojas(resultados, "W.O. FILL", sobrescribir=True)
+    asignar_rtz_cu_sin_gap_ids(resultados)
+
+    madres = [
+        h
+        for h in (res.get("hojas") or [])
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    ]
+    virtuales = [h for h in (res.get("hojas") or []) if h.get("cu_rtz_virtual")]
+    assert virtuales, "debe existir RTZCU con orillas en cola de Z"
+
+    orillas_en_rtz = 0
+    for v in virtuales:
+        for p in v.get("piezas") or []:
+            if str((p or {}).get("nombre") or "").startswith("OR"):
+                orillas_en_rtz += 1
+    assert orillas_en_rtz >= 8, (
+        f"orillas en RTZCU={orillas_en_rtz}; se esperaba rellenar colas Z"
+    )
+
+    # No debe quedar una madre solo-orilla con 24 piezas si hubo cola Z libre.
+    solo_orilla_llenas = 0
+    for h in madres:
+        noms = [
+            str(p.get("nombre") or "")
+            for p in (h.get("piezas") or [])
+            if str(p.get("nombre") or "").startswith(("Z", "OR"))
+        ]
+        if noms and all(n.startswith("OR") for n in noms) and len(noms) >= 20:
+            solo_orilla_llenas += 1
+    assert solo_orilla_llenas == 0, (
+        "no debe quedar barra casi llena solo de orillas si cabían en RTZCU de Z"
+    )
+
+
+def test_orden_barras_cu_menor_a_mayor_ancho() -> None:
+    from modules.nesting_engine.cu_largos_nesting import ordenar_hojas_largos_cu_por_ancho
+
+    piezas = (
+        [_piece(f"A{i}", 8.0, 1.75) for i in range(2)]
+        + [_piece(f"B{i}", 8.0, 6.0) for i in range(2)]
+        + [_piece(f"C{i}", 8.0, 3.0) for i in range(2)]
+    )
+    stock = [
+        _barra_stock(1.75),
+        _barra_stock(3.0),
+        _barra_stock(6.0),
+    ]
+    clave, res = procesar_grupo_largos_cu(
+        "0.25_CU",
+        piezas,
+        stock,
+        wo_name="W.O. SORT",
+        exigir_colocacion_total=True,
+    )
+    assert not res.get("error"), res.get("error")
+    madres = [
+        h
+        for h in (res.get("hojas") or [])
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    ]
+    anchos = [round(float(h.get("placa_h") or 0.0) / 25.4, 3) for h in madres]
+    assert anchos == sorted(anchos), f"ancho UI/nest debe ascender: {anchos}"
+    assert anchos[0] <= 1.76 and anchos[-1] >= 5.9
+
+    mezcladas = list(reversed(res.get("hojas") or []))
+    ordenadas = ordenar_hojas_largos_cu_por_ancho(mezcladas)
+    anchos2 = [
+        round(float(h.get("placa_h") or 0.0) / 25.4, 3)
+        for h in ordenadas
+        if isinstance(h, dict) and not h.get("cu_rtz_virtual") and not h.get("es_retazo")
+    ]
+    assert anchos2 == sorted(anchos2), anchos2
 
 
 def main() -> int:
@@ -886,7 +1142,22 @@ def main() -> int:
     print("[OK] 7b/13 Ancho CU: 4\" no sube a 6\" en lote mixto")
 
     test_corte_orilla_y_relieve_fuerzan_sin_gap()
-    print("[OK] 7c/14 Corte orilla/relieve CU => sin_gap y sin mezclar con lamina exacta")
+    print("[OK] 7c/14 Relieve/Z => sin_gap; orilla en cola Z => RTZCU")
+
+    test_z_rellena_cola_con_orilla_rtzcu()
+    print("[OK] 7d/15 Cola Z se rellena con orillas RTZCU")
+
+    test_orden_barras_cu_menor_a_mayor_ancho()
+    print("[OK] 7e/16 Barras CU ordenadas 1.75→6 por ancho")
+
+    test_orilla_no_entra_rtzcu_abre_barra()
+    print("[OK] 7d/15 Orilla rectangular SÍ puede crear RTZCU")
+
+    test_relieve_z_no_entra_rtzcu()
+    print("[OK] 7d2/15 Relieve/Z: prioriza ≤114\" y no entra a RTZCU")
+
+    test_pieza_175_usa_barra_175_si_existe()
+    print("[OK] 7e/16 Pieza 1.75\" usa barra 1.75\" (no sube a 2\")")
 
     test_reconciliar_no_consume_rtzcu_virtual()
     print("[OK] 8/12 Reconciliar: RTZCU virtual no consume piezas del pool")

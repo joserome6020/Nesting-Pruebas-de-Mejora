@@ -1232,15 +1232,21 @@ def export_plasma_placement(
                 from modules.nest_exporter import _msp_snapshot
 
                 new_ents = _msp_snapshot(msp)[count_before:]
-                validate_plasma_piece(
+                issues = validate_plasma_piece(
                     p,
                     new_ents,
                     offset_mm=offset_mm,
                     sheet=sheet,
                     all_piece_bounds=all_piece_bounds,
                 )
+                if issues:
+                    for iss in issues:
+                        log(f"    plasma[{nom}] FAIL: {iss}", level="ERROR")
+                    # Poka-yoke fail-closed: no dar por buena una pieza plasma inválida.
+                    return False
             except Exception as exc:
-                log(f"    plasma[{nom}] validacion omitida: {exc}", level="WARN")
+                log(f"    plasma[{nom}] validacion fail-closed: {exc}", level="ERROR")
+                return False
         return ok
 
     # Sin compensación: DXF fuente 1:1 (igual que el nest), sin desfase.

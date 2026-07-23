@@ -401,7 +401,7 @@ class NestSimCompareDialog(QDialog):
             self,
             "Abrir nest",
             "",
-            "Nest ARGA (*.arganest);;Todos (*.*)",
+            "Nest ARGA (*.arganest *.navanest);;Todos (*.*)",
         )
         if not path:
             return

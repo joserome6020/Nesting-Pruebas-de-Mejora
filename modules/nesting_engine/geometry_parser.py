@@ -410,6 +410,35 @@ def recuperar_geometria_robusta_detalle(ruta_dxf):
             )
 
         shell_poly = max(candidatos_outer, key=lambda x: x.area)
+        area_shell = float(shell_poly.area or 0.0)
+        # Poka-yoke: varios contornos outer grandes = multi-cuerpo (pérdida de islas).
+        umbral_isla = max(25.0, 0.12 * area_shell)
+        cuerpos_extra = 0
+        for cand in candidatos_outer:
+            if cand is shell_poly:
+                continue
+            try:
+                a = float(cand.area or 0.0)
+            except Exception:
+                continue
+            if a < umbral_isla:
+                continue
+            try:
+                if shell_poly.contains(cand) or shell_poly.covers(cand):
+                    continue
+            except Exception:
+                pass
+            cuerpos_extra += 1
+        if cuerpos_extra > 0:
+            return (
+                None,
+                None,
+                (
+                    f"Multi-contorno outer ({cuerpos_extra + 1} cuerpos significativos). "
+                    "El nesting requiere una sola pieza; revise DXF/capas."
+                ),
+            )
+
         islas_outer = _filtrar_islas_outer(candidatos_outer, shell_poly)
         candidatos_inner = _poligonos_cerrados_de_lineas(lines_inner)
         holes = _recolectar_huecos(

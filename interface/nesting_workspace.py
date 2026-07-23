@@ -7,6 +7,11 @@ from datetime import datetime
 
 SCHEMA_WORKSPACE = "arga_nesting_workspace_v2"
 COMPRESSED_WORKSPACE_EXTS = {".arganest", ".navanest"}
+WORKSPACE_OPEN_EXTS = COMPRESSED_WORKSPACE_EXTS | {".json"}
+
+MATERIAL_KIND_STEEL = "steel"
+MATERIAL_KIND_CU = "cu"
+MATERIAL_KIND_MIX = "mix"
 
 _ARGANEST_LOAD_T0: float | None = None
 _ARGANEST_LOAD_FILE: str = ""
@@ -28,6 +33,148 @@ def log_arganest_load(msg: str, *, phase: str = "") -> None:
     if phase:
         tag += f" [{phase}]"
     print(f"{tag} {msg}", flush=True)
+
+
+def _clave_es_cobre_workspace(clave) -> bool:
+    """True si la clave de grupo parece cobre (misma heurística que el motor)."""
+    try:
+        from utils_nesting import es_material_cobre
+    except Exception:
+        def es_material_cobre(material):
+            m = str(material or "").strip().upper()
+            return m in ("CU", "COBRE", "COPPER") or "COBRE" in m or "COPPER" in m
+
+    s = str(clave or "").strip().upper()
+    if not s or s.startswith("_"):
+        return False
+    if s.endswith("_CU") or s.endswith("|CU") or "| CU" in s:
+        return True
+    if "_" in s:
+        mat = s.split("_", 1)[1]
+        return bool(es_material_cobre(mat))
+    return bool(es_material_cobre(s))
+
+
+def _iter_claves_resultados(payload_or_map) -> list[str]:
+    """Recolecta claves de nest desde payload completo o mapa de resultados."""
+    claves: list[str] = []
+    if not isinstance(payload_or_map, dict):
+        return claves
+
+    multilote = payload_or_map.get("resultados_multilote")
+    if isinstance(multilote, list):
+        for slot in multilote:
+            if not isinstance(slot, dict):
+                continue
+            data = slot.get("data") or {}
+            if isinstance(data, dict):
+                claves.extend(str(k) for k in data.keys())
+        if claves:
+            return claves
+
+    for key in ("resultados_nesting", "resultados", "data"):
+        data = payload_or_map.get(key)
+        if isinstance(data, dict):
+            return [str(k) for k in data.keys()]
+
+    # Mapa plano clave→info (p.ej. resultados_nesting pasado directo)
+    for k, v in payload_or_map.items():
+        if str(k).startswith("_"):
+            continue
+        if isinstance(v, dict) and ("hojas" in v or "error" in v):
+            claves.append(str(k))
+    return claves
+
+
+def clasificar_material_workspace(payload) -> str:
+    """
+    Clasifica el workspace: 'steel' | 'cu' | 'mix'.
+    Escanea claves de resultados_multilote / resultados_nesting.
+    """
+    if isinstance(payload, dict):
+        marked = str(payload.get("workspace_material_kind") or "").strip().lower()
+        if marked in (MATERIAL_KIND_STEEL, MATERIAL_KIND_CU, MATERIAL_KIND_MIX):
+            return marked
+
+    claves = _iter_claves_resultados(payload if isinstance(payload, dict) else {})
+    # Ignorar claves internas de metadatos del motor
+    claves = [k for k in claves if k and not str(k).startswith("_")]
+    if not claves:
+        # Fallback: mirar materiales en datos_partes
+        has_cu = False
+        has_steel = False
+        partes = []
+        if isinstance(payload, dict):
+            partes = payload.get("datos_partes_actuales") or []
+            for lote_parts in payload.get("editable_inputs_by_lote") or []:
+                if isinstance(lote_parts, list):
+                    partes = list(partes) + list(lote_parts)
+        try:
+            from utils_nesting import es_material_cobre
+        except Exception:
+            def es_material_cobre(material):
+                m = str(material or "").strip().upper()
+                return m in ("CU", "COBRE", "COPPER") or "COBRE" in m or "COPPER" in m
+
+        for fila in partes or []:
+            if not isinstance(fila, dict):
+                continue
+            mat = fila.get("material") or ""
+            if es_material_cobre(mat):
+                has_cu = True
+            elif str(mat).strip():
+                has_steel = True
+        if has_cu and has_steel:
+            return MATERIAL_KIND_MIX
+        if has_cu:
+            return MATERIAL_KIND_CU
+        return MATERIAL_KIND_STEEL
+
+    has_cu = any(_clave_es_cobre_workspace(k) for k in claves)
+    has_steel = any(not _clave_es_cobre_workspace(k) for k in claves)
+    if has_cu and has_steel:
+        return MATERIAL_KIND_MIX
+    if has_cu:
+        return MATERIAL_KIND_CU
+    return MATERIAL_KIND_STEEL
+
+
+def extension_para_material(kind: str) -> str:
+    """Siempre .arganest: el icono se resuelve por contenido (Icon Handler)."""
+    _ = kind
+    return ".arganest"
+
+
+def normalizar_ruta_workspace(ruta: str, kind: str | None = None) -> str:
+    """Normaliza a .arganest/.navanest (sin cambiar a otras extensiones)."""
+    ruta = str(ruta or "")
+    if not ruta:
+        return ruta
+    root, ext = os.path.splitext(ruta)
+    ext_l = ext.lower()
+    if ext_l in COMPRESSED_WORKSPACE_EXTS:
+        return ruta
+    if not ext_l or ext_l == ".json":
+        return root + ".arganest"
+    return ruta
+
+
+def filetypes_workspace_guardar():
+    return [
+        ("Arga Nest Workspace", "*.arganest"),
+        ("Nava Nest Workspace", "*.navanest"),
+        ("JSON", "*.json"),
+        ("Todos los archivos", "*.*"),
+    ]
+
+
+def filetypes_workspace_abrir():
+    return [
+        ("Arga Nest Workspace", "*.arganest *.navanest"),
+        ("Nava Nest Workspace", "*.navanest"),
+        ("JSON", "*.json"),
+        ("Todos los archivos", "*.*"),
+    ]
 
 
 def _combo_text(combo):
@@ -428,6 +575,13 @@ def construir_payload_workspace_lote_export(
 
     payload = {
         "schema": SCHEMA_WORKSPACE,
+        "workspace_material_kind": clasificar_material_workspace(
+            {
+                "resultados_multilote": multilote,
+                "datos_partes_actuales": editable_inputs or datos_partes,
+                "editable_inputs_by_lote": editable_inputs_by_lote,
+            }
+        ),
         "saved_at": _now_iso(),
         "workspace_type": "nesting_workspace",
         "job_activo": getattr(tab.app, "job_activo", "NESTING"),
@@ -490,6 +644,13 @@ def construir_payload_workspace(tab):
 
     payload = {
         "schema": SCHEMA_WORKSPACE,
+        "workspace_material_kind": clasificar_material_workspace(
+            {
+                "resultados_multilote": multilote,
+                "datos_partes_actuales": datos_partes,
+                "editable_inputs_by_lote": editable_inputs_by_lote,
+            }
+        ),
         "saved_at": _now_iso(),
         "workspace_type": "nesting_workspace",
         "job_activo": getattr(tab.app, "job_activo", "NESTING"),
@@ -535,6 +696,14 @@ def construir_payload_workspace(tab):
 
 
 def guardar_workspace_payload(payload, ruta_archivo):
+    import tempfile
+
+    if isinstance(payload, dict) and not payload.get("workspace_material_kind"):
+        try:
+            payload["workspace_material_kind"] = clasificar_material_workspace(payload)
+        except Exception:
+            payload["workspace_material_kind"] = MATERIAL_KIND_STEEL
+
     carpeta = os.path.dirname(os.path.abspath(ruta_archivo))
     if carpeta:
         os.makedirs(carpeta, exist_ok=True)
@@ -546,12 +715,28 @@ def guardar_workspace_payload(payload, ruta_archivo):
         separators=(",", ":"),
     )
 
-    if ext in COMPRESSED_WORKSPACE_EXTS:
-        with gzip.open(ruta_archivo, "wb", compresslevel=6) as f:
-            f.write(json_text.encode("utf-8"))
-    else:
-        with open(ruta_archivo, "w", encoding="utf-8") as f:
-            f.write(json_text)
+    # Poka-yoke: escritura atómica (tmp + replace) para no truncar .arganest.
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=".arganest_",
+        suffix=".tmp",
+        dir=carpeta or None,
+    )
+    try:
+        os.close(fd)
+        if ext in COMPRESSED_WORKSPACE_EXTS:
+            with gzip.open(tmp_path, "wb", compresslevel=6) as f:
+                f.write(json_text.encode("utf-8"))
+        else:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(json_text)
+        os.replace(tmp_path, ruta_archivo)
+    except Exception:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
     return payload
 

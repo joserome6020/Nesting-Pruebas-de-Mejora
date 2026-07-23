@@ -1551,26 +1551,62 @@ def exportar_resultados_a_dxf(
             step_done=0,
         )
         if motor == "occt":
-            from .occt_step_export import (
-                generar_steps_cobre_fuentes_occt,
-                lanzar_occt_robotica,
-            )
+            # Arga Nesting Suite: reutilizar FreeCAD/generador_verde si está
+            # instalado (mismo resultado de producción). OCCT solo de respaldo.
+            from freecad_runner import freecad_listo_para_step
 
-            lanzar_occt_robotica(
-                rutas,
-                thickness_para_step,
-                plasma_offset_job,
-                job_root_dir,
-                es_cobre=_job_tiene_cobre(resultados),
-                cu_formato_por_dxf=cu_formato_por_dxf,
-                progress_cb=_progress,
-            )
-            generar_steps_cobre_fuentes_occt(
-                resultados,
-                job_root_dir,
-                log_fn=log,
-                progress_cb=_progress,
-            )
+            if freecad_listo_para_step(prefer_verde=True):
+                log(
+                    "Arga Nesting Suite: usando FreeCAD + generador_verde "
+                    "(motor de producción; sin reimplementar STEP)"
+                )
+                _progress(
+                    mensaje="Arga Nesting Suite → FreeCAD (generador_verde)…",
+                    step_done=0,
+                )
+                lanzar_freecad_robotica(
+                    rutas,
+                    thickness_para_step,
+                    plasma_offset_job,
+                    job_root_dir=job_root_dir,
+                    es_cobre=_job_tiene_cobre(resultados),
+                    cu_formato_por_dxf=cu_formato_por_dxf,
+                    progress_cb=_progress,
+                )
+                _generar_steps_cobre_fuentes_in_place(
+                    resultados, job_root_dir, log_fn=log
+                )
+                _progress(
+                    mensaje="Validando STEP (FreeCAD vía Arga)…",
+                    step_done=n_step_est,
+                )
+                # Auditoría como FreeCAD (mismo motor real)
+                motor = "freecad"
+            else:
+                log(
+                    "Arga Nesting Suite: FreeCAD no disponible → "
+                    "fallback OCCT embebido"
+                )
+                from .occt_step_export import (
+                    generar_steps_cobre_fuentes_occt,
+                    lanzar_occt_robotica,
+                )
+
+                lanzar_occt_robotica(
+                    rutas,
+                    thickness_para_step,
+                    plasma_offset_job,
+                    job_root_dir,
+                    es_cobre=_job_tiene_cobre(resultados),
+                    cu_formato_por_dxf=cu_formato_por_dxf,
+                    progress_cb=_progress,
+                )
+                generar_steps_cobre_fuentes_occt(
+                    resultados,
+                    job_root_dir,
+                    log_fn=log,
+                    progress_cb=_progress,
+                )
         else:
             lanzar_freecad_robotica(
                 rutas,

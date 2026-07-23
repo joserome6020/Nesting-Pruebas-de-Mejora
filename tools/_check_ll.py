@@ -1,0 +1,11 @@
+import psycopg2
+cfg = dict(host="192.168.2.80", port=5433, dbname="nestingpro_db", user="postgres", password="nesting123")
+conn = psycopg2.connect(**cfg)
+cur = conn.cursor()
+cur.execute("SELECT COUNT(*) FROM lista_largos_job")
+print("lista_largos_job total:", cur.fetchone()[0])
+cur.execute("SELECT DISTINCT TRIM(job) FROM lista_largos_job LIMIT 10")
+print("jobs:", cur.fetchall())
+cur.execute("SELECT COUNT(*) FROM lista_largos_swo")
+print("lista_largos_swo total:", cur.fetchone()[0])
+conn.close()

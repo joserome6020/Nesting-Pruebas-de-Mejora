@@ -149,10 +149,23 @@ def empaquetar_una_hoja_arga_base(
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
+    cancel_checker=None,
 ):
     """Motor ARGA FORCE (pizarrón) — C++ packer_base; semillas en paralelo si hay CPU."""
     import random
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _cancelled() -> bool:
+        try:
+            return bool(cancel_checker and cancel_checker())
+        except Exception:
+            return False
+
+    if _cancelled():
+        return (
+            {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+            list(piezas or []),
+        )
 
     try:
         from . import algorithm_cpp
@@ -184,6 +197,11 @@ def empaquetar_una_hoja_arga_base(
 
     def _one_pack(ordered_piezas, seed_idx: int = 0):
         import time as _time
+
+        if _cancelled():
+            return {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}, list(
+                piezas or []
+            )
 
         t0 = _time.perf_counter()
         print(f"[FORCE] semilla {seed_idx + 1}/{seeds} iniciada…", flush=True)
@@ -243,6 +261,10 @@ def empaquetar_una_hoja_arga_base(
             pool.submit(_one_pack, ord_, idx): idx for idx, ord_ in enumerate(orders)
         }
         for fut in as_completed(futs):
+            if _cancelled():
+                for other in futs:
+                    other.cancel()
+                break
             try:
                 hoja, restos = fut.result()
             except Exception as exc:
@@ -262,6 +284,11 @@ def empaquetar_una_hoja_arga_base(
                     other.cancel()
                 break
 
+    if _cancelled():
+        return (
+            {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+            list(piezas or []),
+        )
     if mejor_hoja is None:
         return _one_pack(base, 0)
     return mejor_hoja, mejor_restos
@@ -304,9 +331,19 @@ def empaquetar_una_hoja_burke_blf(
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
     hill_climb_iterations=None,
+    cancel_checker=None,
 ):
     """Motor Burke BLF + NFP — C++ packer_burke_blf."""
     from .nest_optimization import get_engine_profile
+
+    try:
+        if cancel_checker and cancel_checker():
+            return (
+                {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+                list(piezas or []),
+            )
+    except Exception:
+        pass
 
     try:
         from . import algorithm_cpp
@@ -340,9 +377,6 @@ def empaquetar_una_hoja_burke_blf(
         limite_rings,
         hill_climb_iterations,
     )
-    return _assemble_pack_result(hoja_native, restos_native, piezas)
-
-
     return _assemble_pack_result(hoja_native, restos_native, piezas)
 
 

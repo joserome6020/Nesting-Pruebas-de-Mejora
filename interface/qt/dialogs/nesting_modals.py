@@ -230,10 +230,20 @@ def abrir_modal_configuracion(parent):
 
     def guardar_y_aplicar():
         try:
-            kerf_val = float(ent_kerf.text())
-            margin_val = float(ent_margin.text())
-            if kerf_val <= 0:
-                kerf_val = 0.3
+            from modules.nesting_engine.nest_poka_yoke import (
+                validar_kerf_in,
+                validar_margin_in,
+            )
+
+            kerf_val, err_k = validar_kerf_in(ent_kerf.text())
+            margin_val, err_m = validar_margin_in(ent_margin.text())
+            if err_k or err_m:
+                QMessageBox.critical(
+                    dlg,
+                    "Configuración inválida (poka-yoke)",
+                    "\n".join(x for x in (err_k, err_m) if x),
+                )
+                return
             parent.global_margin_val = margin_val
             parent.global_kerf_val = kerf_val
             if hasattr(parent, "_sync_kerf_widget"):
@@ -989,14 +999,8 @@ def filtrar_datos_placas_nest_selection(datos_placas: list, selection: dict | No
             rows = filtered
         if not rows:
             continue
-        qty = item.get("qty")
-        if qty is None:
-            filtradas.extend(rows)
-            continue
-        n = max(1, int(qty))
-        # Si hay menos filas físicas, se repite la última para tipar N hojas del formato.
-        for i in range(n):
-            filtradas.append(rows[min(i, len(rows) - 1)])
+        # Catálogo: una o más filas del formato bastan. NUNCA limitar hojas por qty.
+        filtradas.extend(rows)
     return filtradas
 
 

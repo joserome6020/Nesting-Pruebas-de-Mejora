@@ -162,14 +162,17 @@ def _plate_format_key_mm(w_mm: float, h_mm: float) -> str:
 
 
 def _parse_plate_selection(selection: dict | None) -> tuple[set[str] | None, dict[str, int] | None]:
-    """Retorna (formatos_permitidos|None, limites_qty|None). None = sin restricción."""
+    """
+    Retorna (formatos_permitidos|None, limites_qty|None).
+    limites_qty siempre None: el nest no corta por cantidad de hojas.
+    formats_allowed solo restringe tamaños si mode=manual.
+    """
     if not selection or selection.get("mode") == "auto":
         return None, None
     items = selection.get("items") or []
     if not items:
         return None, None
     allowed: set[str] = set()
-    limits: dict[str, int] = {}
     for item in items:
         key = str(item.get("key") or "").strip()
         if not key:
@@ -181,13 +184,7 @@ def _parse_plate_selection(selection: dict | None) -> tuple[set[str] | None, dic
             except Exception:
                 continue
         allowed.add(key)
-        qty = item.get("qty")
-        if qty is not None:
-            try:
-                limits[key] = max(1, int(qty))
-            except Exception:
-                limits[key] = 1
-    return (allowed or None), (limits or None)
+    return (allowed or None), None
 
 
 def _fmt_bounds(poly):
@@ -1961,6 +1958,8 @@ def _safe_empaquetar_una_hoja_mc(
     mc_iterations=None,
     cancel_checker=None,
 ):
+    from .nest_poka_yoke import marcar_pack_fault
+
     hoja_vacia = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
     restos_default = list(piezas or [])
     cc = cancel_checker if cancel_checker is not None else _active_pack_cancel_checker()
@@ -1981,11 +1980,14 @@ def _safe_empaquetar_una_hoja_mc(
 
         if result is None:
             _dbg_nesting(f"[SAFE-EMPAQUE-NONE] {debug_tag} | resultado=None")
-            return hoja_vacia, restos_default
+            return marcar_pack_fault(hoja_vacia, "resultado_none"), restos_default
 
         if not isinstance(result, (tuple, list)) or len(result) != 2:
             _dbg_nesting(f"[SAFE-EMPAQUE-FORMATO-INVALIDO] {debug_tag} | tipo={type(result).__name__}")
-            return hoja_vacia, restos_default
+            return (
+                marcar_pack_fault(hoja_vacia, f"formato_invalido:{type(result).__name__}"),
+                restos_default,
+            )
 
         hoja, restos = result
 
@@ -2001,7 +2003,7 @@ def _safe_empaquetar_una_hoja_mc(
 
     except Exception as e:
         _dbg_nesting(f"[SAFE-EMPAQUE-EXCEPTION] {debug_tag} | {e}")
-        return hoja_vacia, restos_default
+        return marcar_pack_fault(hoja_vacia, str(e)), restos_default
 
 class MotorNesting:
     def __init__(self):
@@ -2614,6 +2616,22 @@ class MotorNesting:
             if piezas
         }
 
+        # Poka-yoke PRE-PACK: stock + AABB + smoke de 1 pieza (falla antes del nest caro).
+        ok_pre, msg_pre = self._preflight_grupos_antes_pack(
+            grupos_con_piezas,
+            datos_placas,
+            config_kerf=config_kerf,
+            config_margin=config_margin,
+            config_opt=config_opt,
+            config_corner=config_corner,
+        )
+        if not ok_pre:
+            _dbg_nesting(f"[PREFLIGHT-FAIL] {msg_pre}")
+            return {"error": msg_pre, "dxf_audit": self._ultima_auditoria_dxf}
+
+        # Evita re-smoke en grupos de esta corrida (renesteo de calibre sí vuelve a validar).
+        self._preflight_done = True
+
         # Cobre = canal propio (largos CU). Nunca entra a Ultra / perfiles de motor acero.
         grupos_cobre = {
             k: v for k, v in grupos_con_piezas.items() if _clave_es_cobre(k)
@@ -2634,6 +2652,7 @@ class MotorNesting:
 
         if total_lotes_reales == 0:
             _dbg_nesting("[ABORT] No hay grupos válidos para enviar a multiproceso")
+            self._preflight_done = False
             return {"error": "No hay grupos válidos para procesar."}
 
         _dbg_nesting(
@@ -2810,6 +2829,29 @@ class MotorNesting:
                                 print(f"Error en Lote {clave}: {exc}")
                                 resultados[clave] = {"error": f"Error en cálculo: {exc}"}
 
+                            # Fail-fast: un grupo duro fallido detiene hermanos (cancel_event).
+                            try:
+                                from .nest_poka_yoke import es_resultado_grupo_fallido
+
+                                grp_chk = resultados.get(clave)
+                                if es_resultado_grupo_fallido(grp_chk):
+                                    if cancel_event is not None:
+                                        try:
+                                            cancel_event.set()
+                                        except Exception:
+                                            pass
+                                    for fut_pend in list(pendientes):
+                                        fut_pend.cancel()
+                                    pendientes.clear()
+                                    notificar(
+                                        f"Fallo duro en {clave}: deteniendo workers hermanos...",
+                                        base_pct
+                                        + (completados / max(1, n_acero))
+                                        * (1.0 - base_pct),
+                                    )
+                            except Exception:
+                                pass
+
                             completados += 1
                             progreso_actual = (
                                 base_pct
@@ -2836,6 +2878,7 @@ class MotorNesting:
         resultados["_nest_engine_id"] = resolved_engine
         if grupos_cobre:
             resultados["_nest_cobre_engine"] = "largos_cu"
+        self._preflight_done = False
         return resultados
 
     def ejecutar_comparacion_motores_visual(
@@ -2872,6 +2915,175 @@ class MotorNesting:
         )
         self._ultima_comparacion_motores = bundle
         return bundle
+
+    def _preflight_grupos_antes_pack(
+        self,
+        grupos_con_piezas: dict,
+        datos_placas,
+        *,
+        config_kerf=DEFAULT_KERF_IN,
+        config_margin=DEFAULT_MARGIN_IN,
+        config_opt="OPTIMIZAR LARGO Y ANCHO",
+        config_corner="INFERIOR IZQUIERDA",
+    ) -> tuple[bool, str]:
+        """
+        Poka-yoke antes del nest caro: por grupo valida stock, AABB de la
+        pieza más grande y un smoke-pack de 1 pieza en la mejor placa.
+        """
+        from .cu_inventory import inventario_barras_largos_cu
+        from .nest_poka_yoke import es_pack_fault, motivo_pack_fault
+
+        fallas: list[str] = []
+        formats_allowed = getattr(self, "_plate_formats_allowed", None)
+
+        for clave, piezas in sorted(
+            (grupos_con_piezas or {}).items(),
+            key=lambda kv: _orden_clave_nesting(kv[0]),
+        ):
+            if not piezas:
+                continue
+            partes = str(clave).split("_", 1)
+            req_cal = partes[0]
+            req_mat = partes[1] if len(partes) > 1 else ""
+
+            placas_empresa = []
+            placas_proveedor = []
+            for placa in datos_placas or []:
+                try:
+                    p_cal = placa[0]
+                    p_mat = placa[1]
+                except Exception:
+                    continue
+                if not (self._coinciden(req_cal, p_cal) and self._coinciden(req_mat, p_mat)):
+                    continue
+                w_in = self._extraer_numero(placa[3] if len(placa) > 3 else 0)
+                h_in = self._extraer_numero(placa[4] if len(placa) > 4 else 0)
+                if w_in <= 0 or h_in <= 0:
+                    continue
+                origen = str(placa[9]).upper() if len(placa) > 9 else "EMPRESA"
+                row = {
+                    "data": placa,
+                    "w": w_in * 25.4,
+                    "h": h_in * 25.4,
+                    "precio": 0.0,
+                    "id": str(placa[2]) if len(placa) > 2 else "",
+                    "origen": origen,
+                    "precio_lb": 0.0,
+                }
+                if "EMPRESA" in origen or origen.strip() == "":
+                    placas_empresa.append(row)
+                else:
+                    placas_proveedor.append(row)
+            placas_ok = placas_empresa if placas_empresa else placas_proveedor
+
+            if not placas_ok:
+                fallas.append(
+                    f"{clave}: sin inventario de placas ({len(piezas)} pieza(s))."
+                )
+                continue
+
+            if _clave_es_cobre(clave) or es_material_cobre(req_mat):
+                barras = inventario_barras_largos_cu(placas_ok)
+                if not barras:
+                    fallas.append(
+                        f"{clave}: sin barras CU 144\"×1.75–6\" para largos."
+                    )
+                continue
+
+            # Pieza más exigente por bounding box
+            target = max(
+                piezas,
+                key=lambda pz: (
+                    max(
+                        float(pz["poly"].bounds[2] - pz["poly"].bounds[0]),
+                        float(pz["poly"].bounds[3] - pz["poly"].bounds[1]),
+                    )
+                    if pz.get("poly") is not None
+                    else 0.0
+                ),
+            )
+            try:
+                minx, miny, maxx, maxy = target["poly"].bounds
+                w_req = float(maxx - minx)
+                h_req = float(maxy - miny)
+            except Exception:
+                fallas.append(
+                    f"{clave}: geometría inválida en pieza "
+                    f"{target.get('nombre') or '?'}."
+                )
+                continue
+            max_req, min_req = max(w_req, h_req), min(w_req, h_req)
+
+            candidatas = []
+            for p in placas_ok:
+                fk = _plate_format_key_mm(
+                    float(p.get("w", 0.0) or 0.0),
+                    float(p.get("h", 0.0) or 0.0),
+                )
+                if formats_allowed is not None and fk not in formats_allowed:
+                    continue
+                max_p = max(float(p["w"]), float(p["h"]))
+                min_p = min(float(p["w"]), float(p["h"]))
+                if max_p >= (max_req - 10.0) and min_p >= (min_req - 10.0):
+                    candidatas.append(p)
+
+            if not candidatas:
+                fallas.append(
+                    f"{clave}: la pieza {target.get('nombre')} "
+                    f"({w_req/25.4:.2f}\"×{h_req/25.4:.2f}\") no cabe en ninguna "
+                    f"placa del catálogo"
+                    + (
+                        " (tras filtro de formatos seleccionados)"
+                        if formats_allowed is not None
+                        else ""
+                    )
+                    + "."
+                )
+                continue
+
+            # Smoke-pack: 1 pieza en la placa más grande candidata
+            placa_smoke = max(
+                candidatas,
+                key=lambda p: float(p["w"]) * float(p["h"]),
+            )
+            hoja_sm, _restos = _safe_empaquetar_una_hoja_mc(
+                [copy.deepcopy(target)],
+                placa_smoke["w"],
+                placa_smoke["h"],
+                config_kerf,
+                config_margin,
+                config_opt,
+                config_corner,
+                debug_tag=f"preflight|{clave}|{target.get('nombre')}",
+                mc_iterations=1,
+            )
+            if es_pack_fault(hoja_sm):
+                fallas.append(
+                    f"{clave}: fallo de motor al probar {target.get('nombre')} "
+                    f"en placa {placa_smoke.get('id')}: {motivo_pack_fault(hoja_sm)}"
+                )
+                continue
+            if not (hoja_sm or {}).get("piezas"):
+                fallas.append(
+                    f"{clave}: no se pudo colocar {target.get('nombre')} "
+                    f"({w_req/25.4:.2f}\"×{h_req/25.4:.2f}\") ni sola en placa "
+                    f"{placa_smoke.get('id')} "
+                    f"({float(placa_smoke['w'])/25.4:.1f}\"×"
+                    f"{float(placa_smoke['h'])/25.4:.1f}\"). "
+                    f"Revise DXF / kerf / margin."
+                )
+
+        if fallas:
+            texto = "\n".join(f"• {f}" for f in fallas[:12])
+            if len(fallas) > 12:
+                texto += f"\n(+{len(fallas) - 12} más)"
+            return (
+                False,
+                "Poka-yoke pre-nest: hay grupos que no se pueden anidar.\n"
+                "Corrija stock, selección de placas o DXF antes de continuar.\n\n"
+                f"{texto}",
+            )
+        return True, ""
 
     def _procesar_grupo_parallel(
         self,
@@ -2996,6 +3208,20 @@ class MotorNesting:
             )
             return clave, {"error": f"Sin placa. No se halló inventario para {req_cal} {req_mat}."}
 
+        # Renesteo de calibre / worker: preflight si la corrida completa no lo hizo.
+        if not getattr(self, "_preflight_done", False):
+            ok_pf, msg_pf = self._preflight_grupos_antes_pack(
+                {clave: piezas},
+                datos_placas,
+                config_kerf=config_kerf,
+                config_margin=config_margin,
+                config_opt=config_opt,
+                config_corner=config_corner,
+            )
+            if not ok_pf:
+                _dbg_nesting(f"[PREFLIGHT-GRUPO-FAIL] clave={clave} | {msg_pf}")
+                return clave, {"error": msg_pf}
+
         if str(req_mat).strip().upper() == "CU" or es_material_cobre(req_mat):
             # Cobre largos: canal propio. Ignora motor de acero, kerf, margin, opt y corner.
             placas_largos = inventario_barras_largos_cu(placas_ok)
@@ -3047,6 +3273,18 @@ class MotorNesting:
             if formato not in formatos_vistos:
                 formatos_vistos.add(formato)
                 placas_unicas_simulacion.append(p)
+
+        # Herinox DISPONIBLE = catálogo de formatos. NUNCA cupo de hojas.
+        # Ningún motor (Lite/Force/Ultra) falla por “se acabaron N filas”.
+        # formats_allowed (Ultra manual) solo filtra QUÉ tamaños usar, no cuántas hojas.
+        formats_allowed_pre = getattr(self, "_plate_formats_allowed", None)
+        format_limits_grupo: dict[str, int] = {}
+        format_used_grupo: dict[str, int] = {}
+        _dbg_nesting(
+            f"[FORMAT-CATALOGO] clave={clave} | "
+            f"allowed={'manual' if formats_allowed_pre else 'auto'} | "
+            f"limites_hojas=0 (desactivados)"
+        )
 
         AREA_LIMITE_MM2 = ARGA_AREA_ESTRUCTURAL_MM2
         estructurales = [p for p in piezas if p['area'] > AREA_LIMITE_MM2]
@@ -3155,11 +3393,8 @@ class MotorNesting:
             mejor_precio = None
 
             formats_allowed = getattr(self, "_plate_formats_allowed", None)
-            format_limits = getattr(self, "_plate_format_limits", None) or {}
-            format_used = getattr(self, "_plate_format_used", None)
-            if format_used is None:
-                format_used = {}
-                self._plate_format_used = format_used
+            format_limits = format_limits_grupo
+            format_used = format_used_grupo
 
             # Early-exit: FORCE o Ultra en Auto (sin formatos forzados a mano).
             use_early_exit = (
@@ -3297,7 +3532,31 @@ class MotorNesting:
                     f"area_usada={hoja_sim.get('area_usada', 0.0):.3f} | restos={len(restos_sim)}"
                 )
 
+                from .nest_poka_yoke import es_pack_fault, motivo_pack_fault
+
+                if es_pack_fault(hoja_sim):
+                    _dbg_nesting(
+                        f"[SIM-PLACA-FAULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
+                        f"motivo={motivo_pack_fault(hoja_sim)}"
+                    )
+                    continue
+
                 if not hoja_sim.get("piezas"):
+                    continue
+
+                # Poka-yoke: no dejar que una sim solapada / fuera de placa gane por score.
+                from .nest_poka_yoke import validar_integridad_bloque_hojas
+
+                hoja_chk = dict(hoja_sim)
+                hoja_chk["placa_w"] = float(candidato_placa.get("w", 0.0) or 0.0)
+                hoja_chk["placa_h"] = float(candidato_placa.get("h", 0.0) or 0.0)
+                hoja_chk["placa_id"] = candidato_placa.get("id")
+                ok_sim_s, msg_sim_s = validar_integridad_bloque_hojas([hoja_chk])
+                if not ok_sim_s:
+                    _dbg_nesting(
+                        f"[SIM-PLACA-INTEGRIDAD] clave={clave} | "
+                        f"placa_id={candidato_placa.get('id')} | {msg_sim_s}"
+                    )
                     continue
 
                 restos_count = len(restos_est_out) + len(restos_acc_out)
@@ -3337,10 +3596,28 @@ class MotorNesting:
             reset_ultra_sim_bounded(sim_bound_token)
 
             if not mejor_hoja_temp:
+                # Diagnóstico: distinguir stock / selección / packer
+                n_sim = len(candidatos_sim)
+                n_skip_fmt = 0
+                n_skip_lim = 0
+                for cand in candidatos_sim:
+                    fk = _plate_format_key_mm(
+                        float(cand.get("w", 0.0) or 0.0),
+                        float(cand.get("h", 0.0) or 0.0),
+                    )
+                    if formats_allowed is not None and fk not in formats_allowed:
+                        n_skip_fmt += 1
+                        continue
+                    lim = format_limits.get(fk)
+                    if lim is not None and int(format_used.get(fk, 0)) >= int(lim):
+                        n_skip_lim += 1
+                n_utiles = n_sim - n_skip_fmt - n_skip_lim
+                tgt = target_piece.get("nombre") or "?"
                 _dbg_nesting(
                     f"[ERROR-CRITICO-EMPAQUE] clave={clave} | req_cal={req_cal} | req_mat={req_mat} | "
                     f"piezas_grupo={len(piezas)} | placas_candidatas={len(placas_ok)} | "
-                    f"motivo=no se obtuvo ninguna hoja con piezas"
+                    f"sim={n_sim} skip_fmt={n_skip_fmt} skip_lim={n_skip_lim} utiles={n_utiles} | "
+                    f"target={tgt} | motivo=no se obtuvo ninguna hoja con piezas"
                 )
 
                 for pz in piezas:
@@ -3352,7 +3629,24 @@ class MotorNesting:
                         f"ruta={pz.get('ruta', 'SIN_RUTA')}"
                     )
 
-                return clave, {"error": "Error de empaquetado crítico. Geometría imposible de anidar."}
+                if n_utiles <= 0:
+                    if n_skip_fmt > 0:
+                        msg_err = (
+                            f"{clave}: las placas de este calibre quedaron fuera por la "
+                            f"selección manual de formatos. Pieza pendiente: {tgt}."
+                        )
+                    else:
+                        msg_err = (
+                            f"{clave}: no hay formato de placa en catálogo para {tgt} "
+                            f"({req_cal} {req_mat}). Revise Herinox."
+                        )
+                else:
+                    msg_err = (
+                        f"{clave}: el motor no pudo acomodar piezas en "
+                        f"{n_utiles} formato(s) candidato(s) (objetivo {tgt}). "
+                        f"Revise DXF / kerf / margin."
+                    )
+                return clave, {"error": msg_err}
 
             hoja_ganadora = mejor_hoja_temp
             candidato_ganador = mejor_placa
@@ -3361,8 +3655,8 @@ class MotorNesting:
                     float(candidato_ganador.get("w", 0.0) or 0.0),
                     float(candidato_ganador.get("h", 0.0) or 0.0),
                 )
-                self._plate_format_used[win_key] = int(
-                    self._plate_format_used.get(win_key, 0)
+                format_used_grupo[win_key] = int(
+                    format_used_grupo.get(win_key, 0)
                 ) + 1
             except Exception:
                 pass
@@ -3488,6 +3782,19 @@ class MotorNesting:
                     f"[SIN-RTZ-PLASMA] clave={clave} | placa_id={candidato_ganador.get('id')} | "
                     "renesteo compensado plasma: placa madre sin mini-nest ni hojas RTZ."
                 )
+                from .nest_poka_yoke import validar_integridad_bloque_hojas
+
+                ok_c, msg_c = validar_integridad_bloque_hojas([hoja_ganadora])
+                if not ok_c:
+                    _dbg_nesting(
+                        f"[COMMIT-PLACA-INTEGRIDAD] clave={clave} | {msg_c}"
+                    )
+                    return clave, {
+                        "error": (
+                            f"Integridad al commit de placa {candidato_ganador.get('id')}: "
+                            f"{msg_c}"
+                        ),
+                    }
                 hojas_finales.append(hoja_ganadora)
                 costo_total_lote += candidato_ganador['precio']
                 num_placa_actual += 1
@@ -3829,6 +4136,24 @@ class MotorNesting:
                         "calibre": req_cal,
                         "material": req_mat
                     })
+            # Poka-yoke: commit atómico madre(+RTZ) solo si no hay solapes (incl. RTZ).
+            bloque_commit = [hoja_ganadora]
+            if not forzar_sin_mini_nest:
+                bloque_commit.extend(mini_nests_locales)
+            from .nest_poka_yoke import validar_integridad_bloque_hojas
+
+            ok_c, msg_c = validar_integridad_bloque_hojas(bloque_commit)
+            if not ok_c:
+                _dbg_nesting(
+                    f"[COMMIT-PLACA-INTEGRIDAD] clave={clave} | "
+                    f"placa={candidato_ganador.get('id')} | {msg_c}"
+                )
+                return clave, {
+                    "error": (
+                        f"Integridad al commit de placa {candidato_ganador.get('id')}: "
+                        f"{msg_c}"
+                    ),
+                }
             hojas_finales.append(hoja_ganadora)
             if not forzar_sin_mini_nest:
                 hojas_finales.extend(mini_nests_locales)
@@ -3857,6 +4182,19 @@ class MotorNesting:
             if not ok_inv:
                 _dbg_nesting(f"[INVENTARIO-INCOMPLETO] clave={clave} | {msg_inv}")
                 inventario_aviso = msg_inv
+                from .nest_poka_yoke import allow_incomplete_nest
+
+                if not allow_incomplete_nest():
+                    # Poka-yoke: no devolver grupo "OK" con BOM incompleto.
+                    return clave, {
+                        "error": (
+                            f"{msg_inv} "
+                            "(Poka-yoke: nest incompleto rechazado. "
+                            "ARGA_ALLOW_INCOMPLETE_NEST=1 para aviso suave.)"
+                        ),
+                        "advertencia": msg_inv,
+                        "inventario_incompleto": True,
+                    }
             # Construimos mapa 1-a-1 por nombre base para no agarrar siempre
             # la primera coincidencia cuando hay piezas repetidas.
             source_map = {}
@@ -3928,6 +4266,18 @@ class MotorNesting:
                         f"anillos={len(p_final.get('poligonos') or [])} | holes={n_holes} | "
                         f"marcas={n_marks}"
                     )
+
+            # Tras remap DXF 1:1: revalidar solapes (geom exacta puede diferir del pack).
+            from .nest_poka_yoke import validar_integridad_bloque_hojas
+
+            ok_post, msg_post = validar_integridad_bloque_hojas(hojas_finales)
+            if not ok_post:
+                _dbg_nesting(f"[POST-EXACT-INTEGRIDAD] clave={clave} | {msg_post}")
+                return clave, {
+                    "error": (
+                        f"Integridad tras geometría exacta DXF: {msg_post}"
+                    ),
+                }
         
         if hojas_finales:
             costo_empresa = sum(
@@ -3964,7 +4314,10 @@ class MotorNesting:
             return clave, resultado_placas
         else:
             return clave, {
-                "error": "Error de empaquetado crítico. Geometría imposible de anidar."
+                "error": (
+                    f"No se generaron hojas para {clave}: el nest quedó vacío "
+                    f"tras el empaque. Revise inventario, cancelación o DXF."
+                )
             }
 
     def _as_pack_piece_visual(self, p):
@@ -5635,6 +5988,8 @@ class MotorNesting:
         es_swo=False,
         swo_id=None,
         datos_partes=None,
+        motor_3d="freecad",
+        progress_cb=None,
     ):
         """Redirige la orden de la interfaz gráfica hacia el archivo exporter.py"""
         return exportar_resultados_a_dxf(
@@ -5646,6 +6001,8 @@ class MotorNesting:
             es_swo=es_swo,
             swo_id=swo_id,
             datos_partes=datos_partes,
+            motor_3d=motor_3d,
+            progress_cb=progress_cb,
         )
 
 

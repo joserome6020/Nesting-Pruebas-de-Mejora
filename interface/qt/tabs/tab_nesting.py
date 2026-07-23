@@ -60,6 +60,9 @@ from nesting_workspace import (
     enlazar_rutas_en_payload,
     preparar_dxf_en_app,
     preparar_dxf_cache_en_payload,
+    clasificar_material_workspace,
+    filetypes_workspace_guardar,
+    filetypes_workspace_abrir,
 )
 from postgres_connector import guardar_nesting_en_postgresql
 from reporte_pdf_nesting import exportar_pdf_nesting
@@ -153,17 +156,44 @@ class TabNesting(QWidget, TimerHost):
         self._sync_kerf_widget()
 
     def _kerf_efectivo(self) -> float:
-        """Kerf global de nesting (placa láser). Nunca 0: las placas CU guardan kerf_usado=0 aparte."""
-        try:
-            k = float(self.global_kerf_val)
-        except Exception:
-            k = DEFAULT_KERF_IN
-        if k <= 0:
-            k = DEFAULT_KERF_IN
+        """Kerf global de nesting (placa láser). Poka-yoke: no coerce silencioso."""
+        from modules.nesting_engine.nest_poka_yoke import validar_kerf_in
+
+        k, err = validar_kerf_in(getattr(self, "global_kerf_val", DEFAULT_KERF_IN))
+        if err:
+            raise ValueError(err)
         return k
 
+    def _margin_efectivo(self) -> float:
+        from modules.nesting_engine.nest_poka_yoke import validar_margin_in
+
+        m, err = validar_margin_in(getattr(self, "global_margin_val", 0.15))
+        if err:
+            raise ValueError(err)
+        return m
+
+    def _leer_kerf_margin_ui(self) -> tuple[float, float] | None:
+        """Valida kerf/margin con diálogo; None si el usuario debe corregir."""
+        from modules.nesting_engine.nest_poka_yoke import validar_kerf_in, validar_margin_in
+
+        k, err_k = validar_kerf_in(getattr(self, "global_kerf_val", DEFAULT_KERF_IN))
+        m, err_m = validar_margin_in(getattr(self, "global_margin_val", 0.15))
+        if err_k or err_m:
+            QMessageBox.critical(
+                self,
+                "Configuración inválida (poka-yoke)",
+                "\n".join(x for x in (err_k, err_m) if x),
+            )
+            return None
+        self.global_kerf_val = k
+        self.global_margin_val = m
+        return k, m
+
     def _sync_kerf_widget(self) -> None:
-        k = self._kerf_efectivo()
+        try:
+            k = self._kerf_efectivo()
+        except Exception:
+            k = DEFAULT_KERF_IN
         self.global_kerf_val = k
         if hasattr(self, "ent_kerf"):
             self.ent_kerf.setText(str(k))
@@ -237,12 +267,42 @@ class TabNesting(QWidget, TimerHost):
             n_wo=str(n_wo),
             k_val=k_val,
         )
+        # Marca material para Icon Handler de Explorer (misma extensión .arganest).
+        try:
+            payload["workspace_material_kind"] = clasificar_material_workspace(payload)
+        except Exception:
+            pass
         guardar_workspace_payload(payload, ruta_arganest)
         return ruta_arganest
 
     def exportar_reporte_pdf_nesting(self):
         if not hasattr(self.app, 'resultados_nesting') or not self.app.resultados_nesting:
             return QMessageBox.warning(self, "Atención", "No hay datos de nesting para exportar.")
+
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                allow_incomplete_nest,
+                listar_fallas_resultados_nest,
+            )
+
+            fallas_pdf = listar_fallas_resultados_nest(self.app.resultados_nesting)
+            if fallas_pdf and not allow_incomplete_nest():
+                texto = "\n\n".join(fallas_pdf[:6])
+                if len(fallas_pdf) > 6:
+                    texto += f"\n\n(+{len(fallas_pdf) - 6} más)"
+                return QMessageBox.critical(
+                    self,
+                    "PDF bloqueado (poka-yoke)",
+                    "No se genera reporte oficial de un nest incompleto/solapado.\n\n"
+                    f"{texto}",
+                )
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "PDF bloqueado (poka-yoke)",
+                f"No se pudo validar integridad antes del PDF:\n{exc}",
+            )
+
         wo_real = self._obtener_wo_real_lote_actual()
         if not wo_real:
             return QMessageBox.warning(self, 
@@ -323,15 +383,44 @@ class TabNesting(QWidget, TimerHost):
             title="Guardar workspace de nesting",
             defaultextension=".arganest",
             initialfile=nombre_sugerido,
-            filetypes=[
-                ("Arga Nest Workspace", "*.arganest"),
-                ("Nava Nest Workspace", "*.navanest"),
-                ("JSON", "*.json"),
-                ("Todos los archivos", "*.*"),
-            ]
+            filetypes=filetypes_workspace_guardar(),
         )
         if not ruta_archivo:
             return
+
+        # Poka-yoke: no persistir nest inválido como workspace "oficial".
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                allow_incomplete_nest,
+                listar_fallas_resultados_nest,
+            )
+
+            fallas_ws: list[str] = []
+            if tiene_multilote:
+                for lote in self.app.resultados_multilote or []:
+                    fallas_ws.extend(
+                        listar_fallas_resultados_nest((lote or {}).get("data"))
+                    )
+            else:
+                fallas_ws.extend(
+                    listar_fallas_resultados_nest(self.app.resultados_nesting)
+                )
+            if fallas_ws and not allow_incomplete_nest():
+                texto = "\n\n".join(fallas_ws[:6])
+                if len(fallas_ws) > 6:
+                    texto += f"\n\n(+{len(fallas_ws) - 6} más)"
+                return QMessageBox.critical(
+                    self,
+                    "Guardado bloqueado (poka-yoke)",
+                    "El nest tiene fallas de integridad; no se guarda .arganest.\n\n"
+                    f"{texto}",
+                )
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "Guardado bloqueado (poka-yoke)",
+                f"No se pudo validar integridad antes de guardar:\n{exc}",
+            )
 
         try:
             guardar_workspace(self, ruta_archivo)
@@ -345,12 +434,7 @@ class TabNesting(QWidget, TimerHost):
     def abrir_workspace_nesting(self):
         ruta_archivo = self._ask_open_file(
             title="Abrir workspace de nesting",
-            filetypes=[
-                ("Arga Nest Workspace", "*.arganest"),
-                ("Nava Nest Workspace", "*.navanest"),
-                ("JSON", "*.json"),
-                ("Todos los archivos", "*.*"),
-            ]
+            filetypes=filetypes_workspace_abrir(),
         )
         if not ruta_archivo:
             return
@@ -365,6 +449,13 @@ class TabNesting(QWidget, TimerHost):
         from interface.qt.dialogs.nest_sim_lab import abrir_nest_sim_lab
 
         abrir_nest_sim_lab(self)
+
+    def abrir_visor_step(self):
+        """Visor 3D experimental de STEP (OCCT + VTK). No usa FreeCAD."""
+        from interface.qt.dialogs.step_viewer import abrir_visor_step
+
+        abrir_visor_step(self)
+
     def _ui(self, fn, *args):
         call_on_main(fn, *args)
 
@@ -514,6 +605,26 @@ class TabNesting(QWidget, TimerHost):
             if hasattr(self.app, "actualizar_progreso"):
                 self.app.actualizar_progreso("Restaurando nesting…", 0.78)
             aplicar_workspace(self, payload, carga_rapida=True)
+            try:
+                self.app.ruta_workspace_actual = str(ruta_archivo or "")
+                self.app.ultimo_arganest = str(ruta_archivo or "")
+                # Si el .arganest vive bajo NESTING/..., sube a ARGA MODEL CORE.
+                cur = os.path.abspath(str(ruta_archivo or ""))
+                for _ in range(8):
+                    parent = os.path.dirname(cur)
+                    if not parent or parent == cur:
+                        break
+                    nest_dir = os.path.join(parent, "NESTING")
+                    base_name = os.path.basename(parent).upper()
+                    if os.path.isdir(nest_dir) and base_name != "NESTING":
+                        self.app.ultima_ruta_export_cad = parent
+                        break
+                    if base_name == "ARGA MODEL CORE":
+                        self.app.ultima_ruta_export_cad = parent
+                        break
+                    cur = parent
+            except Exception:
+                pass
             if hasattr(self.app, "actualizar_progreso"):
                 self.app.actualizar_progreso("Listo", 1.0)
             if hasattr(self.app, "cerrar_ventana_carga"):
@@ -1296,6 +1407,41 @@ class TabNesting(QWidget, TimerHost):
                 self.frame_ajuste_container.hide()
         return False
 
+    def _poka_yoke_stock_grupos_ok(
+        self,
+        lista_partes,
+        datos_placas=None,
+        *,
+        solo_claves=None,
+        titulo: str = "Stock por calibre (poka-yoke)",
+    ) -> bool:
+        """True si se puede continuar; False si ya mostró el diálogo de bloqueo."""
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                validar_stock_por_grupos_antes_nest,
+            )
+
+            placas = datos_placas
+            if placas is None:
+                placas = self.app.plates_manager.obtener_datos_placas()
+            ok, msg = validar_stock_por_grupos_antes_nest(
+                lista_partes,
+                placas,
+                coinciden=self.app.motor_nesting._coinciden,
+                solo_claves=set(solo_claves) if solo_claves else None,
+            )
+            if not ok:
+                QMessageBox.critical(self, titulo, msg)
+                return False
+            return True
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                titulo,
+                f"No se pudo validar stock por calibre antes de nestear:\n{exc}",
+            )
+            return False
+
     def _preguntar_generacion_3d_export(self):
         """True=con 3D, False=solo DXF, None=cancelar exportación."""
         box = QMessageBox(self)
@@ -1316,7 +1462,40 @@ class TabNesting(QWidget, TimerHost):
             return None
         return clicked == btn_si
 
-    def _finalizar_renesteo_lote(self, nuevo_resultado):
+    def _preguntar_motor_3d_export(self):
+        """
+        Motor STEP tras 'SI, generar 3D'.
+        Returns: 'freecad' | 'occt' | None (cancelar toda la exportación).
+
+        FreeCAD / generador_verde = producción.
+        Arga Nesting Suite = mismo FreeCAD si está instalado; OCCT solo si no hay FreeCAD.
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("Motor 3D (STEP)")
+        box.setText("¿Con qué motor generar los archivos STEP?")
+        box.setInformativeText(
+            "FreeCAD: producción (generador_verde).\n\n"
+            "Arga Nesting Suite: reutiliza FreeCAD si está instalado "
+            "(mismo resultado); solo usa OCCT embebido si FreeCAD no está disponible.\n\n"
+            "El visor 3D OCCT no se desconecta en ningún caso."
+        )
+        btn_fc = box.addButton("FreeCAD", QMessageBox.ButtonRole.YesRole)
+        btn_occt = box.addButton("Arga Nesting Suite", QMessageBox.ButtonRole.ActionRole)
+        btn_cancel = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+        for btn, min_w in ((btn_fc, 120), (btn_occt, 180), (btn_cancel, 104)):
+            btn.setMinimumWidth(min_w)
+            btn.setMinimumHeight(34)
+        box.setDefaultButton(btn_fc)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is None or clicked == btn_cancel:
+            return None
+        if clicked == btn_occt:
+            return "occt"
+        return "freecad"
+
+    def _finalizar_renesteo_lote(self, nuevo_resultado, *, backup_resultados=None):
         if hasattr(self.app, 'cerrar_ventana_carga'):
             self.app.cerrar_ventana_carga()
 
@@ -1325,6 +1504,46 @@ class TabNesting(QWidget, TimerHost):
 
         if not hasattr(self.app, "resultados_multilote") or not self.app.resultados_multilote:
             return QMessageBox.critical(self, "Error", "No existe un lote activo para sustituir.")
+
+        # Poka-yoke: rechazar grupos con error / inventario incompleto / solapes.
+        errores = []
+        for clave, info in nuevo_resultado.items():
+            if not isinstance(info, dict):
+                continue
+            if info.get("error"):
+                errores.append(f"{clave}: {info.get('error')}")
+            elif info.get("inventario_incompleto"):
+                errores.append(f"{clave}: {info.get('advertencia') or 'inventario incompleto'}")
+        if errores:
+            texto = "\n\n".join(errores[:6])
+            if len(errores) > 6:
+                texto += f"\n\n(+{len(errores) - 6} más)"
+            return QMessageBox.critical(
+                self,
+                "Renesteo rechazado (poka-yoke)",
+                "No se aplicó el renesteo del lote: hay grupos incompletos o con error.\n\n"
+                f"{texto}",
+            )
+
+        try:
+            from modules.nesting_engine.nest_poka_yoke import validar_solapes_hojas_fail_closed
+
+            for clave, info in nuevo_resultado.items():
+                if not isinstance(info, dict) or info.get("error"):
+                    continue
+                ok_s, msg_s = validar_solapes_hojas_fail_closed(info.get("hojas") or [])
+                if not ok_s:
+                    return QMessageBox.critical(
+                        self,
+                        "Renesteo rechazado (poka-yoke)",
+                        f"Solapes / validación metal en {clave}:\n{msg_s}",
+                    )
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "Renesteo rechazado (poka-yoke)",
+                f"No se pudo validar solapes (fail-closed):\n{exc}",
+            )
 
         self.app.resultados_multilote[self.lote_actual_idx]["data"] = nuevo_resultado
         self.app.resultados_nesting = nuevo_resultado
@@ -1361,6 +1580,19 @@ class TabNesting(QWidget, TimerHost):
         if not lote_inputs:
             return QMessageBox.warning(self, "Atención", "El lote activo no tiene piezas para renestear.")
 
+        km = self._leer_kerf_margin_ui()
+        if km is None:
+            return
+        kerf_ui, margin_ui = km
+
+        if not self._poka_yoke_stock_grupos_ok(
+            lote_inputs,
+            titulo="Renesteo lote — stock (poka-yoke)",
+        ):
+            return
+
+        backup_resultados = copy.deepcopy(getattr(self.app, "resultados_nesting", None))
+
         if hasattr(self.app, 'abrir_ventana_carga'):
             self.app.abrir_ventana_carga("Renesteando lote activo...")
 
@@ -1373,18 +1605,19 @@ class TabNesting(QWidget, TimerHost):
             try:
                 self._sync_orientacion_cobre_al_motor()
                 datos_placas = self.app.plates_manager.obtener_datos_placas()
+                if not datos_placas:
+                    raise RuntimeError(
+                        "Sin placas DISPONIBLE en inventario (poka-yoke). "
+                        "Revise Herinox / stock antes de renestear."
+                    )
                 wo_act = str(getattr(self.app, 'job_activo', 'PENDIENTE')).strip().upper() or "PENDIENTE"
 
-                try:
-                    kerf_ui = self._kerf_efectivo()
-                except Exception:
-                    kerf_ui = DEFAULT_KERF_IN
                 nuevo_resultado = self.app.motor_nesting.ejecutar_nesting_visual(
                     lote_inputs,
                     datos_placas,
                     progress_callback=receptor_en_vivo,
                     config_kerf=kerf_ui,
-                    config_margin=self.global_margin_val,
+                    config_margin=margin_ui,
                     config_corner=self.global_corner_val,
                     config_opt=self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO",
                     wo_name=wo_act,
@@ -1397,7 +1630,12 @@ class TabNesting(QWidget, TimerHost):
                     self.app.after(0, self.restaurar_controles_tras_cancelacion)
                     return
 
-                self.app.after(0, lambda r=nuevo_resultado: self._finalizar_renesteo_lote(r))
+                self.app.after(
+                    0,
+                    lambda r=nuevo_resultado, b=backup_resultados: self._finalizar_renesteo_lote(
+                        r, backup_resultados=b
+                    ),
+                )
 
             except Exception as e:
                 msg = str(e)
@@ -1405,6 +1643,8 @@ class TabNesting(QWidget, TimerHost):
                 def throw_err():
                     if hasattr(self.app, 'cerrar_ventana_carga'):
                         self.app.cerrar_ventana_carga()
+                    if backup_resultados is not None:
+                        self.app.resultados_nesting = backup_resultados
                     QMessageBox.critical(self, "Error", f"No se pudo renestear el lote activo:\n{msg}")
 
                 self.app.after(0, throw_err)
@@ -1940,6 +2180,29 @@ class TabNesting(QWidget, TimerHost):
         if not self.app.datos_partes_actuales:
             return QMessageBox.warning(self, "Atención", "No hay piezas importadas.")
 
+        # Poka-yoke INPUT: no Run si auditoría pendiente o DXF omitidos.
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                validar_auditoria_dxf_antes_nest,
+            )
+
+            ok_dxf, msg_dxf = validar_auditoria_dxf_antes_nest(
+                getattr(self.app, "dxf_nesting_audit", None),
+                pending=bool(getattr(self.app, "dxf_audit_pending", False)),
+            )
+            if not ok_dxf:
+                return QMessageBox.critical(
+                    self,
+                    "DXF no aptos (poka-yoke)",
+                    msg_dxf,
+                )
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "DXF no aptos (poka-yoke)",
+                f"No se pudo validar la auditoría de DXF antes de nestear:\n{exc}",
+            )
+
         if self._tiene_nesting_activo():
             resp = QMessageBox.question(
                 self,
@@ -1952,6 +2215,48 @@ class TabNesting(QWidget, TimerHost):
             )
             if resp != QMessageBox.StandardButton.Yes:
                 return
+
+        # Kerf/margin ANTES de abrir ventana de carga (no gastar UI en config inválida).
+        km = self._leer_kerf_margin_ui()
+        if km is None:
+            return
+        kerf_ui, margin_ui = km
+        self.global_margin_val = margin_ui
+
+        # Poka-yoke stock: sin placas = bloqueo; cache vieja = confirmación.
+        try:
+            from modules.nesting_engine.nest_poka_yoke import validar_stock_antes_nest
+
+            datos_chk = self.app.plates_manager.obtener_datos_placas()
+            ok_st, msg_st, nivel_st = validar_stock_antes_nest(datos_chk)
+            if not ok_st:
+                return QMessageBox.critical(
+                    self, "Stock insuficiente (poka-yoke)", msg_st
+                )
+            if nivel_st == "warn" and msg_st:
+                resp_st = QMessageBox.question(
+                    self,
+                    "Stock posiblemente desactualizado",
+                    f"{msg_st}\n\n¿Continuar de todos modos?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if resp_st != QMessageBox.StandardButton.Yes:
+                    return
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "Stock (poka-yoke)",
+                f"No se pudo validar inventario de placas antes de nestear:\n{exc}",
+            )
+
+        # Poka-yoke por calibre/material (stock usable) ANTES de gastar el nest.
+        if not self._poka_yoke_stock_grupos_ok(
+            self._datos_partes_activos_para_nesting(),
+            getattr(self.app.plates_manager, "obtener_datos_placas", lambda: [])(),
+            titulo="Stock por calibre (poka-yoke)",
+        ):
+            return
 
         plate_selection = None
         if not self._wo_solo_cobre():
@@ -1995,19 +2300,13 @@ class TabNesting(QWidget, TimerHost):
             "Optimizando Lotes..." if analiza_lotes else "Ejecutando Nesting"
         )
 
-        try:
-            kerf_ui = self._kerf_efectivo()
-        except Exception:
-            kerf_ui = DEFAULT_KERF_IN
-        if kerf_ui < DEFAULT_KERF_IN:
-            kerf_ui = DEFAULT_KERF_IN
         opt_ui = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
 
         threading.Thread(
             target=self.thread_worker,
             args=(
                 T,
-                self.global_margin_val,
+                margin_ui,
                 self.global_corner_val,
                 kerf_ui,
                 opt_ui,
@@ -2102,6 +2401,10 @@ class TabNesting(QWidget, TimerHost):
 
                 self.app.tiempo_calculo = time.time() - tiempo_inicio
                 lista_unica = [{"lote_k": T, "data": res}]
+                # Poka-yoke: si el nest abortó (p. ej. DXF), no gastar en largos/display.
+                if isinstance(res, dict) and res.get("error"):
+                    self.app.after(0, lambda rl=lista_unica: self.finalizar(rl))
+                    return
                 self._preparar_resultados_nesting_pesado(
                     lista_unica, progress_callback=receptor_en_vivo
                 )
@@ -2147,6 +2450,26 @@ class TabNesting(QWidget, TimerHost):
                 )
                 self._propagar_auditoria_dxf_a_parts(nestings_precalculados[k])
                 if _abortar_si_cancelado():
+                    return
+                # Poka-yoke: un k con error de geometría/DXF/integridad no debe seguir anidando.
+                res_k = nestings_precalculados[k]
+                if isinstance(res_k, dict) and res_k.get("error"):
+                    self.app.tiempo_calculo = time.time() - tiempo_inicio
+                    lista_fail = [{"lote_k": k, "data": res_k}]
+                    self.app.after(0, lambda rl=lista_fail: self.finalizar(rl))
+                    return
+                try:
+                    from modules.nesting_engine.nest_poka_yoke import (
+                        listar_fallas_resultados_nest,
+                    )
+
+                    fallas_k = listar_fallas_resultados_nest(res_k)
+                except Exception as exc:
+                    fallas_k = [f"No se pudo auditar integridad del lote k={k}: {exc}"]
+                if fallas_k:
+                    self.app.tiempo_calculo = time.time() - tiempo_inicio
+                    lista_fail = [{"lote_k": k, "data": res_k}]
+                    self.app.after(0, lambda rl=lista_fail: self.finalizar(rl))
                     return
 
             escenarios_resultados = []
@@ -2289,22 +2612,37 @@ class TabNesting(QWidget, TimerHost):
             pass
 
         avisos = []
+        bloqueantes = []
         for item in resultados_list or []:
             data = (item or {}).get("data")
             if isinstance(data, dict) and data.get("error"):
-                avisos.append(str(data.get("error")))
+                bloqueantes.append(str(data.get("error")))
                 continue
             if not isinstance(data, dict):
                 continue
             for clave, info in data.items():
                 if not isinstance(info, dict):
                     continue
-                if info.get("error"):
-                    avisos.append(f"{clave}: {info.get('error')}")
+                if info.get("error") or info.get("inventario_incompleto"):
+                    bloqueantes.append(
+                        f"{clave}: {info.get('error') or info.get('advertencia')}"
+                    )
                 elif info.get("advertencia"):
                     avisos.append(f"{clave}: {info.get('advertencia')}")
 
-        if avisos:
+        if bloqueantes:
+            texto = "\n\n".join(bloqueantes[:5])
+            if len(bloqueantes) > 5:
+                texto += f"\n\n(+{len(bloqueantes) - 5} más)"
+            QMessageBox.critical(
+                self,
+                "Nest incompleto (poka-yoke)",
+                f"{mensaje}\n\n"
+                "Hay grupos rechazados o incompletos. La exportación a corte "
+                "quedará bloqueada hasta corregirlos.\n\n"
+                f"{texto}",
+            )
+        elif avisos:
             texto_aviso = "\n\n".join(avisos[:5])
             if len(avisos) > 5:
                 texto_aviso += f"\n\n(+{len(avisos) - 5} avisos más)"
@@ -2394,18 +2732,40 @@ class TabNesting(QWidget, TimerHost):
         self.tipo_cambio_fuente = fuente
         self.tipo_cambio_actualizado = ts
 
+    def _contar_placas_usadas(self, resultados=None) -> int:
+        """Placas/barras físicas usadas (excluye RTZCU virtual y retazos ACCESORIOS)."""
+        res = resultados if resultados is not None else getattr(self.app, "resultados_nesting", None)
+        if not isinstance(res, dict) or not res:
+            return 0
+        total = 0
+        for info in res.values():
+            if not isinstance(info, dict) or "error" in info:
+                continue
+            for hoja in info.get("hojas") or []:
+                if not isinstance(hoja, dict):
+                    continue
+                if hoja.get("cu_rtz_virtual") or hoja.get("es_retazo"):
+                    continue
+                total += 1
+        return total
+
     def _actualizar_piezas_totales_label(self, resultados=None):
         if not hasattr(self, "lbl_piezas_totales"):
             return
         res = resultados if resultados is not None else getattr(self.app, "resultados_nesting", None)
         if not isinstance(res, dict) or not res:
             self.lbl_piezas_totales.setText("PIEZAS TOTALES: -")
+            if hasattr(self, "lbl_placas_totales"):
+                self.lbl_placas_totales.setText("PLACAS: -")
             return
         total = 0
         for info in res.values():
             if isinstance(info, dict) and "error" not in info:
                 total += contar_piezas_grupo(info)
         self.lbl_piezas_totales.setText(f"PIEZAS TOTALES: {total}")
+        if hasattr(self, "lbl_placas_totales"):
+            n_placas = self._contar_placas_usadas(res)
+            self.lbl_placas_totales.setText(f"PLACAS: {n_placas}")
 
     def sincronizar_overlays_clave(self, clave):
         """Actualiza REF/guillotina/tatuajes del retazo en la placa madre."""
@@ -2640,6 +3000,14 @@ class TabNesting(QWidget, TimerHost):
             scroll_add_widget(self.lista_hojas, header)
 
             if es_grupo_cu and hojas_del_material:
+                from modules.nesting_engine.cu_largos_nesting import (
+                    ordenar_hojas_largos_cu_por_ancho,
+                )
+
+                hojas_del_material = ordenar_hojas_largos_cu_por_ancho(
+                    list(hojas_del_material)
+                )
+                info["hojas"] = hojas_del_material
                 info.setdefault("ignorar_deduccion_cu", True)
                 ign_cu = bool(info.get("ignorar_deduccion_cu", True))
                 for h_cu in hojas_del_material:
@@ -3591,6 +3959,26 @@ class TabNesting(QWidget, TimerHost):
                 if not (resultado.get("hojas") or []):
                     raise RuntimeError("El renesteo no generó hojas válidas.")
 
+                inv_esperado = self._inventario_piezas_canonico(piezas_pack)
+                ok_inv, msg_inv = self._validar_renest_conserva_inventario(
+                    inv_esperado, resultado
+                )
+                if not ok_inv:
+                    raise RuntimeError(msg_inv)
+
+                from modules.nesting_engine.nest_poka_yoke import (
+                    validar_solapes_hojas_fail_closed,
+                )
+
+                ok_s, msg_s = validar_solapes_hojas_fail_closed(
+                    resultado.get("hojas") or []
+                )
+                if not ok_s:
+                    raise RuntimeError(
+                        "Compensación rechazada (poka-yoke solapes fail-closed):\n"
+                        f"{msg_s}"
+                    )
+
                 self._marcar_hojas_compensadas_plasma(clave, resultado, compensados, offset_mm)
                 self.app.resultados_nesting[clave] = resultado
                 self._recalcular_costos_grupo(clave)
@@ -3751,6 +4139,40 @@ class TabNesting(QWidget, TimerHost):
                 f"Esperadas: {total_esperado} · Generadas: {len(piezas_pack)}.\n"
                 "Revise PARTS y rutas DXF antes de renestear.",
             )
+
+        # Stock del calibre ANTES de confirmar / gastar renesteo.
+        partes_grupo = []
+        for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
+            if self.app.motor_nesting._coinciden(
+                str(clave).split("_", 1)[0], cal
+            ) and self.app.motor_nesting._coinciden(
+                (str(clave).split("_", 1) + [""])[1], mat
+            ):
+                partes_grupo.append((p_nom, mat, qty, cal, st, ruta))
+        if not partes_grupo:
+            # Fallback: sintetizar desde piezas_pack
+            from collections import Counter
+
+            cnt = Counter(p.get("nombre") for p in piezas_pack)
+            for nom, q in cnt.items():
+                src = next((p for p in piezas_pack if p.get("nombre") == nom), {})
+                partes_grupo.append(
+                    (
+                        nom,
+                        src.get("material") or "",
+                        q,
+                        src.get("calibre") or str(clave).split("_", 1)[0],
+                        "OK",
+                        src.get("ruta") or "",
+                    )
+                )
+        if not self._poka_yoke_stock_grupos_ok(
+            partes_grupo,
+            solo_claves={str(clave)},
+            titulo="Renesteo calibre — stock (poka-yoke)",
+        ):
+            return
+
         total_nido = sum(int(v) for v in (build_info.get("conteo_nido") or {}).values())
         total_job_cnt = sum(int(v) for v in (build_info.get("conteo_job") or {}).values())
         aviso_cantidad = ""
@@ -3876,22 +4298,18 @@ class TabNesting(QWidget, TimerHost):
                 if not ok_inv:
                     raise RuntimeError(msg_inv)
 
-                try:
-                    from modules.nesting_engine.sheet_integrity import hoja_tiene_solapes_metal
+                from modules.nesting_engine.nest_poka_yoke import (
+                    validar_solapes_hojas_fail_closed,
+                )
 
-                    for hx in resultado.get("hojas") or []:
-                        if not isinstance(hx, dict) or hx.get("es_retazo"):
-                            continue
-                        solapa, detalle = hoja_tiene_solapes_metal(hx)
-                        if solapa:
-                            raise RuntimeError(
-                                "El motor generó piezas solapadas en una placa.\n"
-                                f"Detalle: {detalle}"
-                            )
-                except RuntimeError:
-                    raise
-                except Exception:
-                    pass
+                ok_s, msg_s = validar_solapes_hojas_fail_closed(
+                    resultado.get("hojas") or []
+                )
+                if not ok_s:
+                    raise RuntimeError(
+                        "Renesteo rechazado (poka-yoke solapes fail-closed):\n"
+                        f"{msg_s}"
+                    )
 
                 self._aplicar_flags_cobre_resultado(clave, resultado, backup_grp)
                 self.app.resultados_nesting[clave] = resultado
@@ -6990,26 +7408,22 @@ class TabNesting(QWidget, TimerHost):
                 )
                 return False
 
-        # Anti-solape: no aplicar nest con metal overlapping (nests “fantasma”).
-        try:
-            from modules.nesting_engine.sheet_integrity import hoja_tiene_solapes_metal
+        # Anti-solape fail-closed: no aplicar nest con metal overlapping ni si no se pudo validar.
+        from modules.nesting_engine.nest_poka_yoke import validar_solapes_hojas_fail_closed
 
-            for hx in [nueva, *(hojas_adicionales or [])]:
-                if not hx:
-                    continue
-                solapa, detalle = hoja_tiene_solapes_metal(hx)
-                if solapa:
-                    self._abortar_y_restaurar_nesting(
-                        clv,
-                        snapshot,
-                        "El motor generó piezas solapadas; se restauró el nesteo anterior.\n"
-                        f"Detalle: {detalle}",
-                        hoja_original=hoja_original,
-                        idx_objetivo=idx_objetivo,
-                    )
-                    return False
-        except Exception:
-            pass
+        ok_s, msg_s = validar_solapes_hojas_fail_closed(
+            [h for h in [nueva, *(hojas_adicionales or [])] if h]
+        )
+        if not ok_s:
+            self._abortar_y_restaurar_nesting(
+                clv,
+                snapshot,
+                "Renesteo de bloque rechazado (poka-yoke solapes fail-closed).\n"
+                f"{msg_s}",
+                hoja_original=hoja_original,
+                idx_objetivo=idx_objetivo,
+            )
+            return False
 
         if tiene_minis and hoja_original and self._placa_equivalente_en_esencia(hoja_original, nueva):
             nueva = copy.deepcopy(hoja_original)
@@ -7403,6 +7817,32 @@ class TabNesting(QWidget, TimerHost):
             )
             return
 
+        # Poka-yoke solapes fail-closed tras transferencia.
+        try:
+            from modules.nesting_engine.nest_poka_yoke import validar_solapes_hojas_fail_closed
+
+            grp = (self.app.resultados_nesting or {}).get(clv) or {}
+            ok_s, msg_s = validar_solapes_hojas_fail_closed(grp.get("hojas") or [])
+            if not ok_s:
+                self._abortar_y_restaurar_nesting(
+                    clv,
+                    backup_grupo,
+                    "Transferencia rechazada (poka-yoke solapes fail-closed).\n"
+                    f"{msg_s}",
+                    hoja_original=hoja_destino,
+                    multilote_snaps=backup_multilote,
+                )
+                return
+        except Exception as exc:
+            self._abortar_y_restaurar_nesting(
+                clv,
+                backup_grupo,
+                f"Transferencia rechazada: no se pudo validar solapes.\n{exc}",
+                hoja_original=hoja_destino,
+                multilote_snaps=backup_multilote,
+            )
+            return
+
         resultado = None
         if isinstance(exito, dict):
             resultado = exito
@@ -7475,6 +7915,36 @@ class TabNesting(QWidget, TimerHost):
         if not hasattr(self.app, 'resultados_multilote') or not self.app.resultados_multilote:
             return QMessageBox.warning(self, "Atención", "No hay datos para exportar.")
 
+        # Poka-yoke: no exportar nests incompletos / solapados / con error de grupo.
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                allow_incomplete_nest,
+                listar_fallas_resultados_nest,
+            )
+
+            fallas_export: list[str] = []
+            for lote in self.app.resultados_multilote or []:
+                data = (lote or {}).get("data")
+                fallas_export.extend(listar_fallas_resultados_nest(data))
+            if fallas_export and not allow_incomplete_nest():
+                texto = "\n\n".join(fallas_export[:6])
+                if len(fallas_export) > 6:
+                    texto += f"\n\n(+{len(fallas_export) - 6} más)"
+                return QMessageBox.critical(
+                    self,
+                    "Exportación bloqueada (poka-yoke)",
+                    "Hay grupos con error, inventario incompleto o solapes.\n"
+                    "Corrija el nesteo (o renestee) antes de exportar a corte.\n\n"
+                    f"{texto}\n\n"
+                    "Escape shop: ARGA_ALLOW_INCOMPLETE_NEST=1",
+                )
+        except Exception as exc:
+            return QMessageBox.critical(
+                self,
+                "Exportación bloqueada (poka-yoke)",
+                f"No se pudo validar integridad antes de exportar:\n{exc}",
+            )
+
         if self._geom_prep_en_curso():
             return QMessageBox.information(
                 self,
@@ -7512,12 +7982,85 @@ class TabNesting(QWidget, TimerHost):
             return
         print(f"[DEBUG] Respuesta 3D: {respuesta_3d} (True=Yes, False=No, None=Cancelado)")
 
-        if hasattr(self.app, 'abrir_ventana_carga'):
-            self.app.abrir_ventana_carga("Procesando Exportación...")
+        motor_3d = "freecad"
+        if respuesta_3d:
+            elegido = self._preguntar_motor_3d_export()
+            if elegido is None:
+                return
+            motor_3d = elegido
+        print(f"[DEBUG] Motor 3D: {motor_3d}")
+
+        # Totales estimados (todos los lotes) para la pantalla dual
+        try:
+            from modules.nesting_engine.exporter import estimar_conteos_export
+
+            n_dxf_tot = 0
+            n_step_tot = 0
+            for orden_obj in (self.app.resultados_multilote or []):
+                mini = orden_obj.get("data") or {}
+                d, s = estimar_conteos_export(mini, generar_step=bool(respuesta_3d))
+                n_dxf_tot += int(d)
+                n_step_tot += int(s)
+        except Exception as exc_est:
+            print(f"[EXPORT][WARN] No se pudo estimar conteos: {exc_est}")
+            n_dxf_tot, n_step_tot = 0, 0
+
+        titulo_export = (
+            "Exportando DXF / STEP — Arga Nesting Suite"
+            if motor_3d == "occt" and respuesta_3d
+            else (
+                "Exportando DXF / STEP — FreeCAD"
+                if respuesta_3d
+                else "Exportando DXF…"
+            )
+        )
+        if hasattr(self.app, "abrir_ventana_carga_export"):
+            self.app.abrir_ventana_carga_export(
+                titulo_export,
+                n_dxf=n_dxf_tot,
+                n_step=n_step_tot if respuesta_3d else 0,
+            )
+        elif hasattr(self.app, "abrir_ventana_carga"):
+            self.app.abrir_ventana_carga(titulo_export)
+
+        dxf_done_global = [0]
+        step_done_global = [0]
+
+        def _on_export_progress(**kwargs):
+            msg = str(kwargs.get("mensaje") or "")
+            dd = kwargs.get("dxf_done")
+            sd = kwargs.get("step_done")
+            # Acumular por lote: el exporter reporta contadores locales del lote actual.
+            # Usamos deltas vía máximos locales trackeados por lote en el worker.
+            if hasattr(self.app, "actualizar_progreso_export"):
+                self.app.actualizar_progreso_export(
+                    mensaje=msg,
+                    dxf_done=dxf_done_global[0] + int(dd or 0) if dd is not None else None,
+                    step_done=step_done_global[0] + int(sd or 0) if sd is not None else None,
+                    dxf_total=n_dxf_tot,
+                    step_total=n_step_tot if respuesta_3d else 0,
+                )
+            elif hasattr(self.app, "actualizar_progreso"):
+                pct = 0.0
+                if n_dxf_tot > 0 and dd is not None:
+                    pct = 0.55 * float(dxf_done_global[0] + int(dd)) / float(n_dxf_tot)
+                if respuesta_3d and n_step_tot > 0 and sd is not None:
+                    pct = 0.55 + 0.45 * float(step_done_global[0] + int(sd)) / float(n_step_tot)
+                self.app.actualizar_progreso(msg or "Exportando…", pct)
 
         def worker():
             try:
+                _on_export_progress(
+                    mensaje="Preparando geometría / carpetas…",
+                    dxf_done=0,
+                    step_done=0 if respuesta_3d else None,
+                )
                 self._bloquear_hasta_geom_prep()
+                _on_export_progress(
+                    mensaje="Creando estructura de W.O.…",
+                    dxf_done=0,
+                    step_done=0 if respuesta_3d else None,
+                )
                 modo_servidor = bool(getattr(self.app, "exportar_a_servidor", True))
                 print(
                     f"[EXPORT] modo={'SERVIDOR+BD' if modo_servidor else 'LOCAL (Nesteos Locales)'}"
@@ -7627,9 +8170,29 @@ class TabNesting(QWidget, TimerHost):
 
                     ruta_export = os.path.join(ruta_absoluta_wo, "ARGA MODEL CORE")
                     os.makedirs(ruta_export, exist_ok=True)
+                    try:
+                        self.app.ultima_ruta_export_cad = ruta_export
+                    except Exception:
+                        pass
 
                     # 1) Primero exportamos DXF/STEP para que mini_resultados
                     #    quede enriquecido con pqart_exports por hoja.
+                    lote_dxf_max = [0]
+                    lote_step_max = [0]
+
+                    def _progress_lote(**kwargs):
+                        dd = kwargs.get("dxf_done")
+                        sd = kwargs.get("step_done")
+                        if dd is not None:
+                            lote_dxf_max[0] = max(lote_dxf_max[0], int(dd))
+                        if sd is not None:
+                            lote_step_max[0] = max(lote_step_max[0], int(sd))
+                        _on_export_progress(
+                            mensaje=kwargs.get("mensaje", ""),
+                            dxf_done=lote_dxf_max[0],
+                            step_done=lote_step_max[0] if respuesta_3d else None,
+                        )
+
                     self.app.motor_nesting.exportar_resultados_a_dxf(
                         mini_resultados,
                         ruta_export,
@@ -7639,6 +8202,15 @@ class TabNesting(QWidget, TimerHost):
                         es_swo=es_swo_flag,
                         swo_id=job_activo if es_swo_flag else None,
                         datos_partes=getattr(self.app, "datos_partes_actuales", None),
+                        motor_3d=motor_3d if respuesta_3d else "freecad",
+                        progress_cb=_progress_lote,
+                    )
+                    dxf_done_global[0] += int(lote_dxf_max[0])
+                    step_done_global[0] += int(lote_step_max[0])
+                    _on_export_progress(
+                        mensaje=f"Lote {i + 1} exportado",
+                        dxf_done=0,
+                        step_done=0 if respuesta_3d else None,
                     )
 
                     try:

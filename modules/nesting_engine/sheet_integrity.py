@@ -89,11 +89,13 @@ def hoja_tiene_solapes_metal(
     """True si dos piezas reales se solapan en metal (área > umbral).
 
     Usado antes de aplicar renest/resultado para rechazar nests inválidos.
+    Fail-closed: si no se puede validar, el detalle empieza con
+    ``validacion_solape_no_disponible`` (el caller debe rechazar el commit).
     """
     try:
         from .geometry_parser import reconstruir_poly_seguro
     except Exception as exc:
-        return False, f"validacion_solape_no_disponible:{exc}"
+        return True, f"validacion_solape_no_disponible:{exc}"
 
     _ = kerf_in  # reservado; metal sólido sin buffer (kerf ya en nest)
 
@@ -107,19 +109,30 @@ def hoja_tiene_solapes_metal(
 
     geoms = []
     names = []
+    skipped = 0
     for p in piezas:
         g = reconstruir_poly_seguro(p.get("poligonos") or [])
         if g is None or g.is_empty:
+            skipped += 1
             continue
         try:
             if not g.is_valid:
                 g = g.buffer(0)
             if g.is_empty:
+                skipped += 1
                 continue
             geoms.append(g)
             names.append(str(p.get("nombre") or "?"))
         except Exception:
+            skipped += 1
             continue
+
+    # Si perdimos demasiadas geometrías, no afirmar "sin solape".
+    if skipped > 0 and len(geoms) < 2 and len(piezas) >= 2:
+        return True, (
+            f"validacion_solape_no_disponible:"
+            f"geoms_insuficientes skipped={skipped} piezas={len(piezas)}"
+        )
 
     for i in range(len(geoms)):
         for j in range(i + 1, len(geoms)):
@@ -131,7 +144,10 @@ def hoja_tiene_solapes_metal(
                 if area >= float(min_area_mm2):
                     return True, f"{names[i]} × {names[j]} ({area:.0f} mm²)"
             except Exception:
-                continue
+                return True, (
+                    f"validacion_solape_no_disponible:"
+                    f"intersection_error {names[i]}×{names[j]}"
+                )
     return False, ""
 
 
@@ -435,11 +451,9 @@ def deduplicar_resultados_nesting(resultados, kerf_global: float = DEFAULT_KERF_
                 grupo["hojas"],
                 piezas_pendientes=grupo.get("piezas_pendientes"),
             )
-            if not ok_inv:
-                grupo["advertencia"] = msg_inv
-                grupo.pop("error", None)
-            else:
-                grupo.pop("advertencia", None)
+            from .nest_poka_yoke import aplicar_resultado_inventario
+
+            aplicar_resultado_inventario(grupo, ok_inv=ok_inv, msg_inv=msg_inv)
         else:
             hojas_largos = [
                 h for h in hojas if isinstance(h, dict) and h.get("modo_largos_cu")

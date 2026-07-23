@@ -97,6 +97,7 @@ class SistemaNestingPro(QMainWindow):
         self.datos_placas_empresa, self.datos_placas_proveedor = self.plates_manager.obtener_datos_placas_divididos()
         self.datos_partes_actuales = []
         self.dxf_nesting_audit = {"total": 0, "ok": 0, "omitidos": []}
+        self.dxf_audit_pending = False
         self.orientacion_cobre_por_ruta = {}
         self._parts_ui_pendiente = None
         self.resultados_nesting = {}
@@ -201,9 +202,15 @@ class SistemaNestingPro(QMainWindow):
         root.addLayout(footer)
 
         try:
-            icon_path = config.ruta_recurso(os.path.join("assets", "branding", "logo_icon1.png"))
-            if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
+            icon_candidates = (
+                os.path.join("assets", "branding", "arga_nesting_logo.png"),
+                os.path.join("assets", "branding", "logo_icon1.png"),
+            )
+            for rel in icon_candidates:
+                icon_path = config.ruta_recurso(rel)
+                if os.path.exists(icon_path):
+                    self.setWindowIcon(QIcon(icon_path))
+                    break
         except Exception:
             pass
 
@@ -404,6 +411,27 @@ class SistemaNestingPro(QMainWindow):
         self._ventana_carga_abierta = True
         self._progress_dialog.show()
 
+    def abrir_ventana_carga_export(
+        self,
+        titulo: str = "Exportando DXF / STEP",
+        *,
+        n_dxf: int = 0,
+        n_step: int = 0,
+    ):
+        """Pantalla de exportación con doble barra (DXF + STEP) y cronómetro."""
+        if self._ventana_carga_abierta:
+            self.cerrar_ventana_carga(solicitud_usuario=False)
+        self.reiniciar_cancelacion_tarea()
+        if hasattr(self.motor_nesting, "set_cancel_checker"):
+            self.motor_nesting.set_cancel_checker(self.tarea_cancelada)
+        from .export_progress_dialog import ExportProgressDialog
+
+        dlg = ExportProgressDialog(self, titulo)
+        dlg.set_totals(int(n_dxf or 0), int(n_step or 0))
+        self._progress_dialog = dlg
+        self._ventana_carga_abierta = True
+        dlg.show()
+
     def actualizar_progreso(self, mensaje, porcentaje):
         dlg = self._progress_dialog
         if not dlg or not self._ventana_carga_abierta:
@@ -417,7 +445,54 @@ class SistemaNestingPro(QMainWindow):
             except Exception:
                 pass
 
-        QTimer.singleShot(0, _apply)
+        # Siempre vía bridge: el export corre en hilo worker.
+        call_on_main(_apply)
+
+    def actualizar_progreso_export(
+        self,
+        *,
+        mensaje: str = "",
+        dxf_done: int | None = None,
+        dxf_total: int | None = None,
+        step_done: int | None = None,
+        step_total: int | None = None,
+    ):
+        dlg = self._progress_dialog
+        if not dlg or not self._ventana_carga_abierta:
+            return
+        if not hasattr(dlg, "update_progress"):
+            # Fallback a ProgressDialog clásico
+            pct = 0.0
+            if dxf_total and dxf_done is not None:
+                pct = 0.5 * (float(dxf_done) / max(1, float(dxf_total)))
+            if step_total and step_done is not None:
+                pct = 0.5 + 0.5 * (float(step_done) / max(1, float(step_total)))
+            self.actualizar_progreso(mensaje or "Exportando…", pct)
+            return
+
+        def _apply(
+            d=dlg,
+            m=mensaje,
+            dd=dxf_done,
+            dt=dxf_total,
+            sd=step_done,
+            st=step_total,
+        ):
+            if self._progress_dialog is not d or not self._ventana_carga_abierta:
+                return
+            try:
+                if dt is not None or st is not None:
+                    cur_dxf = getattr(d, "_dxf_total", 0)
+                    cur_step = getattr(d, "_step_total", 0)
+                    d.set_totals(
+                        int(dt if dt is not None else cur_dxf),
+                        int(st if st is not None else cur_step),
+                    )
+                d.update_progress(dxf_done=dd, step_done=sd, mensaje=m or "")
+            except Exception:
+                pass
+
+        call_on_main(_apply)
 
     def cerrar_ventana_carga(self, solicitud_usuario=False):
         if self._progress_dialog:

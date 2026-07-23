@@ -44,12 +44,26 @@ if __name__ == "__main__":
     import urllib.request  # noqa: F401
 
     from PySide6.QtWidgets import QApplication
+    from PySide6.QtGui import QIcon
     from interface.qt.theme import apply_theme
     from interface.qt.main_window import SistemaNestingPro
 
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("ARGA NESTING SUITE")
     qt_app.setApplicationDisplayName("ARGA NESTING SUITE")
+    try:
+        import config as _cfg
+
+        for _rel in (
+            os.path.join("assets", "branding", "arga_nesting_logo.png"),
+            os.path.join("assets", "branding", "logo_icon1.png"),
+        ):
+            _icon = _cfg.ruta_recurso(_rel)
+            if os.path.isfile(_icon):
+                qt_app.setWindowIcon(QIcon(_icon))
+                break
+    except Exception:
+        pass
 
     apply_theme(qt_app)
 
@@ -58,7 +72,10 @@ if __name__ == "__main__":
     try:
         if len(sys.argv) > 1:
             arg_path = os.path.abspath(str(sys.argv[1]))
-            if os.path.isfile(arg_path) and os.path.splitext(arg_path)[1].lower() in {".arganest", ".navanest"}:
+            if os.path.isfile(arg_path) and os.path.splitext(arg_path)[1].lower() in {
+                ".arganest",
+                ".navanest",
+            }:
                 window.after(250, lambda p=arg_path: window.abrir_workspace_arganest_en_arranque(p))
 
     except Exception:

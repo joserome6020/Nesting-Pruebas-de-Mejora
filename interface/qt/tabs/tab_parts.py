@@ -376,6 +376,7 @@ class TabParts(QWidget, TimerHost):
         self._dxf_audit_token = int(getattr(self, "_dxf_audit_token", 0)) + 1
         token = self._dxf_audit_token
         snapshot = [tuple(x) for x in (datos or [])]
+        self.app.dxf_audit_pending = True
         self.lbl_dxf_conteo.setText("DXF NESTEO: validando…")
         self.lbl_dxf_conteo.setStyleSheet(self._estilo_lbl_dxf_conteo())
         self.btn_dxf_omitidos.setEnabled(False)
@@ -415,6 +416,7 @@ class TabParts(QWidget, TimerHost):
             "omitidos": list(audit.get("omitidos") or []),
         }
         self.app.dxf_nesting_audit = dict(self._dxf_audit_actual)
+        self.app.dxf_audit_pending = False
         self._actualizar_widget_resumen_dxf()
 
     def actualizar_resumen_dxf(self, audit: dict | None = None):
@@ -425,6 +427,8 @@ class TabParts(QWidget, TimerHost):
                 "ok": int(audit.get("ok", 0) or 0),
                 "omitidos": list(audit.get("omitidos") or []),
             }
+            self.app.dxf_nesting_audit = dict(self._dxf_audit_actual)
+            self.app.dxf_audit_pending = False
         self._actualizar_widget_resumen_dxf()
 
     def _estilo_lbl_dxf_conteo(self) -> str:

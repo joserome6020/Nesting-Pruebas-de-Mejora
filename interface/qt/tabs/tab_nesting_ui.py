@@ -161,6 +161,15 @@ def build_tab_nesting_ui(tab) -> None:
     tab.lista_hojas.setWidget(tab._lista_hojas_inner)
     izq_lay.addWidget(tab.lista_hojas, 1)
 
+    fila_placas = QHBoxLayout()
+    fila_placas.setContentsMargins(0, 6, 0, 0)
+    tab.lbl_placas_totales = QLabel("PLACAS: -")
+    tab.lbl_placas_totales.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    tab.lbl_placas_totales.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    fila_placas.addWidget(tab.lbl_placas_totales)
+    fila_placas.addStretch()
+    izq_lay.addLayout(fila_placas)
+
     splitter.addWidget(panel_izq)
 
     panel_der_wrap = QWidget()
@@ -184,6 +193,7 @@ def build_tab_nesting_ui(tab) -> None:
         return b
 
     tab.btn_exportar = _btn("EXPORTAR DXF/STEP", tab.exportar_resultados_dxf)
+    tab.btn_ver_step = _btn("VER STEP", tab.abrir_visor_step)
     tab.btn_ver_lotes = _btn("HISTORIAL DE W.O.", tab.reabrir_modal_escenarios)
     tab.btn_costos = _btn("COSTOS DE ORDEN", lambda: __import__("interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]).abrir_modal_costos(tab))
     tab.btn_nesting_largos = _btn("NESTEO DE LARGOS", tab.abrir_nesting_largos)

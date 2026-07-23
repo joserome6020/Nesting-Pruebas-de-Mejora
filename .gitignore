@@ -15,6 +15,10 @@ modules/nesting_engine/algorithm_cpp*.pyd
 # Dependencias vendored (Deepnest, etc.)
 third_party/
 
+# Laboratorio OCCT paralelo (salidas de prueba; el código sí se versiona)
+CAD (OCCT)/out/*
+!CAD (OCCT)/out/.gitkeep
+
 # PyInstaller / artefactos de build local
 build/
 dist/
@@ -36,3 +40,9 @@ modules/nesting_engine/algorithm_cpp.pyd.bak
 modules/nesting_engine/algorithm_cpp.pyd.prev
 modules/nesting_engine/algorithm_cpp.pyd.new
 
+
+# Salidas locales / cache de trabajo
+_logs/
+cache/
+*.obj
+Plates.xlsx

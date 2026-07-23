@@ -43,6 +43,7 @@ class ArgaForceEngine:
                 opt_override=request.opt_override,
                 corner_override=request.corner_override,
                 limite_poly=request.limite_poly,
+                cancel_checker=request.cancel_checker,
             )
             return PackSheetResult(
                 hoja=hoja,
