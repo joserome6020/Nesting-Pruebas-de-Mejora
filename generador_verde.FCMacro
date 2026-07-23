@@ -1244,9 +1244,15 @@ def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_
         return
 
     # POSICIONAMIENTO GLOBAL
+    # NONE/ASIS/KEEP: coords DXF 1:1 (solo off_*). TR/BR: ancla robot + off_*.
     caja_total = plate_solid.BoundBox
-    if origen_tipo == "TR": dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMax
-    else: dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMin
+    ori_u = str(origen_tipo or "").strip().upper()
+    if ori_u in ("", "NONE", "ASIS", "KEEP", "IDENTITY", "0"):
+        dx_ancla, dy_ancla = 0.0, 0.0
+    elif ori_u == "TR":
+        dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMax
+    else:
+        dx_ancla, dy_ancla = -caja_total.XMax, -caja_total.YMin
 
     dx_final, dy_final, dz_final = dx_ancla + off_x, dy_ancla + off_y, off_z
     mov = App.Vector(dx_final, dy_final, dz_final)

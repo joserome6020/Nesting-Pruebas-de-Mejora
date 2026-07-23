@@ -79,6 +79,19 @@ FREECAD_MACRO = ruta_recurso("generador_verde.FCMacro")
 FREECAD_THK_MM = 6.35 
 FREECAD_SCALE = 1.0
 
+# Overlay encima del flujo robot Cama A/B:
+# True  → TODAS las carpetas DXF de acero generan 1 STEP (sin A/B, coords 1:1).
+#         Cobre no aplica (sigue su lógica).
+# False → flujo normal (solo robot láser/plasma con Cama A + Cama B).
+# Override: STEP_UNIVERSAL_SIN_CAMAS=0|1 en el entorno.
+_STEP_UNIVERSAL_ENV = os.getenv("STEP_UNIVERSAL_SIN_CAMAS", "").strip().lower()
+if _STEP_UNIVERSAL_ENV in {"0", "false", "no", "off"}:
+    STEP_UNIVERSAL_SIN_CAMAS = False
+elif _STEP_UNIVERSAL_ENV in {"1", "true", "yes", "si", "on"}:
+    STEP_UNIVERSAL_SIN_CAMAS = True
+else:
+    STEP_UNIVERSAL_SIN_CAMAS = True  # activo hasta que volvamos al flujo A/B
+
 # =========================================================
 # --- INTEGRACION REACT-HERINOX (SYNC DE PLACAS) ---
 # =========================================================

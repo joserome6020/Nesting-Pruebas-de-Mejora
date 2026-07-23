@@ -1,7 +1,6 @@
 import glob
 import os
 import re
-import shutil
 from shapely.geometry import Polygon, MultiPolygon
 
 
@@ -12,6 +11,20 @@ RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
 ARCHIVO_ARGANEST_NESTING = "ARCHIVO DE NESTEO ARGANEST"
+
+
+def step_universal_sin_camas_activo() -> bool:
+    """
+    Overlay sobre el flujo robot Cama A/B.
+    True → STEP 1:1 en todas las carpetas DXF de acero (sin A/B).
+    False → solo robot láser/plasma con Cama A + Cama B.
+    """
+    try:
+        import config as _cfg
+
+        return bool(getattr(_cfg, "STEP_UNIVERSAL_SIN_CAMAS", False))
+    except Exception:
+        return False
 
 
 def _hay_dxfs(ruta):
@@ -118,39 +131,12 @@ def _build_cu_formato_por_dxf(resultados: dict) -> dict[str, str]:
     return formato
 
 
-def _publicar_steps_en_3d_nesting(out_dir: str, rutas: dict) -> int:
-    """Copia STEP generados a ARGA MODEL CORE/3D NESTING (ruta visible en SWO)."""
-    dest = os.path.join(out_dir, "3D NESTING")
-    os.makedirs(dest, exist_ok=True)
-    copiados = 0
-    step_dirs = [
-        rutas.get("nesteos_cobre_step"),
-        rutas.get("robot_laser_step_A"),
-        rutas.get("robot_laser_step_B"),
-        rutas.get("robot_plasma_step_A"),
-        rutas.get("robot_plasma_step_B"),
-    ]
-    for step_dir in step_dirs:
-        if not step_dir or not os.path.isdir(step_dir):
-            continue
-        for cad_path in glob.glob(os.path.join(step_dir, "*.step")):
-            dest_path = os.path.join(dest, os.path.basename(cad_path))
-            try:
-                shutil.copy2(cad_path, dest_path)
-                copiados += 1
-            except Exception as exc:
-                print(
-                    f"[3D][WARN] No se pudo copiar {cad_path} -> {dest_path}: {exc}"
-                )
-    return copiados
-
-
-_ULTIMO_RESUMEN_STEP: dict[str, dict[str, int]] = {}
-
-
 def obtener_resumen_step_ultimo_export() -> dict[str, dict[str, int]]:
     """Resumen DXF vs STEP del último export (vacío si no hubo conversión 3D)."""
     return dict(_ULTIMO_RESUMEN_STEP)
+
+
+_ULTIMO_RESUMEN_STEP: dict[str, dict[str, int]] = {}
 
 
 def _auditar_steps_en_rutas(
@@ -158,11 +144,21 @@ def _auditar_steps_en_rutas(
     *,
     cu_formato_por_dxf: dict[str, str] | None = None,
 ) -> dict[str, dict[str, int]]:
-    familias = [
-        ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
-        ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
-        ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
-    ]
+    universal = step_universal_sin_camas_activo()
+    if universal:
+        familias = [
+            ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
+            ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
+            ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
+            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step"),
+            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step"),
+        ]
+    else:
+        familias = [
+            ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
+            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
+            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
+        ]
     resumen: dict[str, dict[str, int]] = {}
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
     for etiqueta, dxf_key, step_key in familias:
@@ -205,14 +201,80 @@ def _auditar_steps_en_rutas(
     return resumen
 
 
+def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int, int]:
+    """
+    Estima (n_dxf, n_step) para barras de progreso.
+    Flujo normal: robot láser/plasma → 2 STEP (Cama A + Cama B); CAMA LASER solo DXF.
+    Overlay STEP_UNIVERSAL_SIN_CAMAS: 1 STEP por cada DXF de acero (sin A/B).
+    Cobre: STEP solo si la hoja requiere 3D.
+    """
+    n_dxf = 0
+    n_step = 0
+    universal = step_universal_sin_camas_activo()
+    for clave, data in (resultados or {}).items():
+        if not isinstance(data, dict):
+            continue
+        for hoja in data.get("hojas") or []:
+            if not isinstance(hoja, dict):
+                continue
+            carpeta = _resolver_carpeta_principal(clave, hoja)
+            n_dxf += 1
+            generar_plasma = _debe_generar_plasma(clave, hoja)
+            if generar_plasma:
+                n_dxf += 1
+            if not generar_step:
+                continue
+            if carpeta == RUTA_NESTEOS_COBRE:
+                if _cu_dxf_requiere_3d(_hoja_cobre_export_3d(hoja)):
+                    n_step += 1
+            elif universal:
+                n_step += 1
+                if generar_plasma:
+                    n_step += 1
+            else:
+                if carpeta == RUTA_ROBOT_LASER:
+                    n_step += 2
+                if generar_plasma:
+                    n_step += 2
+    return n_dxf, n_step
+
+
+def _step_dir_key_for_familia(etiqueta: str) -> str:
+    """Clave de rutas[] para la carpeta STEP según overlay o flujo A/B."""
+    universal = step_universal_sin_camas_activo()
+    mapping = {
+        "NESTEOS DE COBRE": "nesteos_cobre_step",
+        "CAMA LASER": "cama_laser_step",
+        "CAMA LASER 12KW": "cama_laser_12kw_step",
+        "ROBOT LASER": "robot_laser_step" if universal else "robot_laser_step_A",
+        "ROBOT PLASMA": "robot_plasma_step" if universal else "robot_plasma_step_A",
+    }
+    return mapping.get(etiqueta, "")
+
+
+def _dxf_dir_key_for_familia(etiqueta: str) -> str:
+    mapping = {
+        "NESTEOS DE COBRE": "nesteos_cobre_dxf",
+        "CAMA LASER": "cama_laser_dxf",
+        "CAMA LASER 12KW": "cama_laser_12kw_dxf",
+        "ROBOT LASER": "robot_laser_dxf",
+        "ROBOT PLASMA": "robot_plasma_dxf",
+    }
+    return mapping.get(etiqueta, "")
+
+
 def _validar_steps_tras_export(
     rutas: dict,
     *,
     log_fn=None,
     cu_formato_por_dxf: dict[str, str] | None = None,
+    motor_3d: str = "freecad",
 ) -> dict[str, dict[str, int]]:
     """Falla el export si había DXF de cobre/láser y no se generó el STEP esperado."""
     _log = log_fn or (lambda _msg: None)
+    motor = str(motor_3d or "freecad").strip().lower()
+    motor_label = "Arga Nesting Suite (OCCT)" if motor in ("occt", "arga", "nans") else "FreeCAD"
+    universal = step_universal_sin_camas_activo()
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
     resumen = _auditar_steps_en_rutas(rutas, cu_formato_por_dxf=cu_formato_por_dxf)
     for etiqueta, counts in resumen.items():
@@ -222,52 +284,26 @@ def _validar_steps_tras_export(
         if n_dxf <= 0:
             continue
         _log(
-            f"3D audit [{etiqueta}]: {n_step} STEP / {n_dxf_3d} DXF con 3D"
+            f"3D audit [{etiqueta}] ({motor_label}): {n_step} STEP / {n_dxf_3d} DXF con 3D"
             + (f" ({n_dxf - n_dxf_3d} solo DXF)" if n_dxf > n_dxf_3d else "")
         )
         if n_dxf_3d <= 0:
             continue
+        step_key = _step_dir_key_for_familia(etiqueta)
+        dxf_key = _dxf_dir_key_for_familia(etiqueta)
         if n_step <= 0:
-            step_dir = rutas.get(
-                {
-                    "NESTEOS DE COBRE": "nesteos_cobre_step",
-                    "ROBOT LASER": "robot_laser_step_A",
-                    "ROBOT PLASMA": "robot_plasma_step_A",
-                }.get(etiqueta, ""),
-                "",
-            )
-            log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
+            step_dir = rutas.get(step_key, "")
+            if motor in ("occt", "arga", "nans"):
+                log_hint = step_dir or "(sin carpeta STEP)"
+            else:
+                log_hint = os.path.join(step_dir, "_logs", "freecad_macro.log") if step_dir else ""
             raise RuntimeError(
-                f"FreeCAD no generó archivos STEP en {etiqueta} ({n_dxf_3d} DXF con 3D, 0 STEP). "
-                f"Revisa el log: {log_hint}"
+                f"{motor_label} no generó archivos STEP en {etiqueta} "
+                f"({n_dxf_3d} DXF con 3D, 0 STEP). Revisa: {log_hint}"
             )
         if n_step < n_dxf_3d:
-            step_dir = os.path.normpath(
-                str(
-                    rutas.get(
-                        {
-                            "NESTEOS DE COBRE": "nesteos_cobre_step",
-                            "ROBOT LASER": "robot_laser_step_A",
-                            "ROBOT PLASMA": "robot_plasma_step_A",
-                        }.get(etiqueta, ""),
-                        "",
-                    )
-                    or ""
-                ).strip()
-            )
-            dxf_dir = os.path.normpath(
-                str(
-                    rutas.get(
-                        {
-                            "NESTEOS DE COBRE": "nesteos_cobre_dxf",
-                            "ROBOT LASER": "robot_laser_dxf",
-                            "ROBOT PLASMA": "robot_plasma_dxf",
-                        }.get(etiqueta, ""),
-                        "",
-                    )
-                    or ""
-                ).strip()
-            )
+            step_dir = os.path.normpath(str(rutas.get(step_key, "") or "").strip())
+            dxf_dir = os.path.normpath(str(rutas.get(dxf_key, "") or "").strip())
             faltantes: list[str] = []
             if dxf_dir:
                 try:
@@ -297,6 +333,34 @@ def _validar_steps_tras_export(
                 f"{detalle_faltantes} "
                 "Re-exportar reanuda solo los pendientes."
             )
+
+    # Poka-yoke Cama A/B: solo en flujo normal (láser y plasma)
+    if not universal:
+        try:
+            from .nest_poka_yoke import validar_step_cama_ab_pares
+
+            for etiqueta, key_a, key_b in (
+                ("ROBOT LASER", "robot_laser_step_A", "robot_laser_step_B"),
+                ("ROBOT PLASMA", "robot_plasma_step_A", "robot_plasma_step_B"),
+            ):
+                ok_ab, msg_ab = validar_step_cama_ab_pares(
+                    rutas.get(key_a, ""),
+                    rutas.get(key_b, ""),
+                    etiqueta=etiqueta,
+                    motor_label=motor_label,
+                )
+                if not ok_ab:
+                    raise RuntimeError(msg_ab)
+                na = int((resumen.get(etiqueta) or {}).get("step") or 0)
+                if na > 0:
+                    _log(f"3D poka-yoke [{etiqueta}]: Cama A/B OK ({na} STEP en A)")
+        except RuntimeError:
+            raise
+        except Exception as exc_py:
+            _log(f"WARN poka-yoke Cama A/B: {exc_py}")
+    else:
+        _log("3D overlay: STEP_UNIVERSAL_SIN_CAMAS activo (sin poka-yoke Cama A/B)")
+
     return resumen
 
 
@@ -694,12 +758,21 @@ def lanzar_freecad_robotica(
     *,
     es_cobre: bool = False,
     cu_formato_por_dxf: dict[str, str] | None = None,
+    progress_cb=None,
 ):
     from freecad_runner import ejecutar_macro_freecad
 
     job_root = os.path.normpath(str(job_root_dir or "").strip())
     resultados = []
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
+
+    def _notify(msg: str):
+        if not callable(progress_cb):
+            return
+        try:
+            progress_cb(mensaje=msg)
+        except Exception:
+            pass
 
     def _convertir(
         etiqueta,
@@ -735,10 +808,12 @@ def lanzar_freecad_robotica(
         if not candidatos:
             print(f"[{cad_label}][SKIP] {etiqueta}: sin DXF aplicables en {dxf_dir}")
             resultados.append((etiqueta, True, dxf_dir))
+            _notify(f"FreeCAD [{etiqueta}]: sin DXF")
             return
 
         os.makedirs(out_dir, exist_ok=True)
         print(f"[{cad_label}] {etiqueta}: {len(candidatos)} DXF -> {out_dir}")
+        _notify(f"FreeCAD STEP [{etiqueta}]: {len(candidatos)} DXF…")
         ok = ejecutar_macro_freecad(
             dxf_dir,
             out_dir,
@@ -752,6 +827,7 @@ def lanzar_freecad_robotica(
             dxf_filter=dxf_filter,
         )
         resultados.append((etiqueta, ok, dxf_dir))
+        _notify(f"FreeCAD STEP [{etiqueta}]: {'OK' if ok else 'WARN'}")
         if not ok:
             print(
                 f"[{cad_label}][WARN] {etiqueta}: FreeCAD no generó {cad_label} "
@@ -767,9 +843,9 @@ def lanzar_freecad_robotica(
             return "dxf"
         return "step"
 
-    # CAMA LASER (acero): solo DXF — no genera STEP.
+    universal = step_universal_sin_camas_activo()
 
-    # NESTEOS DE COBRE (largos CU: madre + RTZCU)
+    # NESTEOS DE COBRE (largos CU: madre + RTZCU) — siempre igual (no entra al overlay)
     if es_cobre and rutas.get("nesteos_cobre_dxf"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
         if not fmt_map:
@@ -789,49 +865,80 @@ def lanzar_freecad_robotica(
                 dxf_filter=lambda p: _cu_dxf_requiere_3d(_fmt_for_dxf(p)),
             )
 
-    # ROBOT LASER
-    if rutas.get("robot_laser_dxf"):
-        os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
-        _convertir(
-            "ROBOT LASER A",
-            "robot_laser_dxf",
-            "robot_laser_step_A",
-            "TR",
-            4235, -1015, -700,
-            prefer_verde=True,
-            material="STEEL",
+    if universal:
+        # Overlay: 1 STEP por DXF de acero, coords DXF 1:1 (origen NONE, sin A/B).
+        print(
+            "[STEP] Overlay STEP_UNIVERSAL_SIN_CAMAS activo: "
+            "todas las carpetas DXF acero → 1 STEP sin desfase de camas"
         )
-        _convertir(
-            "ROBOT LASER B",
-            "robot_laser_dxf",
-            "robot_laser_step_B",
-            "BR",
-            4235, 840, -700,
-            prefer_verde=True,
-            material="STEEL",
+        acero_jobs = (
+            ("CAMA LASER", "cama_laser_dxf", "cama_laser_step", "0.0"),
+            ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step", "0.0"),
+            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step", "0.0"),
+            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step", str(plasma_off)),
         )
+        for etiqueta, dxf_key, step_key, plasma_env in acero_jobs:
+            if not rutas.get(dxf_key) and not rutas.get(step_key):
+                continue
+            os.environ["FREECAD_PLASMA_OFFSET"] = plasma_env
+            _convertir(
+                etiqueta,
+                dxf_key,
+                step_key,
+                "NONE",
+                0.0,
+                0.0,
+                0.0,
+                prefer_verde=True,
+                material="STEEL",
+            )
+    else:
+        # Flujo normal: CAMA LASER solo DXF; robot A/B con ancla + offset.
+        # CAMA LASER (acero): solo DXF — no genera STEP.
 
-    # ROBOT PLASMA
-    if rutas.get("robot_plasma_dxf"):
-        os.environ["FREECAD_PLASMA_OFFSET"] = str(plasma_off)
-        _convertir(
-            "ROBOT PLASMA A",
-            "robot_plasma_dxf",
-            "robot_plasma_step_A",
-            "TR",
-            4235, -1015, -700,
-            prefer_verde=True,
-            material="STEEL",
-        )
-        _convertir(
-            "ROBOT PLASMA B",
-            "robot_plasma_dxf",
-            "robot_plasma_step_B",
-            "BR",
-            4235, 840, -700,
-            prefer_verde=True,
-            material="STEEL",
-        )
+        # ROBOT LASER
+        if rutas.get("robot_laser_dxf"):
+            os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
+            _convertir(
+                "ROBOT LASER A",
+                "robot_laser_dxf",
+                "robot_laser_step_A",
+                "TR",
+                4235, -1015, -700,
+                prefer_verde=True,
+                material="STEEL",
+            )
+            _convertir(
+                "ROBOT LASER B",
+                "robot_laser_dxf",
+                "robot_laser_step_B",
+                "BR",
+                4235, 840, -700,
+                prefer_verde=True,
+                material="STEEL",
+            )
+
+        # ROBOT PLASMA
+        if rutas.get("robot_plasma_dxf"):
+            os.environ["FREECAD_PLASMA_OFFSET"] = str(plasma_off)
+            _convertir(
+                "ROBOT PLASMA A",
+                "robot_plasma_dxf",
+                "robot_plasma_step_A",
+                "TR",
+                4235, -1015, -700,
+                prefer_verde=True,
+                material="STEEL",
+            )
+            _convertir(
+                "ROBOT PLASMA B",
+                "robot_plasma_dxf",
+                "robot_plasma_step_B",
+                "BR",
+                4235, 840, -700,
+                prefer_verde=True,
+                material="STEEL",
+            )
 
     ok_total = sum(1 for _, ok, _ in resultados if ok)
     if resultados:
@@ -848,6 +955,8 @@ def exportar_resultados_a_dxf(
     es_swo: bool = False,
     swo_id: str | None = None,
     datos_partes=None,
+    motor_3d: str = "freecad",
+    progress_cb=None,
 ):
     from .dxf_export_log import log, log_section, log_sheet_plan
 
@@ -864,12 +973,43 @@ def exportar_resultados_a_dxf(
     job_root_dir = os.path.join(out_dir, nest_folder)
     es_swo_export = _es_export_swo(base_name, wo_label, es_swo=es_swo)
     swo_ref = str(swo_id or base_name or "").strip()
+    motor = str(motor_3d or "freecad").strip().lower()
+    if motor in ("arga", "nans", "arga nesting", "arga_nesting"):
+        motor = "occt"
+    if motor not in ("freecad", "occt"):
+        motor = "freecad"
+
+    n_dxf_est, n_step_est = estimar_conteos_export(resultados, generar_step=bool(generar_step))
+    dxf_done = 0
+
+    def _progress(**kwargs):
+        if not callable(progress_cb):
+            return
+        payload = {
+            "dxf_done": dxf_done,
+            "dxf_total": n_dxf_est,
+            "step_done": kwargs.get("step_done"),
+            "step_total": n_step_est if generar_step else 0,
+            "mensaje": kwargs.get("mensaje", ""),
+        }
+        if kwargs.get("step_total") is not None:
+            payload["step_total"] = kwargs["step_total"]
+        try:
+            progress_cb(**{k: v for k, v in payload.items() if v is not None or k == "mensaje"})
+        except Exception:
+            pass
 
     log_section("INICIO EXPORTACION DXF")
     log(f"destino_raiz={out_dir}")
     log(f"carpeta_nesting={job_root_dir}")
     log(f"base_name={base_name} | wo_label={wo_label} | es_swo={es_swo_export} | swo_ref={swo_ref}")
-    log(f"generar_step={generar_step} | grupos={len(resultados or {})}")
+    log(
+        f"generar_step={generar_step} | motor_3d={motor} | "
+        f"step_universal_sin_camas={step_universal_sin_camas_activo()} | "
+        f"estimado_dxf={n_dxf_est} | estimado_step={n_step_est} | "
+        f"grupos={len(resultados or {})}"
+    )
+    _progress(mensaje="Escribiendo DXF de producción…", step_done=0)
 
     rutas = {
         "nesteos_cobre_dxf": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "DXF"),
@@ -878,12 +1018,36 @@ def exportar_resultados_a_dxf(
         "cama_laser_12kw_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "DXF"),
         "robot_laser_dxf": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "DXF"),
         "robot_plasma_dxf": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "DXF"),
-
-        "robot_laser_step_A": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama A"),
-        "robot_laser_step_B": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"),
-        "robot_plasma_step_A": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"),
-        "robot_plasma_step_B": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"),
     }
+    if step_universal_sin_camas_activo():
+        # Overlay: STEP plano por familia (sin Cama A/B).
+        rutas.update(
+            {
+                "cama_laser_step": os.path.join(job_root_dir, RUTA_CAMA_LASER, "STEP"),
+                "cama_laser_12kw_step": os.path.join(
+                    job_root_dir, RUTA_CAMA_LASER_12KW, "STEP"
+                ),
+                "robot_laser_step": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP"),
+                "robot_plasma_step": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP"),
+            }
+        )
+    else:
+        rutas.update(
+            {
+                "robot_laser_step_A": os.path.join(
+                    job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama A"
+                ),
+                "robot_laser_step_B": os.path.join(
+                    job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"
+                ),
+                "robot_plasma_step_A": os.path.join(
+                    job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"
+                ),
+                "robot_plasma_step_B": os.path.join(
+                    job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"
+                ),
+            }
+        )
 
     for r in rutas.values():
         os.makedirs(r, exist_ok=True)
@@ -1278,6 +1442,11 @@ def exportar_resultados_a_dxf(
                         f"Exportación abortada ({nombre_archivo}): {exc}"
                     ) from exc
                 exportados_principales.append(path_principal)
+                dxf_done += 1
+                _progress(
+                    mensaje=f"DXF {dxf_done}/{n_dxf_est}: {nombre_archivo}",
+                    step_done=0,
+                )
 
                 _registrar_exportacion_pqart_hoja(
                     hoja,
@@ -1361,36 +1530,76 @@ def exportar_resultados_a_dxf(
                     ruta_dxf=path_plasma,
                     tipo_corte=_normalizar_tipo_corte_pqart(RUTA_ROBOT_PLASMA),
                 )
+                dxf_done += 1
+                _progress(
+                    mensaje=f"DXF {dxf_done}/{n_dxf_est}: {nombre_archivo} (plasma)",
+                    step_done=0,
+                )
                 if solo_plasma:
                     exportados_principales.append(path_plasma)
 
     if generar_step:
-        log("Iniciando conversión 3D (FreeCAD)...")
+        motor_label = (
+            "Arga Nesting Suite (OCCT)" if motor == "occt" else "FreeCAD"
+        )
+        log(f"Iniciando conversión 3D ({motor_label})...")
         import time
         time.sleep(0.35)
         cu_formato_por_dxf = _build_cu_formato_por_dxf(resultados)
-        lanzar_freecad_robotica(
-            rutas,
-            thickness_para_step,
-            plasma_offset_job,
-            job_root_dir=job_root_dir,
-            es_cobre=_job_tiene_cobre(resultados),
-            cu_formato_por_dxf=cu_formato_por_dxf,
+        _progress(
+            mensaje=f"Convirtiendo a STEP con {motor_label}…",
+            step_done=0,
         )
-        _generar_steps_cobre_fuentes_in_place(resultados, job_root_dir, log_fn=log)
+        if motor == "occt":
+            from .occt_step_export import (
+                generar_steps_cobre_fuentes_occt,
+                lanzar_occt_robotica,
+            )
+
+            lanzar_occt_robotica(
+                rutas,
+                thickness_para_step,
+                plasma_offset_job,
+                job_root_dir,
+                es_cobre=_job_tiene_cobre(resultados),
+                cu_formato_por_dxf=cu_formato_por_dxf,
+                progress_cb=_progress,
+            )
+            generar_steps_cobre_fuentes_occt(
+                resultados,
+                job_root_dir,
+                log_fn=log,
+                progress_cb=_progress,
+            )
+        else:
+            lanzar_freecad_robotica(
+                rutas,
+                thickness_para_step,
+                plasma_offset_job,
+                job_root_dir=job_root_dir,
+                es_cobre=_job_tiene_cobre(resultados),
+                cu_formato_por_dxf=cu_formato_por_dxf,
+                progress_cb=_progress,
+            )
+            _generar_steps_cobre_fuentes_in_place(resultados, job_root_dir, log_fn=log)
+            _progress(
+                mensaje="Validando STEP (FreeCAD)…",
+                step_done=n_step_est,
+            )
         _ULTIMO_RESUMEN_STEP.clear()
         _ULTIMO_RESUMEN_STEP.update(
             _validar_steps_tras_export(
                 rutas,
                 log_fn=log,
                 cu_formato_por_dxf=cu_formato_por_dxf,
+                motor_3d=motor,
             )
         )
-        n_step = _publicar_steps_en_3d_nesting(out_dir, rutas)
-        if n_step:
-            etiqueta = "SWO" if es_swo_export else "WO"
-            log(f"STEP publicados en 3D NESTING: {n_step} archivos ({etiqueta})")
-            print(f"[STEP][{etiqueta}] Publicados {n_step} STEP en 3D NESTING", flush=True)
+        _progress(
+            mensaje=f"Exportación 3D completa ({motor_label})",
+            step_done=n_step_est,
+        )
+        # STEP solo en NESTING/<familia>/STEP (sin copia a 3D NESTING).
 
     if es_swo_export and swo_ref.upper().startswith("SWO"):
         from .api_client import enviar_reporte_a_api
