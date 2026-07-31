@@ -11,6 +11,12 @@ modules/nesting_engine/cpp/build/
 modules/nesting_engine/build/
 modules/nesting_engine/cpp/third_party/
 modules/nesting_engine/algorithm_cpp*.pyd
+modules/nesting_engine/venom_core*.pyd
+
+# Secrets / local env
+.env
+.env.*
+!.env.example
 
 # Dependencias vendored (Deepnest, etc.)
 third_party/
@@ -46,9 +52,34 @@ _logs/
 cache/
 *.obj
 Plates.xlsx
+debug.log
+exports/
+out_bench*.txt
 
-# Secrets / local env
-.env
-.env.*
-!.env.example
+# Generated local config & database files
+historial_jobs.json
+inventario_remanentes.csv
 
+# Workspaces and outputs
+*.arganest
+*.pdf
+
+# Corpus real local: manifests sanitizados sí; DXF/workspaces pesados no.
+benchmarks/corpus_real/*/dxf/
+benchmarks/corpus_real/*/*.arganest
+benchmarks/results_real/
+
+# Fixtura Amada: sims y scripts locales de medición
+FIXTURA AMADA/_sim/
+FIXTURA AMADA/_sim_*.py
+
+# Context and dumps
+Contexto_*.txt
+PROJECT_CODE_LISTING.txt
+project_context.json
+*.sql
+
+# Local IDE / build artifacts
+tools/arga_icon_handler_native/bin/
+tools/arga_nest_icon_handler/bin/
+tools/arga_nest_icon_handler/obj/

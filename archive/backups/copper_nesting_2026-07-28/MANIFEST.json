@@ -1,0 +1,130 @@
+﻿{
+    "snapshot":  "copper_nesting_2026-07-28",
+    "created_at":  "2026-07-28T10:16:08.9312898-06:00",
+    "files":  [
+                  {
+                      "path":  "modules/nesting_engine/cu_largos_nesting.py",
+                      "sha256":  "31A498161BB5AFC021F0B92189653C8822847459EDC4CEEC8DD1A23CE20CD69E"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/cu_rtz_sin_gap.py",
+                      "sha256":  "1E1F3A40979DD0B435C07A5B2CAEDB586BC3B6D74406D6B957D52B434D816113"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/cu_inventory.py",
+                      "sha256":  "D16EF75251C1A1EB01EEB585ECD5C7425D22409119CF6BDFE266A4183CBBB57E"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/manager.py",
+                      "sha256":  "0345A4951D78C710F7340C85E7DABAB33719F90E3A37160850E9C259007EF53D"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/nest_poka_yoke.py",
+                      "sha256":  "CAD0140AED273AECA7CC92AB64EFFFF0BAA41B9CC3260ADE3A1A894C751D8EE3"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/sheet_integrity.py",
+                      "sha256":  "9EDF6CB57A6D7B093804DCA81D7572EA40059546C94C51C28B6184C3774DF2BE"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/efficiency_metrics.py",
+                      "sha256":  "2430DAA3CB1BB141D271FD45DD34F5AB2F05C9F32EA6DA67E345BDDD3728ECC9"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/exporter.py",
+                      "sha256":  "6FAF7A4F5CA4E72DCB88A1414821831B3BCD50E5DC9890594D52FFE4B105F463"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/rtz_overlays.py",
+                      "sha256":  "4310BFEF2E845863451E71383C487B336E83BC3EA88E8528213D82173F2989A2"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/sheet_numbering.py",
+                      "sha256":  "0FA8E379BABFAEB75142C58A3CC316DA3825353F6D13FD8F7B47C52FA92E1280"
+                  },
+                  {
+                      "path":  "modules/nesting_engine/occt_step_export.py",
+                      "sha256":  "C25A392042507545E70E737FB4063E806EC9DE2BCF093211E7C7D165024F7739"
+                  },
+                  {
+                      "path":  "modules/dxf_export/cobre.py",
+                      "sha256":  "AF970A04B18ACE3CCF43EC067786E1BF0356ED34622F576BB010ACE82776EBAD"
+                  },
+                  {
+                      "path":  "modules/dxf_export/cobre_nest.py",
+                      "sha256":  "ED0FA338B84D40504F728146E377D83D499AB52F4B56C0FF6720A548397F1380"
+                  },
+                  {
+                      "path":  "modules/nest_exporter.py",
+                      "sha256":  "ECCF8E3BA7D8C83B7A156199BB80BE208DD402F53FE1D775CA5776F2C5477C4E"
+                  },
+                  {
+                      "path":  "modules/cobre_step_fuentes.py",
+                      "sha256":  "DD909B85E9D391276B3FD3858A80B07A9503183E65CC3609D61B10205E10E4B4"
+                  },
+                  {
+                      "path":  "interface/utils_nesting.py",
+                      "sha256":  "2C1AA35D55757D9D924D0F2CC6D7472C23A3D7CE850D550B56A217F058BE9905"
+                  },
+                  {
+                      "path":  "interface/nesting_workspace.py",
+                      "sha256":  "F254C63EB36C1A12C53FD31A5DED48B3B9752BEF4B9637089AD2C4EED906A5ED"
+                  },
+                  {
+                      "path":  "interface/material_colors.py",
+                      "sha256":  "350883A3E2CA57F41947934F6A2D2E14631A7A1A59DBEF9846BDFB7A2CA1CF4F"
+                  },
+                  {
+                      "path":  "interface/largos_nesting_service.py",
+                      "sha256":  "21C56D67824C306D1EF6085F294278AA841153E028548F30D5C7683119A945AE"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/_mixin_nesting_calc.py",
+                      "sha256":  "345CD4512746826965FF055531FC9692D78F2A0F1C5C550055257D2B737394E4"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/_mixin_export.py",
+                      "sha256":  "5918FA8290E84019417CE2823A3DBC459DD367E7D4EE7EE81D49114831884694"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/_mixin_plate_mgmt.py",
+                      "sha256":  "BB3EAA9A346B6DD1A76CC13EA1A2644B8F1F8B5EF205DD980C4B30866DCAFD66"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/_mixin_lote_edit.py",
+                      "sha256":  "FB0597613A052200B7B05DE4ED2B128634CDD541C15207799BFBBA6BEACA3264"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/_mixin_transfer.py",
+                      "sha256":  "4CE6820480401548B0184EF01A2AF7B2B0E1C8ECD9E26C171439BC1BE3B2F1E8"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/tab_nesting.py",
+                      "sha256":  "D03EB0989D3FC77A9B58C933C0F1C1A298F9C40ACE4B408D7D44EBC2B0E2E19C"
+                  },
+                  {
+                      "path":  "interface/qt/tabs/tab_parts.py",
+                      "sha256":  "76859B7011E8FB26FD02259D37B10DDF69D49EAC72B88F8C7933C4B58DAAD52C"
+                  },
+                  {
+                      "path":  "interface/qt/nesting_graphics.py",
+                      "sha256":  "4B7425B1276713653BDC6FB05F9D147B404A2CE9EBD396AC394D120E1FBD539C"
+                  },
+                  {
+                      "path":  "interface/qt/nesting_canvas.py",
+                      "sha256":  "AD834C7CDDD80202AD81BC729751A95D55AE125AC55CA658EBE01F0832A4199B"
+                  },
+                  {
+                      "path":  "interface/qt/dialogs/largos_nesting_modal.py",
+                      "sha256":  "775A709075A498727F892D7D3154C71D3C627F90604493E12096AAF7D6C54DB8"
+                  },
+                  {
+                      "path":  "reporte_pdf_nesting.py",
+                      "sha256":  "087AD47BC8BA35030AA88AC78A268C8FB6D13195A2A6C3DB90C1D43C951ECDA0"
+                  },
+                  {
+                      "path":  "lista_largos_material_requerido.py",
+                      "sha256":  "C4E49491FEB91666D4F468F04DF0DE5508F1340F6573676C9A6C31A6E61F3C6C"
+                  }
+              ]
+}

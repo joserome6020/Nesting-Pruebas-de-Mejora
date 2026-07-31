@@ -490,15 +490,6 @@ def construir_lista_largos_wo(wo_id: str) -> dict:
 
             rows.extend(_expandir_lista_para_wo(cursor, job, work_order))
 
-        if len(rows) > 0:
-            asegurar_tablas_lista_largos_operativas()
-            asegurar_tabla_material_requerido_ldg()
-            try:
-                _asegurar_material_requerido_orden(cursor, wo_limpia, "WO")
-            except Exception as e_plan:
-                print(f"[LISTA_LARGOS][WARN] Plan/pedido WO '{wo_limpia}': {e_plan}")
-            conexion.commit()
-
         return {
             "tipo": "wo",
             "identificador": wo_limpia,
@@ -559,15 +550,6 @@ def construir_lista_largos_swo(swo_id: str) -> dict:
             })
 
             rows.extend(_expandir_lista_para_wo(cursor, job, work_order))
-
-        if len(rows) > 0:
-            asegurar_tablas_lista_largos_operativas()
-            asegurar_tabla_material_requerido_ldg()
-            try:
-                _asegurar_material_requerido_orden(cursor, swo_limpia, "SWO")
-            except Exception as e_plan:
-                print(f"[LISTA_LARGOS][WARN] Plan/pedido SWO '{swo_limpia}': {e_plan}")
-            conexion.commit()
 
         return {
             "tipo": "swo",
@@ -1523,6 +1505,34 @@ def _asegurar_material_requerido_orden(
     if tipo not in ("WO", "SWO"):
         return False, "tipo_orden debe ser WO o SWO"
 
+    if tipo == "WO":
+        # En una orden fusionada el pedido de compra es canónico en la SWO.
+        # Generarlo de nuevo bajo la WO duplica material requerido y puede
+        # duplicar el consumo en VSM/ContPAQ.
+        cursor.execute(
+            """
+            SELECT NULLIF(BTRIM(super_work_order), '') AS swo
+            FROM reporte_cortes
+            WHERE BTRIM(work_order) = %s
+              AND NULLIF(BTRIM(super_work_order), '') IS NOT NULL
+            LIMIT 1
+            """,
+            (orden,),
+        )
+        row_swo = cursor.fetchone()
+        swo = (
+            str(row_swo.get("swo") or "").strip()
+            if isinstance(row_swo, dict)
+            else str(row_swo[0] or "").strip()
+            if row_swo
+            else ""
+        )
+        if swo:
+            return (
+                True,
+                f"Pedido WO omitido: la orden pertenece a {swo}; el pedido canónico es SWO.",
+            )
+
     asegurar_tabla_material_requerido_ldg()
     rows, _ = _ll_rows_para_orden(cursor, orden, tipo)
     if not rows:
@@ -1544,7 +1554,9 @@ def _propagar_material_requerido_tras_jobs(cursor, jobs: list[dict]) -> list[dic
     for item in jobs or []:
         wo = str(item.get("work_order") or "").strip()
         swo = str(item.get("super_work_order") or "").strip()
-        if wo:
+        # Si pertenece a una SWO, el pedido se consolida una sola vez bajo la
+        # SWO; nunca bajo cada WO miembro.
+        if wo and not swo:
             wos.add(wo)
         if swo:
             swos.add(swo)
