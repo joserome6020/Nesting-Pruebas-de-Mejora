@@ -34,8 +34,10 @@ def export_piece(
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
     count_before = _msp_count(msp)
+    used_source = False
 
     if bool(p.get("prefer_source_dxf")) and ruta and os.path.isfile(ruta):
+        used_source = True
         _export_cu_largos_from_source(
             msp,
             doc,
@@ -59,6 +61,29 @@ def export_piece(
         for e in new_ents
         if str(getattr(e.dxf, "layer", "") or "") == "CUT_OUTER"
     )
+    # Madre Amada/sin_gap con 1 sola pieza: el DXF fuente no aporta
+    # segmentos láser interiores. Insertar guillotina al fin de la pieza.
+    if (
+        used_source
+        and outer_cuts == 0
+        and bool(p.get("cu_largos_piece"))
+        and not str(label).startswith("CU_CORTE__")
+    ):
+        from modules.nest_exporter import _export_cu_guillotina_fin_pieza
+
+        log(
+            f"    cobre[{label}]: sin CUT_OUTER desde fuente → "
+            f"guillotina fin de pieza",
+            level="WARN",
+        )
+        if _export_cu_guillotina_fin_pieza(msp, p, sheet=sheet):
+            new_ents = _msp_snapshot(msp)[count_before:]
+            outer_cuts = sum(
+                1
+                for e in new_ents
+                if str(getattr(e.dxf, "layer", "") or "") == "CUT_OUTER"
+            )
+
     if outer_cuts == 0 and not str(label).startswith("CU_CORTE__"):
         log(
             f"    cobre[{label}]: sin segmentos CUT_OUTER "

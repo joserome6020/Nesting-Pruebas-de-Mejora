@@ -1346,7 +1346,7 @@ def _export_cu_largos_from_source(
                 "sin contorno CUT_OUTER cerrado exportable para STEP (revise DXF fuente)",
             )
         inner_ok = _export_cu_inner_and_marks_from_source(
-            msp, doc, part_doc, m, p, draw_marks=draw_marks
+            msp, doc, part_doc, m, p, draw_holes=draw_holes, draw_marks=draw_marks
         )
         holes = p.get("holes") or p.get("inner") or []
         marks = p.get("marks") or p.get("mark") or []
@@ -1378,7 +1378,7 @@ def _export_cu_largos_from_source(
             )
 
     inner_ok = _export_cu_inner_and_marks_from_source(
-        msp, doc, part_doc, m, p, draw_marks=draw_marks
+        msp, doc, part_doc, m, p, draw_holes=draw_holes, draw_marks=draw_marks
     )
 
     holes = p.get("holes") or p.get("inner") or []
@@ -1706,6 +1706,105 @@ def _export_cu_bar_inicio_marker_vertical(msp, bar_width_mm: float) -> None:
     )
 
 
+def _ensure_cierre_corte_madre_cu(msp, sheet: dict | None) -> bool:
+    """
+    Añade CUT_OUTER al fin de la madre (antes del RTZCU) si falta.
+    En export vertical CyPTube el corte queda horizontal a y = fin_madre.
+    """
+    if not isinstance(sheet, dict) or not sheet.get("cu_rtz_activo"):
+        return False
+    if sheet.get("cu_rtz_virtual") or sheet.get("cu_export_amada"):
+        return False
+    try:
+        fin = float(sheet.get("cu_fin_piezas_mm") or 0.0)
+    except (TypeError, ValueError):
+        fin = 0.0
+    if fin <= TOL_GEOM_MM:
+        try:
+            inicio = float(sheet.get("cu_rtz_inicio_mm") or 0.0)
+        except (TypeError, ValueError):
+            inicio = 0.0
+        # inicio = fin_madre + gap → aproximar fin si no hay cu_fin_piezas_mm
+        gap = 0.375 * 25.4
+        try:
+            from modules.nesting_engine.cu_rtz_sin_gap import _gap_rtz_mm
+
+            gap = float(_gap_rtz_mm(sheet))
+        except Exception:
+            pass
+        fin = max(0.0, inicio - gap) if inicio > gap + TOL_GEOM_MM else inicio
+    if fin <= TOL_GEOM_MM:
+        return False
+
+    bar_w = _bar_width_mm(sheet)
+    if bar_w <= TOL_GEOM_MM:
+        return False
+
+    p1 = (float(fin), 0.0)
+    p2 = (float(fin), float(bar_w))
+    if _sheet_export_sin_gap_vertical(sheet):
+        pts = _transform_poly_sin_gap_vertical([p1, p2], bar_w)
+        if len(pts) < 2:
+            return False
+        p1, p2 = pts[0], pts[1]
+
+    # ¿Ya hay un CUT_OUTER casi en esa posición?
+    tol = max(1.0, TOL_GEOM_MM * 4)
+    for e in msp:
+        if str(getattr(e.dxf, "layer", "") or "") != "CUT_OUTER":
+            continue
+        if e.dxftype() != "LINE":
+            continue
+        try:
+            a = e.dxf.start
+            b = e.dxf.end
+            ax, ay = float(a.x), float(a.y)
+            bx, by = float(b.x), float(b.y)
+        except Exception:
+            continue
+        # Vertical en nest / horizontal en CyPTube: misma coordenada de avance.
+        if _sheet_export_sin_gap_vertical(sheet):
+            if abs(ay - float(fin)) <= tol and abs(by - float(fin)) <= tol:
+                return False
+        else:
+            if abs(ax - float(fin)) <= tol and abs(bx - float(fin)) <= tol:
+                return False
+
+    msp.add_line(p1, p2, dxfattribs={"layer": "CUT_OUTER"})
+    return True
+
+
+def _export_cu_guillotina_fin_pieza(msp, p: dict, sheet: dict | None = None) -> bool:
+    """
+    Inserta CUT_OUTER en el extremo +X de la pieza (guillotina de cierre).
+    Respaldo cuando el DXF fuente no aporta segmentos láser (1 pieza Amada).
+    """
+    outer = p.get("outer") or p.get("outer_poly") or []
+    if len(outer) < 2:
+        return False
+    try:
+        xs = [float(pt[0]) for pt in outer]
+        ys = [float(pt[1]) for pt in outer]
+    except Exception:
+        return False
+    if not xs or not ys:
+        return False
+    maxx = max(xs)
+    miny, maxy = min(ys), max(ys)
+    if abs(maxy - miny) <= TOL_GEOM_MM:
+        return False
+    p1 = (float(maxx), float(miny))
+    p2 = (float(maxx), float(maxy))
+    if _sheet_export_sin_gap_vertical(sheet):
+        bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
+        pts = _transform_poly_sin_gap_vertical([p1, p2], bw)
+        if len(pts) < 2:
+            return False
+        p1, p2 = pts[0], pts[1]
+    msp.add_line(p1, p2, dxfattribs={"layer": "CUT_OUTER"})
+    return True
+
+
 def _canal_es_cama_laser(canal: str | None) -> bool:
     """DXF destinado a carpeta CAMA LASER (no Robot Láser / plasma)."""
     u = str(canal or "").strip().upper()
@@ -1846,6 +1945,7 @@ def _setup_layers(
         ensure("CUT_CU", 1)
         ensure("BAR_START", 8)
         ensure("ARGA_META", 8)
+        ensure("FIXTURE", 8)
     if not omit_plate:
         ensure("Plate", 3)
     if not solo_cobre and not omit_plate_text:

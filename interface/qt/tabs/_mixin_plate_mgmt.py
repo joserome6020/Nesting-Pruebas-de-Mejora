@@ -122,7 +122,7 @@ COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 DEFAULT_MARGIN_IN = 0.15
 
 
@@ -1815,6 +1815,7 @@ class PlateManagementMixin:
         *,
         compensar_plasma=False,
         offset_mm_forzado=None,
+        prefer_dxf=False,
     ):
         """Reconstruye piezas para renest/compensar usando fuente robusta (DXF + fallback nest)."""
         resumen_canon = self._inventario_piezas_canonico(resumen or {})
@@ -1822,7 +1823,9 @@ class PlateManagementMixin:
             return []
 
         fuente = self._construir_fuente_geometria_por_nombre(
-            clave, nombres_requeridos=set(resumen_canon.keys())
+            clave,
+            nombres_requeridos=set(resumen_canon.keys()),
+            prefer_dxf=bool(prefer_dxf),
         )
         if not fuente:
             return []
@@ -2041,6 +2044,13 @@ class PlateManagementMixin:
                         'opt_usado': self.cmb_opt.currentText(),
                         'corner_usado': self.global_corner_val
                     })
+                    try:
+                        import os
+                        from modules.nesting_engine import venom_ai
+                        engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+                        venom_ai.apply_smart_polisher(nh, engine_id)
+                    except Exception:
+                        pass
                     nueva = nh
             else:
                 nueva = self.app.motor_nesting.recalcular_hoja_full(

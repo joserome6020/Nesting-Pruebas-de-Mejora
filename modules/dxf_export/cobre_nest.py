@@ -16,6 +16,7 @@ from modules.nest_exporter import (
     DxfExportValidationError,
     TOL_GEOM_MM,
     _bar_width_mm,
+    _ensure_cierre_corte_madre_cu,
     _export_cu_bar_inicio_marker,
     _export_cu_bar_inicio_marker_vertical,
     _fail_export,
@@ -43,7 +44,12 @@ from modules.nesting_engine.dxf_export_log import (
 )
 
 
-def _filtrar_placements_cobre(placements: list | None, sheet: dict | None = None) -> list[dict]:
+def _filtrar_placements_cobre(
+    placements: list | None,
+    sheet: dict | None = None,
+    *,
+    include_rtz_pieces: bool = False,
+) -> list[dict]:
     """Quita artefactos del canal acero y piezas/cortes de zona RTZCU en madre."""
     sheet = sheet if isinstance(sheet, dict) else {}
     madre_sin_rtz = bool(sheet.get("modo_largos_cu")) and not sheet.get("cu_rtz_virtual")
@@ -69,9 +75,15 @@ def _filtrar_placements_cobre(placements: list | None, sheet: dict | None = None
             continue
         if nom.startswith("TATUAJE__") and "RTZCU" in nom.upper():
             continue
-        if p.get("cu_zona_rtz"):
-            continue
-        if madre_sin_rtz and inicio_rtz > 0.5:
+        if p.get("cu_zona_rtz") and not include_rtz_pieces:
+            # En hoja virtual RTZCU las piezas llevan cu_zona_rtz: no filtrarlas.
+            if not sheet.get("cu_rtz_virtual"):
+                continue
+        if (
+            madre_sin_rtz
+            and inicio_rtz > 0.5
+            and not include_rtz_pieces
+        ):
             # Defensa: geom/placement cuyo X empieza en zona RTZ.
             outer = p.get("outer") or []
             if outer:
@@ -85,9 +97,20 @@ def _filtrar_placements_cobre(placements: list | None, sheet: dict | None = None
     return out
 
 
-def _preparar_sheet_cobre(sheet: dict | None) -> dict[str, Any]:
+def _preparar_sheet_cobre(
+    sheet: dict | None,
+    *,
+    force_horizontal: bool = False,
+) -> dict[str, Any]:
     s = dict(sheet or {})
     s.setdefault("modo_largos_cu", True)
+    if force_horizontal or s.get("cu_export_amada"):
+        # AMADA: barra horizontal pieza completa (incluye RTZCU con gap).
+        s["cu_modo_separacion_barra"] = "con_gap"
+        s["export_3d_format"] = "dxf"
+        s.pop("cu_export_vertical", None)
+        s["cu_export_amada"] = True
+        return s
     if s.get("cu_rtz_virtual"):
         # RTZCU: misma lógica STEP que con_gap (horizontal, contorno cerrado).
         s["cu_modo_separacion_barra"] = "con_gap"
@@ -119,15 +142,23 @@ def export_cobre_hoja_to_dxf(
     draw_holes: bool = True,
     draw_marks: bool = True,
     strict: bool = True,
+    include_rtz_pieces: bool = False,
+    force_horizontal: bool = False,
 ) -> str:
     """
     Exporta una hoja de cobre (madre o RTZCU) sin mezclar lógica de acero.
     """
-    sheet_work = _preparar_sheet_cobre(sheet)
-    placements_work = _filtrar_placements_cobre(placements, sheet_work)
-    sin_gap = _sheet_is_sin_gap(sheet_work)
+    sheet_work = _preparar_sheet_cobre(sheet, force_horizontal=force_horizontal)
+    placements_work = _filtrar_placements_cobre(
+        placements,
+        sheet_work,
+        include_rtz_pieces=include_rtz_pieces or bool(sheet_work.get("cu_export_amada")),
+    )
+    sin_gap = _sheet_is_sin_gap(sheet_work) and not force_horizontal and not sheet_work.get(
+        "cu_export_amada"
+    )
     rtz_virtual = bool(sheet_work.get("cu_rtz_virtual"))
-    canal_tag = "NESTEOS DE COBRE"
+    canal_tag = str(title or "NESTEOS DE COBRE")
 
     log_export_start(
         out_path,
@@ -173,12 +204,19 @@ def export_cobre_hoja_to_dxf(
             log(f"PIEZA COBRE {i}/{len(placements_work)}: {format_placement_spec(p, index=i)}")
             log(f"  modo={export_mode}")
 
+            # VERTICAL especial: sin MARK ni CUT_INNER (solo líneas de corte).
+            piece_holes = draw_holes
+            piece_marks = draw_marks
+            if bool(p.get("cu_especial_vertical")) and not sheet_work.get("cu_export_amada"):
+                piece_holes = False
+                piece_marks = False
+
             mode, ok_channel = dxf_export_piece(
                 msp,
                 doc,
                 p,
-                draw_holes=draw_holes,
-                draw_marks=draw_marks,
+                draw_holes=piece_holes,
+                draw_marks=piece_marks,
                 strict=strict,
                 solo_cobre=True,
                 cache_blocks=cache_blocks,
@@ -218,12 +256,35 @@ def export_cobre_hoja_to_dxf(
                 ok=bool(new_entities),
             )
 
+        # Madre sin_gap + RTZ: corte de cierre ANTES del check vacío
+        # (caso 1 sola pieza Amada: sin CU_CORTE intermedias).
+        if (
+            sin_gap
+            and not rtz_virtual
+            and not sheet_work.get("cu_export_amada")
+            and sheet_work.get("cu_rtz_activo")
+        ):
+            if _ensure_cierre_corte_madre_cu(msp, sheet_work):
+                exported_pieces += 1
+                log("  -> cierre madre RTZ: CUT_OUTER insertado")
+
         if strict and exported_pieces == 0:
             raise DxfExportValidationError(
                 "La hoja de cobre no exportó ninguna pieza con geometría de corte válida."
             )
 
-        _purge_entities_on_layers(msp, {"Plate", "Plate_Text", "RTZ_LABEL"})
+        # Amada VERTICAL / CyPTube: nunca dejar barrenos ni marcaje colados.
+        purge_layers = {"Plate", "Plate_Text", "RTZ_LABEL"}
+        if not draw_holes:
+            purge_layers.add("CUT_INNER")
+        if not draw_marks:
+            purge_layers.add("MARK")
+        _purge_entities_on_layers(msp, purge_layers)
+
+        if sheet_work.get("cu_export_amada"):
+            from modules.dxf_export.amada_fixture import draw_amada_fixture_provisional
+
+            draw_amada_fixture_provisional(msp, _sheet_bar_l, _sheet_bar_w)
 
         if sin_gap:
             _export_cu_bar_inicio_marker_vertical(

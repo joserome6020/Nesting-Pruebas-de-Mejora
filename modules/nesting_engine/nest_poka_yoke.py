@@ -23,7 +23,7 @@ def allow_incomplete_nest() -> bool:
     )
 
 
-def validar_kerf_in(kerf: float, *, default: float = 0.3) -> tuple[float, Optional[str]]:
+def validar_kerf_in(kerf: float, *, default: float = 0.15) -> tuple[float, Optional[str]]:
     """
     Returns (kerf_ok, error_msg).
     No coerce silencioso: si es inválido, error_msg != None.
@@ -31,7 +31,7 @@ def validar_kerf_in(kerf: float, *, default: float = 0.3) -> tuple[float, Option
     try:
         k = float(kerf)
     except Exception:
-        return float(default), f"Kerf no numérico ({kerf!r}). Use pulgadas > 0 (ej. 0.3)."
+        return float(default), f"Kerf no numérico ({kerf!r}). Use pulgadas > 0 (ej. 0.15)."
     if k <= 0:
         return float(default), f"Kerf inválido ({k}). Debe ser > 0 in."
     if k > 2.0:
@@ -263,7 +263,29 @@ def _placas_matching_grupo(
     *,
     coinciden,
 ) -> list[dict]:
-    """Misma lógica de match calibre/material que el motor (empresa preferida)."""
+    """Misma regla que el motor: SOLO calibre exacto (sin tolerancia %)."""
+    try:
+        from .manager import MotorNesting
+
+        motor = MotorNesting.__new__(MotorNesting)
+        placas, _mode = motor._clasificar_placas_por_calibre(
+            req_cal, req_mat, datos_placas
+        )
+        return [
+            {
+                "id": p.get("id", ""),
+                "w": p["w"],
+                "h": p["h"],
+                "origen": p.get("origen", "EMPRESA"),
+                "w_in": float(p["w"]) / 25.4,
+                "h_in": float(p["h"]) / 25.4,
+            }
+            for p in placas
+        ]
+    except Exception:
+        pass
+
+    # Fallback legacy (exacto vía coinciden)
     placas_empresa: list[dict] = []
     placas_proveedor: list[dict] = []
     for placa in datos_placas or []:
@@ -503,8 +525,8 @@ def validar_auditoria_dxf_antes_nest(
         return (
             False,
             f"{len(omitidos)} DXF no apto(s) para nesting (de {total}).\n"
-            "Corrija o quite esas piezas antes de Run — el motor abortaría tras "
-            "re-parsear todo el job.\n\n"
+            "Repare o cambie esos DXF en PARTS (VER OMITIDOS / REEMPLAZAR DXF)\n"
+            "antes de nestear o renestear.\n\n"
             + "\n".join(lineas)
             + extra,
         )

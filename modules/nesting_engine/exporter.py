@@ -7,6 +7,9 @@ from shapely.geometry import Polygon, MultiPolygon
 RUTA_CAMA_LASER = "CAMA LASER SIN MINI NEST"
 RUTA_CAMA_LASER_12KW = "CAMA LASER 12 KW SIN MINI NEST"
 RUTA_NESTEOS_COBRE = "NESTEOS DE COBRE"
+RUTA_COBRE_AMADA = "AMADA"
+RUTA_COBRE_VERTICAL = "VERTICAL"
+RUTA_COBRE_FIXTURA = "FIXTURA"
 RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
@@ -81,6 +84,194 @@ def _es_export_swo(
     bn = str(base_name or "").strip().upper()
     wl = str(wo_label or "").strip().upper()
     return bn.startswith("SWO") or "S.W.O" in wl
+
+
+def _hoja_cobre_es_especial(hoja: dict | None) -> bool:
+    """Barra con pieza especial PARTS → AMADA/VERTICAL (+ FIXTURA por pieza)."""
+    if not isinstance(hoja, dict):
+        return False
+    if bool(hoja.get("cu_barra_especial")):
+        return True
+    for p in hoja.get("piezas") or []:
+        if isinstance(p, dict) and (
+            p.get("cu_especial_vertical") or p.get("cu_barra_especial")
+        ):
+            return True
+    return False
+
+
+def _safe_dxf_stem(nombre: str, *, fallback: str = "PIEZA") -> str:
+    text = str(nombre or "").strip() or fallback
+    for ch in '<>:"/\\|?*':
+        text = text.replace(ch, "_")
+    text = text.replace("\n", " ").replace("\r", " ").strip(" .")
+    return text[:120] or fallback
+
+
+def _shift_ring_xy(ring, dx: float, dy: float):
+    out = []
+    for pt in ring or []:
+        if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+            continue
+        try:
+            out.append((float(pt[0]) + dx, float(pt[1]) + dy))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _bbox_rings_mm(rings) -> tuple[float, float, float, float] | None:
+    xs: list[float] = []
+    ys: list[float] = []
+    for ring in rings or []:
+        for pt in ring or []:
+            if not isinstance(pt, (list, tuple)) or len(pt) < 2:
+                continue
+            try:
+                xs.append(float(pt[0]))
+                ys.append(float(pt[1]))
+            except (TypeError, ValueError):
+                continue
+    if not xs or not ys:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _clave_fixtura_amada_pieza(pieza: dict) -> str:
+    """Una FIXTURA por DXF marcado ESP. en PARTS (no por instancia en barra)."""
+    ruta = str((pieza or {}).get("ruta") or "").strip()
+    if ruta:
+        try:
+            from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+            return str(clave_orientacion_cobre_ruta(ruta))
+        except Exception:
+            return os.path.normcase(os.path.normpath(ruta))
+    return f"NOM::{str((pieza or {}).get('nombre') or 'PIEZA').strip().upper()}"
+
+
+def _collect_piezas_amada_fixtura(resultados: dict) -> list[dict]:
+    """Piezas únicas marcadas ESP. (una entrada por DXF de PARTS)."""
+    from .sheet_integrity import _es_pieza_real_nombre
+
+    vistos: set[str] = set()
+    out: list[dict] = []
+    for _clave, data in (resultados or {}).items():
+        if not isinstance(data, dict):
+            continue
+        for hoja in data.get("hojas") or []:
+            if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
+                continue
+            if hoja.get("cu_rtz_virtual"):
+                continue
+            calibre = ""
+            for pz in hoja.get("piezas") or []:
+                if not isinstance(pz, dict):
+                    continue
+                nom = str(pz.get("nombre") or "")
+                if not _es_pieza_real_nombre(nom):
+                    continue
+                if not (
+                    pz.get("cu_especial_vertical") or pz.get("cu_barra_especial")
+                ):
+                    continue
+                key = _clave_fixtura_amada_pieza(pz)
+                if key in vistos:
+                    continue
+                vistos.add(key)
+                if not calibre:
+                    calibre = str(pz.get("calibre") or hoja.get("calibre") or "")
+                out.append(
+                    {
+                        "pieza": pz,
+                        "hoja": hoja,
+                        "calibre": str(pz.get("calibre") or calibre or ""),
+                        "clave_fixtura": key,
+                    }
+                )
+    return out
+
+
+def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
+    """
+    Sheet + placement de UNA pieza ESP. en origen (0,0) para barrenado Amada.
+    Contorno cerrado + barrenos/marcaje; fixtura se dibuja al exportar.
+    """
+    from modules.nesting_engine.cu_largos_nesting import AMADA_FIXTURA_ANCHO_IN
+
+    pols = (pieza or {}).get("poligonos") or []
+    if not pols:
+        return None
+    outer, holes = _clean_profile_for_production(
+        pols[0],
+        pols[1:] if len(pols) > 1 else [],
+    )
+    bb = _bbox_rings_mm([outer] + list(holes or []))
+    if bb is None:
+        return None
+    minx, miny, maxx, maxy = bb
+    dx, dy = -float(minx), -float(miny)
+    outer_l = _shift_ring_xy(outer, dx, dy)
+    holes_l = [_shift_ring_xy(h, dx, dy) for h in (holes or [])]
+    marks_l = [
+        _shift_ring_xy(mk, dx, dy) for mk in ((pieza or {}).get("marcas") or [])
+    ]
+    bb2 = _bbox_rings_mm([outer_l] + holes_l)
+    if bb2 is None:
+        return None
+    _x0, _y0, maxx2, maxy2 = bb2
+    len_mm = float(maxx2) - float(_x0)
+    w_piece = float(maxy2) - float(_y0)
+    # Ancho de asiento = fixtura 5"; si la pieza es exactamente 5" queda flush.
+    bar_w = max(float(w_piece), float(AMADA_FIXTURA_ANCHO_IN) * 25.4)
+    bar_l = max(float(len_mm), 1.0)
+    ruta = str(pieza.get("ruta") or "").strip()
+    use_src = bool(ruta) and os.path.isfile(ruta)
+    # Geometría ya en origen del nest: no reaplicar matriz del DXF fuente.
+    placement = {
+        "part_name": str(pieza.get("nombre") or "PIEZA"),
+        "outer": outer_l,
+        "holes": holes_l,
+        "marks": marks_l,
+        "ruta": "",
+        "prefer_source_dxf": False,
+        "compensated": False,
+        "cu_largos_piece": True,
+        "cu_slice_idx": 0,
+        "cu_slice_count": 1,
+        "cu_bar_w_mm": bar_w,
+        "cu_bar_l_mm": bar_l,
+        "cu_especial_vertical": True,
+        "omit_cut_cu": True,
+        "closed": True,
+        "orig_minx": 0.0,
+        "orig_miny": 0.0,
+        "shift_x": 0.0,
+        "shift_y": 0.0,
+        "rot_deg": 0.0,
+        "rot_origin_cx": 0.0,
+        "rot_origin_cy": 0.0,
+    }
+    # Conservar ruta solo por trazabilidad (no se usa para clonar).
+    if use_src:
+        placement["ruta_origen"] = ruta
+    sheet = {
+        "modo_largos_cu": True,
+        "cu_export_amada": True,
+        "cu_modo_separacion_barra": "con_gap",
+        "export_3d_format": "dxf",
+        "length": bar_l,
+        "width": bar_w,
+        "Length": bar_l,
+        "Width": bar_w,
+        "cu_rtz_activo": False,
+        "cu_rtz_inicio_mm": 0.0,
+    }
+    return sheet, placement
+
+
+def _contar_fixturas_amada_unicas(resultados: dict) -> int:
+    return len(_collect_piezas_amada_fixtura(resultados))
 
 
 def _hoja_cobre_export_3d(hoja: dict) -> str:
@@ -207,6 +398,8 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
     Flujo normal: robot láser/plasma → 2 STEP (Cama A + Cama B); CAMA LASER solo DXF.
     Overlay STEP_UNIVERSAL_SIN_CAMAS: 1 STEP por cada DXF de acero (sin A/B).
     Cobre: STEP solo si la hoja requiere 3D.
+    Barras Amada (ESP.): 1 DXF VERTICAL por barra + 1 FIXTURA por pieza ESP. única.
+    VERTICAL y FIXTURA son solo DXF (sin STEP). El RTZCU de esas barras va a DXF/STEP normal.
     """
     n_dxf = 0
     n_step = 0
@@ -218,6 +411,15 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
             if not isinstance(hoja, dict):
                 continue
             carpeta = _resolver_carpeta_principal(clave, hoja)
+            es_cu = carpeta == RUTA_NESTEOS_COBRE or bool(hoja.get("modo_largos_cu"))
+            es_especial = es_cu and _hoja_cobre_es_especial(hoja)
+            es_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
+
+            if es_especial and not es_rtz_virtual:
+                # Solo AMADA/VERTICAL por barra (FIXTURA se cuenta aparte, por pieza).
+                n_dxf += 1
+                continue
+
             n_dxf += 1
             generar_plasma = _debe_generar_plasma(clave, hoja)
             if generar_plasma:
@@ -236,6 +438,8 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
                     n_step += 2
                 if generar_plasma:
                     n_step += 2
+
+    n_dxf += _contar_fixturas_amada_unicas(resultados)
     return n_dxf, n_step
 
 
@@ -633,6 +837,9 @@ def _normalizar_tipo_corte_pqart(nombre_carpeta: str) -> str:
         RUTA_NESTEOS_COBRE.upper(),
         RUTA_CAMA_LASER.upper(),
         RUTA_CAMA_LASER_12KW.upper(),
+        RUTA_COBRE_VERTICAL.upper(),
+        RUTA_COBRE_AMADA.upper(),
+        RUTA_COBRE_FIXTURA.upper(),
     }:
         return "CamaLaser"
 
@@ -713,6 +920,7 @@ def _registrar_exportacion_pqart_hoja(
     *,
     ruta_dxf: str,
     tipo_corte: str,
+    export_3d_format: str | None = None,
 ):
     if not isinstance(hoja, dict):
         return
@@ -723,6 +931,11 @@ def _registrar_exportacion_pqart_hoja(
 
     exports = hoja.setdefault("pqart_exports", [])
 
+    if export_3d_format is not None:
+        fmt3d = str(export_3d_format or "dxf").strip().lower()
+    else:
+        fmt3d = str(hoja.get("export_3d_format") or "step").strip().lower()
+
     payload = {
         "nombre_dxf": os.path.basename(ruta_normalizada),
         "ruta": ruta_normalizada,
@@ -730,7 +943,7 @@ def _registrar_exportacion_pqart_hoja(
         "sheet_uid": str(hoja.get("sheet_uid") or "").strip(),
         "sheet_code": str(hoja.get("sheet_code") or "").strip(),
         "sheet_display_name": str(hoja.get("sheet_display_name") or "").strip(),
-        "export_3d_format": str(hoja.get("export_3d_format") or "step").strip().lower(),
+        "export_3d_format": fmt3d,
     }
 
     ruta_cmp = os.path.normcase(ruta_normalizada)
@@ -1013,6 +1226,18 @@ def exportar_resultados_a_dxf(
 
     rutas = {
         "nesteos_cobre_dxf": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "DXF"),
+        "nesteos_cobre_vertical_dxf": os.path.join(
+            job_root_dir,
+            RUTA_NESTEOS_COBRE,
+            RUTA_COBRE_AMADA,
+            RUTA_COBRE_VERTICAL,
+        ),
+        "nesteos_cobre_amada_dxf": os.path.join(
+            job_root_dir,
+            RUTA_NESTEOS_COBRE,
+            RUTA_COBRE_AMADA,
+            RUTA_COBRE_FIXTURA,
+        ),
         "nesteos_cobre_step": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "STEP"),
         "cama_laser_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER, "DXF"),
         "cama_laser_12kw_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "DXF"),
@@ -1115,6 +1340,7 @@ def exportar_resultados_a_dxf(
             es_retazo = hoja.get("es_retazo", False)
             es_cu_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
             es_cu_hoja = bool(hoja.get("modo_largos_cu"))
+            es_cu_especial = es_cu_hoja and _hoja_cobre_es_especial(hoja)
 
             if es_swo_export and swo_ref.upper().startswith("SWO"):
                 order_label = swo_ref
@@ -1308,6 +1534,8 @@ def exportar_resultados_a_dxf(
                     "cu_bar_w_mm": _cu_bar_w if es_cu_hoja else 0.0,
                     "cu_bar_l_mm": _cu_bar_l if es_cu_hoja else 0.0,
                     "cu_sin_separacion": bool(pz.get("cu_sin_separacion")),
+                    "cu_especial_vertical": bool(pz.get("cu_especial_vertical")),
+                    "cu_zona_rtz": bool(pz.get("cu_zona_rtz")),
                     "omit_cut_cu": True,
                     "largo_cu_in": float(pz.get("largo_cu_in") or 0.0),
                     "orig_minx": pz.get("orig_minx", 0.0),
@@ -1408,6 +1636,7 @@ def exportar_resultados_a_dxf(
 
             # Exportación principal (omitida en RTZC: solo Robot Plasma)
             if not solo_plasma:
+                # RTZCU de barra Amada: a DXF/STEP normal (barrenado Amada es por pieza).
                 if carpeta_principal == RUTA_NESTEOS_COBRE:
                     path_principal = os.path.join(rutas["nesteos_cobre_dxf"], nombre_archivo)
                 elif carpeta_principal == RUTA_CAMA_LASER:
@@ -1418,41 +1647,73 @@ def exportar_resultados_a_dxf(
                     path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
 
                 try:
-                    log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
-                    if es_cu_hoja:
+                    if es_cu_especial and not es_cu_rtz_virtual:
+                        path_vertical = os.path.join(
+                            rutas["nesteos_cobre_vertical_dxf"], nombre_archivo
+                        )
+                        log(
+                            f"-> EXPORT COBRE ESPECIAL VERTICAL: {path_vertical}"
+                        )
                         export_cobre_hoja_to_dxf(
-                            path_principal,
+                            path_vertical,
                             sheet_info,
                             placements_principales,
-                            title=f"{carpeta_principal} | {clave}",
-                            strict=not es_cu_rtz_virtual,
+                            title=f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_VERTICAL} | {clave}",
+                            draw_holes=False,
+                            draw_marks=False,
+                            strict=True,
+                        )
+                        exportados_principales.append(path_vertical)
+                        path_principal = path_vertical
+                        dxf_done += 1
+                        _progress(
+                            mensaje=(
+                                f"DXF {dxf_done}/{n_dxf_est}: "
+                                f"AMADA VERTICAL {nombre_archivo}"
+                            ),
+                            step_done=0,
+                        )
+                        _registrar_exportacion_pqart_hoja(
+                            hoja,
+                            ruta_dxf=path_vertical,
+                            tipo_corte=_normalizar_tipo_corte_pqart(RUTA_COBRE_VERTICAL),
+                            export_3d_format="dxf",  # AMADA/VERTICAL: solo DXF, sin STEP
                         )
                     else:
-                        export_nest_to_dxf(
-                            path_principal,
-                            sheet_info,
-                            placements_principales,
-                            title=f"{carpeta_principal} | {clave}",
-                            canal=carpeta_principal,
-                            modo_largos_cu=False,
-                            strict=True,
+                        log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
+                        if es_cu_hoja:
+                            export_cobre_hoja_to_dxf(
+                                path_principal,
+                                sheet_info,
+                                placements_principales,
+                                title=f"{carpeta_principal} | {clave}",
+                                strict=True,
+                            )
+                        else:
+                            export_nest_to_dxf(
+                                path_principal,
+                                sheet_info,
+                                placements_principales,
+                                title=f"{carpeta_principal} | {clave}",
+                                canal=carpeta_principal,
+                                modo_largos_cu=False,
+                                strict=True,
+                            )
+                        exportados_principales.append(path_principal)
+                        dxf_done += 1
+                        _progress(
+                            mensaje=f"DXF {dxf_done}/{n_dxf_est}: {nombre_archivo}",
+                            step_done=0,
+                        )
+                        _registrar_exportacion_pqart_hoja(
+                            hoja,
+                            ruta_dxf=path_principal,
+                            tipo_corte=_normalizar_tipo_corte_pqart(carpeta_principal),
                         )
                 except DxfExportValidationError as exc:
                     raise DxfExportValidationError(
                         f"Exportación abortada ({nombre_archivo}): {exc}"
                     ) from exc
-                exportados_principales.append(path_principal)
-                dxf_done += 1
-                _progress(
-                    mensaje=f"DXF {dxf_done}/{n_dxf_est}: {nombre_archivo}",
-                    step_done=0,
-                )
-
-                _registrar_exportacion_pqart_hoja(
-                    hoja,
-                    ruta_dxf=path_principal,
-                    tipo_corte=_normalizar_tipo_corte_pqart(carpeta_principal),
-                )
 
             # Exportación plasma solo cuando aplique
             lista_plasma = placements_plasma
@@ -1537,6 +1798,61 @@ def exportar_resultados_a_dxf(
                 )
                 if solo_plasma:
                     exportados_principales.append(path_plasma)
+
+    # AMADA/FIXTURA: 1 DXF por pieza ESP. de PARTS (subproceso barrenado), no por barra.
+    nest_tag_fix = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
+    for item_fx in _collect_piezas_amada_fixtura(resultados):
+        pieza_fx = item_fx["pieza"]
+        built = _placement_fixtura_amada_pieza(pieza_fx)
+        if not built:
+            log(
+                f"-> SKIP FIXTURA (sin geometría): "
+                f"{pieza_fx.get('nombre') or item_fx.get('clave_fixtura')}"
+            )
+            continue
+        sheet_fx, placement_fx = built
+        part_stem = _safe_dxf_stem(str(pieza_fx.get("nombre") or "PIEZA"))
+        thick_fx = str(item_fx.get("calibre") or thickness_para_step or "CU").strip()
+        thick_fx = _safe_dxf_stem(thick_fx, fallback="CU")
+        nombre_fx = f"{nest_tag_fix}_{thick_fx}_{part_stem}.dxf"
+        path_fx = os.path.join(rutas["nesteos_cobre_amada_dxf"], nombre_fx)
+        log(f"-> EXPORT COBRE AMADA FIXTURA (pieza): {path_fx}")
+        try:
+            export_cobre_hoja_to_dxf(
+                path_fx,
+                sheet_fx,
+                [placement_fx],
+                title=f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_FIXTURA} | {part_stem}",
+                draw_holes=True,
+                draw_marks=True,
+                strict=True,
+                include_rtz_pieces=False,
+                force_horizontal=True,
+            )
+        except DxfExportValidationError as exc:
+            raise DxfExportValidationError(
+                f"Exportación abortada (FIXTURA {nombre_fx}): {exc}"
+            ) from exc
+        exportados_principales.append(path_fx)
+        dxf_done += 1
+        _progress(
+            mensaje=f"DXF {dxf_done}/{n_dxf_est}: FIXTURA {part_stem}",
+            step_done=0,
+        )
+        # PQART debe vivir en la hoja real del nest (no en un dict temporal).
+        hoja_pqart = item_fx.get("hoja")
+        if isinstance(hoja_pqart, dict):
+            _registrar_exportacion_pqart_hoja(
+                hoja_pqart,
+                ruta_dxf=path_fx,
+                tipo_corte=_normalizar_tipo_corte_pqart(RUTA_COBRE_FIXTURA),
+                export_3d_format="dxf",  # AMADA/FIXTURA: solo DXF, sin STEP
+            )
+        else:
+            log(
+                f"-> WARN FIXTURA sin hoja PQART: {nombre_fx} "
+                f"(exportado, pero no entrará a persistencia)"
+            )
 
     if generar_step:
         motor_label = (
@@ -1637,11 +1953,8 @@ def exportar_resultados_a_dxf(
         )
         # STEP solo en NESTING/<familia>/STEP (sin copia a 3D NESTING).
 
-    if es_swo_export and swo_ref.upper().startswith("SWO"):
-        from .api_client import enviar_reporte_a_api
-        enviar_reporte_a_api(swo_ref, resultados)
-
     log_section(f"EXPORTACION DXF COMPLETA - {len(exportados_principales)} archivo(s)")
     for pth in exportados_principales:
         log(f"  * {pth}")
+    return exportados_principales
     return exportados_principales

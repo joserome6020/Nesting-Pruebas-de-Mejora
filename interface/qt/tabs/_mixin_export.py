@@ -67,6 +67,11 @@ from nesting_workspace import (
 )
 from postgres_connector import guardar_nesting_en_postgresql
 from reporte_pdf_nesting import exportar_pdf_nesting
+from interface.export_checkpoint_service import (
+    checkpoint_export_ok,
+    guardar_checkpoint_export,
+    nuevo_export_run_id,
+)
 from interface.qt.export_paths import (
     asegurar_exportacion_local,
     desktop_nesteos_locales,
@@ -122,9 +127,24 @@ COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 DEFAULT_MARGIN_IN = 0.15
 
+
+class ExportStageError(RuntimeError):
+    """Fallo recuperable con una etapa explícita para el operador."""
+
+    def __init__(self, stage: str, detail: str):
+        self.stage = str(stage or "DESCONOCIDA").upper()
+        super().__init__(f"[{self.stage}] {detail}")
+
+
+def _es_job_swo(nombre: str) -> bool:
+    """Detecta SWO-001 / S.W.O 01 X1 / similares."""
+    n = str(nombre or "").strip().upper()
+    if not n:
+        return False
+    return n.startswith("SWO") or n.startswith("S.W.O") or "S.W.O" in n
 
 
 class ExportMixin:
@@ -360,6 +380,408 @@ class ExportMixin:
             return "occt"
         return "freecad"
 
+    def _validar_lote_exportado(
+        self,
+        exportados: list[str] | tuple[str, ...] | None,
+        mini_resultados: dict,
+        n_wo: str,
+    ) -> int:
+        """
+        Verifica el contrato entre el exportador CAD y la persistencia PQART.
+
+        Ningún lote puede seguir a PostgreSQL/VSM si el exportador no entregó
+        DXF físicos y sus metadatos de producción por hoja.
+        """
+        rutas = [os.path.normpath(str(path)) for path in (exportados or []) if str(path).strip()]
+        if not rutas:
+            raise RuntimeError(f"{n_wo}: el exportador no produjo DXF de nesting.")
+        rutas_exportadas = {os.path.normcase(path) for path in rutas}
+        if len(rutas_exportadas) != len(rutas):
+            raise RuntimeError(f"{n_wo}: el exportador devolvió rutas DXF duplicadas.")
+
+        faltantes = [path for path in rutas if not os.path.isfile(path)]
+        if faltantes:
+            raise RuntimeError(
+                f"{n_wo}: faltan {len(faltantes)} DXF después de exportar. "
+                f"Primero: {faltantes[0]}"
+            )
+
+        from modules.nesting_engine.resultados_grupos import iter_grupos_material
+
+        pqart = []
+        for _material, data in iter_grupos_material(mini_resultados):
+            for hoja in data.get("hojas", []) or []:
+                if isinstance(hoja, dict):
+                    pqart.extend(hoja.get("pqart_exports", []) or [])
+
+        if not pqart:
+            raise RuntimeError(
+                f"{n_wo}: no se generó metadata PQART para los DXF exportados."
+            )
+
+        rutas_pqart = [
+            os.path.normpath(str(item.get("ruta") or ""))
+            for item in pqart
+            if isinstance(item, dict) and str(item.get("ruta") or "").strip()
+        ]
+        if not rutas_pqart:
+            raise RuntimeError(
+                f"{n_wo}: la metadata PQART no contiene rutas DXF válidas."
+            )
+        rutas_pqart_norm = {os.path.normcase(path) for path in rutas_pqart}
+        if len(rutas_pqart_norm) != len(rutas_pqart):
+            raise RuntimeError(f"{n_wo}: PQART contiene rutas DXF duplicadas.")
+        sin_pqart = rutas_exportadas - rutas_pqart_norm
+        if sin_pqart:
+            raise RuntimeError(
+                f"{n_wo}: hay DXF exportados sin registro PQART. "
+                f"Primero: {sorted(sin_pqart)[0]}"
+            )
+        faltantes_pqart = [path for path in rutas_pqart if not os.path.isfile(path)]
+        if faltantes_pqart:
+            raise RuntimeError(
+                f"{n_wo}: PQART apunta a DXF inexistente. Primero: {faltantes_pqart[0]}"
+            )
+        return len(rutas_pqart)
+
+    def _consolidar_snapshot_swo(self) -> dict:
+        """Une grupos de todos los lotes para publicar un solo reporte SWO."""
+        from modules.nesting_engine.resultados_grupos import iter_grupos_material
+
+        consolidado: dict = {}
+        for orden in getattr(self.app, "resultados_multilote", []) or []:
+            data_lote = (orden or {}).get("data") or {}
+            for clave, grupo in iter_grupos_material(data_lote):
+                if clave not in consolidado:
+                    base = copy.deepcopy(grupo)
+                    base["hojas"] = []
+                    consolidado[clave] = base
+                consolidado[clave]["hojas"].extend(
+                    copy.deepcopy(grupo.get("hojas", []) or [])
+                )
+        if not consolidado:
+            raise RuntimeError("No hay grupos de material para publicar el reporte SWO.")
+        return consolidado
+
+    def _centralizar_exportacion_confirmada(
+        self,
+        *,
+        db_conf: dict,
+        job_activo: str,
+        es_swo: bool,
+        reporte_swo: dict | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        """
+        Sincroniza VSM y ContPAQ únicamente después de persistir todos los
+        lotes, sus DXF y sus pedidos de material. Cada subetapa se registra
+        para permitir reanudarla sin reexportar CAD ni duplicar ContPAQ.
+        """
+        import psycopg2
+
+        from modules.nesting_engine.api_client import (
+            avanzar_job_centralizado,
+            avanzar_swo_centralizado,
+            enviar_reporte_a_api,
+            trigger_po_contpaq,
+            validar_po_contpaq,
+        )
+
+        scope_id = str(job_activo or "").strip()
+        scope_type = "SWO" if es_swo else "JOB"
+        run_id = str(run_id or getattr(self.app, "export_run_id", "") or "").strip() or None
+
+        def _checkpoint(stage: str, *, status: str, detail: str = "", resultado=None):
+            metadata = {
+                "job_activo": scope_id,
+                "es_swo": bool(es_swo),
+                "stage": str(stage).upper(),
+            }
+            if resultado is not None:
+                metadata["api_target"] = str(getattr(resultado, "target", "") or "")
+                metadata["api_operation"] = str(getattr(resultado, "operation", "") or "")
+                metadata["api_response"] = getattr(resultado, "response", None) or {}
+            try:
+                guardar_checkpoint_export(
+                    scope_id,
+                    scope_type,
+                    stage,
+                    status=status,
+                    run_id=run_id,
+                    detail=detail,
+                    http_status=getattr(resultado, "http_status", None),
+                    metadata=metadata,
+                    db_config=db_conf,
+                )
+            except Exception as exc:
+                # El log no debe convertir un éxito externo real en falso error.
+                print(f"[EXPORT][CHECKPOINT][WARN] {stage}: {exc}")
+
+        def _pendiente(stage: str) -> bool:
+            try:
+                return not checkpoint_export_ok(
+                    scope_id,
+                    scope_type,
+                    stage,
+                    db_config=db_conf,
+                )
+            except Exception as exc:
+                print(f"[EXPORT][CHECKPOINT][WARN] consulta {stage}: {exc}")
+                return True
+
+        jobs_involved: set[str] = set()
+        try:
+            with psycopg2.connect(**db_conf) as conn:
+                with conn.cursor() as cur:
+                    if es_swo:
+                        # Solo jobs del nest exportado. Nunca diccionario_swo:
+                        # puede arrastrar WO/jobs viejos que no vienen en esta SWO.
+                        cur.execute(
+                            """
+                            SELECT DISTINCT TRIM(job)
+                            FROM reporte_cortes
+                            WHERE TRIM(super_work_order) = %s
+                              AND job IS NOT NULL
+                              AND BTRIM(job) <> ''
+                            """,
+                            (job_activo,),
+                        )
+                        jobs_involved.update(
+                            str(row[0]).strip() for row in cur.fetchall() if row[0]
+                        )
+                    else:
+                        jobs_involved.add(job_activo)
+        except Exception as exc:
+            raise RuntimeError(
+                "No se pudo confirmar en PostgreSQL la relación Job/SWO antes "
+                f"de centralizar: {exc}"
+            ) from exc
+
+        jobs_involved = {
+            str(j).strip()
+            for j in jobs_involved
+            if str(j or "").strip() and not _es_job_swo(str(j).strip())
+        }
+        if not jobs_involved:
+            raise RuntimeError(
+                "No hay Jobs VSM trazables para centralizar esta exportación. "
+                "Revisa reporte_cortes / diccionario_swo antes de ContPAQ."
+            )
+
+        # No avance VSM si la OC SWO ni siquiera puede validarse. Esto evita
+        # una tarjeta EXPORTADO sin PO por equivalencias/catálogo pendientes.
+        if es_swo:
+            stage = "CONTPAQ_PREFLIGHT"
+            if _pendiente(stage):
+                resultado_preflight = validar_po_contpaq(job_activo)
+                if not resultado_preflight:
+                    detalle = resultado_preflight.summary()
+                    _checkpoint(
+                        stage,
+                        status="FAILED",
+                        detail=detalle,
+                        resultado=resultado_preflight,
+                    )
+                    raise ExportStageError(
+                        stage,
+                        "DXF y PostgreSQL ya están confirmados, pero la validación "
+                        f"de códigos/materiales para ContPAQ falló: {detalle}. "
+                        "No se avanzó VSM ni se creó una OC; corrija las "
+                        "equivalencias y use ‘Reanudar sync’.",
+                    )
+                _checkpoint(
+                    stage,
+                    status="OK",
+                    detail=resultado_preflight.summary(),
+                    resultado=resultado_preflight,
+                )
+            else:
+                print("[CENTRALIZED] CONTPAQ_PREFLIGHT ya confirmado; se omite reintento.")
+
+        print(f"[CENTRALIZED] Jobs a sincronizar: {sorted(jobs_involved)}")
+        for job in sorted(jobs_involved):
+            stage = f"VSM_JOB:{job}"
+            if not _pendiente(stage):
+                print(f"[CENTRALIZED] {stage} ya confirmado; se omite reintento.")
+                continue
+            resultado = avanzar_job_centralizado(job)
+            if not resultado:
+                detalle = resultado.summary()
+                _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado)
+                raise ExportStageError(
+                    stage,
+                    "DXF, PostgreSQL y MRL ya están confirmados; "
+                    f"VSM no confirmó esta etapa: {detalle}. "
+                    "Use ‘Reanudar sync’ cuando VSM esté disponible.",
+                )
+            _checkpoint(stage, status="OK", detail=resultado.summary(), resultado=resultado)
+
+        if es_swo:
+            stage = "VSM_SWO"
+            if _pendiente(stage):
+                resultado = avanzar_swo_centralizado(job_activo)
+                if not resultado:
+                    detalle = resultado.summary()
+                    _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado)
+                    raise ExportStageError(
+                        stage,
+                        "DXF, PostgreSQL y MRL ya están confirmados; "
+                        f"VSM no confirmó la SWO: {detalle}. "
+                        "Use ‘Reanudar sync’ cuando VSM esté disponible.",
+                    )
+                _checkpoint(stage, status="OK", detail=resultado.summary(), resultado=resultado)
+            else:
+                print("[CENTRALIZED] VSM_SWO ya confirmado; se omite reintento.")
+
+        stage = "CONTPAQ"
+        if not es_swo:
+            _checkpoint(
+                stage,
+                status="OK",
+                detail=(
+                    "PO ContPAQ omitida intencionalmente: las WO normales no "
+                    "generan pedido; la compra se consolida únicamente en la SWO."
+                ),
+            )
+            print("[CENTRALIZED] CONTPAQ omitido para WO normal; solo las SWO generan PO.")
+        elif _pendiente(stage):
+            resultado_po = trigger_po_contpaq(job_activo)
+            if not resultado_po:
+                detalle = resultado_po.summary()
+                _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado_po)
+                raise ExportStageError(
+                    stage,
+                    "DXF, PostgreSQL, MRL y VSM ya están confirmados; "
+                    f"ContPAQ no confirmó el pedido: {detalle}. "
+                    "Use ‘Reanudar sync’; no reexporte CAD.",
+                )
+            _checkpoint(stage, status="OK", detail=resultado_po.summary(), resultado=resultado_po)
+        else:
+            print("[CENTRALIZED] CONTPAQ ya confirmado; se omite reintento.")
+
+        if es_swo:
+            if not reporte_swo:
+                _checkpoint(
+                    "REPORTE_SWO",
+                    status="WARNING",
+                    detail="Falta snapshot en memoria; reanude desde el workspace.",
+                )
+                return
+            if _pendiente("REPORTE_SWO"):
+                resultado_reporte = enviar_reporte_a_api(job_activo, reporte_swo)
+                if not resultado_reporte:
+                    detalle = resultado_reporte.summary()
+                    _checkpoint(
+                        "REPORTE_SWO",
+                        status="FAILED",
+                        detail=detalle,
+                        resultado=resultado_reporte,
+                    )
+                    raise ExportStageError(
+                        "REPORTE_SWO",
+                        "La exportación, VSM y ContPAQ están confirmados, pero "
+                        f"el reporte web no: {detalle}. Use ‘Reanudar sync’.",
+                    )
+                _checkpoint(
+                    "REPORTE_SWO",
+                    status="OK",
+                    detail=resultado_reporte.summary(),
+                    resultado=resultado_reporte,
+                )
+
+    def reanudar_centralizacion_pendiente(self):
+        """
+        Reintenta únicamente VSM/ContPAQ/reporte para una exportación ya
+        persistida. Nunca ejecuta DXF, STEP, PostgreSQL ni MRL.
+        """
+        job_activo = str(getattr(self.app, "job_activo", "") or "").strip().upper()
+        if not job_activo or job_activo in {"JOB", "NESTING"}:
+            return QMessageBox.warning(
+                self,
+                "Reanudar sync",
+                "Abra el workspace de la WO/SWO exportada antes de reanudar.",
+            )
+        es_swo = _es_job_swo(job_activo)
+        confirmar = QMessageBox.question(
+            self,
+            "Reanudar centralización",
+            "Solo se reintentarán VSM, ContPAQ y el reporte web pendiente.\n\n"
+            "No se generarán DXF/STEP, no se creará otra WO y no se reconstruirá MRL.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes,
+        )
+        if confirmar != QMessageBox.StandardButton.Yes:
+            return
+        db_conf = {
+            "host": getattr(config, "NESTING_DB_HOST", "192.168.2.80"),
+            "database": getattr(config, "NESTING_DB_NAME", "nestingpro_db"),
+            "user": getattr(config, "NESTING_DB_USER", "postgres"),
+            "password": getattr(config, "NESTING_DB_PASSWORD", "nesting123"),
+            "port": getattr(config, "NESTING_DB_PORT", "5433"),
+        }
+
+        def _worker_reanudar():
+            try:
+                import psycopg2
+
+                with psycopg2.connect(**db_conf) as conexion:
+                    with conexion.cursor() as cursor:
+                        if es_swo:
+                            cursor.execute(
+                                """
+                                SELECT EXISTS(
+                                    SELECT 1 FROM reporte_cortes
+                                    WHERE BTRIM(super_work_order) = %s
+                                )
+                                """,
+                                (job_activo,),
+                            )
+                        else:
+                            cursor.execute(
+                                """
+                                SELECT EXISTS(
+                                    SELECT 1 FROM reporte_cortes
+                                    WHERE BTRIM(job) = %s
+                                )
+                                """,
+                                (job_activo,),
+                            )
+                        exportacion_persistida = bool((cursor.fetchone() or [False])[0])
+                if not exportacion_persistida:
+                    raise ExportStageError(
+                        "PRECONDICION",
+                        "No se encontró una exportación PostgreSQL para esta orden; "
+                        "no se ejecutó ninguna llamada externa.",
+                    )
+                self._centralizar_exportacion_confirmada(
+                    db_conf=db_conf,
+                    job_activo=job_activo,
+                    es_swo=es_swo,
+                    reporte_swo=self._consolidar_snapshot_swo()
+                    if es_swo and getattr(self.app, "resultados_multilote", None)
+                    else None,
+                    run_id=str(getattr(self.app, "export_run_id", "") or "") or None,
+                )
+                self.app.after(
+                    0,
+                    lambda: QMessageBox.information(
+                        self,
+                        "Reanudar sync",
+                        "Centralización confirmada. No se repitió la exportación CAD.",
+                    ),
+                )
+            except Exception as exc:
+                self.app.after(
+                    0,
+                    lambda e=str(exc): QMessageBox.warning(
+                        self,
+                        "Centralización pendiente",
+                        e,
+                    ),
+                )
+
+        threading.Thread(target=_worker_reanudar, daemon=True).start()
+
     def exportar_resultados_dxf(self):
         if not hasattr(self.app, 'resultados_multilote') or not self.app.resultados_multilote:
             return QMessageBox.warning(self, "Atención", "No hay datos para exportar.")
@@ -515,11 +937,11 @@ class ExportMixin:
                     f"[EXPORT] modo={'SERVIDOR+BD' if modo_servidor else 'LOCAL (Nesteos Locales)'}"
                 )
                 db_conf = {
-                    "host": "192.168.2.80",
-                    "database": "nestingpro_db",
-                    "user": "postgres",
-                    "password": "nesting123",
-                    "port": "5433"
+                    "host": getattr(config, "NESTING_DB_HOST", "192.168.2.80"),
+                    "database": getattr(config, "NESTING_DB_NAME", "nestingpro_db"),
+                    "user": getattr(config, "NESTING_DB_USER", "postgres"),
+                    "password": getattr(config, "NESTING_DB_PASSWORD", "nesting123"),
+                    "port": getattr(config, "NESTING_DB_PORT", "5433"),
                 }
 
                 r_base = resolver_ruta_base_exportacion(self.app, modo_servidor=modo_servidor)
@@ -528,33 +950,82 @@ class ExportMixin:
 
                 rutas_generadas = []
                 job_activo = getattr(self.app, 'job_activo', 'JOB').strip().upper()
+                es_swo_flag = _es_job_swo(job_activo)
+                export_run_id = nuevo_export_run_id()
+                self.app.export_run_id = export_run_id
+                print(
+                    f"[EXPORT][RUN] id={export_run_id} job={job_activo} "
+                    f"tipo={'SWO' if es_swo_flag else 'WO'}"
+                )
+
+                def _registrar_checkpoint(
+                    scope_id: str,
+                    scope_type: str,
+                    stage: str,
+                    *,
+                    status: str = "OK",
+                    detail: str = "",
+                    metadata: dict | None = None,
+                ):
+                    if not modo_servidor:
+                        return
+                    try:
+                        guardar_checkpoint_export(
+                            scope_id,
+                            scope_type,
+                            stage,
+                            status=status,
+                            run_id=export_run_id,
+                            detail=detail,
+                            metadata=metadata or {},
+                            db_config=db_conf,
+                        )
+                    except Exception as exc:
+                        print(f"[EXPORT][CHECKPOINT][WARN] {stage}: {exc}")
 
                 if not hasattr(self.app, "wo_reales_por_lote") or self.app.wo_reales_por_lote is None:
                     self.app.wo_reales_por_lote = {}
 
-                usando_offline = False
-                ruta_txt = os.path.join(r_base, "contador_emergencia.txt")
-
                 if modo_servidor:
                     try:
                         consecutivo_base = obtener_siguiente_consecutivo(db_conf)
-                    except Exception:
-                        usando_offline = True
-                        if os.path.exists(ruta_txt):
-                            with open(ruta_txt, "r") as f:
-                                consecutivo_base = int(f.read().strip())
-                        else:
-                            consecutivo_base = 1
+                    except Exception as exc:
+                        raise RuntimeError(
+                            "No hay conexión al servidor para asignar una WO oficial. "
+                            "La exportación a servidor se canceló para evitar "
+                            f"desalinear archivos y PostgreSQL: {exc}"
+                        ) from exc
                 else:
                     os.makedirs(desktop_nesteos_locales(), exist_ok=True)
                     consecutivo_base = obtener_consecutivo_wo_local()
+
+                if modo_servidor:
+                    error_largos = str(getattr(self.app, "plan_largos_error", "") or "").strip()
+                    if error_largos:
+                        print(
+                            "[LARGOS_NESTING][WARN] El precálculo reportó: "
+                            f"{error_largos}. Se verificará el plan persistido "
+                            "después de registrar la WO."
+                        )
+
+                    from modules.nesting_engine.api_client import (
+                        preflight_servicios_centralizados,
+                    )
+
+                    preflight = preflight_servicios_centralizados(es_swo=es_swo_flag)
+                    if not preflight:
+                        raise RuntimeError(
+                            "No se inició la exportación a servidor porque "
+                            f"VSM/ContPAQ no respondieron: {preflight.summary()}"
+                        )
+                    print(f"[CENTRALIZED] Preflight OK: {preflight.summary()}")
+
+                instancias_swo_por_lote: dict[str, int] = {}
 
                 # 2. EL BUCLE DE PRODUCCIÓN SECUENCIAL
                 for i, orden_obj in enumerate(self.app.resultados_multilote):
                     k_val = orden_obj["lote_k"]
                     mini_resultados = orden_obj["data"]
-
-                    es_swo_flag = job_activo.startswith("SWO")
 
                     if es_swo_flag:
                         try:
@@ -565,6 +1036,10 @@ class ExportMixin:
                         consecutivo_actual = consecutivo_base + i
 
                     qty_str = str(k_val) if k_val != "N/A" else "1"
+                    instancia_lote = 1
+                    if es_swo_flag:
+                        instancia_lote = instancias_swo_por_lote.get(qty_str, 0) + 1
+                        instancias_swo_por_lote[qty_str] = instancia_lote
 
                     n_wo, ruta_absoluta_wo = crear_estructura_carpetas(
                         r_base,
@@ -572,6 +1047,7 @@ class ExportMixin:
                         qty_str,
                         es_swo=es_swo_flag,
                         modo_local=not modo_servidor,
+                        instancia_lote=instancia_lote,
                     )
                     if not modo_servidor:
                         asegurar_exportacion_local(r_base, etiqueta="r_base")
@@ -607,16 +1083,6 @@ class ExportMixin:
                     print("=" * 40 + "\n")
                     # === FIN DE RADIOGRAFÍA DE DATOS ===
 
-                    generar_csv_compras(
-                        r_base,
-                        n_wo,
-                        mini_resultados,
-                        ruta_destino=ruta_absoluta_wo,
-                        datos_piezas=self.app.datos_partes_actuales,
-                        es_swo=es_swo_flag,
-                        db_config=db_conf if modo_servidor else None,
-                    )
-
                     ruta_export = os.path.join(ruta_absoluta_wo, "ARGA MODEL CORE")
                     os.makedirs(ruta_export, exist_ok=True)
                     try:
@@ -642,7 +1108,7 @@ class ExportMixin:
                             step_done=lote_step_max[0] if respuesta_3d else None,
                         )
 
-                    self.app.motor_nesting.exportar_resultados_a_dxf(
+                    exportados_lote = self.app.motor_nesting.exportar_resultados_a_dxf(
                         mini_resultados,
                         ruta_export,
                         "NESTING",
@@ -654,6 +1120,11 @@ class ExportMixin:
                         motor_3d=motor_3d if respuesta_3d else "freecad",
                         progress_cb=_progress_lote,
                     )
+                    self._validar_lote_exportado(
+                        exportados_lote,
+                        mini_resultados,
+                        n_wo,
+                    )
                     dxf_done_global[0] += int(lote_dxf_max[0])
                     step_done_global[0] += int(lote_step_max[0])
                     _on_export_progress(
@@ -662,136 +1133,188 @@ class ExportMixin:
                         step_done=0 if respuesta_3d else None,
                     )
 
-                    try:
-                        ruta_pdf_auto = self._exportar_pdf_nesting_en_carpeta_export(
-                            mini_resultados,
-                            ruta_export,
-                            n_wo,
-                            job_activo=job_activo,
-                        )
-                        print(f"[PDF][EXPORT] Reporte automático: {ruta_pdf_auto}")
-                    except Exception as e_pdf:
-                        print(f"[PDF][EXPORT][WARN] Lote {i + 1}: no se pudo generar el PDF: {e_pdf}")
+                    ruta_pdf_auto = self._exportar_pdf_nesting_en_carpeta_export(
+                        mini_resultados,
+                        ruta_export,
+                        n_wo,
+                        job_activo=job_activo,
+                    )
+                    if not os.path.isfile(ruta_pdf_auto):
+                        raise RuntimeError(f"{n_wo}: no se creó el reporte PDF oficial.")
+                    print(f"[PDF][EXPORT] Reporte automático: {ruta_pdf_auto}")
 
-                    try:
-                        ruta_arganest_auto = self._exportar_arganest_en_carpeta_export(
-                            mini_resultados,
-                            ruta_export,
+                    ruta_arganest_auto = self._exportar_arganest_en_carpeta_export(
+                        mini_resultados,
+                        ruta_export,
+                        n_wo,
+                        lote_idx=i,
+                        k_val=k_val,
+                        job_activo=job_activo,
+                    )
+                    if not os.path.isfile(ruta_arganest_auto):
+                        raise RuntimeError(f"{n_wo}: no se creó el workspace .arganest.")
+                    print(f"[ARGANEST][EXPORT] Workspace automático: {ruta_arganest_auto}")
+                    tipo_checkpoint_lote = "SWO_LOTE" if es_swo_flag else "WO"
+                    _registrar_checkpoint(
+                        n_wo,
+                        tipo_checkpoint_lote,
+                        "CAD_ASSETS",
+                        detail=f"DXF/STEP/PDF/ARGANEST validados para lote {i + 1}.",
+                        metadata={"lote_idx": i, "ruta_export": ruta_export},
+                    )
+
+                    # El costeo queda después de validar CAD y artefactos:
+                    # evita asientos financieros sin DXF/PDF/.arganest reales.
+                    estado_costeo = generar_csv_compras(
+                        r_base,
+                        n_wo,
+                        mini_resultados,
+                        ruta_destino=ruta_absoluta_wo,
+                        datos_piezas=self.app.datos_partes_actuales,
+                        es_swo=es_swo_flag,
+                        db_config=db_conf if modo_servidor else None,
+                    )
+                    if modo_servidor and not bool((estado_costeo or {}).get("ok")):
+                        _registrar_checkpoint(
                             n_wo,
-                            lote_idx=i,
-                            k_val=k_val,
-                            job_activo=job_activo,
+                            tipo_checkpoint_lote,
+                            "COSTEO_ERP",
+                            status="FAILED",
+                            detail=str((estado_costeo or {}).get("mensaje") or "Estado desconocido"),
                         )
-                        print(f"[ARGANEST][EXPORT] Workspace automático: {ruta_arganest_auto}")
-                    except Exception as e_arganest:
-                        print(
-                            f"[ARGANEST][EXPORT][WARN] Lote {i + 1}: "
-                            f"no se pudo generar el .arganest: {e_arganest}"
+                        raise ExportStageError(
+                            "COSTEO_ERP",
+                            f"{n_wo}: no se persistió el costeo/ERP: "
+                            f"{(estado_costeo or {}).get('mensaje', 'estado desconocido')}",
                         )
+                    _registrar_checkpoint(
+                        n_wo,
+                        tipo_checkpoint_lote,
+                        "COSTEO_ERP",
+                        detail=f"Costeo y ERP confirmados para lote {i + 1}.",
+                    )
 
                     if modo_servidor:
-                        try:
-                            guardar_nesting_en_postgresql(
-                                job_activo,
+                        ok_bd, resultado_bd = guardar_nesting_en_postgresql(
+                            job_activo,
+                            n_wo,
+                            mini_resultados,
+                            db_conf,
+                            "COMPLETADO" if respuesta_3d else "PENDIENTE",
+                            ruta_export,
+                            limpiar_previos=(i == 0),
+                        )
+                        if not ok_bd:
+                            _registrar_checkpoint(
                                 n_wo,
-                                mini_resultados,
-                                db_conf,
-                                "COMPLETADO" if respuesta_3d else "PENDIENTE",
-                                ruta_export,
-                                limpiar_previos=(i == 0),
+                                tipo_checkpoint_lote,
+                                "POSTGRESQL",
+                                status="FAILED",
+                                detail=str(resultado_bd),
                             )
-                        except Exception as e:
-                            print(f"[PQART][ERROR] No se pudo guardar en PostgreSQL después de exportar DXF: {e}")
+                            raise RuntimeError(
+                                f"{n_wo}: PostgreSQL no confirmó el nesting/PQART: {resultado_bd}"
+                            )
+                        _registrar_checkpoint(
+                            n_wo,
+                            tipo_checkpoint_lote,
+                            "POSTGRESQL",
+                            detail=f"PQART y reporte de corte confirmados ({resultado_bd} pieza(s)).",
+                        )
 
-                    # NUEVO: guardar la WO oficial del lote exportado
+                    # La WO queda visible solo cuando los DXF y PostgreSQL ya
+                    # coinciden; evita que el UI anuncie una orden inexistente.
                     self.app.wo_reales_por_lote[i] = str(n_wo)
 
-                    if modo_servidor:
-                        try:
-                            from interface.largos_nesting_service import aplicar_pedido_largos_tras_export
+                    if modo_servidor and not es_swo_flag:
+                        from interface.largos_nesting_service import aplicar_pedido_largos_tras_export
 
-                            orden_largos = job_activo if es_swo_flag else str(n_wo)
-                            tipo_largos = "SWO" if es_swo_flag else "WO"
-                            ok_ldg, msg_ldg = aplicar_pedido_largos_tras_export(
-                                self.app, i, orden_largos, tipo_largos
+                        ok_ldg, msg_ldg = aplicar_pedido_largos_tras_export(
+                            self.app,
+                            i,
+                            str(n_wo),
+                            "WO",
+                        )
+                        if not ok_ldg:
+                            _registrar_checkpoint(
+                                n_wo,
+                                tipo_checkpoint_lote,
+                                "MRL",
+                                status="FAILED",
+                                detail=msg_ldg,
                             )
-                            if ok_ldg:
-                                print(
-                                    f"[LARGOS_NESTING][EXPORT] {tipo_largos} {orden_largos} lote={i}: {msg_ldg}"
-                                )
-                            else:
-                                print(
-                                    f"[LARGOS_NESTING][EXPORT][WARN] {tipo_largos} {orden_largos} "
-                                    f"lote={i}: {msg_ldg}"
-                                )
-                        except Exception as e_ldg:
-                            print(f"[LARGOS_NESTING][EXPORT][ERROR] lote={i}: {e_ldg}")
+                            raise RuntimeError(
+                                f"{n_wo}: no se confirmó el pedido de largos: {msg_ldg}"
+                            )
+                        print(f"[LARGOS_NESTING][EXPORT] WO {n_wo} lote={i}: {msg_ldg}")
+                        _registrar_checkpoint(
+                            n_wo,
+                            tipo_checkpoint_lote,
+                            "MRL",
+                            detail=msg_ldg,
+                        )
 
                     rutas_generadas.append(ruta_absoluta_wo)
 
                 # --- FIN DEL BUCLE MULTI-LOTE ---
 
                 if modo_servidor:
-                    try:
-                        from modules.nesting_engine.api_client import avanzar_job_centralizado, avanzar_swo_centralizado
+                    if es_swo_flag:
+                        from interface.largos_nesting_service import (
+                            aplicar_pedido_largos_swo_acumulado_tras_export,
+                            validar_mrl_swo_canonica_tras_export,
+                        )
 
-                        jobs_involved = set()
-                        try:
-                            import psycopg2
-                            conn = psycopg2.connect(**db_conf)
-                            with conn.cursor() as cur:
-                                if es_swo_flag:
-                                    cur.execute(
-                                        "SELECT DISTINCT job FROM reporte_cortes WHERE super_work_order = %s AND job IS NOT NULL",
-                                        (job_activo,),
-                                    )
-                                    for r in cur.fetchall():
-                                        if r[0]:
-                                            jobs_involved.add(r[0].strip())
-                                    cur.execute(
-                                        "SELECT DISTINCT job_numero FROM diccionario_swo WHERE swo_id = %s",
-                                        (job_activo,),
-                                    )
-                                    for r in cur.fetchall():
-                                        if r[0]:
-                                            jobs_involved.add(r[0].strip())
-                                else:
-                                    jobs_involved.add(job_activo)
-                            conn.close()
-                        except Exception as db_err:
-                            print(f"[CENTRALIZED][WARN] No se pudo consultar DB para jobs_involved: {db_err}")
+                        ok_ldg, msg_ldg = aplicar_pedido_largos_swo_acumulado_tras_export(
+                            self.app,
+                            job_activo,
+                            list(range(len(self.app.resultados_multilote))),
+                        )
+                        if not ok_ldg:
+                            _registrar_checkpoint(
+                                job_activo,
+                                "SWO",
+                                "MRL",
+                                status="FAILED",
+                                detail=msg_ldg,
+                            )
+                            raise RuntimeError(
+                                f"SWO {job_activo}: no se confirmó el pedido acumulado de largos: "
+                                f"{msg_ldg}"
+                            )
+                        ok_mrl, msg_mrl = validar_mrl_swo_canonica_tras_export(job_activo)
+                        if not ok_mrl:
+                            _registrar_checkpoint(
+                                job_activo,
+                                "SWO",
+                                "MRL",
+                                status="FAILED",
+                                detail=msg_mrl,
+                            )
+                            raise ExportStageError("MRL", msg_mrl)
+                        print(f"[LARGOS_NESTING][EXPORT] SWO {job_activo}: {msg_ldg}")
+                        _registrar_checkpoint(
+                            job_activo,
+                            "SWO",
+                            "MRL",
+                            detail=f"{msg_ldg} {msg_mrl}",
+                        )
 
-                        if not jobs_involved:
-                            jobs_involved.add(job_activo)
-
-                        print(f"[CENTRALIZED] Procesando avance para: {jobs_involved}")
-                        for j_val in jobs_involved:
-                            avanzar_job_centralizado(str(j_val).strip())
-
-                        if es_swo_flag:
-                            avanzar_swo_centralizado(job_activo)
-
-                        from modules.nesting_engine.api_client import trigger_po_contpaq, trigger_pedido_po
-                        if es_swo_flag:
-                            trigger_po_contpaq(job_activo)
-                        else:
-                            trigger_pedido_po(job_activo)
-
-                    except Exception as api_err:
-                        print(f"[API_TRIGGER][ERROR] Error crítico en el avance: {api_err}")
+                    self._centralizar_exportacion_confirmada(
+                        db_conf=db_conf,
+                        job_activo=job_activo,
+                        es_swo=es_swo_flag,
+                        reporte_swo=self._consolidar_snapshot_swo() if es_swo_flag else None,
+                        run_id=export_run_id,
+                    )
 
                 total_carpetas = len(rutas_generadas)
 
-                if modo_servidor and usando_offline:
-                    with open(ruta_txt, "w") as f:
-                        f.write(str(consecutivo_base + total_carpetas))
-                elif not modo_servidor and total_carpetas > 0:
+                if not modo_servidor and total_carpetas > 0:
                     guardar_consecutivo_wo_local(consecutivo_base + total_carpetas - 1)
 
                 if modo_servidor:
                     mensaje_final = f"Se exportaron {total_carpetas} Órdenes de Trabajo separadas."
-                    if usando_offline:
-                        mensaje_final += "\n\n(AVISO: Se usó el contador Offline porque el Servidor está desconectado)."
                 else:
                     mensaje_final = (
                         f"Se exportaron {total_carpetas} lotes en modo local.\n"

@@ -37,6 +37,47 @@ def clave_orientacion_cobre_ruta(ruta) -> str:
     return os.path.normcase(os.path.normpath(str(ruta or "")))
 
 
+def _codigo_placa_base(plate_id) -> str:
+    """'PLC107 P1' / 'PLC107' → 'PLC107'."""
+    return str(plate_id or "").strip().split()[0].strip().upper()
+
+
+def _precio_herinox_por_codigo(codigo: str, _cache: dict | None = None) -> float:
+    """
+    Precio MXN vivo/cache Herinox para un código de placa.
+    Usado al persistir costos_prorrateo si el nesting quedó con precio 0.
+    """
+    cod = _codigo_placa_base(codigo)
+    if not cod or cod.startswith("RTZ"):
+        return 0.0
+    store = _cache if _cache is not None else {}
+    if cod in store:
+        return float(store[cod] or 0.0)
+    precio = 0.0
+    try:
+        from modules.herinox_catalog_cache import cargar_snapshot_placas
+
+        emp, prov, _meta = cargar_snapshot_placas()
+        for row in list(emp or []) + list(prov or []):
+            if not isinstance(row, (list, tuple)) or len(row) < 7:
+                continue
+            c = str(row[2] or "").strip().upper()
+            if not c:
+                continue
+            try:
+                mxn = float(row[6] or 0)
+            except (TypeError, ValueError):
+                mxn = 0.0
+            if mxn > 0:
+                store[c] = mxn
+        precio = float(store.get(cod) or 0.0)
+    except Exception as exc:
+        print(f"⚠️ [COSTOS] No se pudo leer precio Herinox para {cod}: {exc}")
+    if _cache is not None:
+        store.setdefault(cod, precio)
+    return precio
+
+
 def _es_clave_cobre(clave: str) -> bool:
     """True si la clave de grupo corresponde a material cobre (largos CU)."""
     s = str(clave or "").strip().upper()
@@ -217,10 +258,20 @@ def obtener_siguiente_consecutivo(db_config):
             conexion.close()
             
 def crear_estructura_carpetas(
-    ruta_origen_dxfs, consecutivo, qty_tanks, es_swo=False, modo_local=False
+    ruta_origen_dxfs,
+    consecutivo,
+    qty_tanks,
+    es_swo=False,
+    modo_local=False,
+    instancia_lote: int = 1,
 ):
     """Crea el árbol de directorios estandarizado de Grupo Arga.
-       Redirige a 'Máxima Optimización' si es una S.W.O."""
+       Redirige a 'Máxima Optimización' si es una S.W.O.
+
+       En una SWO puede haber más de un lote físico con el mismo multiplicador
+       (por ejemplo, dos lotes X3). Comparten identidad comercial, pero no la
+       misma carpeta para evitar sobrescribir sus DXF/PQART.
+    """
     if es_swo:
         nombre_carpeta_raiz = f"S.W.O {int(consecutivo):02d} X{qty_tanks}"
         if modo_local:
@@ -244,6 +295,12 @@ def crear_estructura_carpetas(
         else:
             raiz_arga = "X:\\"
             ruta_base_wo = os.path.join(raiz_arga, "Máxima Optimización", nombre_carpeta_raiz)
+        try:
+            instancia = max(1, int(instancia_lote or 1))
+        except Exception:
+            instancia = 1
+        if instancia > 1:
+            ruta_base_wo = os.path.join(ruta_base_wo, f"LOTE {instancia}")
     else:
         nombre_carpeta_raiz = f"W.O. {consecutivo} X{qty_tanks}"
         ruta_base_wo = os.path.join(ruta_origen_dxfs, nombre_carpeta_raiz)
@@ -332,7 +389,12 @@ def ensamblar_escenario(esc, nestings):
     return lista_ordenes, costo_total_proyecto, efi_promedio
 
 def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, datos_piezas=None, es_swo=False, db_config=None):
-    """Calcula el Cost Split con Trazabilidad y lo inyecta EXCLUSIVAMENTE a PostgreSQL."""
+    """
+    Calcula el Cost Split con trazabilidad e inyecta datos comerciales en PostgreSQL.
+
+    Retorna un estado explícito para que el exportador pueda bloquear el
+    avance de VSM/ContPAQ cuando el costeo o ERP no quedaron persistidos.
+    """
     import os
     import psycopg2
     import glob
@@ -396,6 +458,9 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
     # =====================================================================
     # 2. CARGA DEL DICCIONARIO S.W.O. + RED DE SEGURIDAD ERP
     # =====================================================================
+    from modules.nesting_engine.efficiency_metrics import _es_pieza_real_nombre
+
+    prefijos_sin_trazabilidad = set()
     if db_config:
         try:
             with psycopg2.connect(**db_config) as conn:
@@ -411,7 +476,11 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
                                 for pieza in hoja.get("piezas", []) or []:
                                     if not isinstance(pieza, dict):
                                         continue
-                                    n_pieza = str(pieza.get("nombre") or "").upper()
+                                    n_pieza_raw = str(pieza.get("nombre") or "").strip()
+                                    # Overlays (REF/TATUAJE/RETAZO/REMANENTE/…) no son WO.
+                                    if not _es_pieza_real_nombre(n_pieza_raw):
+                                        continue
+                                    n_pieza = n_pieza_raw.upper()
                                     if "__" in n_pieza:
                                         prefijos_unicos.add(n_pieza.split("__")[0].strip())
                         
@@ -433,8 +502,29 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
 
                             if reg:
                                 mapa_trazabilidad[prefijo] = {"cli": reg[0], "job": reg[1], "prod": reg[2], "wo_orig": prefijo}
-        except Exception as e: 
+                            else:
+                                prefijos_sin_trazabilidad.add(prefijo)
+        except Exception as e:
             print(f"⚠️ [ERROR DB] Trazabilidad interna falló: {e}")
+            return {
+                "ok": False,
+                "mensaje": f"No se pudo resolver trazabilidad SWO: {e}",
+                "work_order": nombre_wo,
+                "erp_rows": 0,
+                "cost_rows": 0,
+            }
+
+    if prefijos_sin_trazabilidad:
+        return {
+            "ok": False,
+            "mensaje": (
+                "Falta trazabilidad WO→Job para piezas SWO: "
+                + ", ".join(sorted(prefijos_sin_trazabilidad))
+            ),
+            "work_order": nombre_wo,
+            "erp_rows": 0,
+            "cost_rows": 0,
+        }
 
     # =====================================================================
     # 3. CÁLCULOS MATEMÁTICOS Y DE ÁREA
@@ -480,7 +570,22 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
             else:
                 p_id_base = hoja.get("placa_id", "DESCONOCIDO")
                 sheet_uid = f"{p_id_base} P{idx+1}"
-            precio_placa = float(hoja.get("precio_placa", 0.0))
+            precio_placa = float(hoja.get("precio_placa", 0.0) or 0.0)
+            # Si el layout quedó con precio 0 (catálogo viejo), ContPAQ rechaza la OC.
+            # Rellenar desde cache Herinox antes de escribir costos_prorrateo.
+            if precio_placa <= 0 and not str(sheet_uid).upper().startswith("RTZ"):
+                precios_hx = getattr(generar_csv_compras, "_herinox_precios_cache", None)
+                if precios_hx is None:
+                    precios_hx = {}
+                    setattr(generar_csv_compras, "_herinox_precios_cache", precios_hx)
+                precio_hx = _precio_herinox_por_codigo(
+                    hoja.get("placa_id") or sheet_uid, precios_hx
+                )
+                if precio_hx > 0:
+                    cod = _codigo_placa_base(hoja.get("placa_id") or sheet_uid)
+                    print(f"[COSTOS] Backfill Herinox {cod}: precio_placa 0 → {precio_hx}")
+                    precio_placa = precio_hx
+                    hoja["precio_placa"] = precio_hx
             excluir_compra = bool(hoja.get("ignorar_deduccion")) and not hoja.get("es_retazo")
             
             largo_in = float(hoja.get("placa_h", 0.0)) / 25.4
@@ -495,8 +600,10 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
                 }
             
             for pieza in hoja.get("piezas", []):
-                nombre_crudo = pieza.get("nombre", "Desconocido").upper()
-                if any(i in nombre_crudo for i in ["RETAZO", "TATUAJE", "BORDE", "REMANENTE", "RTZ", "REF__"]): continue
+                nombre_pieza = str(pieza.get("nombre", "Desconocido") or "").strip()
+                if not _es_pieza_real_nombre(nombre_pieza):
+                    continue
+                nombre_crudo = nombre_pieza.upper()
                 
                 area_pieza_in2 = float(pieza.get("area", 0.0)) / 645.16
                 
@@ -567,6 +674,12 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
             if datos_para_costos:
                 with psycopg2.connect(**db_config) as conn:
                     with conn.cursor() as cur:
+                        # Reintentos de la misma WO reemplazan su costeo;
+                        # acumular filas aquí desalineaba costo vs. PQART.
+                        cur.execute(
+                            "DELETE FROM costos_prorrateo WHERE work_order = %s",
+                            (nombre_wo,),
+                        )
                         query = """INSERT INTO costos_prorrateo (work_order, qty_lote, plate_id, largo_in, ancho_in, espesor, precio_placa, area_total_in2, cliente, producto, job, wo_origen, area_asignada_in2, porcentaje_area, costo_asignado, scrap_in2, costo_scrap) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
                         cur.executemany(query, datos_para_costos)
                     conn.commit()
@@ -575,10 +688,49 @@ def generar_csv_compras(ruta_job, nombre_wo, resultados, ruta_destino=None, dato
                 print("ℹ️ [BD] Sin filas de compra: todas las placas madre están marcadas como sobrante.")
 
             try:
-                from postgres_connector import guardar_tracking_erp
-                guardar_tracking_erp(nombre_wo, datos_para_erp, piezas_detalladas_db, db_config, datos_financieros)
+                try:
+                    from postgres_connector import guardar_tracking_erp
+                except ImportError:
+                    from interface.postgres_connector import guardar_tracking_erp
+                ok_erp = guardar_tracking_erp(
+                    nombre_wo,
+                    datos_para_erp,
+                    piezas_detalladas_db,
+                    db_config,
+                    datos_financieros,
+                )
+                if not ok_erp:
+                    return {
+                        "ok": False,
+                        "mensaje": "No se pudo persistir el tracking ERP.",
+                        "work_order": nombre_wo,
+                        "erp_rows": len(datos_para_erp),
+                        "cost_rows": len(datos_para_costos),
+                    }
             except Exception as e_erp:
                 print(f"⚠️ [Error ERP Tracking]: {e_erp}")
+                return {
+                    "ok": False,
+                    "mensaje": f"Error en tracking ERP: {e_erp}",
+                    "work_order": nombre_wo,
+                    "erp_rows": len(datos_para_erp),
+                    "cost_rows": len(datos_para_costos),
+                }
 
         except Exception as e: 
             print(f"❌ [Error Crítico en costos_prorrateo]: {e}")
+            return {
+                "ok": False,
+                "mensaje": f"Error al persistir costos: {e}",
+                "work_order": nombre_wo,
+                "erp_rows": len(datos_para_erp),
+                "cost_rows": len(datos_para_costos),
+            }
+
+    return {
+        "ok": True,
+        "work_order": nombre_wo,
+        "erp_rows": len(datos_para_erp),
+        "cost_rows": len(datos_para_costos),
+        "csv_encontrado": bool(archivo_csv),
+    }

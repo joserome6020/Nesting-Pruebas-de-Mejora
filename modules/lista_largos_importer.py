@@ -10,6 +10,7 @@ import psycopg2
 
 CANDIDATOS_CSV = (
     "Lista_Perfiles_Clasificados.csv",
+    "Lista_Perfiles_Clasificado.csv",  # variante sin 's'
     "materiales_input.csv",
     "Lista_Largos.csv",
 )
@@ -40,6 +41,26 @@ def _norm_key(value: str) -> str:
 
 def _norm_job(value: str) -> str:
     return re.sub(r"\s+", " ", _norm_text(value)).upper()
+
+
+def _jobs_equivalentes(job_a: str, job_b: str) -> bool:
+    """
+    Compara job VSM (ej. 251007) vs carpeta/job_data (ej. 06_30_2322_TANK_251007).
+    """
+    a = _norm_job(job_a)
+    b = _norm_job(job_b)
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    if a.endswith("_" + b) or b.endswith("_" + a):
+        return True
+    # Sufijo numérico de tarjeta VSM dentro del nombre de carpeta.
+    if a.isdigit() and (b.endswith(a) or f"TANK_{a}" in b or f"TANK{a}" in b):
+        return True
+    if b.isdigit() and (a.endswith(b) or f"TANK_{b}" in a or f"TANK{b}" in a):
+        return True
+    return False
 
 
 def _iter_context_paths(ruta_exportacion: str):
@@ -79,6 +100,48 @@ def _resolver_ruta_autodxf(ruta_exportacion: str) -> Path:
         base = base.parent
 
     return base / "AutoDXF"
+
+
+def _buscar_carpeta_job_corporate(job: str) -> Path | None:
+    """
+    Localiza carpeta de job en ARGA METALS CORPORATE SYSTEM/TANKS
+    cuando la ruta de export es SWO (Máxima Optimización) y no tiene AutoDXF.
+    """
+    job_n = _norm_job(job)
+    if not job_n:
+        return None
+
+    roots = [
+        Path(
+            r"\\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals"
+            r"\ARGA METALS CORPORATE SYSTEM\TANKS"
+        ),
+    ]
+    patrones = [
+        f"*TANK_{job_n}",
+        f"*TANK{job_n}",
+        f"*_{job_n}",
+        job_n,
+    ]
+    for root in roots:
+        try:
+            if not root.exists():
+                continue
+        except OSError:
+            continue
+        for pat in patrones:
+            try:
+                hits = sorted(p for p in root.rglob(pat) if p.is_dir())
+            except OSError:
+                hits = []
+            for hit in hits:
+                autodxf = hit / "MODEL CORE FILES" / "AutoDXF"
+                try:
+                    if autodxf.exists():
+                        return hit
+                except OSError:
+                    continue
+    return None
 
 
 def _resolver_csv_lista_largos(ruta_autodxf: Path) -> Path | None:
@@ -539,7 +602,7 @@ def importar_lista_largos_job(
         return {"ok": False, "status": "ruta_exportacion_vacia", "insertados": 0}
 
     job_job_data = _extraer_job_desde_job_data(ruta_exportacion)
-    if job_job_data and _norm_job(job_job_data) != _norm_job(job):
+    if job_job_data and not _jobs_equivalentes(job_job_data, job):
         return {
             "ok": False,
             "status": "job_mismatch",
@@ -550,6 +613,25 @@ def importar_lista_largos_job(
 
     ruta_autodxf = _resolver_ruta_autodxf(ruta_exportacion)
     print(f"[IMPORTADOR_LARGOS] ruta_autodxf_resuelta={ruta_autodxf}")
+    if not ruta_autodxf.exists():
+        job_folder = _buscar_carpeta_job_corporate(job)
+        if job_folder is not None:
+            print(f"[IMPORTADOR_LARGOS] fallback carpeta job={job_folder}")
+            ruta_exportacion = str(job_folder)
+            ruta_autodxf = _resolver_ruta_autodxf(ruta_exportacion)
+            print(f"[IMPORTADOR_LARGOS] ruta_autodxf_fallback={ruta_autodxf}")
+            # Releer qty del job real (job_data en carpeta corporate).
+            cantidad_job = _extraer_cantidad_job_desde_job_data(ruta_exportacion)
+            print(f"[IMPORTADOR_LARGOS] cantidad_job_fallback={cantidad_job}")
+            job_job_data = _extraer_job_desde_job_data(ruta_exportacion)
+            if job_job_data and not _jobs_equivalentes(job_job_data, job):
+                return {
+                    "ok": False,
+                    "status": "job_mismatch",
+                    "job_funcion": job,
+                    "job_job_data": job_job_data,
+                    "insertados": 0,
+                }
     if not ruta_autodxf.exists():
         return {
             "ok": False,

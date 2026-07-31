@@ -120,8 +120,13 @@ class ExportProgressDialog(QDialog):
     ) -> None:
         if dxf_done is not None:
             self._dxf_done = max(0, int(dxf_done))
+            # Si el estimado se quedó corto (p. ej. Amada = 2 DXF), ajusta el total.
+            if self._dxf_done > self._dxf_total:
+                self._dxf_total = self._dxf_done
         if step_done is not None:
             self._step_done = max(0, int(step_done))
+            if self._step_done > self._step_total > 0:
+                self._step_total = self._step_done
         if mensaje:
             self.lbl_mensaje.setText(str(mensaje))
         self._refresh_labels()

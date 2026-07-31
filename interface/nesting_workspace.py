@@ -501,7 +501,7 @@ def _construir_ui_state_workspace(tab, multilote, lote_idx=0):
         "multiplicador_tanques": int(_inferir_multiplicador_desde_multilote(multilote, lote_idx)),
         "lote_k_activo": int(_inferir_multiplicador_desde_multilote(multilote, lote_idx)),
         "global_margin_val": getattr(tab, "global_margin_val", 0.15),
-        "global_kerf_val": getattr(tab, "global_kerf_val", 0.3),
+        "global_kerf_val": getattr(tab, "global_kerf_val", 0.15),
         "global_corner_val": getattr(tab, "global_corner_val", "INFERIOR IZQUIERDA"),
         "costo_usd_val": getattr(tab, "costo_usd_val", 0.0),
         "costo_mxn_val": getattr(tab, "costo_mxn_val", 0.0),
@@ -597,6 +597,11 @@ def construir_payload_workspace_lote_export(
         "orientacion_cobre_por_ruta": dict(
             getattr(tab.app, "orientacion_cobre_por_ruta", {}) or {}
         ),
+        "cu_especial_por_ruta": {
+            str(k): bool(v)
+            for k, v in (getattr(tab.app, "cu_especial_por_ruta", {}) or {}).items()
+            if v
+        },
         "wo_reales_por_lote": {0: str(n_wo)},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
@@ -674,6 +679,11 @@ def construir_payload_workspace(tab):
         "orientacion_cobre_por_ruta": dict(
             getattr(tab.app, "orientacion_cobre_por_ruta", {}) or {}
         ),
+        "cu_especial_por_ruta": {
+            str(k): bool(v)
+            for k, v in (getattr(tab.app, "cu_especial_por_ruta", {}) or {}).items()
+            if v
+        },
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
@@ -1063,6 +1073,14 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         }
     except Exception:
         tab.app.orientacion_cobre_por_ruta = {}
+    try:
+        tab.app.cu_especial_por_ruta = {
+            str(k): bool(v)
+            for k, v in (payload.get("cu_especial_por_ruta") or {}).items()
+            if v
+        }
+    except Exception:
+        tab.app.cu_especial_por_ruta = {}
     tab.app.job_activo = payload.get("job_activo", "NESTING")
     tab.app.ultimos_escenarios = payload.get("ultimos_escenarios", []) or []
 
@@ -1139,11 +1157,11 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     tab.cantidad_tanques = f"X{int(mult_ui)}"
     tab.global_margin_val = float(ui.get("global_margin_val", 0.15) or 0.15)
     try:
-        gk = float(ui.get("global_kerf_val", 0.3) or 0.3)
+        gk = float(ui.get("global_kerf_val", 0.15) or 0.15)
     except Exception:
-        gk = 0.3
+        gk = 0.15
     if gk <= 0:
-        gk = 0.3
+        gk = 0.15
     tab.global_kerf_val = gk
     if hasattr(tab, "_sync_kerf_widget"):
         tab._sync_kerf_widget()
@@ -1191,9 +1209,9 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     try:
         from modules.nesting_engine.sheet_integrity import deduplicar_resultados_nesting
 
-        kerf_g = float(getattr(tab, "global_kerf_val", 0.3) or 0.3)
+        kerf_g = float(getattr(tab, "global_kerf_val", 0.15) or 0.15)
         if kerf_g <= 0:
-            kerf_g = 0.3
+            kerf_g = 0.15
         res = getattr(tab.app, "resultados_nesting", None)
         if isinstance(res, dict) and res:
             deduplicar_resultados_nesting(res, kerf_global=kerf_g)

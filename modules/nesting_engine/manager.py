@@ -7,6 +7,7 @@ import re
 import time
 import os
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime
 
 from modules.plate_stock import stock_permite_nesting
@@ -82,6 +83,57 @@ def _early_exit_sim_placa_activo() -> bool:
         return True
     return False
 
+
+def _plate_sel_parallel_workers() -> int:
+    """Workers para SIM multi-formato. 1 = secuencial (default producción).
+
+    Activar evidencia/candidata: ARGA_PLATE_SEL_PARALLEL=1
+    """
+    raw = str(os.environ.get("ARGA_PLATE_SEL_PARALLEL", "") or "").strip().lower()
+    if raw not in ("1", "true", "yes", "on"):
+        return 1
+    try:
+        from .nest_hardware import hardware_nest_budget
+
+        n = int(hardware_nest_budget().get("plate_pool_workers") or 1)
+    except Exception:
+        n = 2
+    return max(1, min(6, n))
+
+
+def _plate_sel_fast_rank_activo() -> bool:
+    """Ranking con Force 1 semilla + re-nest final de la ganadora.
+
+    ARGA_PLATE_SEL_FAST=1 (evidencia). No cambia política de score; acelera SIM.
+    """
+    raw = str(os.environ.get("ARGA_PLATE_SEL_FAST", "") or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+@contextmanager
+def _force_seeds_override(n_seeds: int):
+    prev = os.environ.get("ARGA_FORCE_SEEDS")
+    os.environ["ARGA_FORCE_SEEDS"] = str(max(1, int(n_seeds)))
+    try:
+        from .nest_hardware import hardware_nest_budget
+
+        hardware_nest_budget.cache_clear()
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("ARGA_FORCE_SEEDS", None)
+        else:
+            os.environ["ARGA_FORCE_SEEDS"] = prev
+        try:
+            from .nest_hardware import hardware_nest_budget
+
+            hardware_nest_budget.cache_clear()
+        except Exception:
+            pass
+
 # Cancelación NestFab-like visible en helpers de módulo (mismo hilo / mismo proceso).
 _CANCEL_TLS = threading.local()
 
@@ -109,6 +161,7 @@ from .nest_optimization import (
     score_placa_lower_bound,
     score_placa_simulacion,
 )
+from .plate_selection_probe import record_probe
 from .exporter import exportar_resultados_a_dxf
 from .cu_largos_nesting import procesar_grupo_largos_cu
 from .cu_inventory import (
@@ -125,9 +178,13 @@ from .rtz_overlays import (
 
 DEBUG_DIR = r"C:\NEST_EXPORTS"
 DEBUG_LOG_NESTING = os.path.join(DEBUG_DIR, "nesting_debug_geometry.txt")
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 DEFAULT_MARGIN_IN = 0.15
-THICKNESS_TOLERANCE_PCT = 0.15
+# Exacto: mismo calibre / redondeo (0.1046 ↔ 0.105). NO cruza 11↔12.
+THICKNESS_EXACT_ABS_IN = 0.005
+# DESACTIVADO: la tolerancia % provocaba usar cal. 11 por 12 y reclasificar grupos.
+# Se deja en 0 por compat; el clasificador ya NO usa fallback de tolerancia.
+THICKNESS_TOLERANCE_PCT = 0.0
 SLIDE_STEP_MM = 4.0
 TRANSFER_GRID_STEP_MM = 12.0
 TRANSFER_ROTATIONS = (0, 90, 180, 270)
@@ -1491,6 +1548,15 @@ def _renest_hoja_desde_pack(hoja, piezas_pack, *, mc_iterations=1, accesorios_re
     if sobras or not nueva or not nueva.get("piezas"):
         return False
     _aplicar_renest_en_hoja(hoja, nueva, params)
+    # --- VENOM POLISHER AI (Re-nesteo interno) ---
+    import os
+    try:
+        from . import venom_ai
+        _engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+        venom_ai.apply_smart_polisher(hoja, _engine_id)
+    except Exception:
+        pass
+    # --------------------------------------------
     return True
 
 
@@ -2011,6 +2077,7 @@ class MotorNesting:
         self.escala_dxf = 25.4
         self._cancel_checker = None
         self.orientacion_cobre_por_ruta = {}
+        self.cu_especial_por_ruta = {}
         self.active_engine_id = get_active_engine_id()
         self._ultima_comparacion_motores = None
         try:
@@ -2206,6 +2273,35 @@ class MotorNesting:
             return None
 
         piezas_a_reprocesar.sort(key=lambda x: x["area"], reverse=True)
+        
+        # --- EDDIE AI + HIVE ML (cualquier motor) ---
+        import os
+        try:
+            from modules.nesting_engine.ai_heuristic import smart_seed_order
+            from modules.nesting_engine.hive_mind_nests import (
+                force_eddie_policy,
+                suggest_seed_policy,
+            )
+
+            _engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+            sug = suggest_seed_policy(
+                piezas_a_reprocesar,
+                w_placa=float(hoja_data.get("placa_w", 0) or 0),
+                h_placa=float(hoja_data.get("placa_h", 0) or 0),
+                kerf=float(hoja_data.get("kerf_usado", 0.15) or 0.15),
+            )
+            force_eddie_policy(
+                str(_engine_id), str(sug.get("policy") or "host_parasite")
+            )
+            piezas_a_reprocesar = smart_seed_order(
+                piezas_a_reprocesar, engine_id=_engine_id
+            )
+        except Exception as e:
+            import traceback
+            with open(r"c:\Proyectos\New Arga Nesting Suite\_logs\eddie_debug.log", "a") as f:
+                f.write(f"ERROR EN EDDIE MANUAL: {e}\n{traceback.format_exc()}\n")
+        # --------------------------------
+
         w = float(hoja_data.get("placa_w", 0) or 0)
         h = float(hoja_data.get("placa_h", 0) or 0)
         if w <= 0 or h <= 0:
@@ -2229,6 +2325,18 @@ class MotorNesting:
 
         if not mejor_resultado:
             return None
+            
+        # --- VENOM POLISHER AI (Re-nesteo Manual) ---
+        import os
+        try:
+            from . import venom_ai
+            engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+            venom_ai.apply_smart_polisher(mejor_resultado, engine_id)
+        except Exception as e:
+            import traceback
+            with open(r"c:\Proyectos\New Arga Nesting Suite\_logs\venom_debug.log", "a") as f:
+                f.write(f"ERROR EN VENOM MANUAL: {e}\n{traceback.format_exc()}\n")
+        # --------------------------------------------
 
         mejor_resultado.update(
             {
@@ -2264,21 +2372,79 @@ class MotorNesting:
         except: return 0.0
 
     @staticmethod
+    def _thickness_inches_for_match(value):
+        """Pulgadas de espesor; si el texto es calibre entero (11, 12…) usa tabla acero."""
+        txt = str(value or "").strip().replace(",", ".")
+        if not txt:
+            return None
+        if re.fullmatch(r"\d{1,2}", txt):
+            try:
+                from modules.herinox_sync import HerinoxPlateSync
+
+                mapped = HerinoxPlateSync.STEEL_GAUGE_TO_INCHES.get(int(txt))
+                if mapped is not None:
+                    return float(mapped)
+            except Exception:
+                pass
+        return MotorNesting._parse_thickness_value(txt)
+
+    @staticmethod
+    def _nearest_steel_gauge(thk_in: float) -> int | None:
+        try:
+            from modules.herinox_sync import HerinoxPlateSync
+
+            tabla = HerinoxPlateSync.STEEL_GAUGE_TO_INCHES
+        except Exception:
+            return None
+        best_g = None
+        best_d = 1e9
+        for g, inches in tabla.items():
+            d = abs(float(inches) - float(thk_in))
+            if d < best_d:
+                best_d = d
+                best_g = int(g)
+        if best_g is None or best_d > 0.008:
+            return None
+        return best_g
+
+    @staticmethod
+    def _espesor_exacto(val1, val2) -> bool:
+        """Mismo calibre (abs ≤ 0.005\" o mismo gauge nominal). No cruza 11↔12."""
+        v1 = str(val1 or "").strip().upper()
+        v2 = str(val2 or "").strip().upper()
+        if v1 and v1 == v2:
+            return True
+        n1 = MotorNesting._thickness_inches_for_match(v1)
+        n2 = MotorNesting._thickness_inches_for_match(v2)
+        if n1 is None or n2 is None:
+            return False
+        if abs(n1 - n2) <= float(THICKNESS_EXACT_ABS_IN):
+            return True
+        g1 = MotorNesting._nearest_steel_gauge(n1)
+        g2 = MotorNesting._nearest_steel_gauge(n2)
+        return g1 is not None and g1 == g2
+
+    @staticmethod
+    def _espesor_con_tolerancia(val1, val2) -> bool:
+        """LEGACY: ya no hay fallback de tolerancia. Solo exacto."""
+        return MotorNesting._espesor_exacto(val1, val2)
+
+    @staticmethod
     def _coinciden(val1, val2):
+        """
+        Material: familia normalizada.
+        Espesor/calibre: SOLO exacto (no cruza gauges vecinos).
+        """
         v1 = str(val1).strip().upper()
         v2 = str(val2).strip().upper()
         if v1 == v2:
             return True
 
-        n1 = MotorNesting._parse_thickness_value(v1)
-        n2 = MotorNesting._parse_thickness_value(v2)
+        n1 = MotorNesting._thickness_inches_for_match(v1)
+        n2 = MotorNesting._thickness_inches_for_match(v2)
         if n1 is not None and n2 is not None:
-            mayor = max(abs(n1), abs(n2))
-            if mayor <= 1e-9:
-                return True
-            return abs(n1 - n2) <= (mayor * THICKNESS_TOLERANCE_PCT)
+            return MotorNesting._espesor_exacto(v1, v2)
 
-        # Piezas DXF usan "INOXIDABLE"; Herinox cataloga "SSTL 304" (misma familia).
         try:
             from modules.consulta_herinox_bridge import normalize_material
 
@@ -2289,11 +2455,134 @@ class MotorNesting:
         except Exception:
             pass
 
-        tiene_numeros = any(char.isdigit() for char in v1) or any(char.isdigit() for char in v2)
+        tiene_numeros = any(char.isdigit() for char in v1) or any(
+            char.isdigit() for char in v2
+        )
         if not tiene_numeros:
             if v1 in v2 or v2 in v1:
                 return True
         return False
+
+    @staticmethod
+    def _delta_espesor(req_cal, p_cal) -> float:
+        n1 = MotorNesting._thickness_inches_for_match(req_cal)
+        n2 = MotorNesting._thickness_inches_for_match(p_cal)
+        if n1 is None or n2 is None:
+            return 999.0
+        return abs(n1 - n2)
+
+    def _clasificar_placas_por_calibre(
+        self, req_cal, req_mat, datos_placas
+    ) -> tuple[list[dict], str]:
+        """
+        Solo placas del MISMO calibre (exacto).
+        Sin tolerancia %: no saltar 11↔12 ni reclasificar el grupo.
+        """
+        placas_exactas_emp: list[dict] = []
+        placas_exactas_prov: list[dict] = []
+
+        for placa in datos_placas or []:
+            if not stock_permite_nesting(
+                placa[8] if isinstance(placa, (list, tuple)) and len(placa) > 8 else ""
+            ):
+                continue
+            try:
+                p_cal = placa[0]
+                p_mat = placa[1]
+            except Exception:
+                continue
+            if not self._coinciden(req_mat, p_mat):
+                continue
+
+            w_in = self._extraer_numero(placa[3])
+            h_in = self._extraer_numero(placa[4])
+            if w_in <= 0 or h_in <= 0:
+                continue
+
+            libras_totales_placa = (
+                self._extraer_numero(placa[5]) if len(placa) > 5 else 0.0
+            )
+            origen_placa = str(placa[9]).upper() if len(placa) > 9 else "EMPRESA"
+            precio_mxn = self._extraer_numero(placa[6]) if len(placa) > 6 else 0.0
+            precio_usd_lb = (
+                self._extraer_numero(placa[10])
+                if len(placa) > 10
+                else (self._extraer_numero(placa[7]) if len(placa) > 7 else 0.0)
+            )
+            costo_placa_completa = (
+                precio_mxn
+                if precio_mxn > 0
+                else (libras_totales_placa * precio_usd_lb)
+            )
+            datos_placa_dict = {
+                "data": placa,
+                "w": w_in * 25.4,
+                "h": h_in * 25.4,
+                "precio": costo_placa_completa,
+                "id": str(placa[2]),
+                "origen": origen_placa,
+                "precio_lb": precio_usd_lb,
+                "calibre": str(p_cal).strip(),
+                "delta_thk": self._delta_espesor(req_cal, p_cal),
+            }
+
+            es_emp = "EMPRESA" in origen_placa or origen_placa.strip() == ""
+            if self._espesor_exacto(req_cal, p_cal):
+                (placas_exactas_emp if es_emp else placas_exactas_prov).append(
+                    datos_placa_dict
+                )
+
+        exactas = placas_exactas_emp if placas_exactas_emp else placas_exactas_prov
+        if exactas:
+            exactas.sort(
+                key=lambda x: (
+                    x.get("delta_thk", 999.0),
+                    x["precio_lb"],
+                    x["precio"],
+                )
+            )
+            return exactas, "exacto"
+
+        # Sin stock del calibre pedido: no improvisar con gauge vecino.
+        return [], "exacto"
+
+    @staticmethod
+    def _merge_resultado_en_mapa(resultados: dict, clave: str, nuevo: dict) -> None:
+        """Fusiona hojas si la clave ya existe (salto de calibre → grupo destino)."""
+        if not clave:
+            return
+        prev = resultados.get(clave)
+        if (
+            isinstance(prev, dict)
+            and isinstance(nuevo, dict)
+            and "hojas" in prev
+            and "hojas" in nuevo
+            and not prev.get("error")
+            and not nuevo.get("error")
+        ):
+            hojas = list(prev.get("hojas") or []) + list(nuevo.get("hojas") or [])
+            merged = dict(prev)
+            merged["hojas"] = hojas
+            merged["costo_total"] = float(prev.get("costo_total") or 0) + float(
+                nuevo.get("costo_total") or 0
+            )
+            merged["costo_empresa"] = float(prev.get("costo_empresa") or 0) + float(
+                nuevo.get("costo_empresa") or 0
+            )
+            merged["costo_proveedor"] = float(prev.get("costo_proveedor") or 0) + float(
+                nuevo.get("costo_proveedor") or 0
+            )
+            try:
+                from .rtz_overlays import sincronizar_overlays_grupo
+                from .efficiency_metrics import calcular_eficiencias_grupo
+
+                sincronizar_overlays_grupo(hojas)
+                merged.update(calcular_eficiencias_grupo(hojas))
+            except Exception:
+                pass
+            resultados[clave] = merged
+            return
+        resultados[clave] = nuevo
 
     @staticmethod
     def _parse_thickness_value(value):
@@ -2365,7 +2654,7 @@ class MotorNesting:
             return {"error": "Lista vacía."}
 
         try:
-            return self._ejecutar_nesting_visual_core(
+            result = self._ejecutar_nesting_visual_core(
                 lista_partes,
                 datos_placas,
                 progress_callback=progress_callback,
@@ -2376,6 +2665,12 @@ class MotorNesting:
                 wo_name=wo_name,
                 resolved_engine=resolved_engine,
             )
+            try:
+                from .ai_heuristic import ai_learn_from_feedback
+                ai_learn_from_feedback()
+            except Exception:
+                pass
+            return result
         finally:
             _release_engine_context()
 
@@ -2537,6 +2832,13 @@ class MotorNesting:
                 poly_nesting = poly_exact
 
             for idx_qty in range(int(qty)):
+                especial_cu = False
+                if es_material_cobre(mat):
+                    especial_cu = bool(
+                        (getattr(self, "cu_especial_por_ruta", {}) or {}).get(
+                            clave_orientacion_cobre_ruta(ruta), False
+                        )
+                    )
                 grupos[clave].append({
                     "nombre": pieza,
                     # Geometría exacta al motor: misma malla que exporta/visibiliza (con barrenos).
@@ -2551,6 +2853,7 @@ class MotorNesting:
                     # NUEVO: respaldo exacto para exportación/reconstrucción
                     "poly_exact": poly_exact,
                     "marks_exact": marks_exact,
+                    "cu_especial_vertical": especial_cu,
                     "debug_id": f"{clave}::{pieza}::rep{idx_qty + 1}"
                 })
 
@@ -2686,7 +2989,9 @@ class MotorNesting:
                         wo_name,
                         cu_routing_override="largos",
                     )
-                    resultados[clave_w or clave] = resultado_grupo
+                    self._merge_resultado_en_mapa(
+                        resultados, clave_w or clave, resultado_grupo
+                    )
                 except Exception as exc:
                     print(f"Error en Lote cobre {clave}: {exc}")
                     resultados[clave] = {"error": f"Error en cálculo cobre: {exc}"}
@@ -2729,7 +3034,9 @@ class MotorNesting:
                                 config_corner,
                                 wo_name,
                             )
-                            resultados[clave_w or clave] = resultado_grupo
+                            self._merge_resultado_en_mapa(
+                                resultados, clave_w or clave, resultado_grupo
+                            )
                         except Exception as exc:
                             print(f"Error en Lote {clave}: {exc}")
                             resultados[clave] = {"error": f"Error en cálculo: {exc}"}
@@ -2817,9 +3124,13 @@ class MotorNesting:
                                     clave_worker, resultado_grupo = raw_result
                                     if not clave_worker:
                                         clave_worker = clave
-                                    resultados[clave] = resultado_grupo
+                                    self._merge_resultado_en_mapa(
+                                        resultados, clave_worker, resultado_grupo
+                                    )
                                 elif isinstance(raw_result, dict):
-                                    resultados[clave] = raw_result
+                                    self._merge_resultado_en_mapa(
+                                        resultados, clave, raw_result
+                                    )
                                 else:
                                     raise RuntimeError(
                                         f"Salida inesperada del worker: tipo={type(raw_result).__name__}"
@@ -2834,6 +3145,14 @@ class MotorNesting:
                                 from .nest_poka_yoke import es_resultado_grupo_fallido
 
                                 grp_chk = resultados.get(clave)
+                                try:
+                                    if isinstance(raw_result, tuple) and len(raw_result) == 2:
+                                        _cw = raw_result[0] or clave
+                                        grp_chk = resultados.get(_cw, raw_result[1])
+                                    elif isinstance(raw_result, dict):
+                                        grp_chk = resultados.get(clave, raw_result)
+                                except NameError:
+                                    pass
                                 if es_resultado_grupo_fallido(grp_chk):
                                     if cancel_event is not None:
                                         try:
@@ -2899,6 +3218,7 @@ class MotorNesting:
             child = MotorNesting()
             child.set_cancel_checker(self._cancel_checker)
             child.orientacion_cobre_por_ruta = dict(self.orientacion_cobre_por_ruta or {})
+            child.cu_especial_por_ruta = dict(self.cu_especial_por_ruta or {})
             return child
 
         bundle = ejecutar_comparacion_motores(
@@ -2946,35 +3266,24 @@ class MotorNesting:
             req_cal = partes[0]
             req_mat = partes[1] if len(partes) > 1 else ""
 
-            placas_empresa = []
-            placas_proveedor = []
-            for placa in datos_placas or []:
-                try:
-                    p_cal = placa[0]
-                    p_mat = placa[1]
-                except Exception:
-                    continue
-                if not (self._coinciden(req_cal, p_cal) and self._coinciden(req_mat, p_mat)):
-                    continue
-                w_in = self._extraer_numero(placa[3] if len(placa) > 3 else 0)
-                h_in = self._extraer_numero(placa[4] if len(placa) > 4 else 0)
-                if w_in <= 0 or h_in <= 0:
-                    continue
-                origen = str(placa[9]).upper() if len(placa) > 9 else "EMPRESA"
-                row = {
-                    "data": placa,
-                    "w": w_in * 25.4,
-                    "h": h_in * 25.4,
-                    "precio": 0.0,
-                    "id": str(placa[2]) if len(placa) > 2 else "",
-                    "origen": origen,
-                    "precio_lb": 0.0,
+            placas_ok, match_mode = self._clasificar_placas_por_calibre(
+                req_cal, req_mat, datos_placas
+            )
+            # Preflight: filas mínimas (sin precio) — reclasificar a dicts ligeros
+            placas_ok = [
+                {
+                    "data": p.get("data"),
+                    "w": p["w"],
+                    "h": p["h"],
+                    "precio": p.get("precio", 0.0),
+                    "id": p.get("id", ""),
+                    "origen": p.get("origen", "EMPRESA"),
+                    "precio_lb": p.get("precio_lb", 0.0),
+                    "calibre": p.get("calibre", ""),
                 }
-                if "EMPRESA" in origen or origen.strip() == "":
-                    placas_empresa.append(row)
-                else:
-                    placas_proveedor.append(row)
-            placas_ok = placas_empresa if placas_empresa else placas_proveedor
+                for p in placas_ok
+            ]
+            _ = match_mode
 
             if not placas_ok:
                 fallas.append(
@@ -3103,6 +3412,31 @@ class MotorNesting:
     ):
         prev_cc = _bind_pack_cancel_checker(self._cancelado)
         try:
+            import os
+            from modules.nesting_engine.ai_heuristic import smart_seed_order
+            from modules.nesting_engine.hive_mind_nests import (
+                force_eddie_policy,
+                suggest_seed_policy,
+            )
+
+            _engine_id = getattr(self, "active_engine_id", "default")
+            try:
+                kerf_g = 0.15
+                if isinstance(config_kerf, dict):
+                    kerf_g = float(next(iter(config_kerf.values()), 0.15) or 0.15)
+                else:
+                    kerf_g = float(config_kerf or 0.15)
+                sug = suggest_seed_policy(piezas or [], kerf=kerf_g)
+                force_eddie_policy(str(_engine_id), str(sug.get("policy") or "host_parasite"))
+                print(
+                    f"[HIVE-ML] engine={_engine_id} suggest={sug.get('policy')} "
+                    f"conf={sug.get('confidence')} neighbors={sug.get('neighbors')}",
+                    flush=True,
+                )
+            except Exception as _hive_exc:
+                print(f"[HIVE-ML] seed skip: {_hive_exc}", flush=True)
+            piezas = smart_seed_order(piezas or [], engine_id=_engine_id)
+
             return self._procesar_grupo_parallel_impl(
                 clave,
                 piezas,
@@ -3141,15 +3475,11 @@ class MotorNesting:
         req_cal = partes_clave[0]
         req_mat = partes_clave[1] if len(partes_clave) > 1 else ""
 
-        placas_empresa = []
-        placas_proveedor = []
-
         _dbg_nesting(
             f"[GRUPO-START] clave={clave} | piezas={len(piezas)} | "
             f"kerf={config_kerf} | margin={config_margin} | "
             f"opt={config_opt} | corner={config_corner} | wo={wo_name}"
         )
-
         for pz in piezas:
             poly_dbg = pz.get("poly")
             _dbg_nesting(
@@ -3159,44 +3489,19 @@ class MotorNesting:
                 f"ruta={pz.get('ruta', 'SIN_RUTA')}"
             )
 
-        for placa in datos_placas:
-            if not stock_permite_nesting(
-                placa[8] if isinstance(placa, (list, tuple)) and len(placa) > 8 else ""
-            ):
-                continue
-            p_cal = placa[0]
-            p_mat = placa[1]
-            if self._coinciden(req_cal, p_cal) and self._coinciden(req_mat, p_mat):
-                w_in = self._extraer_numero(placa[3]) 
-                h_in = self._extraer_numero(placa[4])
-                
-                libras_totales_placa = self._extraer_numero(placa[5]) if len(placa) > 5 else 0.0
-                origen_placa = str(placa[9]).upper() if len(placa) > 9 else "EMPRESA"
-                precio_mxn = self._extraer_numero(placa[6]) if len(placa) > 6 else 0.0
-                precio_usd_lb = self._extraer_numero(placa[10]) if len(placa) > 10 else (self._extraer_numero(placa[7]) if len(placa) > 7 else 0.0)
-                
-                if w_in > 0 and h_in > 0:
-                    costo_placa_completa = precio_mxn if precio_mxn > 0 else (libras_totales_placa * precio_usd_lb)
-                    datos_placa_dict = {
-                        "data": placa, "w": w_in * 25.4, "h": h_in * 25.4, 
-                        "precio": costo_placa_completa, "id": str(placa[2]),
-                        "origen": origen_placa, "precio_lb": precio_usd_lb
-                    }
-                    if "EMPRESA" in origen_placa or origen_placa.strip() == "":
-                        placas_empresa.append(datos_placa_dict)
-                    else:
-                        placas_proveedor.append(datos_placa_dict)
-
-        placas_ok = placas_empresa if placas_empresa else placas_proveedor
+        placas_ok, match_mode = self._clasificar_placas_por_calibre(
+            req_cal, req_mat, datos_placas
+        )
 
         _dbg_nesting(
-            f"[PLACAS-CANDIDATAS] clave={clave} | empresa={len(placas_empresa)} | "
-            f"proveedor={len(placas_proveedor)}"
+            f"[PLACAS-CANDIDATAS] clave={clave} | match={match_mode} | "
+            f"n={len(placas_ok)}"
         )
 
         for placa_dbg in placas_ok:
             _dbg_nesting(
                 f"[PLACA-OK] clave={clave} | placa_id={placa_dbg.get('id')} | "
+                f"cal={placa_dbg.get('calibre')} | delta={placa_dbg.get('delta_thk', 0):.4f} | "
                 f"origen={placa_dbg.get('origen')} | w_mm={placa_dbg.get('w', 0.0):.3f} | "
                 f"h_mm={placa_dbg.get('h', 0.0):.3f} | precio={placa_dbg.get('precio', 0.0):.3f} | "
                 f"precio_lb={placa_dbg.get('precio_lb', 0.0):.3f}"
@@ -3264,8 +3569,7 @@ class MotorNesting:
                     return clave_out, {"error": msg_inv}
             return clave_out, resultado_largos
 
-        placas_ok.sort(key=lambda x: (x['precio_lb'], x['precio']))
-
+        # Ya vienen ordenadas por delta_thk, precio_lb, precio. No reordenar solo por $.
         formatos_vistos = set()
         placas_unicas_simulacion = []
         for p in placas_ok:
@@ -3409,68 +3713,58 @@ class MotorNesting:
             from .nest_engine_context import reset_ultra_sim_bounded, set_ultra_sim_bounded
 
             sim_bound_token = set_ultra_sim_bounded(True)
-            for candidato_placa in candidatos_sim:
+            parallel_workers = _plate_sel_parallel_workers()
+            fast_rank = _plate_sel_fast_rank_activo()
+            _dbg_nesting(
+                f"[SIM-PLACA-MODE] clave={clave} | parallel_workers={parallel_workers} | "
+                f"fast_rank={fast_rank} | candidatos={len(candidatos_sim)} | "
+                f"early_exit={use_early_exit}"
+            )
+
+            def _skip_candidato(cand, mejor_sc, mejor_pr, mejor_restos):
                 fmt_key = _plate_format_key_mm(
-                    float(candidato_placa.get("w", 0.0) or 0.0),
-                    float(candidato_placa.get("h", 0.0) or 0.0),
+                    float(cand.get("w", 0.0) or 0.0),
+                    float(cand.get("h", 0.0) or 0.0),
                 )
                 if formats_allowed is not None and fmt_key not in formats_allowed:
-                    continue
+                    return "fmt"
                 lim = format_limits.get(fmt_key)
                 if lim is not None and int(format_used.get(fmt_key, 0)) >= int(lim):
-                    continue
-
-                cand_precio = float(candidato_placa.get("precio", 0.0) or 0.0)
-
-                # Regla fuerte: si la mejor ya metió TODAS las piezas y esta
-                # candidata cuesta igual o más, no puede ganar → skip.
+                    return "lim"
+                cand_precio = float(cand.get("precio", 0.0) or 0.0)
                 if (
                     use_early_exit
-                    and mejor_restos_total == 0
-                    and mejor_precio is not None
-                    and cand_precio >= float(mejor_precio) - 1e-9
+                    and mejor_restos == 0
+                    and mejor_pr is not None
+                    and cand_precio >= float(mejor_pr) - 1e-9
                 ):
-                    _dbg_nesting(
-                        f"[SIM-PLACA-SKIP] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                        f"precio={cand_precio:.2f} >= best_precio={float(mejor_precio):.2f} | "
-                        f"best_restos=0 | early-exit-full"
-                    )
-                    continue
-
-                # Cota inferior: si ni llenando al 100% puede ganar, no nestear.
-                if use_early_exit and mejor_score < float("inf"):
+                    return "early-exit-full"
+                if use_early_exit and mejor_sc < float("inf"):
                     lb = score_placa_lower_bound(
-                        candidato_placa,
-                        area_piezas_pendientes=area_pend_score,
+                        cand, area_piezas_pendientes=area_pend_score
                     )
-                    if lb >= mejor_score:
-                        _dbg_nesting(
-                            f"[SIM-PLACA-SKIP] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                            f"lb={lb:.4f} >= best={mejor_score:.4f} | early-exit"
-                        )
-                        continue
+                    if lb >= mejor_sc:
+                        return "early-exit-lb"
+                return None
 
+            def _eval_candidato(candidato_placa):
+                """Nest+score de una candidata. Thread-safe si C++ libera GIL."""
                 sim_est = copy.deepcopy(pendientes_est)
                 sim_acc = copy.deepcopy(accesorios)
-
-                _dbg_nesting(
-                    f"[SIM-PLACA-START] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                    f"w_mm={candidato_placa.get('w', 0.0):.3f} | h_mm={candidato_placa.get('h', 0.0):.3f} | "
-                    f"precio={candidato_placa.get('precio', 0.0):.3f} | "
-                    f"pendientes_est={len(sim_est)} | accesorios={len(sim_acc)}"
+                record_probe(
+                    "sim_start",
+                    clave=str(clave),
+                    placa_id=str(candidato_placa.get("id") or ""),
+                    w_mm=float(candidato_placa.get("w", 0.0) or 0.0),
+                    h_mm=float(candidato_placa.get("h", 0.0) or 0.0),
+                    precio=float(candidato_placa.get("precio", 0.0) or 0.0),
                 )
-
-                if q_msg:
-                    q_msg.put(
-                        f"[{req_cal}] Procesando Placa #{num_placa_actual} | "
-                        f"Quedan: {len(sim_est) + len(sim_acc)} piezas..."
-                    )
-
+                _sim_t0 = time.perf_counter()
                 hoja_sim = None
                 restos_sim = []
                 restos_est_out = []
                 restos_acc_out = []
-
+                modo = ""
                 if sim_est:
                     if usar_pack_combinado:
                         hoja_sim, restos_est_out, restos_acc_out = _empaquetar_arga_combinado(
@@ -3490,7 +3784,8 @@ class MotorNesting:
                         )
                         restos_sim = restos_est_out + restos_acc_out
                         if not hoja_sim or not hoja_sim.get("piezas"):
-                            continue
+                            return None
+                        modo = "combinado"
                     else:
                         hoja_sim, restos_sim = _safe_empaquetar_una_hoja_mc(
                             sim_est,
@@ -3500,12 +3795,15 @@ class MotorNesting:
                             config_margin,
                             config_opt,
                             config_corner,
-                            debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=estructurales",
+                            debug_tag=(
+                                f"clave={clave} | placa_id={candidato_placa.get('id')} | "
+                                "modo=estructurales"
+                            ),
                             mc_iterations=mc_iters,
                         )
                         restos_est_out = restos_sim
                         restos_acc_out = sim_acc
-                    modo = "combinado" if usar_pack_combinado else "estructurales"
+                        modo = "estructurales"
                 elif sim_acc:
                     hoja_sim, restos_sim = _empaquetar_mejor_hoja_mc(
                         sim_acc,
@@ -3515,7 +3813,10 @@ class MotorNesting:
                         config_margin,
                         config_opt,
                         config_corner,
-                        debug_tag=f"clave={clave} | placa_id={candidato_placa.get('id')} | modo=accesorios",
+                        debug_tag=(
+                            f"clave={clave} | placa_id={candidato_placa.get('id')} | "
+                            "modo=accesorios"
+                        ),
                         mc_iterations=mc_iters,
                         solo_accesorios=True,
                         accesorios_retries=cu_acc_retries,
@@ -3524,27 +3825,27 @@ class MotorNesting:
                     restos_acc_out = restos_sim
                     modo = "accesorios"
                 else:
-                    continue
+                    return None
 
                 _dbg_nesting(
                     f"[SIM-PLACA-RESULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                    f"modo={modo} | piezas_colocadas={len(hoja_sim.get('piezas', []))} | "
-                    f"area_usada={hoja_sim.get('area_usada', 0.0):.3f} | restos={len(restos_sim)}"
+                    f"modo={modo} | piezas_colocadas={len((hoja_sim or {}).get('piezas', []))} | "
+                    f"area_usada={(hoja_sim or {}).get('area_usada', 0.0):.3f} | "
+                    f"restos={len(restos_sim)}"
                 )
-
                 from .nest_poka_yoke import es_pack_fault, motivo_pack_fault
 
                 if es_pack_fault(hoja_sim):
-                    _dbg_nesting(
-                        f"[SIM-PLACA-FAULT] clave={clave} | placa_id={candidato_placa.get('id')} | "
-                        f"motivo={motivo_pack_fault(hoja_sim)}"
+                    record_probe(
+                        "sim_fault",
+                        clave=str(clave),
+                        placa_id=str(candidato_placa.get("id") or ""),
+                        elapsed_ms=(time.perf_counter() - _sim_t0) * 1000.0,
+                        detail=str(motivo_pack_fault(hoja_sim) or ""),
                     )
-                    continue
-
+                    return None
                 if not hoja_sim.get("piezas"):
-                    continue
-
-                # Poka-yoke: no dejar que una sim solapada / fuera de placa gane por score.
+                    return None
                 from .nest_poka_yoke import validar_integridad_bloque_hojas
 
                 hoja_chk = dict(hoja_sim)
@@ -3553,14 +3854,18 @@ class MotorNesting:
                 hoja_chk["placa_id"] = candidato_placa.get("id")
                 ok_sim_s, msg_sim_s = validar_integridad_bloque_hojas([hoja_chk])
                 if not ok_sim_s:
-                    _dbg_nesting(
-                        f"[SIM-PLACA-INTEGRIDAD] clave={clave} | "
-                        f"placa_id={candidato_placa.get('id')} | {msg_sim_s}"
+                    record_probe(
+                        "sim_integrity_fail",
+                        clave=str(clave),
+                        placa_id=str(candidato_placa.get("id") or ""),
+                        elapsed_ms=(time.perf_counter() - _sim_t0) * 1000.0,
+                        detail=str(msg_sim_s or ""),
                     )
-                    continue
-
+                    return None
                 restos_count = len(restos_est_out) + len(restos_acc_out)
-                area_restos = _area_total_piezas(restos_est_out) + _area_total_piezas(restos_acc_out)
+                area_restos = _area_total_piezas(restos_est_out) + _area_total_piezas(
+                    restos_acc_out
+                )
                 piezas_colocadas = len(hoja_sim.get("piezas") or [])
                 lookahead_cost = 0.0
                 if use_lookahead and restos_count > 0:
@@ -3574,7 +3879,6 @@ class MotorNesting:
                         config_corner,
                         mc_fast,
                     )
-
                 score = score_placa_simulacion(
                     candidato_placa,
                     hoja_sim,
@@ -3583,15 +3887,148 @@ class MotorNesting:
                     piezas_colocadas=piezas_colocadas,
                     lookahead_cost=lookahead_cost,
                 )
+                _sim_elapsed_ms = (time.perf_counter() - _sim_t0) * 1000.0
+                _dbg_nesting(
+                    f"[SIM-PLACA-SCORE] clave={clave} | placa_id={candidato_placa.get('id')} | "
+                    f"score={score:.6f} | elapsed_ms={_sim_elapsed_ms:.1f}"
+                )
+                record_probe(
+                    "sim_result",
+                    clave=str(clave),
+                    placa_id=str(candidato_placa.get("id") or ""),
+                    w_mm=float(candidato_placa.get("w", 0.0) or 0.0),
+                    h_mm=float(candidato_placa.get("h", 0.0) or 0.0),
+                    precio=float(candidato_placa.get("precio", 0.0) or 0.0),
+                    piezas_colocadas=int(piezas_colocadas),
+                    area_usada=float(hoja_sim.get("area_usada", 0.0) or 0.0),
+                    restos=int(restos_count),
+                    score=float(score),
+                    elapsed_ms=float(_sim_elapsed_ms),
+                )
+                return {
+                    "score": float(score),
+                    "hoja": hoja_sim,
+                    "restos_est": restos_est_out,
+                    "restos_acc": restos_acc_out,
+                    "placa": candidato_placa,
+                    "restos_total": int(restos_count),
+                    "precio": float(candidato_placa.get("precio", 0.0) or 0.0),
+                }
 
-                if score < mejor_score:
-                    mejor_score = score
-                    mejor_hoja_temp = hoja_sim
-                    mejor_restos_est = restos_est_out
-                    mejor_restos_acc = restos_acc_out
-                    mejor_placa = candidato_placa
-                    mejor_restos_total = int(restos_count)
-                    mejor_precio = float(candidato_placa.get("precio", 0.0) or 0.0)
+            # Orden por cota inferior solo en modo paralelo (misma optima,
+            # mejor early-exit entre olas). Secuencial conserva orden histórico.
+            if parallel_workers > 1:
+                candidatos_ordenados = sorted(
+                    list(candidatos_sim),
+                    key=lambda p: (
+                        score_placa_lower_bound(
+                            p, area_piezas_pendientes=area_pend_score
+                        ),
+                        float(p.get("precio", 0.0) or 0.0),
+                        str(p.get("id") or ""),
+                    ),
+                )
+            else:
+                candidatos_ordenados = list(candidatos_sim)
+            pendientes_cand = list(candidatos_ordenados)
+            while pendientes_cand:
+                # Primera candidata sola: permite early-exit antes de abrir ola paralela.
+                # Sin esto, N workers nestearían N formatos aunque el 1º ya cierre el job.
+                ola_cap = 1 if mejor_score == float("inf") else max(1, parallel_workers)
+                ola = []
+                while pendientes_cand and len(ola) < ola_cap:
+                    cand = pendientes_cand.pop(0)
+                    motivo = _skip_candidato(
+                        cand, mejor_score, mejor_precio, mejor_restos_total
+                    )
+                    if motivo is not None:
+                        if motivo in ("early-exit-full", "early-exit-lb"):
+                            _dbg_nesting(
+                                f"[SIM-PLACA-SKIP] clave={clave} | "
+                                f"placa_id={cand.get('id')} | detail={motivo}"
+                            )
+                            record_probe(
+                                "sim_skip",
+                                clave=str(clave),
+                                placa_id=str(cand.get("id") or ""),
+                                w_mm=float(cand.get("w", 0.0) or 0.0),
+                                h_mm=float(cand.get("h", 0.0) or 0.0),
+                                precio=float(cand.get("precio", 0.0) or 0.0),
+                                detail=str(motivo),
+                            )
+                        continue
+                    ola.append(cand)
+                if not ola:
+                    continue
+                if q_msg:
+                    q_msg.put(
+                        f"[{req_cal}] Procesando Placa #{num_placa_actual} | "
+                        f"Quedan: {len(pendientes_est) + len(accesorios)} piezas..."
+                    )
+                resultados_ola = []
+                import contextlib as _ctxlib
+
+                rank_cm = (
+                    _force_seeds_override(1) if fast_rank else _ctxlib.nullcontext()
+                )
+                with rank_cm:
+                    if len(ola) == 1 or parallel_workers <= 1:
+                        for cand in ola:
+                            _dbg_nesting(
+                                f"[SIM-PLACA-START] clave={clave} | placa_id={cand.get('id')} | "
+                                f"w_mm={cand.get('w', 0.0):.3f} | h_mm={cand.get('h', 0.0):.3f} | "
+                                f"precio={cand.get('precio', 0.0):.3f} | "
+                                f"pendientes_est={len(pendientes_est)} | "
+                                f"accesorios={len(accesorios)}"
+                            )
+                            resultados_ola.append(_eval_candidato(cand))
+                    else:
+                        _dbg_nesting(
+                            f"[SIM-PLACA-OLA] clave={clave} | size={len(ola)} | "
+                            f"workers={parallel_workers} | ids="
+                            + ",".join(str(c.get("id") or "") for c in ola)
+                        )
+                        with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=len(ola)
+                        ) as pool:
+                            futs = [pool.submit(_eval_candidato, c) for c in ola]
+                            for fut in concurrent.futures.as_completed(futs):
+                                try:
+                                    resultados_ola.append(fut.result())
+                                except Exception as exc:
+                                    _dbg_nesting(
+                                        f"[SIM-PLACA-OLA-ERR] clave={clave} | {exc}"
+                                    )
+                for res in resultados_ola:
+                    if not res:
+                        continue
+                    if res["score"] < mejor_score:
+                        mejor_score = res["score"]
+                        mejor_hoja_temp = res["hoja"]
+                        mejor_restos_est = res["restos_est"]
+                        mejor_restos_acc = res["restos_acc"]
+                        mejor_placa = res["placa"]
+                        mejor_restos_total = int(res["restos_total"])
+                        mejor_precio = float(res["precio"])
+
+            # Ranking rápido usó 1 semilla: re-nest de la ganadora con presupuesto completo.
+            if (
+                fast_rank
+                and mejor_placa is not None
+                and mejor_hoja_temp is not None
+            ):
+                _dbg_nesting(
+                    f"[SIM-PLACA-REFINE] clave={clave} | placa_id={mejor_placa.get('id')} | "
+                    "re-nest ganadora con semillas completas"
+                )
+                refined = _eval_candidato(mejor_placa)
+                if refined and refined.get("hoja"):
+                    mejor_score = refined["score"]
+                    mejor_hoja_temp = refined["hoja"]
+                    mejor_restos_est = refined["restos_est"]
+                    mejor_restos_acc = refined["restos_acc"]
+                    mejor_restos_total = int(refined["restos_total"])
+                    mejor_precio = float(refined["precio"])
 
             reset_ultra_sim_bounded(sim_bound_token)
 
@@ -3726,10 +4163,23 @@ class MotorNesting:
                 f"piezas_colocadas={len(hoja_ganadora.get('piezas', []))} | "
                 f"area_usada={hoja_ganadora.get('area_usada', 0.0):.3f}"
             )
+            record_probe(
+                "sim_winner",
+                clave=str(clave),
+                placa_id=str(candidato_ganador.get("id") or ""),
+                w_mm=float(candidato_ganador.get("w", 0.0) or 0.0),
+                h_mm=float(candidato_ganador.get("h", 0.0) or 0.0),
+                precio=float(candidato_ganador.get("precio", 0.0) or 0.0),
+                piezas_colocadas=len(hoja_ganadora.get("piezas") or []),
+                area_usada=float(hoja_ganadora.get("area_usada", 0.0) or 0.0),
+                score=float(mejor_score) if mejor_score < float("inf") else None,
+            )
 
             hoja_ganadora.update({
                 'placa_id': candidato_ganador['id'], 'placa_w': candidato_ganador['w'],
                 'placa_h': candidato_ganador['h'], 'precio_placa': candidato_ganador['precio'],
+                'placa_cal': str(candidato_ganador.get('calibre') or req_cal).strip(),
+                'placa_match_mode': match_mode,
                 'kerf_usado': config_kerf, 'margin_usado': config_margin,
                 'opt_usado': config_opt, 'corner_usado': config_corner,
                 'es_retazo': False, 'origen_placa': candidato_ganador['origen']
@@ -4291,6 +4741,28 @@ class MotorNesting:
                 if h.get('origen_placa') != "EMPRESA" and not h.get('es_retazo')
             )
 
+            # --- VENOM POLISHER AI (coarse C++ + Shapely + CUDA opt-in) ---
+            import os
+            venom_reward_total = 0.0
+            venom_compact_pre = 0.0
+            venom_compact_post = 0.0
+            venom_sheets = 0
+            try:
+                from . import venom_ai
+                engine_id = getattr(self, "active_engine_id", "default")
+                for hoja in hojas_finales:
+                    venom_ai.apply_smart_polisher(hoja, engine_id)
+                    if "venom_reward" in hoja:
+                        venom_reward_total += float(hoja.get("venom_reward") or 0.0)
+                        venom_compact_pre += float(hoja.get("venom_compactness_pre") or 0.0)
+                        venom_compact_post += float(hoja.get("venom_compactness_post") or 0.0)
+                        venom_sheets += 1
+            except Exception as e:
+                import traceback
+                with open(r"c:\Proyectos\New Arga Nesting Suite\_logs\venom_debug.log", "a") as f:
+                    f.write(f"ERROR EN VENOM BATCH: {e}\n{traceback.format_exc()}\n")
+            # ------------------------------------
+
             sincronizar_overlays_grupo(hojas_finales)
             efi_grupo = calcular_eficiencias_grupo(hojas_finales)
             resultado_placas = {
@@ -4307,11 +4779,48 @@ class MotorNesting:
                 "costo_empresa": costo_empresa,
                 "costo_proveedor": costo_proveedor,
                 "reporte": "Reporte Generado.",
+                "match_placa": match_mode,
+                "calibre_pieza": req_cal,
                 **efi_grupo,
             }
             if inventario_aviso:
                 resultado_placas["advertencia"] = inventario_aviso
-            return clave, resultado_placas
+
+            clave_out = clave
+            
+            # --- APRENDIZAJE IA POR MOTOR (señal de grupo + compactación Venom) ---
+            import os
+            from .ai_heuristic import record_telemetry, get_last_seed_info
+            engine_id = getattr(self, "active_engine_id", None) or os.environ.get(
+                "ARGA_MOTOR_NESTING", "svgnest_ultra"
+            )
+            eff_real = float(
+                efi_grupo.get("eficiencia_tanque_real")
+                or efi_grupo.get("efficiency_real")
+                or efi_grupo.get("eficiencia_real")
+                or 0.0
+            )
+            seed_info = get_last_seed_info(engine_id)
+            nest_reward = None
+            c_pre = c_post = None
+            if venom_sheets > 0:
+                c_pre = venom_compact_pre / venom_sheets
+                c_post = venom_compact_post / venom_sheets
+                # Reward compuesto: eficiencia real del tanque + Δcompactación media.
+                nest_reward = eff_real + (venom_reward_total / venom_sheets)
+            if eff_real > 0.5 or nest_reward is not None:
+                record_telemetry(
+                    piezas,
+                    eff_real,
+                    engine_id,
+                    compactness_pre=c_pre,
+                    compactness_post=c_post,
+                    seed_policy=seed_info.get("policy"),
+                    nest_reward=nest_reward if nest_reward is not None else eff_real,
+                )
+            # --------------------------------
+            
+            return clave_out, resultado_placas
         else:
             return clave, {
                 "error": (

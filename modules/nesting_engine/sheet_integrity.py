@@ -8,7 +8,7 @@ import copy
 from collections import Counter, deque
 from typing import List, Tuple
 
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 
 
 def _piece_name_base(nombre: str) -> str:
@@ -35,6 +35,7 @@ def _es_pieza_real_nombre(nombre: str) -> bool:
         n.startswith("REF__")
         or n.startswith("TATUAJE__")
         or n.startswith("RETAZO_GUILLOTINA__")
+        or n.startswith("RTZCU_ZONA__")
         or n.startswith("CU_CORTE__")
         or n.startswith("REMANENTE__")
     )
@@ -48,19 +49,26 @@ def _es_grupo_cu(clave: str = "", hoja=None) -> bool:
 
 
 def kerf_efectivo_hoja(hoja, clave: str = "", kerf_global: float = DEFAULT_KERF_IN) -> float:
-    """Cobre/largos CU: kerf 0. Acero y demás: mínimo 0.3 in (o kerf_global si mayor)."""
+    """Cobre/largos CU: kerf 0. Acero: kerf_global (default 0.15 in).
+
+    El kerf de Configuración Global manda: ya no se clava un piso 0.3 in que
+    ignoraba valores más bajos de la UI.
+    """
     if _es_grupo_cu(clave, hoja):
         return 0.0
     try:
-        k = float((hoja or {}).get("kerf_usado", kerf_global) or 0.0)
+        g = float(kerf_global)
+    except Exception:
+        g = 0.0
+    if g > 0:
+        return g
+    try:
+        k = float((hoja or {}).get("kerf_usado") or 0.0)
     except Exception:
         k = 0.0
-    min_k = float(kerf_global or DEFAULT_KERF_IN)
-    if min_k < DEFAULT_KERF_IN:
-        min_k = DEFAULT_KERF_IN
-    if k < min_k:
-        k = min_k
-    return k
+    if k > 0:
+        return k
+    return float(DEFAULT_KERF_IN)
 
 
 def normalizar_kerf_hojas(hojas, clave: str = "", kerf_global: float = DEFAULT_KERF_IN) -> None:

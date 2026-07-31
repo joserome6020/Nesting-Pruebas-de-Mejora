@@ -101,8 +101,37 @@ def asegurar_tabla_material_requerido_ldg(db_config: dict | None = None):
             "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS incoming_handshake_at TIMESTAMP NULL",
             "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS incoming_handshake_by VARCHAR(120) NULL",
             "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS rechazado_incoming BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS estatus VARCHAR(80) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS po_estatus VARCHAR(250) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS po_documento_id BIGINT NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS po_folio_gam VARCHAR(64) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS po_movimiento_numero INTEGER NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS po_generada_at TIMESTAMP NULL",
+            # ``codigo`` conserva el identificador Herinox legado. Los campos
+            # nuevos son el snapshot aprobado para la compra en ContPAQ.
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS codigo_herinox VARCHAR(100) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS codigo_contpaq VARCHAR(100) NULL",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS codigo_contpaq_estatus VARCHAR(16) NOT NULL DEFAULT 'PENDING'",
+            "ALTER TABLE material_requerido_ldg ADD COLUMN IF NOT EXISTS codigo_equivalencia_id BIGINT NULL",
         ):
             cursor.execute(col_sql)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_mrl_po_pendiente
+            ON material_requerido_ldg (orden_id, tipo_orden, po_estatus);
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_mrl_codigo_contpaq_pendiente
+            ON material_requerido_ldg (
+                orden_id, tipo_orden, codigo_contpaq_estatus, po_estatus
+            );
+        """)
+        from interface.material_code_mapping_service import (
+            asegurar_tabla_equivalencias,
+            sembrar_equivalencias_verificadas,
+        )
+
+        asegurar_tabla_equivalencias(cursor)
+        sembrar_equivalencias_verificadas(cursor)
 
         conexion.commit()
         _MRL_SCHEMA_READY = True
@@ -341,6 +370,18 @@ def existe_pedido(cursor, orden_id: str, tipo_orden: str) -> bool:
     return cursor.fetchone() is not None
 
 
+def _mrl_bloqueada_para_mapeo(fila: Dict[str, Any]) -> bool:
+    """No cambia snapshots con PO o movimiento operativo."""
+    return bool(
+        fila.get("po_estatus")
+        or fila.get("kit_recibido")
+        or fila.get("provider_handshake_at")
+        or fila.get("almacen_received_at")
+        or fila.get("incoming_handshake_at")
+        or fila.get("rechazado_incoming")
+    )
+
+
 def enriquecer_pedido_herinox_cursor(
     cursor,
     orden_id: str,
@@ -354,6 +395,11 @@ def enriquecer_pedido_herinox_cursor(
             datos_material_requerido_pedido,
             extraer_codigo_herinox_combo,
         )
+        from interface.material_code_mapping_service import (
+            mapeo_es_verificado,
+            resolver_codigo_contpaq,
+            resolver_equivalencia,
+        )
     except ImportError:
         return 0
 
@@ -364,13 +410,39 @@ def enriquecer_pedido_herinox_cursor(
     filas = obtener_filas_pedido(cursor, orden_id, tipo_orden)
     actualizadas = 0
 
+    pendientes_contpaq: list[str] = []
     for fila in filas:
+        if _mrl_bloqueada_para_mapeo(fila):
+            continue
+        material_txt = str(fila.get("material") or "").strip()
+        codigo_probe = str(
+            fila.get("codigo_herinox")
+            or fila.get("codigo")
+            or extraer_codigo_herinox_combo(material_txt)
+            or ""
+        ).strip().upper()
+        if not codigo_probe:
+            continue
+        if not mapeo_es_verificado(resolver_equivalencia(cursor, codigo_probe)):
+            pendientes_contpaq.append(codigo_probe)
+
+    resultados_contpaq: dict = {}
+    if pendientes_contpaq:
+        try:
+            from modules.nesting_engine.api_client import verificar_codigos_contpaq
+
+            resultados_contpaq = verificar_codigos_contpaq(pendientes_contpaq) or {}
+        except Exception:
+            resultados_contpaq = {}
+
+    for fila in filas:
+        if _mrl_bloqueada_para_mapeo(fila):
+            continue
         material_txt = str(fila.get("material") or "").strip()
         cantidad = int(fila.get("cantidad") or 1)
         codigo_esperado = extraer_codigo_herinox_combo(material_txt)
         codigo_actual = str(fila.get("codigo") or "").strip()
         costo_actual = fila.get("costo")
-        largo_actual = float(fila.get("largo") or 0)
         tiene_costo = costo_actual is not None and float(costo_actual or 0) > 0
 
         datos = datos_material_requerido_pedido(
@@ -380,6 +452,18 @@ def enriquecer_pedido_herinox_cursor(
         )
         nuevo_codigo = str(datos.get("codigo") or codigo_esperado or "").strip()
         nuevo_costo = datos.get("costo")
+        mapeo = resolver_codigo_contpaq(
+            cursor,
+            nuevo_codigo,
+            resultados_catalogo=resultados_contpaq,
+        )
+        mapeo_verificado = mapeo_es_verificado(mapeo)
+        nuevo_codigo_contpaq = (
+            str(mapeo.get("codigo_contpaq") or "").strip() if mapeo_verificado else None
+        )
+        nuevo_estatus_contpaq = (
+            "VERIFIED" if mapeo_verificado else str(mapeo.get("estatus") or "PENDING")
+        )
 
         if not nuevo_codigo and nuevo_costo is None:
             continue
@@ -390,6 +474,9 @@ def enriquecer_pedido_herinox_cursor(
             and codigo_actual == nuevo_codigo
             and codigo_actual == codigo_esperado
             and nuevo_costo is not None
+            and str(fila.get("codigo_contpaq") or "") == str(nuevo_codigo_contpaq or "")
+            and str(fila.get("codigo_contpaq_estatus") or "PENDING")
+            == nuevo_estatus_contpaq
         ):
             continue
 
@@ -397,12 +484,20 @@ def enriquecer_pedido_herinox_cursor(
             """
             UPDATE material_requerido_ldg
             SET codigo = %s,
+                codigo_herinox = %s,
+                codigo_contpaq = %s,
+                codigo_contpaq_estatus = %s,
+                codigo_equivalencia_id = %s,
                 costo = %s,
                 updated_at = NOW()
             WHERE id = %s;
             """,
             (
                 nuevo_codigo,
+                nuevo_codigo,
+                nuevo_codigo_contpaq,
+                nuevo_estatus_contpaq,
+                mapeo.get("mapping_id"),
                 nuevo_costo,
                 fila["id"],
             ),
@@ -410,6 +505,21 @@ def enriquecer_pedido_herinox_cursor(
         actualizadas += 1
 
     return actualizadas
+
+
+def sincronizar_codigos_contpaq_pedido(
+    cursor,
+    orden_id: str | None = None,
+    tipo_orden: str | None = None,
+) -> Dict[str, Any]:
+    """Actualiza snapshots MRL pendientes desde el registro interno."""
+    from interface.material_code_mapping_service import sincronizar_codigos_contpaq_mrl
+
+    return sincronizar_codigos_contpaq_mrl(
+        cursor,
+        orden_id=orden_id,
+        tipo_orden=tipo_orden,
+    )
 
 
 def refrescar_pedido_herinox(orden_id: str, tipo_orden: str) -> Dict[str, Any]:
@@ -494,31 +604,69 @@ def insertar_pedido_desde_plan_cursor(
     return True, "Pedido de compra generado correctamente."
 
 
-def reconstruir_pedido_desde_plan(
+def _pedido_tiene_movimiento_operativo(cursor, orden_id: str, tipo_orden: str) -> bool:
+    """
+    Un re-export no debe borrar el estado que VSM/almacén ya registró sobre
+    material recibido o en tránsito. En ese caso se requiere una corrección
+    explícita, no una regeneración silenciosa del pedido.
+    """
+    cursor.execute(
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM material_requerido_ldg
+            WHERE TRIM(orden_id) = %s
+              AND tipo_orden = %s
+              AND (
+                  COALESCE(kit_recibido, FALSE)
+                  OR provider_handshake_at IS NOT NULL
+                  OR almacen_received_at IS NOT NULL
+                  OR incoming_handshake_at IS NOT NULL
+                  OR COALESCE(rechazado_incoming, FALSE)
+              )
+        );
+        """,
+        (str(orden_id or "").strip(), str(tipo_orden or "").strip().upper()),
+    )
+    row = cursor.fetchone()
+    if isinstance(row, dict):
+        return bool(row.get("exists"))
+    return bool(row[0]) if row else False
+
+
+def reconstruir_pedido_desde_filas(
     cursor,
     orden_id: str,
     tipo_orden: str,
-    plan: Dict[str, Any],
-    barras_excluidas_pedido: set[str] | None = None,
-    unidades_excluidas_mrl: set[str] | None = None,
+    filas: List[Dict[str, Any]],
 ) -> Tuple[bool, str]:
+    """
+    Reemplaza un pedido solo cuando las nuevas filas ya son válidas.
+
+    Validar antes del DELETE evita que un catálogo Herinox no disponible o un
+    plan vacío borre un pedido correcto. También protege los pedidos que ya
+    están en operación dentro de VSM/almacén.
+    """
+    orden = str(orden_id or "").strip()
+    tipo = str(tipo_orden or "").strip().upper()
+    nuevas = [dict(fila) for fila in (filas or []) if fila]
+    if not nuevas:
+        return False, "No hay barras de stock en el plan para generar el pedido."
+
+    if _pedido_tiene_movimiento_operativo(cursor, orden, tipo):
+        return (
+            False,
+            "El pedido ya tiene movimiento operativo en VSM/almacén; "
+            "no se reemplazó durante la re-exportación.",
+        )
+
     cursor.execute(
         """
         DELETE FROM material_requerido_ldg
         WHERE TRIM(orden_id) = %s AND tipo_orden = %s
         """,
-        (str(orden_id or "").strip(), tipo_orden),
+        (orden, tipo),
     )
-    if unidades_excluidas_mrl is not None:
-        todas = expandir_pedido_mrl_unidades(plan)
-        excl = unidades_excluidas_mrl or set()
-        kept = [u for u in todas if u["key"] not in excl]
-        nuevas = agregar_filas_desde_unidades_mrl(kept)
-    else:
-        nuevas = agregar_filas_desde_plan(plan, barras_excluidas_pedido=barras_excluidas_pedido)
-    if not nuevas:
-        return False, "No hay barras de stock en el plan para generar el pedido."
-
     for fila in nuevas:
         cursor.execute(
             """
@@ -528,8 +676,8 @@ def reconstruir_pedido_desde_plan(
             VALUES (%s, %s, %s, %s, %s, %s, %s);
             """,
             (
-                orden_id,
-                tipo_orden,
+                orden,
+                tipo,
                 fila["material"],
                 fila.get("codigo") or "",
                 fila.get("largo") or 0,
@@ -538,8 +686,26 @@ def reconstruir_pedido_desde_plan(
             ),
         )
 
-    enriquecer_pedido_herinox_cursor(cursor, orden_id, tipo_orden, forzar_costo=True)
+    enriquecer_pedido_herinox_cursor(cursor, orden, tipo, forzar_costo=True)
     return True, "Pedido de compra regenerado desde el plan."
+
+
+def reconstruir_pedido_desde_plan(
+    cursor,
+    orden_id: str,
+    tipo_orden: str,
+    plan: Dict[str, Any],
+    barras_excluidas_pedido: set[str] | None = None,
+    unidades_excluidas_mrl: set[str] | None = None,
+) -> Tuple[bool, str]:
+    if unidades_excluidas_mrl is not None:
+        todas = expandir_pedido_mrl_unidades(plan)
+        excl = unidades_excluidas_mrl or set()
+        kept = [u for u in todas if u["key"] not in excl]
+        nuevas = agregar_filas_desde_unidades_mrl(kept)
+    else:
+        nuevas = agregar_filas_desde_plan(plan, barras_excluidas_pedido=barras_excluidas_pedido)
+    return reconstruir_pedido_desde_filas(cursor, orden_id, tipo_orden, nuevas)
 
 
 def sincronizar_pedido_desde_plan(
@@ -559,6 +725,16 @@ def sincronizar_pedido_desde_plan(
         generado, mensaje = reconstruir_pedido_desde_plan(
             cursor, orden_id, tipo_orden, plan
         )
+        if not generado:
+            conexion.rollback()
+            filas = obtener_filas_pedido(cursor, orden_id, tipo_orden)
+            return {
+                "estatus": "error",
+                "generado": False,
+                "regenerado": False,
+                "mensaje": mensaje,
+                "filas": _serializar_filas(filas),
+            }
         conexion.commit()
         filas = obtener_filas_pedido(cursor, orden_id, tipo_orden)
 

@@ -68,15 +68,17 @@ def aplica_rtz_sin_gap(modo_barra: str) -> bool:
 
 
 def pieza_prohibida_en_rtzcu(pieza: dict) -> bool:
-    """True si la pieza no puede ir a RTZCU (solo relieve/Z).
+    """True si la pieza no puede ir a RTZCU (relieve/Z o especial PARTS).
 
     Rectángulos con orilla superior (corte_superior) SÍ pueden ir a RTZCU.
     """
     if not isinstance(pieza, dict):
         return False
+    if bool(pieza.get("cu_especial_vertical")):
+        return True
     if bool(pieza.get("cu_perfil_relieve")):
         return True
-    # Tras el cambio de reglas, cu_forzar_sin_gap solo se setea para relieve/Z.
+    # Tras el cambio de reglas, cu_forzar_sin_gap solo se setea para relieve/Z/especial.
     if bool(pieza.get("cu_forzar_sin_gap")):
         return True
     # Fallback geométrico: contorno no ortogonal (Z/escalón), sin usar orilla sola.
@@ -120,6 +122,7 @@ def pieza_excluida_dxf_madre_cu(pieza: dict, hoja: dict | None = None) -> bool:
 
     La madre solo corta el primer tramo (≤114\" / hasta inicio RTZ). Las piezas
     cu_zona_rtz y sus CU_CORTE van al STEP/DXF del RTZCU virtual.
+    El corte exactamente en el límite RTZ se conserva en la madre (cierre final).
     """
     if not isinstance(pieza, dict):
         return False
@@ -145,9 +148,15 @@ def pieza_excluida_dxf_madre_cu(pieza: dict, hoja: dict | None = None) -> bool:
     minx, _miny, maxx, _maxy = _bbox_pieza_xy(pieza)
     if minx is None:
         return False
-    # Pieza/corte cuyo contorno empieza en la zona RTZ (o casi).
-    if float(minx) >= float(inicio) - 0.5:
+
+    # Todo lo que termina en/antes del límite (incl. corte de cierre) → madre.
+    if maxx is not None and float(maxx) <= float(inicio) + 0.5:
+        return False
+
+    # Contorno que empieza estrictamente después del límite → RTZCU.
+    if float(minx) >= float(inicio) + 0.5:
         return True
+
     # Pieza real casi toda en RTZ (por si el flag se perdió).
     if (
         maxx is not None
@@ -381,6 +390,7 @@ def colocada_a_pack_cu(pieza: dict) -> dict | None:
         "calibre": pieza.get("calibre", ""),
         "material": pieza.get("material", ""),
         "ruta": pieza.get("ruta", ""),
+        "cu_especial_vertical": bool(pieza.get("cu_especial_vertical")),
         "cu_forzar_sin_gap": bool(pieza.get("cu_forzar_sin_gap")),
         "cu_perfil_relieve": bool(
             pieza.get("cu_perfil_relieve", pieza.get("cu_forzar_sin_gap"))
@@ -606,6 +616,7 @@ def construir_hoja_rtz_cu_virtual(madre: dict) -> dict | None:
         "ignorar_deduccion": True,
         "area_placa_mm2": area_rtz,
         "cu_rtz_largo_in": float(madre.get("cu_rtz_largo_in") or 0.0),
+        "cu_barra_especial": bool(madre.get("cu_barra_especial")),
     }
 
 

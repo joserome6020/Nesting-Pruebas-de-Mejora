@@ -122,13 +122,40 @@ COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 DEFAULT_MARGIN_IN = 0.15
 
 
 
 class NestingCalcMixin:
     """Métodos de cálculo, ejecución y re-nesteo para TabNesting."""
+
+    def _bloquear_si_dxf_no_apto(self, *, titulo: str = "DXF no aptos (poka-yoke)") -> bool:
+        """
+        True = hay que abortar (DXF malo / auditoría pendiente).
+        Obliga a reparar o cambiar el DXF en PARTS antes de nest/renest.
+        """
+        try:
+            from modules.nesting_engine.nest_poka_yoke import (
+                validar_auditoria_dxf_antes_nest,
+            )
+
+            ok_dxf, msg_dxf = validar_auditoria_dxf_antes_nest(
+                getattr(self.app, "dxf_nesting_audit", None),
+                pending=bool(getattr(self.app, "dxf_audit_pending", False)),
+            )
+            if not ok_dxf:
+                QMessageBox.critical(self, titulo, msg_dxf)
+                return True
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                titulo,
+                f"No se pudo validar la auditoría de DXF:\n{exc}\n\n"
+                "Vuelva a PARTS, revise VER OMITIDOS y repare/cambie el DXF.",
+            )
+            return True
+        return False
 
     def _poka_yoke_stock_grupos_ok(
         self,
@@ -250,6 +277,9 @@ class NestingCalcMixin:
         if not lote_inputs:
             return QMessageBox.warning(self, "Atención", "El lote activo no tiene piezas para renestear.")
 
+        if self._bloquear_si_dxf_no_apto(titulo="DXF no aptos — no se puede renestear"):
+            return
+
         km = self._leer_kerf_margin_ui()
         if km is None:
             return
@@ -334,33 +364,18 @@ class NestingCalcMixin:
     def _sync_orientacion_cobre_al_motor(self):
         orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
         self.app.motor_nesting.orientacion_cobre_por_ruta = dict(orientaciones)
+        especiales = getattr(self.app, "cu_especial_por_ruta", None) or {}
+        self.app.motor_nesting.cu_especial_por_ruta = {
+            str(k): bool(v) for k, v in dict(especiales).items() if v
+        }
 
     def ejecutar_nesting(self):
         if not self.app.datos_partes_actuales:
             return QMessageBox.warning(self, "Atención", "No hay piezas importadas.")
 
-        # Poka-yoke INPUT: no Run si auditoría pendiente o DXF omitidos.
-        try:
-            from modules.nesting_engine.nest_poka_yoke import (
-                validar_auditoria_dxf_antes_nest,
-            )
-
-            ok_dxf, msg_dxf = validar_auditoria_dxf_antes_nest(
-                getattr(self.app, "dxf_nesting_audit", None),
-                pending=bool(getattr(self.app, "dxf_audit_pending", False)),
-            )
-            if not ok_dxf:
-                return QMessageBox.critical(
-                    self,
-                    "DXF no aptos (poka-yoke)",
-                    msg_dxf,
-                )
-        except Exception as exc:
-            return QMessageBox.critical(
-                self,
-                "DXF no aptos (poka-yoke)",
-                f"No se pudo validar la auditoría de DXF antes de nestear:\n{exc}",
-            )
+        # Poka-yoke INPUT: no Run si DXF omitidos / auditoría pendiente.
+        if self._bloquear_si_dxf_no_apto(titulo="DXF no aptos — no se puede nestear"):
+            return
 
         if self._tiene_nesting_activo():
             resp = QMessageBox.question(
@@ -1209,13 +1224,19 @@ class NestingCalcMixin:
         except Exception:
             return poly, marks
 
-    def _construir_fuente_geometria_por_nombre(self, clave, nombres_requeridos=None):
+    def _construir_fuente_geometria_por_nombre(
+        self, clave, nombres_requeridos=None, *, prefer_dxf=False
+    ):
         """
         Mapa nombre->geometría base para renest/compensar.
 
-        Orden (rápido + orientación correcta):
+        Orden por defecto (rápido + orientación correcta):
         1) Nest en memoria (sin red) + desrotar pose (quita 45° horneado).
         2) DXF solo de nombres que aún falten.
+
+        Con prefer_dxf=True (reparación tras reprocesar AutoDXF):
+        1) DXF actual de PARTS.
+        2) Nest en memoria solo si falta el DXF.
         """
         material_hoja = clave.split("_")[1] if "_" in clave else clave
         calibre_hoja = clave.split("_")[0] if "_" in clave else ""
@@ -1297,70 +1318,75 @@ class NestingCalcMixin:
                 "ruta": ruta,
             }
 
-        # 1) Nest en memoria (rápido) + desrotar pose a ejes.
-        grp = (self.app.resultados_nesting or {}).get(clave) or {}
-        for hoja in (grp.get("hojas") or []):
-            for p in (hoja.get("piezas") or []):
-                nom = str(p.get("nombre", "")).strip()
-                canon = self._nombre_canonico_pieza(nom)
-                if not canon or self._es_pieza_virtual(nom) or canon in fuente:
-                    continue
-                if req is not None and canon not in req:
-                    continue
-                pols = p.get("poligonos") or []
-                if not pols or not pols[0]:
-                    continue
-                try:
-                    from shapely.geometry import Polygon
-                    outer = []
-                    for pt in (pols[0] or []):
-                        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                            try:
-                                outer.append((float(pt[0]), float(pt[1])))
-                            except Exception:
-                                continue
-                    holes = []
-                    for h in pols[1:]:
-                        hh = []
-                        for pt in (h or []):
+        def _cargar_desde_nest():
+            grp = (self.app.resultados_nesting or {}).get(clave) or {}
+            for hoja in (grp.get("hojas") or []):
+                for p in (hoja.get("piezas") or []):
+                    nom = str(p.get("nombre", "")).strip()
+                    canon = self._nombre_canonico_pieza(nom)
+                    if not canon or self._es_pieza_virtual(nom) or canon in fuente:
+                        continue
+                    if req is not None and canon not in req:
+                        continue
+                    pols = p.get("poligonos") or []
+                    if not pols or not pols[0]:
+                        continue
+                    try:
+                        from shapely.geometry import Polygon
+                        outer = []
+                        for pt in (pols[0] or []):
                             if isinstance(pt, (list, tuple)) and len(pt) >= 2:
                                 try:
-                                    hh.append((float(pt[0]), float(pt[1])))
+                                    outer.append((float(pt[0]), float(pt[1])))
                                 except Exception:
                                     continue
-                        if len(hh) >= 3:
-                            holes.append(hh)
-                    if len(outer) < 3:
+                        holes = []
+                        for h in pols[1:]:
+                            hh = []
+                            for pt in (h or []):
+                                if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                                    try:
+                                        hh.append((float(pt[0]), float(pt[1])))
+                                    except Exception:
+                                        continue
+                            if len(hh) >= 3:
+                                holes.append(hh)
+                        if len(outer) < 3:
+                            continue
+                        poly = Polygon(outer, holes)
+                        if not poly.is_valid:
+                            poly = poly.buffer(0)
+                        if poly is None or poly.is_empty:
+                            continue
+                        marks = _marks_from_raw(p.get("marcas"))
+                        _agregar_fuente(
+                            nom,
+                            poly,
+                            marks,
+                            p.get("calibre", calibre_hoja),
+                            p.get("material", material_hoja),
+                            p.get("ruta", ""),
+                            desrotar=True,
+                        )
+                    except Exception:
                         continue
-                    poly = Polygon(outer, holes)
-                    if not poly.is_valid:
-                        poly = poly.buffer(0)
-                    if poly is None or poly.is_empty:
-                        continue
-                    marks = _marks_from_raw(p.get("marcas"))
-                    _agregar_fuente(
-                        nom,
-                        poly,
-                        marks,
-                        p.get("calibre", calibre_hoja),
-                        p.get("material", material_hoja),
-                        p.get("ruta", ""),
-                        desrotar=True,
-                    )
-                except Exception:
-                    continue
 
-        # 2) DXF solo de lo que aún falte (no el job entero).
-        faltan = None
-        if req is not None:
-            faltan = {n for n in req if n not in fuente}
-        if faltan is None or faltan:
+        def _cargar_desde_dxf(*, solo_faltantes=True):
+            faltan = None
+            if solo_faltantes:
+                if req is not None:
+                    faltan = {n for n in req if n not in fuente}
+                    if not faltan:
+                        return
+                # sin req: solo nombres que aún no están en fuente
             for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
                 nom = str(p_nom or "").strip()
                 canon = self._nombre_canonico_pieza(nom)
                 if not canon or canon in fuente:
                     continue
                 if faltan is not None and canon not in faltan:
+                    continue
+                if req is not None and canon not in req:
                     continue
                 if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
                     continue
@@ -1375,9 +1401,17 @@ class NestingCalcMixin:
                     if not faltan:
                         break
 
+        if prefer_dxf:
+            _cargar_desde_dxf(solo_faltantes=False)
+            _cargar_desde_nest()
+        else:
+            _cargar_desde_nest()
+            _cargar_desde_dxf(solo_faltantes=True)
+
         print(
             f"[GEOM-FUENTE] clave={clave} | nest+dxf={len(fuente)}"
-            + (f" | req={len(req)}" if req is not None else ""),
+            + (f" | req={len(req)}" if req is not None else "")
+            + (f" | prefer_dxf={prefer_dxf}" if prefer_dxf else ""),
             flush=True,
         )
         return fuente
@@ -1721,6 +1755,10 @@ class NestingCalcMixin:
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
         if clave not in self.app.resultados_nesting:
             return QMessageBox.warning(self, "Atención", "No se encontró ese calibre/material.")
+
+        if self._bloquear_si_dxf_no_apto(titulo="DXF no aptos — no se puede renestear"):
+            return
+
         piezas_pack = self._build_piezas_para_renest_calibre(clave)
         build_info = getattr(self, "_renest_calibre_build_info", {}) or {}
         faltantes_geom = build_info.get("faltantes_geom") or []
@@ -1799,7 +1837,7 @@ class NestingCalcMixin:
             cu_separacion_in, cu_largo_sin_separacion_in = opts_cu
             detalle = (
                 f"Se volverá a optimizar el calibre {clave} en barras largo CU "
-                f"(gap {cu_separacion_in:g}\", piezas ≤{cu_largo_sin_separacion_in:g}\" sin gap)."
+                f"(gap {cu_separacion_in:g}\"; Z/especial sin gap)."
                 f"{aviso_cantidad}\n\n¿Continuar?"
             )
             titulo = "Renestear cobre en largos"
@@ -2607,6 +2645,7 @@ class NestingCalcMixin:
         compensar_plasma=False,
         offset_mm_forzado=None,
         absorber_rtz=False,
+        prefer_dxf=False,
     ):
         bloque = self._desglosar_bloque_placa_mini(clave, hoja)
         resumen_hoja = self._inventario_piezas_canonico(
@@ -2624,9 +2663,11 @@ class NestingCalcMixin:
             resumen_hoja,
             compensar_plasma=compensar_plasma,
             offset_mm_forzado=offset_mm_forzado,
+            prefer_dxf=prefer_dxf,
         )
         nueva = None
         hojas_extra = []
+        renovada_en_pose = False
         if piezas_a_reprocesar:
             n_esperado = sum(int(v) for v in (resumen_hoja or {}).values())
             if len(piezas_a_reprocesar) < n_esperado:
@@ -2689,12 +2730,17 @@ class NestingCalcMixin:
                         is_ultra_renest_accept_mode,
                     )
 
-                    # Renest de placa: 1 pack. 8 reintentos × PIP/anillos = minutos.
-                    n_intentos = 1
+                    # Renest normal: SIEMPRE empaquetar con el motor elegido (misma placa).
+                    # La renovación DXF-en-pose solo es fallback tras REPROCESAR AUTODXF
+                    # si el pack no logra colocar todas (p. ej. espejo) — nunca abre hoja extra.
+                    n_esperado = len(piezas_a_reprocesar)
+                    renovada_en_pose = False
+                    n_intentos = 24 if prefer_dxf else 12
                     print(
-                        f"[RENEST-PACK] piezas={len(piezas_a_reprocesar)} | "
+                        f"[RENEST-PACK] piezas={n_esperado} | misma_placa | "
                         f"intentos={n_intentos} | engine={get_active_engine_id()} | "
-                        f"ultra_accept={is_ultra_renest_accept_mode()}",
+                        f"ultra_accept={is_ultra_renest_accept_mode()} | "
+                        f"prefer_dxf={bool(prefer_dxf)}",
                         flush=True,
                     )
                     nh = self.app.motor_nesting.empaquetar_con_reintentos(
@@ -2708,7 +2754,8 @@ class NestingCalcMixin:
                         intentos=n_intentos,
                         debug_tag="recalc_contexto",
                     )
-                    if nh:
+                    colocadas = self._conteo_piezas_reales_en_nest(nh) if nh else 0
+                    if nh and colocadas >= n_esperado:
                         nueva = self._hidratar_hoja_repack(
                             nh,
                             hoja,
@@ -2720,6 +2767,58 @@ class NestingCalcMixin:
                             compensar_plasma=compensar_plasma,
                             offset_mm_forzado=offset_mm_forzado,
                         )
+                    else:
+                        print(
+                            f"[RENEST-PACK] pack incompleto {colocadas}/{n_esperado}",
+                            flush=True,
+                        )
+                        # Fallback espejo/DXF: renovar geometría en el acomodo actual.
+                        usar_pose = (
+                            prefer_dxf
+                            and not compensar_plasma
+                            and bool(getattr(self.app, "autodxf_reprocesado_pendiente", False))
+                        )
+                        if usar_pose:
+                            try:
+                                from modules.nesting_engine.display_geometry import (
+                                    renovar_hoja_desde_dxf_en_pose,
+                                )
+                                from modules.nesting_engine.nest_poka_yoke import (
+                                    validar_solapes_hojas_fail_closed,
+                                )
+
+                                candidata = copy.deepcopy(hoja)
+                                rutas = {
+                                    str(p.get("nombre") or "").strip(): str(p.get("ruta") or "").strip()
+                                    for p in piezas_a_reprocesar
+                                    if p.get("nombre") and p.get("ruta")
+                                }
+                                ok_n, fail_n = renovar_hoja_desde_dxf_en_pose(
+                                    candidata, rutas_por_nombre=rutas
+                                )
+                                print(
+                                    f"[RENEST-DXF-POSE] fallback ok={ok_n} fail={fail_n} | "
+                                    f"placa={hoja.get('placa_id')}",
+                                    flush=True,
+                                )
+                                if ok_n > 0 and fail_n == 0:
+                                    ok_s, msg_s = validar_solapes_hojas_fail_closed([candidata])
+                                    if ok_s:
+                                        nueva = candidata
+                                        renovada_en_pose = True
+                                    else:
+                                        print(
+                                            f"[RENEST-DXF-POSE] solape | {msg_s}",
+                                            flush=True,
+                                        )
+                            except Exception as exc:
+                                print(f"[RENEST-DXF-POSE] error: {exc}", flush=True)
+                        if nueva is None:
+                            print(
+                                "[RENEST-PACK] no caben todas en la misma placa — sin hoja extra",
+                                flush=True,
+                            )
+                            return None, idx_retazos_asociados, []
         else:
             hoja_recalc = hoja
             if compensar_plasma:
@@ -2758,11 +2857,96 @@ class NestingCalcMixin:
                             continue
                         pz["plasma_compensada_manual"] = True
         fuente_pack = piezas_a_reprocesar
-        if fuente_pack:
+        if fuente_pack and not renovada_en_pose:
             from modules.nesting_engine.manager import enriquecer_piezas_hoja_con_fuentes
 
             for hoja_out in [hoja for hoja in [nueva, *hojas_extra] if hoja]:
                 enriquecer_piezas_hoja_con_fuentes(hoja_out, fuente_pack)
+
+        # Venom acabado (hole-fill + gravity) en renesteo de placa / contexto.
+        # No aplicar si solo renovamos DXF en pose (espejo): no mover el acomodo.
+        if (
+            nueva
+            and isinstance(nueva, dict)
+            and nueva.get("piezas")
+            and not renovada_en_pose
+        ):
+            try:
+                import os
+                from modules.nesting_engine import venom_ai
+
+                # Forzar kerf de Config/UI en la hoja (no el 0.3 viejo del nest cargado).
+                nueva["kerf_usado"] = float(k)
+                for hx in hojas_extra or []:
+                    if isinstance(hx, dict):
+                        hx["kerf_usado"] = float(k)
+                print(
+                    f"[RENEST-VENOM] kerf_forzado={float(k):.4f}in | placa={nueva.get('placa_id')}",
+                    flush=True,
+                )
+                engine_id = (
+                    getattr(getattr(self.app, "motor_nesting", None), "active_engine_id", None)
+                    or os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+                )
+                venom_ai.apply_smart_polisher(nueva, engine_id, kerf_in=float(k))
+                # Si casi no mejoró: 2º pase explorando (sube el techo por renesteo).
+                try:
+                    r1 = float(nueva.get("venom_reward") or 0.0)
+                    filled = int(nueva.get("venom_fill_count") or 0)
+                    if r1 < 4.0 and filled <= 0:
+                        print(
+                            f"[RENEST-VENOM] 2do pase (explore) reward1={r1:.2f}",
+                            flush=True,
+                        )
+                        venom_ai.apply_smart_polisher(
+                            nueva, engine_id, kerf_in=float(k), force_explore=True
+                        )
+                    elif r1 < 2.0:
+                        print(
+                            f"[RENEST-VENOM] 2do pase (explore) reward1={r1:.2f}",
+                            flush=True,
+                        )
+                        venom_ai.apply_smart_polisher(
+                            nueva, engine_id, kerf_in=float(k), force_explore=True
+                        )
+                except Exception:
+                    pass
+                for hx in hojas_extra or []:
+                    if isinstance(hx, dict) and hx.get("piezas"):
+                        venom_ai.apply_smart_polisher(hx, engine_id, kerf_in=float(k))
+                        try:
+                            if float(hx.get("venom_reward") or 0.0) < 4.0:
+                                venom_ai.apply_smart_polisher(
+                                    hx, engine_id, kerf_in=float(k), force_explore=True
+                                )
+                        except Exception:
+                            pass
+            except Exception as e:
+                try:
+                    import traceback
+                    with open(
+                        r"c:\Proyectos\New Arga Nesting Suite\_logs\venom_debug.log",
+                        "a",
+                        encoding="utf-8",
+                    ) as f:
+                        f.write(f"ERROR VENOM RENEST PLACA: {e}\n{traceback.format_exc()}\n")
+                except Exception:
+                    pass
+
+        # Venom mueve piezas: rot/shift previos quedan stale y el display 1:1
+        # puede dibujar la geometría DXF desplazada (parece solape / UI rota).
+        if not renovada_en_pose:
+            try:
+                from modules.nesting_engine.display_geometry import invalidar_sellos_geom_hoja
+                from modules.nesting_engine.manager import enriquecer_piezas_hoja_con_fuentes
+
+                for hoja_out in [h for h in [nueva, *(hojas_extra or [])] if h]:
+                    invalidar_sellos_geom_hoja(hoja_out)
+                    if fuente_pack:
+                        enriquecer_piezas_hoja_con_fuentes(hoja_out, fuente_pack)
+            except Exception:
+                pass
+
         return nueva, idx_retazos_asociados, hojas_extra
 
     def _preguntar_opts_renest_cobre(self, clave, hoja=None):
@@ -2868,7 +3052,7 @@ class NestingCalcMixin:
                 self,
                 "Renestear por barra",
                 f"Se reacomodarán {len(hojas_sel)} barra(s): {lista_txt}\n"
-                f"(gap {cu_separacion_in:g}\", piezas ≤{cu_largo_sin_separacion_in:g}\" sin gap).\n\n"
+                f"(gap {cu_separacion_in:g}\"; Z/especial sin gap).\n\n"
                 "Misma lógica que el renesteo de calibre, aplicada solo a las barras elegidas.\n\n"
                 "¿Continuar?",
             )
@@ -2949,7 +3133,7 @@ class NestingCalcMixin:
                 self,
                 "Renestear barra cobre",
                 f"Se reacomodarán solo las piezas de la barra {pid} "
-                f"(gap {cu_separacion_in:g}\", piezas ≤{cu_largo_sin_separacion_in:g}\" sin gap).\n\n"
+                f"(gap {cu_separacion_in:g}\"; Z/especial sin gap).\n\n"
                 "Si con el nuevo gap no caben en una sola barra, se abrirán barras adicionales "
                 "conservando el inventario del calibre.\n\n¿Continuar?",
             )
@@ -3128,6 +3312,7 @@ class NestingCalcMixin:
         offset_mm_forzado=None,
         absorber_rtz=False,
         engine_id=None,
+        prefer_dxf=True,
     ):
         if not getattr(self.app, "resultados_nesting", None):
             return QMessageBox.warning(self, "Atención", "No hay resultados de nesting.")
@@ -3135,6 +3320,10 @@ class NestingCalcMixin:
             return QMessageBox.warning(self, "Atención", "Material no encontrado en el resultado actual.")
         if not hoja:
             return
+
+        if self._bloquear_si_dxf_no_apto(titulo="DXF no aptos — no se puede renestear"):
+            return
+
         if (
             not compensar_plasma
             and (
@@ -3191,6 +3380,8 @@ class NestingCalcMixin:
         backup_grupo = self._snapshot_grupo_nesting(clave)
         inventario_antes = self._inventario_piezas_grupo(clave)
         engine_renest = engine_id
+        # Renest de placa siempre lee geometría actual de PARTS/DXF (fallback nest).
+        forzar_dxf = True if prefer_dxf is None else bool(prefer_dxf)
 
         def worker():
             import time as _time
@@ -3226,7 +3417,7 @@ class NestingCalcMixin:
                         (
                             "Ultra buscando primer acomodo nuevo..."
                             if ultra_renest
-                            else "Ejecutando motor..."
+                            else "Ejecutando motor de renesteo..."
                         ),
                         0.35,
                     )
@@ -3246,6 +3437,7 @@ class NestingCalcMixin:
                         compensar_plasma=compensar_plasma,
                         offset_mm_forzado=offset_mm_forzado,
                         absorber_rtz=absorber_rtz,
+                        prefer_dxf=forzar_dxf,
                     )
 
                 if ultra_renest:
@@ -3294,7 +3486,11 @@ class NestingCalcMixin:
                     raise RuntimeError("Cancelado por el usuario.")
 
                 if nueva is None or not (nueva.get("piezas") or []):
-                    raise RuntimeError("El motor no generó un acomodo válido.")
+                    raise RuntimeError(
+                        "No se pudo renovar/acomodar todas las piezas en la misma placa.\n"
+                        "Un espejo no debería requerir hoja extra; revise el DXF regenerado "
+                        "o pruebe otro motor."
+                    )
 
                 if hasattr(self.app, "actualizar_progreso"):
                     call_on_main(self.app.actualizar_progreso, "Actualizando vista...", 0.9)
@@ -3306,8 +3502,9 @@ class NestingCalcMixin:
                     _idx_rtz=idx_retazos_asociados,
                     _hojas_extra=list(hojas_extra or []),
                     _conservar=conservar_rtz,
+                    _from_dxf=forzar_dxf,
                 ):
-                    self.finalizar_recalc(
+                    ok = self.finalizar_recalc(
                         _nueva,
                         clave_renest=clave,
                         post_fill=post_fill and not absorber_rtz,
@@ -3323,6 +3520,11 @@ class NestingCalcMixin:
                         eliminar_rtz_asociados=absorber_rtz,
                         hojas_adicionales=_hojas_extra,
                     )
+                    if ok and _from_dxf:
+                        try:
+                            self.app.autodxf_reprocesado_pendiente = False
+                        except Exception:
+                            pass
 
                 self.app.after(0, on_ok)
             except Exception as e:
@@ -3522,6 +3724,20 @@ class NestingCalcMixin:
         self._recalcular_costos_grupo(clv)
         self.sincronizar_overlays_clave(clv)
         self._replicar_lote_activo_a_gemelos()
+        # Regenerar display 1:1 limpio (evita poligonos/transform stale → solape visual).
+        try:
+            from modules.nesting_engine.display_geometry import (
+                invalidar_sellos_geom_hoja,
+                refrescar_poligonos_display_hoja,
+            )
+
+            for hfix in [hoja_actualizada, *(hojas_adicionales or [])]:
+                if not hfix:
+                    continue
+                invalidar_sellos_geom_hoja(hfix)
+                refrescar_poligonos_display_hoja(hfix)
+        except Exception:
+            pass
         self.dibujar_hoja_full(hoja_actualizada, clv)
         self.procesar_lista_hojas(self.app.resultados_nesting)
         return True

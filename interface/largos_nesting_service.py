@@ -7,6 +7,10 @@ from typing import Any
 import config
 from lista_largos_material_requerido import (
     asegurar_tabla_material_requerido_ldg,
+    agregar_filas_desde_plan,
+    agregar_filas_desde_unidades_mrl,
+    previsualizar_pedido_mrl_unidades,
+    reconstruir_pedido_desde_filas,
     reconstruir_pedido_desde_plan,
 )
 
@@ -310,10 +314,88 @@ def preparar_barra_para_canvas(barra: dict | None, codigo: str = "") -> dict | N
     return vista
 
 
+def _norm_job(job: str) -> str:
+    return str(job or "").strip().upper()
+
+
+def _jobs_fuente_demanda_swo(cursor, swo_id: str) -> list[str]:
+    """Jobs reales ligados a una SWO vía nest (reporte_cortes), no diccionario."""
+    swo = str(swo_id or "").strip()
+    if not swo:
+        return []
+    jobs: list[str] = []
+    vistos: set[str] = set()
+
+    def _add(j: str) -> None:
+        jn = str(j or "").strip()
+        if not jn:
+            return
+        key = _norm_job(jn)
+        if key in vistos or key.startswith("SWO") or "S.W.O" in key:
+            return
+        vistos.add(key)
+        jobs.append(jn)
+
+    if cursor is not None:
+        try:
+            cursor.execute(
+                """
+                SELECT DISTINCT TRIM(job) AS job
+                FROM reporte_cortes
+                WHERE TRIM(super_work_order) = %s
+                  AND job IS NOT NULL
+                  AND BTRIM(job) <> ''
+                """,
+                (swo,),
+            )
+            for row in cursor.fetchall() or []:
+                _add(row.get("job") if isinstance(row, dict) else row[0])
+        except Exception:
+            pass
+    return jobs
+
+
+def resolver_jobs_fuente_demanda(app, job: str, cursor=None) -> list[str]:
+    """
+    Job(s) fuente de demanda de largos (CSV/BD).
+    SWO-xxx → jobs fusionados presentes en el nest (reporte_cortes).
+    """
+    job = str(job or getattr(app, "job_activo", "") or "").strip()
+    if not job:
+        return []
+    if not job.upper().startswith("SWO"):
+        return [job]
+
+    jobs = _jobs_fuente_demanda_swo(cursor, job)
+    if jobs:
+        return jobs
+
+    try:
+        meta = getattr(app, "meta_pdf_por_ruta", None) or {}
+        vistos: set[str] = set()
+        out: list[str] = []
+        for info in meta.values():
+            if not isinstance(info, dict):
+                continue
+            j = str(info.get("job") or "").strip()
+            if not j or _norm_job(j).startswith("SWO"):
+                continue
+            k = _norm_job(j)
+            if k in vistos:
+                continue
+            vistos.add(k)
+            out.append(j)
+        if out:
+            return out
+    except Exception:
+        pass
+    return [job]
+
+
 def _filas_desde_csv_para_job(app, job: str, factor_lote: int) -> list[dict]:
     """
-    Misma demanda que la pestaña DEMANDA DE LARGOS (CSV del AutoDXF del job activo).
-    Estructura idéntica a _expandir_lista_para_wo.
+    Misma demanda que la pestaña DEMANDA DE LARGOS (CSV del AutoDXF).
+    Si job es SWO, empareja CSVs de los jobs fuente.
     """
     from api_server import _extraer_factor_wo
 
@@ -322,7 +404,13 @@ def _filas_desde_csv_para_job(app, job: str, factor_lote: int) -> list[dict]:
         return []
 
     job = str(job or getattr(app, "job_activo", "") or "").strip()
-    job_norm = _norm_job(job)
+    fuentes = {_norm_job(j) for j in resolver_jobs_fuente_demanda(app, job, cursor=None)}
+    if job:
+        fuentes.add(_norm_job(job))
+    fuentes_csv = {f for f in fuentes if f and not f.startswith("SWO")}
+    if not fuentes_csv and job and not job.upper().startswith("SWO"):
+        fuentes_csv = {_norm_job(job)}
+
     wo_label = f"LOTE X{max(1, int(factor_lote))}"
     factor_wo = _extraer_factor_wo(wo_label)
     filas: list[dict] = []
@@ -331,7 +419,7 @@ def _filas_desde_csv_para_job(app, job: str, factor_lote: int) -> list[dict]:
         if grupo.get("status") != "ok":
             continue
         gjob = str(grupo.get("job") or "").strip()
-        if job_norm and _norm_job(gjob) != job_norm:
+        if fuentes_csv and _norm_job(gjob) not in fuentes_csv:
             continue
         for row in grupo.get("rows") or []:
             try:
@@ -386,17 +474,23 @@ def _filas_desde_job_bd(cursor, job: str, factor_lote: int) -> list[dict]:
 
 def _obtener_filas_demanda_lote(app, cursor, job: str, factor_lote: int) -> tuple[list[dict], str]:
     """
-    Fuente única de demanda: CSV del job (como DEMANDA DE LARGOS), luego lista_largos_job en BD.
-    Retorna (filas, origen).
+    Fuente única de demanda: CSV (como DEMANDA DE LARGOS), luego lista_largos_job.
+    SWO hereda demanda de los jobs ligados.
     """
     job = str(job or "").strip()
     rows = _filas_desde_csv_para_job(app, job, factor_lote)
     if rows:
         return rows, "csv"
-    if cursor is not None and job:
-        rows = _filas_desde_job_bd(cursor, job, factor_lote)
-        if rows:
-            return rows, "bd"
+
+    fuentes = resolver_jobs_fuente_demanda(app, job, cursor=cursor)
+    if cursor is not None:
+        filas_bd: list[dict] = []
+        for j in fuentes:
+            if str(j).upper().startswith("SWO"):
+                continue
+            filas_bd.extend(_filas_desde_job_bd(cursor, j, factor_lote))
+        if filas_bd:
+            return filas_bd, "bd"
     return [], ""
 
 
@@ -425,10 +519,6 @@ def resumir_plan_largos(plan: dict[str, Any], unidades_excluidas_mrl: set[str] |
         "mrl_barras_comerciales": mrl_barras,
         "mrl_barras_total": len(unidades),
     }
-
-
-def _norm_job(job: str) -> str:
-    return str(job or "").strip().upper()
 
 
 def _generar_plan_desde_filas(
@@ -801,6 +891,8 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
     job = str(getattr(app, "job_activo", "") or "").strip()
     planes: dict[int, dict[str, Any]] = {}
     exclusiones: dict[int, set[str]] = {}
+    sin_demanda: set[int] = set()
+    error_calculo: str | None = None
 
     conexion = None
     cursor = None
@@ -817,17 +909,38 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
             wo_label = f"LOTE X{max(1, int(factor))}"
             rows, origen = _obtener_filas_demanda_lote(app, cursor, job, factor)
             if not rows:
+                sin_demanda.add(int(idx))
                 continue
 
-            orden_id = f"NEST-{_norm_job(job)}-{wo_label}".replace(" ", "_")[:90]
-            plan = _generar_plan_desde_filas(cursor, orden_id, "WO", job, factor, rows)
+            if job.upper().startswith("SWO"):
+                orden_id = job
+                tipo_orden = "SWO"
+                jobs_fuente = resolver_jobs_fuente_demanda(app, job, cursor=cursor)
+                job_plan = next(
+                    (j for j in jobs_fuente if not str(j).upper().startswith("SWO")),
+                    job,
+                )
+            else:
+                orden_id = f"NEST-{_norm_job(job)}-{wo_label}".replace(" ", "_")[:90]
+                tipo_orden = "WO"
+                job_plan = job
+
+            plan = _generar_plan_desde_filas(
+                cursor, orden_id, tipo_orden, job_plan, factor, rows
+            )
             if (plan.get("data") or {}) and int(plan.get("total_barras") or 0) > 0:
                 plan["_demanda_origen"] = origen
                 plan["_verificacion_62174"] = verificar_empate_referencia_62174(plan, rows)
                 planes[int(idx)] = plan
                 exclusiones[int(idx)] = set()
-    except Exception:
-        pass
+            if job.upper().startswith("SWO"):
+                try:
+                    conexion.commit()
+                except Exception:
+                    pass
+    except Exception as exc:
+        error_calculo = str(exc) or exc.__class__.__name__
+        print(f"[LARGOS_NESTING][ERROR] No se pudo calcular el plan: {error_calculo}")
     finally:
         if cursor:
             cursor.close()
@@ -838,7 +951,146 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
     app.exclusiones_largos_pedido_por_lote = exclusiones
     app.exclusiones_mrl_unidades_por_lote = {idx: set() for idx in planes}
     app.plan_largos_job = str(job or "").strip()
+    app.plan_largos_sin_demanda_por_lote = sin_demanda
+    app.plan_largos_error = error_calculo
     return planes
+
+
+def _plan_largos_valido(plan: dict[str, Any] | None) -> bool:
+    """Un plan solo es utilizable cuando contiene al menos una tira de corte."""
+    return bool(
+        isinstance(plan, dict)
+        and (plan.get("data") or {})
+        and int(plan.get("total_barras") or 0) > 0
+    )
+
+
+def _auditar_recuperacion_plan_largos(
+    app,
+    orden_id: str,
+    tipo_orden: str,
+    lote_idx: int,
+    *,
+    status: str,
+    detail: str,
+    plan: dict[str, Any] | None = None,
+) -> None:
+    """Deja trazabilidad de recovery sin convertir un éxito en falso fallo."""
+    try:
+        from interface.export_checkpoint_service import guardar_checkpoint_export
+
+        guardar_checkpoint_export(
+            str(orden_id or "").strip(),
+            str(tipo_orden or "").strip().upper(),
+            "LARGOS_PLAN_RECOVERY",
+            status=status,
+            run_id=str(getattr(app, "export_run_id", "") or "") or None,
+            detail=detail,
+            metadata={
+                "lote_idx": int(lote_idx),
+                "total_piezas": int((plan or {}).get("total_piezas") or 0),
+                "total_barras": int((plan or {}).get("total_barras") or 0),
+                "recovered_from": "lista_largos_planes",
+            },
+            db_config=_db_config(),
+        )
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][CHECKPOINT][WARN] recovery: {exc}")
+
+
+def _recuperar_plan_largos_persistido_tras_export(
+    app,
+    lote_idx: int,
+    orden_id: str,
+    tipo_orden: str,
+) -> tuple[dict[str, Any] | None, str, str | None]:
+    """
+    Obtiene el plan temporal del nesting o lo reconstruye desde la WO/SWO ya
+    guardada en PostgreSQL.
+
+    El segundo camino es obligatorio: ``guardar_nesting_en_postgresql`` ya
+    registró la WO y su lista de largos antes de pedir MRL, por lo que perder
+    el cache en memoria no debe dejar una exportación a medias.
+    """
+    idx = int(lote_idx)
+    planes = getattr(app, "plan_largos_por_lote", None) or {}
+    plan_memoria = planes.get(idx)
+    if _plan_largos_valido(plan_memoria):
+        return plan_memoria, "nesting", None
+
+    orden = str(orden_id or "").strip()
+    tipo = str(tipo_orden or "WO").strip().upper()
+    try:
+        plan_persistido = cargar_plan_largos(orden, tipo)
+    except Exception as exc:
+        detalle = str(exc) or exc.__class__.__name__
+        _auditar_recuperacion_plan_largos(
+            app,
+            orden,
+            tipo,
+            idx,
+            status="FAILED",
+            detail=f"No se pudo leer plan persistido: {detalle}",
+        )
+        return None, "", (
+            f"No se pudo recuperar el plan persistido de {tipo} {orden}: {detalle}"
+        )
+
+    if _plan_largos_valido(plan_persistido):
+        if not hasattr(app, "plan_largos_por_lote") or app.plan_largos_por_lote is None:
+            app.plan_largos_por_lote = {}
+        app.plan_largos_por_lote[idx] = plan_persistido
+
+        if not hasattr(app, "exclusiones_mrl_unidades_por_lote") or (
+            app.exclusiones_mrl_unidades_por_lote is None
+        ):
+            app.exclusiones_mrl_unidades_por_lote = {}
+        app.exclusiones_mrl_unidades_por_lote.setdefault(idx, set())
+
+        sin_demanda = getattr(app, "plan_largos_sin_demanda_por_lote", None)
+        if isinstance(sin_demanda, set):
+            sin_demanda.discard(idx)
+
+        # Un error de precálculo ya no es bloqueante si la WO/SWO persistida
+        # entregó un plan completo y verificable.
+        app.plan_largos_error = None
+        print(
+            "[LARGOS_NESTING][RECOVERY] "
+            f"{tipo} {orden} lote={idx}: plan recuperado de PostgreSQL "
+            f"({int(plan_persistido.get('total_piezas') or 0)} piezas, "
+            f"{int(plan_persistido.get('total_barras') or 0)} tiras)."
+        )
+        _auditar_recuperacion_plan_largos(
+            app,
+            orden,
+            tipo,
+            idx,
+            status="OK",
+            detail="Plan recuperado desde PostgreSQL tras perder caché temporal.",
+            plan=plan_persistido,
+        )
+        return plan_persistido, "postgresql", None
+
+    sin_demanda = getattr(app, "plan_largos_sin_demanda_por_lote", set()) or set()
+    if idx in sin_demanda:
+        return None, "sin_demanda", None
+
+    error_precalculo = str(getattr(app, "plan_largos_error", "") or "").strip()
+    detalle = (
+        f"No se generó un plan utilizable para {tipo} {orden} después de "
+        "persistir su demanda."
+    )
+    if error_precalculo:
+        detalle += f" Precálculo: {error_precalculo}"
+    _auditar_recuperacion_plan_largos(
+        app,
+        orden,
+        tipo,
+        idx,
+        status="FAILED",
+        detail=detalle,
+    )
+    return None, "", detalle
 
 
 def aplicar_pedido_largos_tras_export(
@@ -847,18 +1099,259 @@ def aplicar_pedido_largos_tras_export(
     orden_id: str,
     tipo_orden: str,
 ) -> tuple[bool, str]:
-    """Aplica a material_requerido_ldg el plan del nesting y las exclusiones del usuario."""
-    planes = getattr(app, "plan_largos_por_lote", None) or {}
-    plan = planes.get(int(lote_idx))
-    if not plan or not (plan.get("data") or {}):
-        return False, "No hay plan de largos calculado para este lote."
+    """Aplica MRL; recupera el plan persistido si el cache temporal no existe."""
+    plan, origen_plan, error_plan = _recuperar_plan_largos_persistido_tras_export(
+        app,
+        lote_idx,
+        orden_id,
+        tipo_orden,
+    )
+    if origen_plan == "sin_demanda":
+        return True, "Este lote no tiene demanda de largos; no requiere pedido MRL."
+    if not plan:
+        return False, str(error_plan or "No se pudo resolver el plan de largos.")
     excl = obtener_exclusiones_mrl_unidades(app, int(lote_idx))
-    return enviar_pedido_largos_filtrado(
+    ok, mensaje = enviar_pedido_largos_filtrado(
         str(orden_id or "").strip(),
         str(tipo_orden or "WO").strip().upper(),
         plan,
         unidades_excluidas_mrl=excl,
     )
+    if ok and origen_plan == "postgresql":
+        mensaje = f"{mensaje} (plan recuperado de PostgreSQL)"
+    return ok, mensaje
+
+
+def aplicar_pedido_largos_swo_acumulado_tras_export(
+    app,
+    swo_id: str,
+    lote_indices: list[int] | tuple[int, ...],
+) -> tuple[bool, str]:
+    """
+    Genera un único pedido MRL para una SWO con todos sus lotes exportados.
+
+    Cada lote conserva sus exclusiones unitarias antes de consolidar las
+    cantidades. Así se evita que el último lote reemplace el pedido de los
+    anteriores al compartir el mismo ``orden_id = SWO``.
+    """
+    planes = getattr(app, "plan_largos_por_lote", None) or {}
+    sin_demanda = getattr(app, "plan_largos_sin_demanda_por_lote", set()) or set()
+    unidades_activas: list[dict[str, Any]] = []
+    lotes_con_demanda = 0
+    lotes_sin_plan: list[int] = []
+
+    for lote_idx in [int(idx) for idx in lote_indices]:
+        if lote_idx in sin_demanda:
+            continue
+        plan = planes.get(lote_idx)
+        if not _plan_largos_valido(plan):
+            lotes_sin_plan.append(lote_idx)
+            continue
+        lotes_con_demanda += 1
+        excl = obtener_exclusiones_mrl_unidades(app, lote_idx)
+        unidades_activas.extend(previsualizar_pedido_mrl_unidades(plan, excl))
+
+    # El plan calculado en memoria puede corresponder a la geometría de un
+    # solo lote (p. ej. una WO X11 modelada una vez) mientras la SWO ya
+    # persistida representa sus 11 unidades. Antes de comprar, la fuente
+    # canónica es el plan generado desde reporte_cortes + lista_largos_job.
+    # Nunca se debe emitir una MRL parcial por confiar solo en ese caché.
+    try:
+        plan_swo_canonico = cargar_plan_largos(str(swo_id or "").strip(), "SWO")
+    except Exception as exc:
+        plan_swo_canonico = None
+        print(f"[LARGOS_NESTING][WARN] No se pudo validar plan canónico SWO: {exc}")
+
+    piezas_locales = sum(
+        int((planes.get(idx) or {}).get("total_piezas") or 0)
+        for idx in [int(i) for i in lote_indices]
+        if idx not in sin_demanda
+    )
+    piezas_canonicas = int((plan_swo_canonico or {}).get("total_piezas") or 0)
+    if (
+        _plan_largos_valido(plan_swo_canonico)
+        and piezas_canonicas > 0
+        and piezas_locales != piezas_canonicas
+    ):
+        ok, mensaje = enviar_pedido_largos_filtrado(
+            str(swo_id or "").strip(),
+            "SWO",
+            plan_swo_canonico,
+        )
+        detalle = (
+            f"Plan SWO canónico aplicado ({piezas_canonicas} piezas); "
+            f"se descartó caché parcial de {piezas_locales} pieza(s)."
+        )
+        print(f"[LARGOS_NESTING][RECOVERY] {detalle}")
+        return ok, f"{mensaje} ({detalle})"
+
+    if lotes_sin_plan:
+        # En una SWO la fuente persistida ya consolida todos los jobs/lotes.
+        # Si se perdió un cache temporal, se prioriza completar el pedido
+        # correcto contra frenar toda la exportación por ese estado efímero.
+        plan_swo, origen_plan, error_plan = _recuperar_plan_largos_persistido_tras_export(
+            app,
+            lotes_sin_plan[0],
+            swo_id,
+            "SWO",
+        )
+        if origen_plan == "sin_demanda":
+            if not lotes_con_demanda:
+                return True, "La SWO no tiene demanda de largos; no requiere pedido MRL."
+        elif not plan_swo:
+            return False, str(error_plan or "No se pudo resolver el plan consolidado de la SWO.")
+        else:
+            ok, mensaje = enviar_pedido_largos_filtrado(
+                str(swo_id or "").strip(),
+                "SWO",
+                plan_swo,
+            )
+            if ok and origen_plan == "postgresql":
+                mensaje = f"{mensaje} (plan consolidado recuperado de PostgreSQL)"
+            return ok, mensaje
+
+    if not lotes_con_demanda:
+        # El caché en memoria puede venir vacío (reabrir workspace / sin modal),
+        # pero el plan canónico SWO en BD sí tiene demanda. Nunca declarar
+        # "sin demanda" si el plan persistido pide barras: eso deja MRL vacía
+        # y tumba validar_mrl_swo_canonica_tras_export.
+        try:
+            plan_fallback = cargar_plan_largos(str(swo_id or "").strip(), "SWO")
+        except Exception as exc:
+            plan_fallback = None
+            print(f"[LARGOS_NESTING][WARN] Fallback plan SWO: {exc}")
+        if _plan_largos_valido(plan_fallback):
+            ok, mensaje = enviar_pedido_largos_filtrado(
+                str(swo_id or "").strip(),
+                "SWO",
+                plan_fallback,
+            )
+            return ok, f"{mensaje} (pedido desde plan canónico; caché de lotes vacío)"
+        return True, "La SWO no tiene demanda de largos; no requiere pedido MRL."
+
+    filas = agregar_filas_desde_unidades_mrl(unidades_activas)
+    if not filas:
+        return False, "No se pudo resolver material Herinox para el pedido MRL acumulado."
+
+    return enviar_pedido_largos_filas(
+        str(swo_id or "").strip(),
+        "SWO",
+        filas,
+    )
+
+
+def validar_mrl_swo_canonica_tras_export(swo_id: str) -> tuple[bool, str]:
+    """
+    Barrera final antes de VSM/ContPAQ.
+
+    Acepta:
+    - Sin plan y sin MRL → SWO sin demanda de largos.
+    - MRL idéntica al plan canónico.
+    - MRL ⊆ plan (exclusiones Pedir/No del modal); nunca cantidades por encima
+      del plan ni códigos ajenos al plan.
+    - MRL ya persistida si el plan canónico aún no es regenerable (p. ej. justo
+      después de nestear, antes de consolidar filas en BD).
+    """
+    swo = str(swo_id or "").strip()
+    if not swo:
+        return False, "SWO vacía para validar MRL."
+    try:
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
+        try:
+            cursor.execute(
+                """
+                SELECT codigo, largo, cantidad
+                FROM material_requerido_ldg
+                WHERE BTRIM(orden_id) = %s AND tipo_orden = 'SWO'
+                """,
+                (swo,),
+            )
+            actuales: dict[tuple[str, float], int] = defaultdict(int)
+            for row in cursor.fetchall() or []:
+                codigo = row.get("codigo") if isinstance(row, dict) else row[0]
+                largo = row.get("largo") if isinstance(row, dict) else row[1]
+                cantidad = row.get("cantidad") if isinstance(row, dict) else row[2]
+                actuales[(str(codigo or "").strip(), round(float(largo or 0), 2))] += int(
+                    cantidad or 0
+                )
+        finally:
+            cursor.close()
+            conexion.close()
+
+        try:
+            plan = cargar_plan_largos(swo, "SWO")
+        except Exception as exc_plan:
+            plan = {}
+            print(f"[LARGOS_NESTING][WARN] Plan canónico SWO no disponible: {exc_plan}")
+
+        if not _plan_largos_valido(plan):
+            if not actuales:
+                return (
+                    True,
+                    f"SWO {swo}: sin plan canónico ni MRL (sin demanda de largos).",
+                )
+            return (
+                True,
+                f"SWO {swo}: MRL persistida aceptada "
+                f"({sum(actuales.values())} barras; plan canónico aún no regenerable).",
+            )
+
+        esperadas: dict[tuple[str, float], int] = defaultdict(int)
+        for fila in agregar_filas_desde_plan(plan):
+            key = (
+                str(fila.get("codigo") or "").strip(),
+                round(float(fila.get("largo") or 0), 2),
+            )
+            esperadas[key] += int(fila.get("cantidad") or 0)
+
+        if not esperadas:
+            if not actuales:
+                return True, f"SWO {swo}: plan sin barras comerciales; MRL vacía OK."
+            return (
+                False,
+                f"SWO {swo}: hay MRL ({sum(actuales.values())} barras) pero el plan "
+                "canónico no pide material.",
+            )
+
+        if not actuales:
+            return (
+                False,
+                f"SWO {swo}: el plan canónico pide {sum(esperadas.values())} barras "
+                "y la MRL está vacía.",
+            )
+
+        if actuales == esperadas:
+            return (
+                True,
+                f"SWO {swo}: MRL validada contra {int(plan.get('total_piezas') or 0)} "
+                f"piezas y {sum(actuales.values())} barras.",
+            )
+
+        # Exclusiones unitarias (Pedir/No): el pedido puede ser menor al plan,
+        # nunca mayor ni con códigos fuera del plan.
+        for key, qty in actuales.items():
+            if key not in esperadas:
+                codigo, largo = key
+                return (
+                    False,
+                    f"SWO {swo}: MRL tiene {codigo} @ {largo}\" fuera del plan canónico.",
+                )
+            if int(qty) > int(esperadas[key]):
+                codigo, largo = key
+                return (
+                    False,
+                    f"SWO {swo}: MRL pide {qty} de {codigo} @ {largo}\" "
+                    f"(plan={esperadas[key]}).",
+                )
+
+        return (
+            True,
+            f"SWO {swo}: MRL validada con exclusiones "
+            f"({sum(actuales.values())}/{sum(esperadas.values())} barras del plan).",
+        )
+    except Exception as exc:
+        return False, f"SWO {swo}: no se pudo validar MRL canónica: {exc}"
 
 
 def cargar_plan_largos_contexto(app, tab) -> tuple[dict[str, Any], dict[str, Any], str | None]:
@@ -906,6 +1399,34 @@ def cargar_plan_largos_contexto(app, tab) -> tuple[dict[str, Any], dict[str, Any
                 contexto,
                 "No hay demanda de largos para este job. Verifica el CSV en AutoDXF o importa la lista.",
             )
+
+        # SWO: generar/persistir plan bajo el id SWO (hereda filas de jobs fuente).
+        orden_ctx = resolver_orden_largos(app, tab)
+        if orden_ctx and str(orden_ctx[1]).upper() == "SWO":
+            orden_id, tipo_orden = orden_ctx
+            jobs_fuente = resolver_jobs_fuente_demanda(app, job, cursor=cursor)
+            job_plan = next(
+                (j for j in jobs_fuente if not str(j).upper().startswith("SWO")),
+                job,
+            )
+            plan = _generar_plan_desde_filas(
+                cursor, orden_id, "SWO", job_plan, factor, rows
+            )
+            if not (plan.get("data") or {}):
+                return {}, contexto, "No se pudo calcular el nesteo de largos con la demanda disponible."
+            plan["_demanda_origen"] = origen
+            plan["_verificacion_62174"] = verificar_empate_referencia_62174(plan, rows)
+            contexto = dict(contexto)
+            contexto["modo"] = "orden"
+            contexto["orden_id"] = orden_id
+            contexto["tipo_orden"] = "SWO"
+            contexto["puede_enviar_pedido"] = True
+            contexto["etiqueta"] = f"ORDEN: {orden_id} · SWO"
+            try:
+                conexion.commit()
+            except Exception:
+                pass
+            return plan, contexto, None
 
         orden_preview = f"PREVIEW-{_norm_job(job)}-LOTE-X{factor}".replace(" ", "_")[:90]
         plan = _generar_plan_desde_filas(
@@ -966,12 +1487,51 @@ def enviar_pedido_largos_filtrado(
             barras_excluidas_pedido=barras_excluidas_pedido,
             unidades_excluidas_mrl=unidades_excluidas_mrl,
         )
+        if not ok:
+            conexion.rollback()
+            return False, msg
         conexion.commit()
-        return ok, msg
+        return True, msg
     except Exception as e:
         if conexion:
             conexion.rollback()
         return False, str(e)
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
+def enviar_pedido_largos_filas(
+    orden_id: str,
+    tipo_orden: str,
+    filas: list[dict[str, Any]],
+) -> tuple[bool, str]:
+    """Persiste filas MRL ya consolidadas para una WO/SWO."""
+    if not str(orden_id or "").strip():
+        return False, "No hay WO/SWO asociada. Exporta el nesting antes de enviar el pedido."
+    asegurar_tabla_material_requerido_ldg(_db_config())
+    conexion = None
+    cursor = None
+    try:
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
+        ok, msg = reconstruir_pedido_desde_filas(
+            cursor,
+            str(orden_id).strip(),
+            str(tipo_orden or "WO").strip().upper(),
+            filas,
+        )
+        if not ok:
+            conexion.rollback()
+            return False, msg
+        conexion.commit()
+        return True, msg
+    except Exception as exc:
+        if conexion:
+            conexion.rollback()
+        return False, str(exc)
     finally:
         if cursor:
             cursor.close()

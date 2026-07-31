@@ -120,7 +120,7 @@ COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 DEFAULT_MARGIN_IN = 0.15
 
 
@@ -166,31 +166,45 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
         """Kerf global de nesting (placa láser). Poka-yoke: no coerce silencioso."""
         from modules.nesting_engine.nest_poka_yoke import validar_kerf_in
 
-        k, err = validar_kerf_in(getattr(self, "global_kerf_val", DEFAULT_KERF_IN))
+        raw = getattr(self, "global_kerf_val", DEFAULT_KERF_IN)
+        # Si el campo de UI existe, manda sobre el valor en memoria (evita 0.3 viejo del .arganest).
+        if hasattr(self, "ent_kerf"):
+            try:
+                txt = str(self.ent_kerf.text() or "").strip()
+                if txt:
+                    raw = txt
+            except Exception:
+                pass
+        k, err = validar_kerf_in(raw)
         if err:
             raise ValueError(err)
+        self.global_kerf_val = k
         return k
 
     def _margin_efectivo(self) -> float:
         from modules.nesting_engine.nest_poka_yoke import validar_margin_in
 
-        m, err = validar_margin_in(getattr(self, "global_margin_val", 0.15))
+        raw = getattr(self, "global_margin_val", 0.15)
+        if hasattr(self, "ent_margin"):
+            try:
+                txt = str(self.ent_margin.text() or "").strip()
+                if txt:
+                    raw = txt
+            except Exception:
+                pass
+        m, err = validar_margin_in(raw)
         if err:
             raise ValueError(err)
+        self.global_margin_val = m
         return m
 
     def _leer_kerf_margin_ui(self) -> tuple[float, float] | None:
         """Valida kerf/margin con diálogo; None si el usuario debe corregir."""
-        from modules.nesting_engine.nest_poka_yoke import validar_kerf_in, validar_margin_in
-
-        k, err_k = validar_kerf_in(getattr(self, "global_kerf_val", DEFAULT_KERF_IN))
-        m, err_m = validar_margin_in(getattr(self, "global_margin_val", 0.15))
-        if err_k or err_m:
-            QMessageBox.critical(
-                self,
-                "Configuración inválida (poka-yoke)",
-                "\n".join(x for x in (err_k, err_m) if x),
-            )
+        try:
+            k = self._kerf_efectivo()
+            m = self._margin_efectivo()
+        except ValueError as exc:
+            QMessageBox.critical(self, "Configuración inválida (poka-yoke)", str(exc))
             return None
         self.global_kerf_val = k
         self.global_margin_val = m
@@ -394,7 +408,7 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
                     "(evita exportar con rotación incorrecta)."
                 )
             else:
-                btn.setToolTip("")
+                btn.setToolTip("Exportar DXF/STEP")
 
     def _on_geom_prep_finalizado(self):
         setattr(self.app, "_transform_export_done", True)

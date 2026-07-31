@@ -54,22 +54,28 @@ def _centrar_dialogo(dlg: QDialog, parent: QWidget) -> None:
 def preguntar_separacion_cobre_renest(
     parent,
     valor_sep: float = 0.375,
-    valor_largo_sin: float = 10.0,
+    valor_largo_sin: float = 0.0,
 ) -> tuple[float, float] | None:
     """
-    Opciones de separación CU antes de renestear calibre o una barra sola.
-    Retorna (separacion_in, largo_sin_separacion_in) o None si cancela.
+    Separación CU antes de renestear. El umbral por largo ya no aplica
+    (gap siempre salvo Z/especial). Retorna (separacion_in, 0.0) o None.
     """
+    _ = valor_largo_sin
     dlg = QDialog(parent)
     dlg.setWindowTitle("Separación entre piezas de cobre")
     dlg.setModal(True)
-    dlg.setFixedSize(360, 175)
+    dlg.setFixedSize(360, 140)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
     tit = QLabel("SEPARACIÓN ENTRE PIEZAS CU", alignment=Qt.AlignmentFlag.AlignCenter)
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
+
+    hint = QLabel("Gap 3/8\" fijo (salvo Z/especial PARTS). Solo ajusta el gap.")
+    hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    hint.setWordWrap(True)
+    lay.addWidget(hint)
 
     row_sep = QHBoxLayout()
     row_sep.addWidget(QLabel("Separación entre piezas (in):"))
@@ -82,18 +88,6 @@ def preguntar_separacion_cobre_renest(
     row_sep.addWidget(spin_sep)
     row_sep.addStretch(1)
     lay.addLayout(row_sep)
-
-    row_lim = QHBoxLayout()
-    row_lim.addWidget(QLabel("Piezas ≤ este largo (in) sin gap:"))
-    spin_lim = QDoubleSpinBox()
-    spin_lim.setRange(0.0, 144.0)
-    spin_lim.setDecimals(2)
-    spin_lim.setSingleStep(0.5)
-    spin_lim.setValue(max(0.0, float(valor_largo_sin or 10.0)))
-    spin_lim.setFixedWidth(100)
-    row_lim.addWidget(spin_lim)
-    row_lim.addStretch(1)
-    lay.addLayout(row_lim)
 
     btns = QHBoxLayout()
     btn_cancel = QPushButton("Cancelar")
@@ -111,7 +105,7 @@ def preguntar_separacion_cobre_renest(
 
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
-    return float(spin_sep.value()), float(spin_lim.value())
+    return float(spin_sep.value()), 0.0
 
 
 def preguntar_barras_cobre_renest(
@@ -206,13 +200,13 @@ def abrir_modal_configuracion(parent):
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
 
-    kerf_actual = str(getattr(parent, "_kerf_efectivo", lambda: getattr(parent, "global_kerf_val", 0.3))())
+    kerf_actual = str(getattr(parent, "_kerf_efectivo", lambda: getattr(parent, "global_kerf_val", 0.15))())
     try:
         kf = float(kerf_actual)
         if kf <= 0:
-            kerf_actual = "0.3"
+            kerf_actual = "0.15"
     except Exception:
-        kerf_actual = str(getattr(parent, "global_kerf_val", 0.3) or 0.3)
+        kerf_actual = str(getattr(parent, "global_kerf_val", 0.15) or 0.15)
 
     row_k = QHBoxLayout()
     row_k.addWidget(QLabel("Kerf (in):"))

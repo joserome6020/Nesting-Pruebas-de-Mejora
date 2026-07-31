@@ -702,8 +702,8 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
         rows.append((data["id"], job_val, item, f"{L_in:.2f}", f"{W_in:.2f}", int(data["qty"])))
 
     nrows = len(rows)
-    gap_mm = max(10.0, min(32.0, h_mm * 0.022))
-    frac_tabla = min(0.42, max(0.24, 0.075 * float(nrows + 1)))
+    gap_mm = max(28.0, min(48.0, h_mm * 0.035))
+    frac_tabla = min(0.36, max(0.20, 0.065 * float(nrows + 1)))
     tbl_h = h_mm * frac_tabla
     es_rtz = bool(hoja.get("es_retazo"))
     modo_cu = bool(hoja.get("modo_largos_cu"))

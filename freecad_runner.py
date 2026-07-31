@@ -1,11 +1,26 @@
 import glob
 import os
+import re
 import shutil
 import subprocess
 import time
 from pathlib import Path
 
 import config
+
+_NESTING_THK_IN_RE = re.compile(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+_MM_PER_IN = 25.4
+
+
+def thickness_mm_from_dxf_name(name: str, default_mm: float = 6.35) -> float:
+    """Espesor en mm desde NESTING_<pulgadas>_…; fallback a default_mm."""
+    m = _NESTING_THK_IN_RE.search(str(name or ""))
+    if not m:
+        return float(default_mm)
+    try:
+        return float(m.group(1)) * _MM_PER_IN
+    except Exception:
+        return float(default_mm)
 
 
 def _norm_path(p: str) -> str:
@@ -367,6 +382,12 @@ def ejecutar_macro_freecad(
             import_path, mark_json, slim_note = _prepare_import_paths(dxf_path)
             env["FREECAD_DXF_SINGLE"] = dxf_path
             env["FREECAD_DXF_IMPORT"] = import_path
+            # Calibre por archivo: NESTING_<in>_… (no reutilizar el THK del lote).
+            thk_file = thickness_mm_from_dxf_name(
+                os.path.basename(dxf_path),
+                default_mm=float(env_base.get("FREECAD_THK_MM") or thickness_mm),
+            )
+            env["FREECAD_THK_MM"] = str(thk_file)
             if mark_json:
                 env["FREECAD_MARK_JSON"] = mark_json
                 env["FREECAD_PHASE_MODE"] = "PER_PIECE"
@@ -513,9 +534,13 @@ def ejecutar_macro_freecad(
                 nombre = os.path.basename(dxf_path)
                 timeout_sec = _timeout_for_dxf(dxf_path)
                 import_path, mark_json, slim_note = _prepare_import_paths(dxf_path)
+                thk_file = thickness_mm_from_dxf_name(
+                    nombre, default_mm=float(thickness_mm)
+                )
                 slim_info = f" | import={os.path.basename(import_path)}"
                 if mark_json:
                     slim_info += f" | marks_json={os.path.basename(mark_json)}"
+                slim_info += f" | thk_mm={thk_file:.4f}"
                 _log(
                     f"\n[{idx + 1}/{len(pending)}] {nombre} "
                     f"(timeout {int(timeout_sec)} s){slim_info}\n"

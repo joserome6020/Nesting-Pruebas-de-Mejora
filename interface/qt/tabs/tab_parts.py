@@ -12,6 +12,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -104,13 +105,14 @@ class TabParts(QWidget, TimerHost):
         self._row_widgets = {}
 
         self.local_col_config = [
-            {"weight": 3, "min": 160},
-            {"weight": 2, "min": 100},
-            {"weight": 1, "min": 50},
-            {"weight": 1, "min": 80},
+            {"weight": 3, "min": 150},
+            {"weight": 2, "min": 90},
+            {"weight": 1, "min": 45},
             {"weight": 1, "min": 70},
-            {"weight": 1, "min": 90},
+            {"weight": 1, "min": 65},
             {"weight": 1, "min": 70},
+            {"weight": 1, "min": 52},
+            {"weight": 1, "min": 60},
         ]
 
         # Estado para lista de largos
@@ -150,6 +152,14 @@ class TabParts(QWidget, TimerHost):
         self._dxf_audit_token = 0
         self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
         hdr.addStretch()
+        self.btn_reprocesar_autodxf = QPushButton("REPROCESAR AUTODXF")
+        apply_push_button(self.btn_reprocesar_autodxf, ARGB_BTN_2, font_size=11)
+        self.btn_reprocesar_autodxf.setToolTip(
+            "Vuelve a limpiar/procesar los DXF crudos de AutoDXF → Processed Files "
+            "y actualiza PARTS. Luego RENESTEAR ESTA PLACA en la placa afectada."
+        )
+        self.btn_reprocesar_autodxf.clicked.connect(self.reprocesar_autodxf_partes)
+        hdr.addWidget(self.btn_reprocesar_autodxf)
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
@@ -168,13 +178,18 @@ class TabParts(QWidget, TimerHost):
         self._parts_head_grid = QGridLayout(self._parts_head)
         self._parts_head_grid.setContentsMargins(self._PARTS_GRID_MARGIN_H, 0, self._PARTS_GRID_MARGIN_H, 0)
         self._apply_parts_grid_columns(self._parts_head_grid)
-        titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "VISTA"]
+        titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "ESP.", "VISTA"]
         for i, txt in enumerate(titulos):
             lbl = QLabel(txt)
             if i == 0:
                 lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             else:
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if txt == "ESP.":
+                lbl.setToolTip(
+                    "Cobre Amada (solo 5\"): vertical sin gap "
+                    "(sin MARK/INNER) → AMADA/VERTICAL + AMADA/FIXTURA"
+                )
             self._parts_head_grid.addWidget(lbl, 0, i)
         header_wrap_lay.addWidget(self._parts_head, 1)
 
@@ -342,6 +357,29 @@ class TabParts(QWidget, TimerHost):
                         lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                     row_lay.addWidget(lbl, 0, i)
                 elif i == 6:
+                    chk_wrap = QWidget()
+                    chk_lay = QHBoxLayout(chk_wrap)
+                    chk_lay.setContentsMargins(0, 0, 0, 0)
+                    chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    chk = QCheckBox()
+                    es_cu = self._es_material_cobre(mat)
+                    chk.setEnabled(bool(es_cu and ruta))
+                    chk.setVisible(bool(es_cu))
+                    chk.setToolTip(
+                        "Amada 5\": AMADA/VERTICAL + AMADA/FIXTURA (sin gap)"
+                        if es_cu
+                        else ""
+                    )
+                    if es_cu and ruta:
+                        chk.setChecked(self._cu_especial_guardada(ruta))
+                        chk.toggled.connect(
+                            lambda checked, r=ruta, c=chk: self._persistir_cu_especial(
+                                r, checked, checkbox=c
+                            )
+                        )
+                    chk_lay.addWidget(chk)
+                    row_lay.addWidget(chk_wrap, 0, i)
+                elif i == 7:
                     if thumbnails_async:
                         ph = QLabel("…")
                         ph.setFixedSize(32, 32)
@@ -718,6 +756,178 @@ class TabParts(QWidget, TimerHost):
         from interface.utils_nesting import es_material_cobre
         return es_material_cobre(material)
 
+    def _cu_especial_guardada(self, ruta_dxf) -> bool:
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        especiales = getattr(self.app, "cu_especial_por_ruta", None) or {}
+        return bool(especiales.get(clave_orientacion_cobre_ruta(ruta_dxf), False))
+
+    def _dims_pieza_cobre_in(self, ruta_dxf, rot_deg: int) -> tuple[float, float] | None:
+        """(largo X in, ancho Y in) con la orientación indicada."""
+        try:
+            from interface.qt.dxf_part_loader import load_dxf_part
+
+            model = load_dxf_part(str(ruta_dxf), int(rot_deg) % 360)
+            if model is None:
+                return None
+            fc = float(model.factor_conversion) or 25.4
+            snap = model.snap_ctx
+            if snap is not None and getattr(snap, "vertices", None) is not None:
+                verts = snap.vertices
+                if len(verts):
+                    xs = verts[:, 0]
+                    ys = verts[:, 1]
+                    return (
+                        float(abs(float(xs.max()) - float(xs.min())) / fc),
+                        float(abs(float(ys.max()) - float(ys.min())) / fc),
+                    )
+            return (
+                float(abs(model.max_x_raw - model.min_x_raw) / fc),
+                float(abs(model.max_y_raw - model.min_y_raw) / fc),
+            )
+        except Exception:
+            return None
+
+    def _validar_amada_fixtura(self, ruta_dxf) -> tuple[bool, str, int | None]:
+        """
+        Fixtura Amada:
+          - ancho Y exacto 5\" (±tol)
+          - largo X <= canal entre topes (DXF real / ~35.33\")
+        Returns (ok, mensaje, rot_sugerida_o_None).
+        """
+        from modules.nesting_engine.cu_largos_nesting import (
+            AMADA_FIXTURA_ANCHO_IN,
+            TOL_ANCHO_IN_MIN,
+            amada_fixtura_largo_max_in,
+        )
+
+        rot_actual = self._orientacion_cobre_guardada(ruta_dxf)
+        dims = self._dims_pieza_cobre_in(ruta_dxf, rot_actual)
+        if dims is None:
+            return (
+                False,
+                "No se pudo medir el DXF. No se puede marcar ESP. Amada.",
+                None,
+            )
+
+        largo_x, ancho_y = dims
+        largo_max = float(amada_fixtura_largo_max_in())
+        rot_usar = None
+
+        if abs(ancho_y - AMADA_FIXTURA_ANCHO_IN) > TOL_ANCHO_IN_MIN:
+            rot_alt = (rot_actual + 90) % 360
+            dims_alt = self._dims_pieza_cobre_in(ruta_dxf, rot_alt)
+            if dims_alt is not None:
+                largo_alt, ancho_alt = dims_alt
+                if abs(ancho_alt - AMADA_FIXTURA_ANCHO_IN) <= TOL_ANCHO_IN_MIN:
+                    # Candidata a girar: validar largo en esa orientación.
+                    if float(largo_alt) > largo_max + TOL_ANCHO_IN_MIN:
+                        return (
+                            False,
+                            (
+                                f"Ese DXF no se puede usar en proceso Amada.\n\n"
+                                f'Aunque al girar 90° el ancho quede en '
+                                f'{AMADA_FIXTURA_ANCHO_IN:.0f}", el largo sería '
+                                f'{largo_alt:.3f}" y la fixtura solo admite hasta '
+                                f'{largo_max:.3f}" entre topes.\n\n'
+                                f"No se puede marcar ESP."
+                            ),
+                            None,
+                        )
+                    return (
+                        False,
+                        (
+                            f"La fixtura Amada solo admite ancho exacto de "
+                            f'{AMADA_FIXTURA_ANCHO_IN:.0f}" (actual: {ancho_y:.3f}").\n\n'
+                            f'Al girar 90° el ancho quedaría en {ancho_alt:.3f}" '
+                            f'y el largo en {largo_alt:.3f}" '
+                            f'(máx. fixtura {largo_max:.3f}").\n'
+                            "¿Girar la pieza y marcar ESP.?"
+                        ),
+                        rot_alt,
+                    )
+
+            return (
+                False,
+                (
+                    f"Ese DXF no se puede usar en proceso Amada.\n\n"
+                    f'La fixtura solo admite exactamente {AMADA_FIXTURA_ANCHO_IN:.0f}" de ancho '
+                    f"(ni más ancho ni más angosto).\n"
+                    f'Ancho actual (Y): {ancho_y:.3f}".'
+                ),
+                None,
+            )
+
+        # Ancho OK en orientación actual: validar largo.
+        if float(largo_x) > largo_max + TOL_ANCHO_IN_MIN:
+            return (
+                False,
+                (
+                    f"Ese DXF no se puede usar en proceso Amada.\n\n"
+                    f'La pieza mide {largo_x:.3f}" de largo y la fixtura Amada '
+                    f'solo admite hasta {largo_max:.3f}" entre topes.\n\n'
+                    f"No se puede marcar ESP."
+                ),
+                None,
+            )
+
+        return True, "", rot_usar
+
+    def _validar_amada_ancho_5in(self, ruta_dxf) -> tuple[bool, str, int | None]:
+        """Compat: delega a validación completa de fixtura Amada."""
+        return self._validar_amada_fixtura(ruta_dxf)
+
+    def _persistir_cu_especial(self, ruta_dxf, checked: bool, checkbox=None):
+        if not ruta_dxf:
+            return
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        if not hasattr(self.app, "cu_especial_por_ruta") or self.app.cu_especial_por_ruta is None:
+            self.app.cu_especial_por_ruta = {}
+        clave = clave_orientacion_cobre_ruta(ruta_dxf)
+
+        def _revert_check():
+            if checkbox is not None:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(False)
+                checkbox.blockSignals(False)
+
+        if checked:
+            ok, msg, rot_sugerida = self._validar_amada_fixtura(ruta_dxf)
+            if ok:
+                self.app.cu_especial_por_ruta[clave] = True
+                return
+            if rot_sugerida is not None:
+                resp = QMessageBox.question(
+                    self,
+                    "Amada — orientación",
+                    msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if resp == QMessageBox.StandardButton.Yes:
+                    self._persistir_orientacion_cobre(rot_sugerida, ruta_dxf)
+                    try:
+                        if getattr(self, "visor", None) is not None:
+                            self.visor.renderizar_dxf(
+                                ruta_dxf, rotacion_vista_deg=rot_sugerida
+                            )
+                    except Exception:
+                        pass
+                    # Revalidar tras giro (ancho + largo).
+                    ok2, msg2, _rot2 = self._validar_amada_fixtura(ruta_dxf)
+                    if not ok2:
+                        QMessageBox.warning(self, "Amada — DXF no usable", msg2)
+                        _revert_check()
+                        return
+                    self.app.cu_especial_por_ruta[clave] = True
+                    return
+                _revert_check()
+                return
+            QMessageBox.warning(self, "Amada — DXF no usable", msg)
+            _revert_check()
+            return
+
+        self.app.cu_especial_por_ruta.pop(clave, None)
+
     def _orientacion_cobre_guardada(self, ruta_dxf) -> int:
         from interface.utils_nesting import clave_orientacion_cobre_ruta
         orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
@@ -1025,6 +1235,93 @@ class TabParts(QWidget, TimerHost):
         table.resizeRowsToContents()
         fj_lay.addWidget(table)
         contenedor.layout().addWidget(frame_job)
+
+    def reprocesar_autodxf_partes(self):
+        """Reprocesa AutoDXF → Processed Files y refresca PARTS con geometría corregida."""
+        vista_files = getattr(self.app, "vista_files", None)
+        if vista_files is None or not hasattr(vista_files, "escanear_partes_desde_ruta"):
+            QMessageBox.warning(self, "Atención", "No hay módulo FILES disponible para reprocesar.")
+            return
+        autodxf = None
+        if hasattr(vista_files, "_resolver_autodxf_desde_datos_actuales"):
+            autodxf = vista_files._resolver_autodxf_desde_datos_actuales()
+        if not autodxf:
+            QMessageBox.information(
+                self,
+                "Reprocesar AutoDXF",
+                "No se encontró la carpeta AutoDXF del job/lote actual.\n"
+                "Importe el job desde FILES o asegúrese de que PARTS tenga rutas DXF válidas.",
+            )
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Reprocesar AutoDXF",
+                "Se volverán a procesar los DXF crudos de:\n"
+                f"{autodxf}\n\n"
+                "Se actualizará Processed Files y la lista PARTS.\n"
+                "El nesting existente no cambia hasta que renestee la placa "
+                "con «RENESTEAR ESTA PLACA».\n\n¿Continuar?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+
+        if hasattr(self.app, "abrir_ventana_carga"):
+            self.app.abrir_ventana_carga("Reprocesando AutoDXF…")
+
+        def _progress(msg, pct):
+            if hasattr(self.app, "actualizar_progreso"):
+                call_on_main(self.app.actualizar_progreso, str(msg), float(pct))
+
+        def worker():
+            payload = err = None
+            try:
+                payload = vista_files.escanear_partes_desde_ruta(progress_cb=_progress)
+                if not payload:
+                    raise RuntimeError(
+                        "No se pudo escanear AutoDXF (carpeta vacía o sin DXF válidos)."
+                    )
+            except Exception as exc:
+                err = exc
+            call_on_main(self._finalizar_reprocesar_autodxf, payload, err)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finalizar_reprocesar_autodxf(self, payload, err=None):
+        if hasattr(self.app, "cerrar_ventana_carga"):
+            self.app.cerrar_ventana_carga()
+        if err:
+            QMessageBox.critical(self, "Error", f"Error al reprocesar AutoDXF:\n{err}")
+            return
+        vista_files = getattr(self.app, "vista_files", None)
+        if vista_files is None or not payload:
+            QMessageBox.critical(self, "Error", "No se pudo completar el reproceso.")
+            return
+        total = vista_files.aplicar_partes_resincronizadas(payload, thumbnails_async=True)
+        # Marca de sesión: el renest de placa puede preferir DXF regenerado.
+        self.app.autodxf_reprocesado_pendiente = True
+        # Evitar que el cache DXF (mtime Windows) sirva geometría espejada vieja.
+        try:
+            from modules.nesting_engine.display_geometry import invalidar_cache_dxf
+
+            rutas = {
+                str(r[5]).strip()
+                for r in (payload.get("items") or [])
+                if isinstance(r, (list, tuple)) and len(r) > 5 and r[5]
+            }
+            n_cache = invalidar_cache_dxf(rutas) if rutas else invalidar_cache_dxf()
+            print(f"[AUTODXF] cache DXF invalidado: {n_cache} entradas", flush=True)
+        except Exception:
+            pass
+        QMessageBox.information(
+            self,
+            "AutoDXF reprocesado",
+            f"Se actualizaron {total} pieza(s) en PARTS desde AutoDXF.\n\n"
+            "Para corregir un nest afectado:\n"
+            "NESTING → HERRAMIENTAS DE PLACA → RENESTEAR ESTA PLACA.\n"
+            "El renest usa automáticamente el DXF regenerado.",
+        )
 
     def abrir_ventana_lista_largos(self):
         grupos = self._cargar_listas_largos_desde_rutas()

@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import re
 import traceback
 
 # 1. Redirigir todos los mensajes a un archivo de texto para ver qué pasa en modo GUI
@@ -44,6 +45,21 @@ def _env_float(name: str, default: float) -> float:
         return float(_env(name, str(default)))
     except Exception:
         return default
+
+_NESTING_THK_IN_RE = re.compile(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+_SWO_THK_IN_RE = re.compile(r"SWO[-\s]*\d+[_\s-]+([0-9]*\.?[0-9]+)", re.IGNORECASE)
+
+
+def _thk_mm_from_dxf_name(path_or_name: str, default_mm: float) -> float:
+    """Lee calibre en pulgadas de NESTING_<thk>_… o SWO-###_<thk>_… → mm."""
+    name = os.path.basename(str(path_or_name or ""))
+    m = _NESTING_THK_IN_RE.search(name) or _SWO_THK_IN_RE.search(name)
+    if not m:
+        return float(default_mm)
+    try:
+        return float(m.group(1)) * 25.4
+    except Exception:
+        return float(default_mm)
 
 def _export_format() -> str:
     return _env("FREECAD_EXPORT_FORMAT", "step").strip().lower()
@@ -585,8 +601,9 @@ def main():
     
     for dxf in files:
         try:
-            print(f"Procesando: {dxf}")
-            convert_one_dxf(dxf, step_out, thk_mm, scale, off_x, off_y, off_z)
+            thk_file = _thk_mm_from_dxf_name(dxf, thk_mm)
+            print(f"Procesando: {dxf} | thk_mm={thk_file:.4f}")
+            convert_one_dxf(dxf, step_out, thk_file, scale, off_x, off_y, off_z)
         except Exception as e:
             print(f"[ERROR] Falló {dxf}: {e}")
             traceback.print_exc()

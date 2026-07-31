@@ -99,6 +99,7 @@ class SistemaNestingPro(QMainWindow):
         self.dxf_nesting_audit = {"total": 0, "ok": 0, "omitidos": []}
         self.dxf_audit_pending = False
         self.orientacion_cobre_por_ruta = {}
+        self.cu_especial_por_ruta = {}
         self._parts_ui_pendiente = None
         self.resultados_nesting = {}
         self.resultados_multilote = []
@@ -110,6 +111,8 @@ class SistemaNestingPro(QMainWindow):
         self.exclusiones_largos_pedido_por_lote = {}
         self.exclusiones_mrl_unidades_por_lote = {}
         self.plan_largos_job = ""
+        self.plan_largos_sin_demanda_por_lote = set()
+        self.plan_largos_error = None
         self.editable_inputs_by_lote = []
         self.editable_inputs_actuales = []
         self.lote_editado_dirty = False

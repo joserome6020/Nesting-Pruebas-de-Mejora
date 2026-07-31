@@ -129,13 +129,18 @@ def _compound(shapes: list[Any]):
     return comp
 
 
-def _cut(body, tool, *, parallel: bool = False):
+def _cut(body, tool, *, parallel: bool = False, fuzzy: float | None = 1e-5):
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
 
     cut = BRepAlgoAPI_Cut(body, tool)
     if parallel:
         try:
             cut.SetRunParallel(True)
+        except Exception:
+            pass
+    if fuzzy is not None and fuzzy > 0:
+        try:
+            cut.SetFuzzyValue(float(fuzzy))
         except Exception:
             pass
     cut.Build()
@@ -186,25 +191,31 @@ def _cookie_prism(wire, thk_mm: float):
     return BRepBuilderAPI_Transform(prism.Shape(), trsf, True).Shape()
 
 
-def _largest_solid(shape):
-    """Tras un boolean, quédate con el sólido de mayor volumen (evita escombros)."""
+def _list_solids(shape) -> list[Any]:
+    """Explota SOLID / COMPOUND en lista de sólidos."""
     ensure_ocp()
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopAbs import TopAbs_SOLID
     from OCP.TopoDS import TopoDS
 
     if shape is None:
-        return None
+        return []
     try:
         if shape.ShapeType() == TopAbs_SOLID:
-            return shape
+            return [shape]
     except Exception:
         pass
-    solids = []
+    solids: list[Any] = []
     exp = TopExp_Explorer(shape, TopAbs_SOLID)
     while exp.More():
         solids.append(TopoDS.Solid_s(exp.Current()))
         exp.Next()
+    return solids
+
+
+def _largest_solid(shape):
+    """Tras un boolean, quédate con el sólido de mayor volumen (evita escombros)."""
+    solids = _list_solids(shape)
     if not solids:
         return shape
     if len(solids) == 1:
@@ -213,6 +224,40 @@ def _largest_solid(shape):
     if _shape_volume(best) <= 1e-9:
         return shape
     return best
+
+
+def _keep_main_solids(
+    shape,
+    *,
+    expected: int,
+    min_vol_frac: float = 0.45,
+    ref_vols: list[float] | None = None,
+) -> list[Any] | None:
+    """Tras CUT oneshot: conserva los sólidos principales (descarta viruta de ranura)."""
+    solids = _list_solids(shape)
+    if not solids:
+        return None
+    scored = sorted(
+        (( _shape_volume(s), s) for s in solids),
+        key=lambda t: t[0],
+        reverse=True,
+    )
+    if expected <= 0:
+        expected = 1
+    mains = [s for v, s in scored[:expected] if v > 1e-6]
+    if len(mains) < expected:
+        return None
+    if ref_vols:
+        refs = sorted((float(v) for v in ref_vols if v > 1e-9), reverse=True)
+        got = sorted((_shape_volume(s) for s in mains), reverse=True)
+        if len(refs) >= expected and len(got) >= expected:
+            for rv, gv in zip(refs[:expected], got[:expected]):
+                if gv < rv * float(min_vol_frac):
+                    return None
+                if gv > rv + 1e-3:
+                    # No debería ganar volumen al grabar
+                    return None
+    return mains[:expected]
 
 
 def _bbox_xy(shape) -> tuple[float, float, float, float] | None:
@@ -292,6 +337,132 @@ def _shape_volume(shape) -> float:
         return 0.0
 
 
+def _build_mark_groove_tools(
+    segs: list[tuple[float, float, float, float]],
+    *,
+    thk_mm: float,
+    off_z: float,
+    width: float = MARK_WIDTH,
+    z_offset: float = MARK_Z_OFFSET,
+    rib_h: float = MARK_RIB_H,
+) -> list[Any]:
+    z_bottom = float(off_z) + float(thk_mm) + float(z_offset)
+    w = float(width)
+    if w <= 1e-9:
+        w = MARK_WIDTH
+    tools: list[Any] = []
+    for x1, y1, x2, y2 in segs:
+        tool = _mark_groove_tool(
+            x1, y1, x2, y2, z_bottom=z_bottom, height=float(rib_h), width=w
+        )
+        if tool is not None:
+            tools.append(tool)
+    return tools
+
+
+def _cut_multi(arguments: list[Any], tools: list[Any], *, fuzzy: float | None = 1e-5):
+    """
+    Un solo boolean CUT multi-objeto:
+    arguments (piezas) − tools (ranuras), sin meter todo en un Compound.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.TopTools import TopTools_ListOfShape
+
+    if not arguments or not tools:
+        return None
+    args = TopTools_ListOfShape()
+    for sh in arguments:
+        if sh is not None:
+            args.Append(sh)
+    tls = TopTools_ListOfShape()
+    for sh in tools:
+        if sh is not None:
+            tls.Append(sh)
+    if args.Size() < 1 or tls.Size() < 1:
+        return None
+
+    cut = BRepAlgoAPI_Cut()
+    cut.SetArguments(args)
+    cut.SetTools(tls)
+    if fuzzy is not None and fuzzy > 0:
+        try:
+            cut.SetFuzzyValue(float(fuzzy))
+        except Exception:
+            pass
+    try:
+        cut.SetRunParallel(True)
+    except Exception:
+        pass
+    cut.Build()
+    if not cut.IsDone():
+        return None
+    return cut.Shape()
+
+
+def _engrave_marks_oneshot_multibody(
+    solids: list[Any],
+    segs: list[tuple[float, float, float, float]],
+    *,
+    thk_mm: float,
+    off_z: float,
+    width: float = MARK_WIDTH,
+    z_offset: float = MARK_Z_OFFSET,
+    rib_h: float = MARK_RIB_H,
+) -> tuple[list[Any] | None, str]:
+    """
+    Todo el marcaje del multibody en UN solo boolean CUT multi-arg:
+    [pieza1..N] − [ranura1..M]  (una Build(), sin compound destructivo).
+    """
+    bodies = [s for s in solids if s is not None]
+    if not bodies:
+        return None, "sin_solidos"
+    if not segs:
+        return bodies, "sin_marks"
+
+    tools = _build_mark_groove_tools(
+        segs,
+        thk_mm=thk_mm,
+        off_z=off_z,
+        width=width,
+        z_offset=z_offset,
+        rib_h=rib_h,
+    )
+    if not tools:
+        return bodies, "sin_tools"
+
+    ref_vols = [_shape_volume(s) for s in bodies]
+    try:
+        raw = _cut_multi(bodies, tools, fuzzy=1e-5)
+    except Exception as exc:
+        return None, f"cut_multi_exc:{exc}"
+    if raw is None:
+        # Fallback histórico: compound (suele destruir piezas; solo último recurso)
+        try:
+            body = bodies[0] if len(bodies) == 1 else _compound(bodies)
+            tool = tools[0] if len(tools) == 1 else _compound(tools)
+            raw = _cut(body, tool, parallel=True)
+        except Exception as exc:
+            return None, f"cut_fail:{exc}"
+        if raw is None:
+            return None, "cut_fail"
+
+    kept = _keep_main_solids(
+        raw, expected=len(bodies), min_vol_frac=0.50, ref_vols=ref_vols
+    )
+    if kept is None:
+        # A veces el BOP deja sólidos válidos pero el score de volumen falla
+        # por orden; aceptar top-N si la suma cae poco.
+        after = sorted(_list_solids(raw), key=_shape_volume, reverse=True)
+        top = after[: len(bodies)]
+        if len(top) == len(bodies):
+            v0 = sum(ref_vols)
+            v1 = sum(_shape_volume(s) for s in top)
+            if v0 > 1e-6 and (0.50 * v0) <= v1 <= (v0 + 1e-3):
+                return top, f"oneshot_ok_sum tools={len(tools)} solids={len(top)}"
+        return None, f"cut_invalido_volumen after={len(_list_solids(raw) if raw else [])}"
+    return kept, f"oneshot_ok tools={len(tools)} solids={len(kept)}"
+
+
 def _engrave_marks_on_solid(
     solid,
     segs: list[tuple[float, float, float, float]],
@@ -306,23 +477,20 @@ def _engrave_marks_on_solid(
     """
     Boolean CUT de ranuras MARK (ENGRAVE FreeCAD).
     Lotes de `chunk` como generador_verde._apply_imprint_ribbons_on_solid.
+    chunk<=0 → un solo compound con todas las ranuras de la pieza.
     """
     if solid is None or not segs:
         return solid
-    z_bottom = float(off_z) + float(thk_mm) + float(z_offset)
     out = solid
 
-    w = float(width)
-    if w <= 1e-9:
-        w = MARK_WIDTH
-
-    tools: list[Any] = []
-    for x1, y1, x2, y2 in segs:
-        tool = _mark_groove_tool(
-            x1, y1, x2, y2, z_bottom=z_bottom, height=float(rib_h), width=w
-        )
-        if tool is not None:
-            tools.append(tool)
+    tools = _build_mark_groove_tools(
+        segs,
+        thk_mm=thk_mm,
+        off_z=off_z,
+        width=width,
+        z_offset=z_offset,
+        rib_h=rib_h,
+    )
     if not tools:
         return solid
 
@@ -348,6 +516,12 @@ def _engrave_marks_on_solid(
             return trial
         except Exception:
             return None
+
+    # Un movimiento: todas las ranuras de la pieza en un compound.
+    if int(chunk or 0) <= 0:
+        tool_shape = tools[0] if len(tools) == 1 else _compound(tools)
+        got = _try_cut(out, tool_shape)
+        return got if got is not None else solid
 
     step = max(1, int(chunk or 100))
     for i in range(0, len(tools), step):
@@ -668,15 +842,24 @@ def build_freecad_like_shapes(
     origen: str | None = None,
     mark_mode: str = "ENGRAVE",
     apply_placement: bool = True,
+    mark_meta: dict | None = None,
 ) -> tuple[Any | None, list[Any], tuple[float, float, float, float] | None]:
     """
-    Sólidos CUT_OUTER − INNER + ENGRAVE por pieza (rápido).
+    Sólidos CUT_OUTER − INNER + ENGRAVE.
+    mark_mode:
+      ENGRAVE / ENGRAVE_CHUNK — por pieza en lotes (compat FreeCAD)
+      ENGRAVE_ONESHOT / ONESHOT — todo el marcaje del multibody en 1 boolean
+      ENGRAVE_PIECE_ONESHOT — 1 boolean por pieza (todas sus ranuras juntas)
     Ancla TR/BR + offset al final si apply_placement.
     """
     ensure_ocp()
 
     mode = str(mark_mode or "ENGRAVE").strip().upper()
     if mode in ("CUT", "GROOVE", "BOOLEAN", "CARVE", "REAL"):
+        mode = "ENGRAVE"
+    oneshot = mode in ("ENGRAVE_ONESHOT", "ONESHOT", "MULTI_ONESHOT", "ONESHOT_MULTI")
+    piece_oneshot = mode in ("ENGRAVE_PIECE_ONESHOT", "PIECE_ONESHOT")
+    if oneshot or piece_oneshot:
         mode = "ENGRAVE"
 
     outer_solids = []
@@ -702,21 +885,52 @@ def build_freecad_like_shapes(
 
     segs = list(geom.mark_segs)
     solids: list[Any] = []
+    engrave_note = "skip"
     if mode == "ENGRAVE" and segs:
-        for sh in final_parts:
-            if sh is None:
-                continue
-            bb = _bbox_xy(sh)
-            piece_segs = (
-                [s for s in segs if bb and _seg_hits_bbox(s, bb)] if bb else list(segs)
+        base_parts = [sh for sh in final_parts if sh is not None]
+        if oneshot:
+            got, engrave_note = _engrave_marks_oneshot_multibody(
+                base_parts, segs, thk_mm=thk_mm, off_z=0.0
             )
-            solids.append(
-                _engrave_marks_on_solid(
-                    sh, piece_segs, thk_mm=thk_mm, off_z=0.0
+            if got is not None:
+                solids = got
+            else:
+                # Fallback: 1 boolean por pieza (sigue siendo un solo compound de ranuras/pieza)
+                engrave_note = f"fallback_piece_oneshot ({engrave_note})"
+                for sh in base_parts:
+                    bb = _bbox_xy(sh)
+                    piece_segs = (
+                        [s for s in segs if bb and _seg_hits_bbox(s, bb)]
+                        if bb
+                        else list(segs)
+                    )
+                    solids.append(
+                        _engrave_marks_on_solid(
+                            sh, piece_segs, thk_mm=thk_mm, off_z=0.0, chunk=0
+                        )
+                    )
+        else:
+            chunk = 0 if piece_oneshot else 100
+            engrave_note = "piece_oneshot" if piece_oneshot else "piece_chunk100"
+            for sh in base_parts:
+                bb = _bbox_xy(sh)
+                piece_segs = (
+                    [s for s in segs if bb and _seg_hits_bbox(s, bb)]
+                    if bb
+                    else list(segs)
                 )
-            )
+                solids.append(
+                    _engrave_marks_on_solid(
+                        sh, piece_segs, thk_mm=thk_mm, off_z=0.0, chunk=chunk
+                    )
+                )
     else:
         solids = [sh for sh in final_parts if sh is not None]
+
+    if mark_meta is not None:
+        mark_meta["engrave_note"] = engrave_note
+        mark_meta["mark_segs"] = len(segs)
+        mark_meta["solids"] = len(solids)
 
     anchor_bb = _anchor_bbox_xy(geom, solids, thk_mm)
 
@@ -785,6 +999,7 @@ def export_dxf_to_step_freecad_batch(
         # Forzar grabado: curvas sueltas rompen multibody en Inventor
         mode = "ENGRAVE"
 
+    mark_meta: dict = {}
     parts, solids, anchor_bb = build_freecad_like_shapes(
         geom,
         thk_mm=thk_mm,
@@ -794,6 +1009,7 @@ def export_dxf_to_step_freecad_batch(
         origen=origen,
         mark_mode=mode,
         apply_placement=True,
+        mark_meta=mark_meta,
     )
     if parts is None and not solids:
         raise RuntimeError("No se generaron sólidos de CUT_OUTER")
@@ -843,6 +1059,7 @@ def export_dxf_to_step_freecad_batch(
         "solids": len(solids or []),
         "include_plate": bool(include_plate),
         "origen": str(origen or ""),
+        "engrave_note": mark_meta.get("engrave_note", ""),
     }
 
 
@@ -934,10 +1151,18 @@ def export_dxf_to_step_robot_camas(
 
 
 def thickness_mm_from_dxf_name(name: str, default_mm: float = 6.35) -> float:
-    """Parsea NESTING_0.25_... → 0.25 in en mm."""
+    """Parsea calibre en pulgadas del nombre DXF → mm.
+
+    Soporta:
+      NESTING_0.25_W.O. ...
+      SWO-001_0.25_SWO-001-H1.dxf
+    """
     import re
 
-    m = re.search(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", str(name), re.I)
+    text = str(name or "")
+    m = re.search(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", text, re.I)
+    if not m:
+        m = re.search(r"SWO[-\s]*\d+[_\s-]+([0-9]*\.?[0-9]+)", text, re.I)
     if not m:
         return float(default_mm)
     try:

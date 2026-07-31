@@ -4,21 +4,23 @@ Nesting 1D para largos de cobre (CU).
 - Orientación exacta elegida en PARTS: el empaquetador no vuelve a girar la pieza.
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Separación 3/8" entre piezas > umbral de largo (eje X del DXF); piezas ≤ umbral sin separación
-  salvo que ≥80% de la barra sea de un solo tipo (cortas o largas), en cuyo caso predomina
-  sin gap o con gap para toda la barra. Perfil relieve/Z (escalón/diagonal) fuerza sin_gap,
-  se prioriza al inicio y NUNCA va a RTZCU (si no cabe en ≤114\", abre barra nueva).
-  Rectángulos con orilla o laminas verticales exactas SÍ pueden ir a RTZCU: además se
-  permiten en la cola de una barra relieve/Z (mismo ancho) para llenar el sobrante hasta
-  144\" con gap (esas piezas se marcan cu_zona_rtz). No al revés: Z no se mete en barras
-  solo-orilla. Si una barra sin_gap de solo verticales/orilla rebasa 114\", el tramo
-  sobrante también es RTZCU. Cada pieza usa su tira objetivo (exacta o la mínima del
-  catálogo); no se sube 4"/5" a 6" solo porque el lote ya abrió una tira más ancha.
-  Si el RTZCU con gap no cabe hasta 144", las sobrantes abren barra(s) nueva(s).
-- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK
-- sin_gap (pegadas): solo DXF — CUT_OUTER + CUT_INNER + MARK + BAR_START (sin Plate, CUT_CU ni 3D)
-- con_gap: CUT_OUTER cerrado por pieza + STEP (sin CUT_CU ni líneas divisorias)
-  (+ marcador vertical inicio barra en export de hoja).
+- Gap: 3/8" siempre entre piezas normales. Sin umbral por largo.
+  Excepciones sin_gap (independiente del largo):
+  1) Perfil relieve/Z (escalón/diagonal) — auto por geometría.
+  2) Pieza marcada especial en PARTS (`cu_especial_vertical`) — DXF vertical
+     sin MARK/CUT_INNER; export a AMADA/VERTICAL + AMADA/FIXTURA (solo 5").
+  Relieve/Z y especiales se priorizan al inicio y NUNCA van a RTZCU (si no caben
+  en ≤114\", abren barra nueva). Amada (PARTS) y Z NUNCA comparten la misma barra:
+  la fixtura Amada es solo rectangular de 5\". Otras piezas rectangulares en
+  la misma barra Amada/Z van a RTZCU con gap.
+  Rectángulos con orilla o laminas verticales exactas SÍ pueden ir a RTZCU.
+  Cada pieza usa su tira objetivo (exacta o la mínima del catálogo).
+- Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK (con_gap / Amada).
+- sin_gap madre (Z): DXF vertical CyPTube + BAR_START.
+- especial PARTS: AMADA/VERTICAL (barra en rebanadas, sin MARK/INNER) +
+  AMADA/FIXTURA (1 DXF por pieza ESP. con barrenos + fixtura para Amada).
+  El RTZCU también exporta a DXF/STEP normal.
+- con_gap: CUT_OUTER cerrado por pieza + STEP.
 
 Cortes CUT_OUTER (láser):
   1. Pieza rectangular a ancho exacto de tira (ej. 4" en barra 4"): solo guillotinas verticales.
@@ -41,18 +43,38 @@ from .cu_inventory import es_placa_largo_cu
 from .efficiency_metrics import calcular_eficiencias_grupo
 
 TOL_ANCHO_IN_MIN = 0.02  # ~1/50": DXF/medición (ej. 2.0015" sigue en tira 2")
+# Fixtura Amada actual: solo admite barras de exactamente 5" de ancho.
+AMADA_FIXTURA_ANCHO_IN = 5.0
+# Largo máximo del canal entre topes (fallback si no se puede leer el DXF).
+# El valor real se toma de modules.dxf_export.amada_fixture.get_amada_seat().width
+AMADA_FIXTURA_LARGO_MAX_IN = 35.33
 TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 
 
+def amada_fixtura_largo_max_in() -> float:
+    """Largo máximo del canal Amada (entre topes), en pulgadas."""
+    try:
+        from modules.dxf_export.amada_fixture import get_amada_seat
+
+        w = float(get_amada_seat().width)
+        if w > 1.0:
+            return w
+    except Exception:
+        pass
+    return float(AMADA_FIXTURA_LARGO_MAX_IN)
+
+
 def _tol_ancho_mm() -> float:
     return float(TOL_ANCHO_IN_MIN) * 25.4
+
+
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
 DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
-# Piezas con largo DXF (eje X) hasta este umbral van sin separación por defecto (el usuario puede renestear con otro valor).
-LARGO_SIN_SEPARACION_CU_IN = 10.0
-# Si ≥ este % de piezas de una barra son cortas (≤umbral) o largas (>umbral), aplica ese modo a toda la barra.
-MAYORIA_BARRA_CU_FRACCION = 0.80
+# Legacy: el umbral por largo ya no decide gap (siempre 3/8" salvo Z/especial).
+# Se conserva la constante/API por compatibilidad de renesteo y tests.
+LARGO_SIN_SEPARACION_CU_IN = 0.0
+MAYORIA_BARRA_CU_FRACCION = 0.80  # legacy; ya no se usa para decidir gap
 # Barras madre con menos de este avance en X se consideran "cola" para re-empaque conjunto.
 UMBRAL_COLA_LONGITUD_CU_FRAC = 0.80
 # Banda local junto a la frontera de rebanada donde vive el relieve (no todo el techo).
@@ -217,6 +239,7 @@ def _colocar_pieza_nativa(
         "rot_origin_cy": float(p_data.get("rot_origin_cy", 0.0) or 0.0),
         "corte_superior_mm": float(corte_superior_mm),
         "calibre_superior": bool(calibre_superior),
+        "cu_especial_vertical": bool(p_data.get("cu_especial_vertical")),
         "cu_forzar_sin_gap": bool(p_data.get("cu_forzar_sin_gap")),
         "cu_perfil_relieve": bool(
             p_data.get("cu_perfil_relieve", p_data.get("cu_forzar_sin_gap"))
@@ -654,8 +677,10 @@ def _pieza_cu_exime_separacion(
     item: dict,
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> bool:
-    """True si el largo DXF está dentro del umbral sin separación."""
-    return _largo_pieza_cu_in(item) <= max(0.0, float(largo_sin_separacion_in))
+    """Legacy no-op por largo. Ver _pieza_cu_forzar_sin_gap para exención real."""
+    _ = item
+    _ = largo_sin_separacion_in
+    return False
 
 
 def _exterior_item_cu(item: dict) -> list:
@@ -684,15 +709,19 @@ def _pieza_cu_es_relieve_z(item: dict) -> bool:
     return not _solo_cortes_guillotina_vertical(exterior)
 
 
+def _pieza_cu_es_especial_vertical(item: dict) -> bool:
+    """True si PARTS marcó la pieza para corte vertical sin gap (VERTICAL + AMADA)."""
+    return bool(item.get("cu_especial_vertical"))
+
+
 def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
     """
     True si la pieza fuerza sin_gap y queda excluida de RTZCU:
-    solo perfiles con relieve/escalón/Z (corte láser además de guillotina vertical).
-
-    Rectángulos con orilla superior (corte_superior / calibre_superior) ya no fuerzan
-    sin_gap: siguen la regla de gap por largo y pueden ir a RTZCU.
+    - perfiles con relieve/escalón/Z (auto), o
+    - piezas marcadas especiales en PARTS (cu_especial_vertical).
     """
-    # Flag legacy: solo respétalo si además hay perfil de relieve, o no hay geometría.
+    if _pieza_cu_es_especial_vertical(item):
+        return True
     exterior = _exterior_item_cu(item)
     if exterior:
         return _pieza_cu_es_relieve_z(item)
@@ -702,47 +731,67 @@ def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
 
 
 def _marcar_forzar_sin_gap(item: dict) -> dict:
-    """Calcula y fija cu_forzar_sin_gap (solo relieve/Z)."""
-    out = dict(item) if not isinstance(item, dict) else item
-    flag = _pieza_cu_forzar_sin_gap(item)
-    if item.get("cu_forzar_sin_gap") is not flag or "cu_forzar_sin_gap" not in item:
-        out = dict(item)
-        out["cu_forzar_sin_gap"] = bool(flag)
-        out["cu_perfil_relieve"] = bool(flag)
-    elif "cu_perfil_relieve" not in item:
-        out = dict(item)
-        out["cu_perfil_relieve"] = bool(flag)
+    """Fija cu_forzar_sin_gap, cu_perfil_relieve y conserva cu_especial_vertical."""
+    out = dict(item)
+    especial = _pieza_cu_es_especial_vertical(item)
+    exterior = _exterior_item_cu(item)
+    relieve = _pieza_cu_es_relieve_z(item) if exterior else bool(item.get("cu_perfil_relieve"))
+    flag = bool(especial or relieve)
+    out["cu_especial_vertical"] = bool(especial)
+    out["cu_perfil_relieve"] = bool(relieve)
+    out["cu_forzar_sin_gap"] = flag
     return out
 
 
 def _familia_corte_cu(item: dict) -> str:
-    """Familias de corte: relieve/Z vs resto (vertical/orilla)."""
-    return "sin_gap_laser" if _pieza_cu_forzar_sin_gap(item) else "guillotina"
+    """Familias de corte: Amada (PARTS), relieve/Z, o guillotina rectangular.
+
+    Amada y Z NUNCA comparten barra: la fixtura Amada es solo rectangular.
+    """
+    if _pieza_cu_es_especial_vertical(item):
+        return "amada"
+    if _pieza_cu_es_relieve_z(item) or (
+        bool(item.get("cu_perfil_relieve")) and not _exterior_item_cu(item)
+    ):
+        return "sin_gap_laser"
+    if _pieza_cu_forzar_sin_gap(item) and not _pieza_cu_es_especial_vertical(item):
+        # Legacy forzar sin especial → tratar como Z.
+        return "sin_gap_laser"
+    return "guillotina"
 
 
 def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
-    """Relieve/Z juntos; orilla/vertical juntos; orilla/vertical puede rellenar cola de Z.
+    """Amada sola; Z sola; rectángulares pueden rellenar cola RTZ de Amada o de Z.
 
-    No se permite meter relieve/Z en una barra que ya solo tiene guillotina.
-    Una vez hay Z + orilla, siguen pudiendo entrar más orillas/verticales.
+    Nunca se mezclan piezas Amada (PARTS) con relieve/Z en la misma barra.
     """
     colocados = barra.get("colocados") or []
     if not colocados:
         return True
     fam_item = _familia_corte_cu(item)
     fams = {_familia_corte_cu(c[0]) for c in colocados}
+
+    if fam_item == "amada":
+        # Solo barras Amada puras (aún sin cola rectangular).
+        return fams == {"amada"}
     if fam_item == "sin_gap_laser":
-        # Relieve/Z solo en barras sin piezas ortogonales aún.
+        # Solo barras Z puras.
         return fams == {"sin_gap_laser"}
-    # guillotina: sola, o rellenando / siguiendo cola de barra con relieve/Z.
+
+    # guillotina rectangular: sola, o cola RTZ de Amada XOR de Z.
+    if "amada" in fams and "sin_gap_laser" in fams:
+        return False
     if fams == {"guillotina"}:
         return True
-    if "sin_gap_laser" in fams:
+    if fams <= {"amada", "guillotina"}:
+        return True
+    if fams <= {"sin_gap_laser", "guillotina"}:
         return True
     return False
 
 
 def _barra_tiene_relieve_cu(colocados: List[tuple] | None) -> bool:
+    """True si la barra tiene piezas sin_gap forzado (Z o Amada) → cola a RTZCU."""
     return any(_pieza_cu_forzar_sin_gap(c[0]) for c in (colocados or []))
 
 
@@ -754,15 +803,16 @@ def _gap_mm_entre_piezas_cu(
     *,
     tiene_relieve: bool,
 ) -> float:
-    """Gap entre piezas; en barra relieve la cola ortogonal siempre lleva separación."""
+    """Gap entre piezas; en barra Z/Amada la cola ortogonal siempre lleva separación."""
     if prev_item is None or next_item is None:
         return 0.0
     if tiene_relieve:
-        prev_z = _pieza_cu_forzar_sin_gap(prev_item)
-        next_z = _pieza_cu_forzar_sin_gap(next_item)
-        if prev_z and next_z:
+        prev_sg = _pieza_cu_forzar_sin_gap(prev_item)
+        next_sg = _pieza_cu_forzar_sin_gap(next_item)
+        # Misma familia sin_gap (Amada↔Amada o Z↔Z): pegadas.
+        if prev_sg and next_sg:
             return 0.0
-        # Z→orilla u orilla→orilla: gap (van / siguen en RTZCU).
+        # sin_gap → rectangular u orilla→orilla: gap (van / siguen en RTZCU).
         return max(0.0, float(separacion_in or 0.0)) * 25.4
     return _gap_mm_segun_modo(modo, prev_item, next_item, separacion_in)
 
@@ -777,28 +827,16 @@ def _modo_separacion_barra(
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> str:
     """
-    Mayoría ≥80% en la barra:
-    - cortas (≤ umbral) → sin_gap en toda la barra
-    - largas (> umbral) → con_gap entre todas las piezas
-    - si no hay mayoría → separación entre todas las piezas (incl. larga+corta)
-    Piezas con relieve/Z fuerzan sin_gap (toda la barra).
-    Orilla rectangular ya no fuerza sin_gap (sigue mayoría 80% / hibrido).
+    Gap siempre (con_gap) salvo que la barra tenga relieve/Z o pieza especial PARTS
+    → sin_gap en madre (≤114\") y compañeros ortogonales a RTZCU con gap.
+    El parámetro largo_sin_separacion_in se ignora (API legacy).
     """
-    n = len(items or [])
-    if n <= 0:
-        return "hibrido"
+    _ = largo_sin_separacion_in
+    if not items:
+        return "con_gap"
     if any(_pieza_cu_forzar_sin_gap(it) for it in items):
         return "sin_gap"
-    umbral = max(1, math.ceil(n * MAYORIA_BARRA_CU_FRACCION))
-    n_cortas = sum(
-        1 for it in items if _pieza_cu_exime_separacion(it, largo_sin_separacion_in)
-    )
-    n_largas = n - n_cortas
-    if n_cortas >= umbral:
-        return "sin_gap"
-    if n_largas >= umbral:
-        return "con_gap"
-    return "hibrido"
+    return "con_gap"
 
 
 def _gap_mm_segun_modo(
@@ -1027,14 +1065,13 @@ def _recalcular_colocados_barra(
     largo_mm: float,
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[List[tuple], float, str]:
-    """Recalcula posiciones X según mayoría 80% o separación uniforme en barra mixta.
+    """Recalcula posiciones X: gap fijo 3/8" salvo Z/especial (sin_gap madre).
 
     La barra madre conserva su modo (sin_gap / con_gap). Si es sin_gap y rebasa
-    114\", el tramo sobrante se separa como RTZCU con gap por defecto (ver
-    construir_hoja_rtz_cu_virtual), pero la madre NO cambia de modo.
+    114\", el tramo sobrante se separa como RTZCU con gap por defecto.
     """
     if not colocados:
-        return colocados, 0.0, "hibrido"
+        return colocados, 0.0, "con_gap"
 
     items = [c[0] for c in colocados]
     modo = _modo_separacion_barra(items, largo_sin_separacion_in)
@@ -1186,12 +1223,19 @@ def empaquetar_largos_cu(
             item["marks"] = affinity.translate(marks_r, -mx0, -my0)
         items.append(item)
 
-    # Agrupa por ancho objetivo; laser-sin-gap juntos; dentro, largas primero.
+    # Agrupa por ancho; Amada y Z no se mezclan (familias aparte); largas primero.
+    def _prio_familia(x: dict) -> int:
+        fam = _familia_corte_cu(x)
+        if fam == "amada":
+            return 0
+        if fam == "sin_gap_laser":
+            return 1
+        return 2
+
     items.sort(
         key=lambda x: (
             float(x["barra_objetivo_in"]),
-            0 if _pieza_cu_forzar_sin_gap(x) else 1,
-            0 if not _pieza_cu_exime_separacion(x, largo_umbral) else 1,
+            _prio_familia(x),
             -x["len_mm"],
         )
     )
@@ -1290,6 +1334,9 @@ def empaquetar_largos_cu(
         area_usada = 0.0
         requiere_corte_sup = False
         tiene_relieve_barra = _barra_tiene_relieve_cu(barra.get("colocados"))
+        tiene_especial_barra = any(
+            _pieza_cu_es_especial_vertical(c[0]) for c in (barra.get("colocados") or [])
+        )
 
         piezas_reales: List[dict] = []
         for p_data, x_mm, y_mm in barra["colocados"]:
@@ -1300,7 +1347,7 @@ def empaquetar_largos_cu(
                 corte_superior_mm=float(p_data.get("corte_superior_mm") or 0.0),
                 calibre_superior=bool(p_data.get("calibre_superior")),
             )
-            # Orilla/vertical en cola de barra Z → RTZCU (no DXF madre CyPTube).
+            # Orilla/vertical en cola de barra Z/especial → RTZCU (no DXF madre).
             if tiene_relieve_barra and not _pieza_cu_forzar_sin_gap(p_data):
                 p_final["cu_zona_rtz"] = True
                 p_final["cu_sin_separacion"] = False
@@ -1379,7 +1426,8 @@ def empaquetar_largos_cu(
                 "separacion_cu_in": max(0.0, float(separacion_in or 0.0)),
                 "largo_sin_separacion_cu_in": largo_umbral,
                 "mayoria_barra_cu_frac": MAYORIA_BARRA_CU_FRACCION,
-                "cu_modo_separacion_barra": barra.get("cu_modo_separacion", "hibrido"),
+                "cu_modo_separacion_barra": barra.get("cu_modo_separacion", "con_gap"),
+                "cu_barra_especial": bool(tiene_especial_barra),
                 "requiere_corte_superior": requiere_corte_sup,
                 "ignorar_deduccion": True,
             }
@@ -1492,6 +1540,29 @@ def _pack_piezas_reales_hoja_cu(hoja: dict) -> List[dict]:
     return out
 
 
+def _familia_hoja_madre_cu(hoja: dict) -> str:
+    """Familia dominante de una barra madre para no fusionar Amada con Z/normal."""
+    from .sheet_integrity import piezas_reales_en_hoja
+
+    fams = set()
+    for p in piezas_reales_en_hoja(hoja):
+        if bool(p.get("cu_especial_vertical")):
+            fams.add("amada")
+        elif bool(p.get("cu_perfil_relieve")) or (
+            bool(p.get("cu_forzar_sin_gap")) and not bool(p.get("cu_especial_vertical"))
+        ):
+            fams.add("sin_gap_laser")
+        else:
+            fams.add("guillotina")
+    if not fams:
+        return "guillotina"
+    if "amada" in fams:
+        return "amada"
+    if "sin_gap_laser" in fams:
+        return "sin_gap_laser"
+    return "guillotina"
+
+
 def consolidar_barras_cu_baja_ocupacion(
     hojas: List[dict],
     placas_ok: List[dict],
@@ -1504,8 +1575,8 @@ def consolidar_barras_cu_baja_ocupacion(
 ) -> List[dict]:
     """Re-empaqueta juntas varias barras madre del mismo ancho con poco avance en X.
 
-    Típico tras derrame RTZCU: dos barras ~50% que caben mejor en una (o dos
-    con RTZCU) si se nestean las piezas en un solo lote.
+    Solo fusiona barras de la misma familia (Amada / Z / rectangular). Así la
+    cola post-RTZ no mezcla fixtura Amada con relieve/Z.
     """
     _log = dbg_fn or (lambda _msg: None)
     out = list(hojas or [])
@@ -1521,16 +1592,20 @@ def consolidar_barras_cu_baja_ocupacion(
     umbral = max(0.35, min(0.95, float(umbral_long_frac)))
 
     for pasada in range(max(1, int(max_pasadas or 1))):
-        por_ancho: Dict[float, List[tuple[int, dict, float]]] = {}
+        # clave = (ancho_mm_redondeado, familia)
+        por_grupo: Dict[tuple, List[tuple[int, dict, float]]] = {}
         for i, h in enumerate(out):
             if not _es_hoja_madre_cu(h):
                 continue
             uso = _uso_longitudinal_hoja_cu(h)
-            key = round(float(h.get("placa_h") or 0.0), 1)
-            por_ancho.setdefault(key, []).append((i, h, uso))
+            key = (
+                round(float(h.get("placa_h") or 0.0), 1),
+                _familia_hoja_madre_cu(h),
+            )
+            por_grupo.setdefault(key, []).append((i, h, uso))
 
         fusion_hecha = False
-        for _ancho_key, grupo in por_ancho.items():
+        for (ancho_key, fam_key), grupo in por_grupo.items():
             bajas = [(i, h, u) for i, h, u in grupo if u < umbral - 1e-6]
             if len(bajas) < 2:
                 continue
@@ -1561,8 +1636,8 @@ def consolidar_barras_cu_baja_ocupacion(
                     continue
 
             _log(
-                f"[CU-LARGOS][COLA] pasada={pasada + 1} | ancho={_ancho_key:.1f}mm | "
-                f"barras {len(quitar)} → {len(nuevas)} | piezas={len(pack)}"
+                f"[CU-LARGOS][COLA] pasada={pasada + 1} | ancho={ancho_key:.1f}mm | "
+                f"fam={fam_key} | barras {len(quitar)} → {len(nuevas)} | piezas={len(pack)}"
             )
             out = [h for k, h in enumerate(out) if k not in quitar]
             out.extend(nuevas)
