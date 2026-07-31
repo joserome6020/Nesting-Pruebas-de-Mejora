@@ -3,11 +3,13 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
 #include "clipper2/clipper.h"
 #include "clipper2/clipper.minkowski.h"
+#include "cuda/nest_accel_raster.hpp"
 
 namespace arga {
 namespace {
@@ -462,6 +464,8 @@ bool colocar_pieza_burke(
     double mejor_py = 0.0;
     double mejor_score = std::numeric_limits<double>::infinity();
 
+    std::optional<cuda::DenseMask> cuda_board;
+
     for (const auto& var : variaciones) {
         std::vector<std::pair<double, double>> anclajes;
         anclajes.emplace_back(margin_px, margin_px);
@@ -473,6 +477,10 @@ bool colocar_pieza_burke(
             append_nfp_candidates(anclajes, state.fijas_buff_paths[idx], var.outer_norm);
         }
 
+        std::vector<std::pair<double, double>> cand_xy;
+        cand_xy.reserve(anclajes.size());
+        std::vector<std::pair<double, double>> cand_pxpy;
+        cand_pxpy.reserve(anclajes.size());
         for (const auto& anclaje : anclajes) {
             double px = anclaje.first - var.b_minx;
             double py = anclaje.second - var.b_miny;
@@ -482,6 +490,28 @@ bool colocar_pieza_burke(
                 || py + var.b_maxy > h_placa - margin_px + 0.1) {
                 continue;
             }
+            cand_xy.emplace_back(px, py);
+            cand_pxpy.emplace_back(px, py);
+        }
+        const auto rejected = [&]() -> std::vector<std::uint8_t> {
+            if (!cuda::filter_worthwhile(cand_xy.size(), state.fijas_buff_paths.size())) {
+                return {};
+            }
+            if (!cuda_board.has_value()) {
+                cuda_board = cuda::rasterize_union_occupancy(
+                    state.fijas_buff_paths, w_placa, h_placa, 8.0);
+            }
+            return cuda::filter_against_board(
+                *cuda_board, to_paths_d(var.poly_buff), cand_xy, 8.0);
+        }();
+
+        for (std::size_t ci = 0; ci < cand_pxpy.size(); ++ci) {
+            if (!rejected.empty() && rejected[ci] != 0) {
+                continue;
+            }
+            double px = cand_pxpy[ci].first;
+            double py = cand_pxpy[ci].second;
+
             if (comprobar_colision(px, py, var, limit, state.fijas_bounds, state.fijas_buff_paths)) {
                 continue;
             }

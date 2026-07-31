@@ -5,6 +5,7 @@ import os
 
 from .nest_engine_context import (
     DEFAULT_STEEL_ENGINE_ID,
+    ENGINE_ARGA_APEX,
     ENGINE_ARGA_FORCE,
     ENGINE_ARGA_LITE,
     ENGINE_BURKE_BLF,
@@ -125,6 +126,36 @@ ENGINE_BASE_PROFILES: dict[str, dict] = {
         "lock_profile": True,
         "pack_explore_then_refine": True,
     },
+    # Máxima calidad+velocidad posible con el kernel actual:
+    # explore ortogonal-fino → refine 5° (chicas; C++ ya fuerza 90° en estructurales).
+    ENGINE_ARGA_APEX: {
+        "mc_iterations": 3,
+        "mc_lookahead_iterations": 2,
+        "lookahead": True,
+        "refine_hoja": True,
+        "accesorios_retries": 6,
+        "refinar_intentos": 4,
+        "continual_optimization": False,
+        "rotation_step_deg": 5,
+        "apex_explore_rot_deg": 15,
+        "apex_explore_gens": 1,
+        "use_nfp": True,
+        "use_genetic_algorithm": True,
+        "ga_population": 10,
+        "ga_generations": 2,
+        "ga_mutation_rate": 0.12,
+        "part_in_part": True,
+        "morphology_gap_fill": True,
+        "open_cavity_fill": True,
+        "fast_first": False,
+        # 1 semilla: 2 en paralelo saturan CPU y el renesteo parece “colgado”.
+        "force_parallel_seeds": 1,
+        "apex_cavity_pass": False,
+        "apex_venom_polish": True,
+        "apex_cuda": True,
+        "lock_profile": True,
+        "pack_explore_then_refine": True,
+    },
     # Respaldo: MC clásico 3 pases explore→refine (rápido, decente).
     ENGINE_ARGA_LITE: {
         "mc_iterations": 3,
@@ -206,6 +237,12 @@ def get_engine_profile(engine_id: str | None = None) -> dict:
         else:
             base_pop = int(base.get("ga_population", 12) or 12)
             base["ga_population"] = max(base_pop, int(budget["ultra_population"]))
+
+    # APEX: 1 semilla, pop acotada (renesteo usable en minutos, no “colgado”).
+    if eid == ENGINE_ARGA_APEX:
+        base_pop = int(base.get("ga_population", 10) or 10)
+        base["ga_population"] = max(6, min(12, base_pop))
+        base["force_parallel_seeds"] = 1
 
     # Burke / Libnest: más iteraciones si hay CPU (sin pasar de 40).
     if eid in (ENGINE_BURKE_BLF, ENGINE_LIBNEST2D) and budget["nest_threads"] >= 12:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <random>
 #include <string>
@@ -38,6 +39,18 @@ struct SheetOut {
     double eficiencia = 0.0;
 };
 
+struct LabCudaMetrics {
+    bool enabled = false;
+    bool cuda_used = false;
+    std::size_t candidates_evaluated = 0;
+    std::size_t collisions = 0;
+    std::size_t h2d_bytes = 0;
+    std::size_t d2h_bytes = 0;
+    double h2d_ms = 0.0;
+    double kernel_ms = 0.0;
+    double d2h_ms = 0.0;
+};
+
 struct PackResult {
     SheetOut hoja;
     std::vector<PieceIn> restos;
@@ -65,6 +78,7 @@ struct TimelinePackResult {
     int mc_iteracion_ganadora = 0;
     std::string mc_orden_modo;
     std::vector<std::string> orden_piezas;
+    LabCudaMetrics cuda_screen;
 };
 
 constexpr int kMonteCarloIterationsDefault = 15;

@@ -8,6 +8,8 @@ from typing import Any, Callable, Iterable, Optional
 ENGINE_ARGA_FORCE = "arga_force"
 ENGINE_ARGA_BASE = "arga_base"  # alias legacy → FORCE
 ENGINE_ARGA_LITE = "arga_lite"
+ENGINE_ARGA_APEX = "arga_apex"
+ENGINE_ARGA_LAB_PILOT = "arga_lab_pilot"
 ENGINE_BURKE_BLF = "burke_blf"
 ENGINE_LIBNEST2D = "libnest2d"
 ENGINE_SVGNEST_ULTRA = "svgnest_ultra"
@@ -17,12 +19,16 @@ STEEL_ENGINE_IDS: tuple[str, ...] = (
     ENGINE_BURKE_BLF,
     ENGINE_LIBNEST2D,
     ENGINE_SVGNEST_ULTRA,
+    ENGINE_ARGA_APEX,  # calidad + velocidad (NFP fino + Venom)
     ENGINE_ARGA_LITE,  # al final: respaldo rápido / menor densidad
+    ENGINE_ARGA_LAB_PILOT,  # oculto: experimental; no operativo
 )
 
 # Menú diario / renest / FILES / SIM-LAB. Código de libnest2d intacto.
 # Reactivar en UI: ARGA_SHOW_LIBNEST2D=1
-UI_HIDDEN_STEEL_ENGINE_IDS: frozenset[str] = frozenset({ENGINE_LIBNEST2D})
+UI_HIDDEN_STEEL_ENGINE_IDS: frozenset[str] = frozenset(
+    {ENGINE_LIBNEST2D, ENGINE_ARGA_LAB_PILOT}
+)
 
 UI_STEEL_ENGINE_IDS: tuple[str, ...] = tuple(
     eid for eid in STEEL_ENGINE_IDS if eid not in UI_HIDDEN_STEEL_ENGINE_IDS
@@ -123,6 +129,9 @@ def is_engine_ui_visible(engine_id: str | None) -> bool:
     if key not in UI_HIDDEN_STEEL_ENGINE_IDS:
         return True
     raw = str(os.environ.get("ARGA_SHOW_LIBNEST2D", "")).strip().lower()
+    experimental = str(os.environ.get("ARGA_SHOW_EXPERIMENTAL_ENGINES", "")).strip().lower()
+    if key == ENGINE_ARGA_LAB_PILOT:
+        return experimental in ("1", "true", "yes", "on")
     return raw in ("1", "true", "yes", "on")
 
 
@@ -133,7 +142,16 @@ def iter_ui_steel_engine_ids() -> Iterable[str]:
         "yes",
         "on",
     )
-    return STEEL_ENGINE_IDS if show_hidden else UI_STEEL_ENGINE_IDS
+    show_experimental = str(
+        os.environ.get("ARGA_SHOW_EXPERIMENTAL_ENGINES", "")
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if show_hidden and show_experimental:
+        return STEEL_ENGINE_IDS
+    if show_hidden:
+        return tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_ARGA_LAB_PILOT)
+    if show_experimental:
+        return tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_LIBNEST2D)
+    return UI_STEEL_ENGINE_IDS
 
 
 def is_ultra_renest_accept_mode() -> bool:

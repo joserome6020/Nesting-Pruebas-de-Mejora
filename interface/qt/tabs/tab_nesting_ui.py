@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from interface.qt.nesting_canvas import VisorNesting
 from interface.qt.widgets.herinox_switch import HerinoxSwitch
+from interface.qt.widgets.nesting_ribbon import build_nesting_ribbon
 from interface.qt.dialogs.nesting_modals import abrir_modal_configuracion, abrir_modal_transferencia
 from interface.qt.layout_helpers import (
     finalize_splitter,
@@ -26,7 +27,7 @@ from interface.qt.layout_helpers import (
 )
 from interface.qt.theme import COLOR_GRIS_DARK, COLOR_TEXTO_TITULO, apply_herinox_combo, apply_push_button
 
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 PANEL_TOOLS_MIN_WIDTH = 234
 
 
@@ -83,7 +84,7 @@ NEST_TAB_INDEX = 3  # FILES=0, PARTS=1, SHEETS=2, NESTING=3
 
 
 def _nest_sidebar_width_from_tabbar(tab) -> int:
-    """Ancho del panel lista = borde derecho de la pestaña NESTING."""
+    """Ancho del panel lista = borde derecho de la pestaña NESTING (sin pad de colisión)."""
     tabview = getattr(getattr(tab, "app", None), "tabview", None)
     if tabview is None:
         return NEST_SIDEBAR_WIDTH_FALLBACK_PX
@@ -93,10 +94,14 @@ def _nest_sidebar_width_from_tabbar(tab) -> int:
     rect = bar.tabRect(NEST_TAB_INDEX)
     if rect.width() <= 0:
         return NEST_SIDEBAR_WIDTH_FALLBACK_PX
-    return max(280, int(rect.right()))
+    pad = getattr(tab, "_nest_tab_width_pad", None)
+    pad_w = int(pad.width()) if pad is not None else 0
+    return max(280, int(rect.right()) - max(0, pad_w))
 
 
 def apply_nest_sidebar_width(tab) -> None:
+    if getattr(tab, "_nest_sidebar_user_resized", False):
+        return
     splitter = getattr(tab, "_nest_splitter", None)
     if splitter is None:
         return
@@ -175,35 +180,10 @@ def build_tab_nesting_ui(tab) -> None:
     panel_der_wrap = QWidget()
     der_wrap_lay = QVBoxLayout(panel_der_wrap)
     der_wrap_lay.setContentsMargins(0, 0, 0, 0)
-    der_wrap_lay.setSpacing(6)
+    der_wrap_lay.setSpacing(0)
 
-    tab.frame_header_der = QFrame()
-    tab.frame_header_der.setObjectName("ToolbarStrip")
-    hdr = QHBoxLayout(tab.frame_header_der)
-    hdr.setContentsMargins(8, 6, 8, 6)
-    hdr.setSpacing(6)
-
-    def _btn(text, slot, bg=COLOR_GRIS_DARK, enabled=True):
-        b = QPushButton(text)
-        b.setFixedHeight(30)
-        apply_push_button(b, bg, font_size=11, padding="6px 12px")
-        b.setEnabled(enabled)
-        b.clicked.connect(slot)
-        hdr.addWidget(b)
-        return b
-
-    tab.btn_exportar = _btn("EXPORTAR DXF/STEP", tab.exportar_resultados_dxf)
-    tab.btn_ver_step = _btn("VER STEP", tab.abrir_visor_step)
-    tab.btn_ver_lotes = _btn("HISTORIAL DE W.O.", tab.reabrir_modal_escenarios)
-    tab.btn_costos = _btn("COSTOS DE ORDEN", lambda: __import__("interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]).abrir_modal_costos(tab))
-    tab.btn_nesting_largos = _btn("NESTEO DE LARGOS", tab.abrir_nesting_largos)
-    tab.btn_nest_sim_lab = _btn("LAB · COMPARAR", tab.abrir_nest_sim_lab)
-    tab.btn_config = _btn("CONFIGURACIÓN", lambda: abrir_modal_configuracion(tab))
-    tab.btn_pdf_nesting = _btn("PDF NESTING", tab.exportar_reporte_pdf_nesting)
-    tab.btn_editar_lote = _btn("EDITAR LOTE", tab.editar_lote_activo)
-    tab.btn_guardar_nest = _btn("GUARDAR NEST", tab.guardar_workspace_nesting)
-    tab.btn_abrir_nest = _btn("ABRIR NEST", tab.abrir_workspace_nesting)
-    hdr.addStretch()
+    # Cinta dentro del panel (no overlay sobre el QTabBar: eso deformaba las pestañas).
+    tab.frame_header_der = build_nesting_ribbon(tab)
     der_wrap_lay.addWidget(tab.frame_header_der)
 
     tab.panel_der = make_panel_dark()

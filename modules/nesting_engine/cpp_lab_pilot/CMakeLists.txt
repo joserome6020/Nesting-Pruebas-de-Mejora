@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(arga_nesting_cpp LANGUAGES CXX)
+project(arga_nesting_lab_pilot LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,9 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 include(CheckLanguage)
 
-option(ARGA_NEST_ENABLE_CUDA "Acelerador CUDA compartido para motores ANS" ON)
-set(ARGA_NEST_HAS_CUDA 0)
-if(ARGA_NEST_ENABLE_CUDA)
+option(ARGA_LAB_PILOT_ENABLE_CUDA "Acelerador CUDA opcional del escaneo raster" ON)
+set(ARGA_LAB_PILOT_HAS_CUDA 0)
+if(ARGA_LAB_PILOT_ENABLE_CUDA)
     if(WIN32 AND (NOT CMAKE_CUDA_COMPILER OR CMAKE_CUDA_COMPILER MATCHES "NOTFOUND"))
         file(
             GLOB _ARGA_CUDA_COMPILERS
@@ -39,10 +39,10 @@ if(ARGA_NEST_ENABLE_CUDA)
     if(CMAKE_CUDA_COMPILER)
         enable_language(CUDA)
         find_package(CUDAToolkit REQUIRED)
-        set(ARGA_NEST_HAS_CUDA 1)
-        message(STATUS "ARGA algorithm_cpp: CUDA nest accel enabled")
+        set(ARGA_LAB_PILOT_HAS_CUDA 1)
+        message(STATUS "ARGA lab_pilot: CUDA raster accelerator enabled")
     else()
-        message(STATUS "ARGA algorithm_cpp: CUDA Toolkit not found; CPU fallback")
+        message(STATUS "ARGA lab_pilot: CUDA Toolkit not found; CPU scan only")
     endif()
 endif()
 
@@ -59,47 +59,53 @@ set(CLIPPER2_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(CLIPPER2_TESTS OFF CACHE BOOL "" FORCE)
 set(CLIPPER2_USINGZ "OFF" CACHE STRING "" FORCE)
 
-set(CLIPPER2_CPP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/Clipper2/CPP")
+set(NESTING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+set(LAB_CPP_DIR "${NESTING_ROOT}/../../LAB SIMULATOR/engine/cpp")
+set(CLIPPER2_CPP_DIR "${NESTING_ROOT}/cpp/third_party/Clipper2/CPP")
+
+if(NOT EXISTS "${LAB_CPP_DIR}/packer_lab.cpp")
+    message(FATAL_ERROR "Fuentes de LAB SIMULATOR no encontradas.")
+endif()
 if(NOT EXISTS "${CLIPPER2_CPP_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR "Clipper2 no encontrado en ${CLIPPER2_CPP_DIR}. Ejecuta build_cpp_engine.ps1")
+    message(FATAL_ERROR "Clipper2 no encontrado.")
 endif()
 
 add_subdirectory("${CLIPPER2_CPP_DIR}" "${CMAKE_BINARY_DIR}/clipper2_cpp")
 
 set(
-    ARGA_NEST_SOURCES
-    bindings.cpp
-    packer.cpp
-    packer_base.cpp
-    packer_burke_blf.cpp
-    packer_libnest2d.cpp
-    packer_svgnest_ultra.cpp
-    cuda/nest_accel.cpp
-    cuda/nest_accel_raster.cpp
+    ARGA_LAB_PILOT_SOURCES
+    bindings_lab_pilot.cpp
+    "${LAB_CPP_DIR}/packer_lab.cpp"
+    cuda/lab_grid_filter.cpp
 )
-if(ARGA_NEST_HAS_CUDA)
-    list(APPEND ARGA_NEST_SOURCES cuda/nest_accel.cu)
+if(ARGA_LAB_PILOT_HAS_CUDA)
+    list(APPEND ARGA_LAB_PILOT_SOURCES cuda/lab_grid_filter.cu)
 endif()
 
-pybind11_add_module(algorithm_cpp MODULE ${ARGA_NEST_SOURCES})
-
-target_include_directories(
-    algorithm_cpp PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CLIPPER2_CPP_DIR}/Clipper2Lib/include
+pybind11_add_module(
+    algorithm_cpp_lab_pilot
+    MODULE
+    ${ARGA_LAB_PILOT_SOURCES}
 )
 
-target_link_libraries(algorithm_cpp PRIVATE Clipper2)
+target_include_directories(
+    algorithm_cpp_lab_pilot PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${LAB_CPP_DIR}"
+    "${CLIPPER2_CPP_DIR}/Clipper2Lib/include"
+)
+target_link_libraries(algorithm_cpp_lab_pilot PRIVATE Clipper2)
 target_compile_definitions(
-    algorithm_cpp PRIVATE
-    ARGA_NEST_HAS_CUDA=${ARGA_NEST_HAS_CUDA}
+    algorithm_cpp_lab_pilot PRIVATE
+    ARGA_LAB_PILOT=1
+    ARGA_LAB_PILOT_HAS_CUDA=${ARGA_LAB_PILOT_HAS_CUDA}
     _CRT_SECURE_NO_WARNINGS
 )
 
-if(ARGA_NEST_HAS_CUDA)
-    target_link_libraries(algorithm_cpp PRIVATE CUDA::cudart)
+if(ARGA_LAB_PILOT_HAS_CUDA)
+    target_link_libraries(algorithm_cpp_lab_pilot PRIVATE CUDA::cudart)
     set_target_properties(
-        algorithm_cpp PROPERTIES
+        algorithm_cpp_lab_pilot PROPERTIES
         CUDA_STANDARD 17
         CUDA_STANDARD_REQUIRED ON
         CUDA_SEPARABLE_COMPILATION OFF
@@ -110,14 +116,12 @@ endif()
 
 if(MSVC)
     target_compile_options(
-        algorithm_cpp PRIVATE
+        algorithm_cpp_lab_pilot PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:/O2 /EHsc /W3>
     )
 else()
     target_compile_options(
-        algorithm_cpp PRIVATE
+        algorithm_cpp_lab_pilot PRIVATE
         $<$<COMPILE_LANGUAGE:CXX>:-O3>
     )
 endif()
-
-install(TARGETS algorithm_cpp LIBRARY DESTINATION modules/nesting_engine)

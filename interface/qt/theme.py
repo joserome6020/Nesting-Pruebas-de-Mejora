@@ -514,6 +514,25 @@ QFrame#ToolbarStrip {{
     border: 1px solid {COLOR_BORDE_SUAVE};
     border-radius: 10px;
 }}
+QFrame#NestingRibbon {{
+    background: #1E293B;
+    border: 1px solid #0F172A;
+    border-radius: 6px;
+}}
+QFrame#NestingRibbon QFrame#RibbonPanel,
+QFrame#NestingRibbon QLabel {{
+    background: transparent;
+    color: #CBD5E1;
+}}
+QFrame#NestingRibbon QLabel#RibbonPanelTitle {{
+    color: #94A3B8;
+    padding: 10px 4px 1px 4px;
+    min-height: 16px;
+}}
+QFrame#NestingRibbon QFrame#RibbonSep {{
+    background: #475569;
+    border: none;
+}}
 """
 
 

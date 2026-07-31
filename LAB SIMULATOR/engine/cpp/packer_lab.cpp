@@ -2,10 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <memory>
 #include <unordered_map>
 
 #include "clipper2/clipper.h"
+
+#if defined(ARGA_LAB_PILOT)
+#include "cuda/lab_grid_filter.hpp"
+#endif
 
 namespace arga {
 namespace {
@@ -14,6 +20,9 @@ using namespace Clipper2Lib;
 
 constexpr double kScale = 1000.0;
 constexpr double kPi = 3.14159265358979323846;
+#if defined(ARGA_LAB_PILOT)
+constexpr std::size_t kCudaMinOffsets = 2048;
+#endif
 
 struct Bounds {
     double minx = 0.0;
@@ -22,10 +31,38 @@ struct Bounds {
     double maxy = 0.0;
 };
 
+struct RasterGrid {
+    double resolution;
+    int w, h;
+    int stride; // number of uint64_t words per row
+    std::vector<uint64_t> bits;
+
+    RasterGrid() : resolution(4.0), w(0), h(0), stride(0) {}
+    RasterGrid(double w_mm, double h_mm, double res_mm) {
+        resolution = res_mm;
+        w = static_cast<int>(std::ceil(w_mm / resolution)) + 1;
+        h = static_cast<int>(std::ceil(h_mm / resolution)) + 1;
+        stride = (w + 63) / 64;
+        bits.assign(h * stride, 0);
+    }
+
+    void set(int x, int y) {
+        if (x < 0 || x >= w || y < 0 || y >= h) return;
+        bits[y * stride + (x / 64)] |= (1ULL << (x % 64));
+    }
+
+    bool get(int x, int y) const {
+        if (x < 0 || x >= w || y < 0 || y >= h) return false;
+        return (bits[y * stride + (x / 64)] & (1ULL << (x % 64))) != 0;
+    }
+};
+
 struct Variation {
     std::vector<std::vector<Point2D>> poly;
     std::vector<std::vector<Point2D>> poly_buff;
     std::vector<std::vector<Point2D>> marks;
+    RasterGrid grid;
+    RasterGrid grid_buff;
     double w = 0.0;
     double h = 0.0;
     double b_minx = 0.0;
@@ -304,6 +341,128 @@ std::vector<std::vector<Point2D>> translate_rings_copy(
     return out;
 }
 
+
+RasterGrid rasterize_paths(const PathsD& paths_in, double w_mm, double h_mm, double res_mm) {
+    RasterGrid grid(w_mm, h_mm, res_mm);
+    if (paths_in.empty()) return grid;
+
+    Paths64 paths64;
+    paths64.reserve(paths_in.size());
+    for (const auto& path : paths_in) {
+        Path64 p64;
+        p64.reserve(path.size());
+        for (const auto& pt : path) {
+            p64.emplace_back(std::round(pt.x * kScale), std::round(pt.y * kScale));
+        }
+        paths64.push_back(std::move(p64));
+    }
+
+    for (int y = 0; y < grid.h; ++y) {
+        for (int x = 0; x < grid.w; ++x) {
+            double px = x * res_mm + res_mm * 0.5;
+            double py = y * res_mm + res_mm * 0.5;
+            Point64 pt(std::round(px * kScale), std::round(py * kScale));
+            
+            int wind_cnt = 0;
+            for (const auto& p64 : paths64) {
+                if (PointInPolygon(pt, p64) != PointInPolygonResult::IsOutside) {
+                    wind_cnt++;
+                }
+            }
+            if (wind_cnt % 2 != 0) {
+                grid.set(x, y);
+            }
+        }
+    }
+    return grid;
+}
+
+bool grid_collide(const RasterGrid& board, const RasterGrid& piece, int board_x, int board_y) {
+    if (board_x < 0 || board_y < 0 || board_x + piece.w > board.w || board_y + piece.h > board.h) {
+        return true; 
+    }
+    int shift = board_x % 64;
+    int word_offset = board_x / 64;
+    
+    for (int y = 0; y < piece.h; ++y) {
+        const uint64_t* p_row = &piece.bits[y * piece.stride];
+        const uint64_t* b_row = &board.bits[(board_y + y) * board.stride];
+        
+        uint64_t carry = 0;
+        for (int x_w = 0; x_w < piece.stride; ++x_w) {
+            uint64_t p_word = p_row[x_w];
+            uint64_t aligned_word = (p_word << shift) | carry;
+            carry = (shift == 0) ? 0 : (p_word >> (64 - shift));
+            
+            if (b_row[word_offset + x_w] & aligned_word) {
+                return true;
+            }
+        }
+        if (carry > 0 && (word_offset + piece.stride < board.stride)) {
+            if (b_row[word_offset + piece.stride] & carry) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+#if defined(ARGA_LAB_PILOT)
+std::vector<std::uint8_t> raster_to_dense(const RasterGrid& grid) {
+    std::vector<std::uint8_t> dense(
+        static_cast<std::size_t>(std::max(0, grid.w)) * static_cast<std::size_t>(std::max(0, grid.h)),
+        0);
+    if (dense.empty()) {
+        return dense;
+    }
+    for (int y = 0; y < grid.h; ++y) {
+        for (int x = 0; x < grid.w; ++x) {
+            if (grid.get(x, y)) {
+                dense[static_cast<std::size_t>(y) * grid.w + static_cast<std::size_t>(x)] = 1;
+            }
+        }
+    }
+    return dense;
+}
+
+void accumulate_cuda_stats(LabCudaMetrics& metrics, const lab_cuda::GridFilterStats& stats) {
+    metrics.enabled = true;
+    metrics.cuda_used = metrics.cuda_used || stats.cuda_used;
+    metrics.candidates_evaluated += stats.candidates_evaluated;
+    metrics.collisions += stats.collisions;
+    metrics.h2d_bytes += stats.h2d_bytes;
+    metrics.d2h_bytes += stats.d2h_bytes;
+    metrics.h2d_ms += stats.h2d_ms;
+    metrics.kernel_ms += stats.kernel_ms;
+    metrics.d2h_ms += stats.d2h_ms;
+}
+#endif
+
+void draw_piece_on_board(RasterGrid& board, const RasterGrid& piece, int board_x, int board_y) {
+    if (board_x < 0 || board_y < 0 || board_x + piece.w > board.w || board_y + piece.h > board.h) {
+        return; 
+    }
+    int shift = board_x % 64;
+    int word_offset = board_x / 64;
+    
+    for (int y = 0; y < piece.h; ++y) {
+        const uint64_t* p_row = &piece.bits[y * piece.stride];
+        uint64_t* b_row = &board.bits[(board_y + y) * board.stride];
+        
+        uint64_t carry = 0;
+        for (int x_w = 0; x_w < piece.stride; ++x_w) {
+            uint64_t p_word = p_row[x_w];
+            uint64_t aligned_word = (p_word << shift) | carry;
+            carry = (shift == 0) ? 0 : (p_word >> (64 - shift));
+            
+            b_row[word_offset + x_w] |= aligned_word;
+        }
+        if (carry > 0 && (word_offset + piece.stride < board.stride)) {
+            b_row[word_offset + piece.stride] |= carry;
+        }
+    }
+}
+
 std::vector<Variation> build_variaciones(
     const std::vector<std::vector<Point2D>>& poly_src,
     const std::vector<std::vector<Point2D>>& marks_src,
@@ -363,6 +522,15 @@ std::vector<Variation> build_variaciones(
         var.b_maxx = bb.maxx;
         var.b_maxy = bb.maxy;
         var.rot_deg = angulo;
+        
+        // Rasterize the variation for fast bitwise checking (resolution 4mm)
+        // Usar la figura SIN INFLAR para el grid de validación rápida. Así no aplicamos el kerf dos veces
+        PathsD exact_shifted = translate_copy(to_paths_d(poly_rot), -bb.minx, -bb.miny);
+        var.grid = rasterize_paths(exact_shifted, bb.maxx - bb.minx, bb.maxy - bb.miny, 4.0);
+
+        PathsD buff_shifted = translate_copy(to_paths_d(poly_buff), -bb.minx, -bb.miny);
+        var.grid_buff = rasterize_paths(buff_shifted, bb.maxx - bb.minx, bb.maxy - bb.miny, 4.0);
+        
         variaciones.push_back(std::move(var));
     }
     return variaciones;
@@ -513,7 +681,11 @@ void append_lab_concavity_anchors(
     if (n < 4) {
         return;
     }
-    for (size_t i = 0; i < n; ++i) {
+    // Mantener cada vértice cóncavo conserva el acomodo de piezas complejas.
+    // La aceleración del piloto viene de no duplicar ni trasladar dos veces
+    // las anclas finales, no de omitir geometría.
+    const size_t stride = 1;
+    for (size_t i = 0; i < n; i += stride) {
         const auto& p0 = ring[(i + n - 1) % n];
         const auto& p1 = ring[i];
         const auto& p2 = ring[(i + 1) % n];
@@ -556,6 +728,16 @@ void append_lab_anchors_from_placed(
     const Bounds b = bounds_of_rings(poly_placed);
     anclajes.emplace_back(px + b.maxx + 1.0, py + b.miny);
     anclajes.emplace_back(px + b.minx, py + b.maxy + 1.0);
+    
+    // Novedad: agregar anclajes a lo largo del bounding box para mejor empaquetado de piezas complejas
+    const double step = 200.0;
+    for (double y = b.miny; y < b.maxy; y += step) {
+        anclajes.emplace_back(px + b.maxx + 1.0, py + y);
+    }
+    for (double x = b.minx; x < b.maxx; x += step) {
+        anclajes.emplace_back(px + x, py + b.maxy + 1.0);
+    }
+
     append_lab_concavity_anchors(poly_placed.front(), px, py, anclajes, w_placa, h_placa, margin_px);
 }
 
@@ -568,7 +750,8 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
     const std::string& /*opt_mode*/,
     const std::string& /*corner_mode*/,
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
-    std::vector<PlacementStep>* timeline_out) {
+    std::vector<PlacementStep>* timeline_out,
+    LabCudaMetrics* cuda_metrics = nullptr) {
     SheetOut hoja;
     std::vector<PathsD> fijas_buff_paths;
     std::vector<Bounds> fijas_bounds;
@@ -578,8 +761,19 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
     const double margin_px = margin_custom > 0.0 ? (margin_custom * 25.4) : 0.0;
     const LimitContext limit = make_limit_context(limite_rings, margin_px);
 
-    std::vector<std::pair<double, double>> anclajes;
-    anclajes.emplace_back(margin_px, margin_px);
+    RasterGrid board_grid(w_placa, h_placa, 4.0);
+#if defined(ARGA_LAB_PILOT)
+    std::unique_ptr<lab_cuda::GridSession> cuda_session;
+    if (lab_cuda::requested() && lab_cuda::available()) {
+        cuda_session = std::make_unique<lab_cuda::GridSession>(
+            raster_to_dense(board_grid), board_grid.w, board_grid.h, true);
+        if (!cuda_session->cuda_active()) {
+            cuda_session.reset();
+        } else if (cuda_metrics) {
+            cuda_metrics->enabled = true;
+        }
+    }
+#endif
 
     for (const auto& p_data : pendientes) {
         const double area_pieza = p_data.area > 0.0 ? p_data.area : total_area(p_data.rings);
@@ -617,62 +811,120 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
         double mejor_px = 0.0;
         double mejor_py = 0.0;
         double mejor_score = std::numeric_limits<double>::infinity();
-        std::vector<std::pair<double, double>> mejor_anchors;
 
-        std::string estrategia_usada = "estandar";
+        const std::string estrategia_usada = es_estructural_grande
+            ? "estructural"
+            : (modo_interlock_lab
+                ? "interlock_repetida"
+                : (es_rectangular ? "rectangular" : "compleja"));
+        const auto score_candidata = [&](double px, double py) {
+            if (es_estructural_grande || !es_rectangular) {
+                return (px * px) + (py * py);
+            }
+            if (modo_interlock_lab) {
+                return py + (px * 800.0);
+            }
+            return (px * 1000000.0) + py + ((py * py) * 0.00001);
+        };
+        const auto seleccionar_mejor = [&](const Variation& var, double px, double py, double score) {
+            if (score >= mejor_score) {
+                return;
+            }
+            mejor_score = score;
+            mejor_var = &var;
+            mejor_px = px;
+            mejor_py = py;
+        };
+
+#if defined(ARGA_LAB_PILOT)
+        struct PreCandidate {
+            const Variation* var = nullptr;
+            double px = 0.0;
+            double py = 0.0;
+            double score = 0.0;
+        };
+        constexpr size_t kPilotShortlistSize = 8;
+        std::vector<PreCandidate> top_candidates;
+        top_candidates.reserve(kPilotShortlistSize + 1);
 
         for (const auto& var : variaciones) {
-            for (const auto& anclaje : anclajes) {
-                const double ax = anclaje.first;
-                const double ay = anclaje.second;
-                double px = ax - var.b_minx;
-                double py = ay - var.b_miny;
+            int max_bx = board_grid.w - var.grid.w;
+            int max_by = board_grid.h - var.grid.h;
+            if (max_bx < 0 || max_by < 0) {
+                continue;
+            }
+
+            std::vector<lab_cuda::GridOffset> offsets;
+            offsets.reserve(static_cast<std::size_t>((max_bx / 2) + 1) * ((max_by / 2) + 1));
+            for (int by = 0; by <= max_by; by += 2) {
+                for (int bx = 0; bx <= max_bx; bx += 2) {
+                    offsets.push_back({bx, by});
+                }
+            }
+
+            const bool use_cuda = cuda_session
+                && offsets.size() >= kCudaMinOffsets;
+            std::vector<std::uint8_t> collided;
+            if (use_cuda) {
+                lab_cuda::GridFilterStats batch_stats;
+                collided = cuda_session->collide_batch(
+                    raster_to_dense(var.grid),
+                    var.grid.w,
+                    var.grid.h,
+                    offsets,
+                    &batch_stats);
+                if (cuda_metrics) {
+                    accumulate_cuda_stats(*cuda_metrics, batch_stats);
+                }
+            }
+
+            for (std::size_t oi = 0; oi < offsets.size(); ++oi) {
+                const int bx = offsets[oi].x;
+                const int by = offsets[oi].y;
+                const bool hit = use_cuda
+                    ? (collided[oi] != 0)
+                    : grid_collide(board_grid, var.grid, bx, by);
+                if (hit) {
+                    continue;
+                }
+                double px = bx * board_grid.resolution - var.b_minx;
+                double py = by * board_grid.resolution - var.b_miny;
 
                 if (px + var.b_minx < margin_px - 0.1 || py + var.b_miny < margin_px - 0.1
                     || px + var.b_maxx > w_placa - margin_px + 0.1
                     || py + var.b_maxy > h_placa - margin_px + 0.1) {
                     continue;
                 }
-                if (comprobar_colision(px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
-                    continue;
-                }
 
-                compact_slide_position(px, py, var, margin_px, limit, fijas_bounds, fijas_buff_paths);
+                double sc = score_candidata(px, py);
 
-                double score = 0.0;
-                if (es_estructural_grande) {
-                    score = (px * px) + (py * py);
-                    estrategia_usada = "estructural";
-                } else if (modo_interlock_lab) {
-                    // LAB: pieza repetida — priorizar huecos laterales antes de apilar
-                    score = py + (px * 800.0);
-                    estrategia_usada = "interlock_repetida";
-                } else if (es_rectangular) {
-                    score = (px * 1000000.0) + py + ((py * py) * 0.00001);
-                    estrategia_usada = "rectangular";
-                } else {
-                    score = (px * px) + (py * py);
-                    estrategia_usada = "compleja";
-                }
-
-                if (score < mejor_score) {
-                    mejor_score = score;
-                    mejor_var = &var;
-                    mejor_px = px;
-                    mejor_py = py;
-                    mejor_anchors.clear();
-                    Bounds bb_var = bounds_of_rings(var.poly);
-                    append_lab_anchors_from_placed(
-                        var.poly,
-                        px,
-                        py,
-                        mejor_anchors,
-                        w_placa,
-                        h_placa,
-                        margin_px);
+                if (top_candidates.size() < kPilotShortlistSize || sc < top_candidates.back().score) {
+                    top_candidates.push_back({&var, px, py, sc});
+                    std::sort(top_candidates.begin(), top_candidates.end(), [](const PreCandidate& a, const PreCandidate& b) {
+                        return a.score < b.score;
+                    });
+                    if (top_candidates.size() > kPilotShortlistSize) {
+                        top_candidates.pop_back();
+                    }
                 }
             }
         }
+        
+        std::vector<PreCandidate> shortlist;
+        for (const auto& cand : top_candidates) {
+            if (!comprobar_colision(cand.px, cand.py, *cand.var, limit, fijas_bounds, fijas_buff_paths)) {
+                shortlist.push_back(cand);
+            }
+        }
+
+        for (const auto& candidate : shortlist) {
+            double px = candidate.px;
+            double py = candidate.py;
+            compact_slide_position(
+                px, py, *candidate.var, margin_px, limit, fijas_bounds, fijas_buff_paths);
+            seleccionar_mejor(*candidate.var, px, py, score_candidata(px, py));
+        }
+#endif
 
         if (mejor_var != nullptr) {
             const auto cand_final = translate_rings_copy(mejor_var->poly, mejor_px, mejor_py);
@@ -682,25 +934,15 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
             fijas_buff_paths.push_back(to_paths_d(cand_buff_final));
             fijas_bounds.push_back(bounds_of_rings(cand_buff_final));
 
-            anclajes.insert(anclajes.end(), mejor_anchors.begin(), mejor_anchors.end());
-            std::vector<std::pair<double, double>> extra_anchors;
-            append_lab_anchors_from_placed(
-                cand_final,
-                mejor_px,
-                mejor_py,
-                extra_anchors,
-                w_placa,
-                h_placa,
-                margin_px);
-            anclajes.insert(anclajes.end(), extra_anchors.begin(), extra_anchors.end());
-            anclajes.erase(
-                std::remove_if(
-                    anclajes.begin(),
-                    anclajes.end(),
-                    [&](const std::pair<double, double>& a) {
-                        return a.first > w_placa - margin_px || a.second > h_placa - margin_px;
-                    }),
-                anclajes.end());
+            int draw_bx = static_cast<int>(std::round((mejor_px + mejor_var->b_minx) / board_grid.resolution));
+            int draw_by = static_cast<int>(std::round((mejor_py + mejor_var->b_miny) / board_grid.resolution));
+            draw_piece_on_board(board_grid, mejor_var->grid_buff, draw_bx, draw_by);
+#if defined(ARGA_LAB_PILOT)
+            if (cuda_session) {
+                cuda_session->update_board(
+                    raster_to_dense(board_grid), board_grid.w, board_grid.h);
+            }
+#endif
 
             PieceOut placed;
             placed.nombre = p_data.nombre;
@@ -837,17 +1079,7 @@ TimelinePackResult empaquetar_una_hoja_timeline_impl(
     }
 
     std::vector<PieceIn> pool_base = piezas;
-    std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
-        const auto ka = sort_key_pool(a);
-        const auto kb = sort_key_pool(b);
-        if (std::get<0>(ka) != std::get<0>(kb)) {
-            return std::get<0>(ka) < std::get<0>(kb);
-        }
-        if (std::get<1>(ka) != std::get<1>(kb)) {
-            return std::get<1>(ka) < std::get<1>(kb);
-        }
-        return std::get<2>(ka) < std::get<2>(kb);
-    });
+    // Respetar el sembrado inteligente (IA Heurística) generado por Python
 
     std::mt19937 local_rng(static_cast<uint32_t>(std::random_device{}()));
     std::uniform_real_distribution<double> dist(0.85, 1.15);
@@ -857,7 +1089,7 @@ TimelinePackResult empaquetar_una_hoja_timeline_impl(
     std::vector<PlacementStep> mejor_timeline;
     int mejor_iter = 0;
 
-    const int iteraciones = std::max(1, std::min(mc_iterations, 50));
+    const int iteraciones = std::max(1, std::min(mc_iterations, 2000));
 
     auto es_mejor = [](const SheetOut& hoja, const std::vector<PieceIn>& restos,
                        const SheetOut& mejor, const std::vector<PieceIn>& mejor_restos) -> bool {
@@ -885,6 +1117,7 @@ TimelinePackResult empaquetar_una_hoja_timeline_impl(
         ordenar_pool_mc(pool_intento, i, local_rng, dist);
 
         std::vector<PlacementStep> timeline;
+        LabCudaMetrics iter_cuda;
         auto [hoja, restos] = llenar_una_hoja_ultrafast(
             pool_intento,
             w_placa,
@@ -894,13 +1127,15 @@ TimelinePackResult empaquetar_una_hoja_timeline_impl(
             opt_override,
             corner_override,
             limite_rings,
-            &timeline);
+            &timeline,
+            &iter_cuda);
 
         if (es_mejor(hoja, restos, mejor_hoja, mejor_restos)) {
             mejor_hoja = std::move(hoja);
             mejor_restos = std::move(restos);
             mejor_timeline = std::move(timeline);
             mejor_iter = i;
+            out.cuda_screen = iter_cuda;
             out.mc_orden_modo = modo_orden_mc(i);
             out.orden_piezas.clear();
             out.orden_piezas.reserve(pool_intento.size());
@@ -950,17 +1185,7 @@ PackResult empaquetar_una_hoja_mc(
     }
 
     std::vector<PieceIn> pool_base = piezas;
-    std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
-        const auto ka = sort_key_pool(a);
-        const auto kb = sort_key_pool(b);
-        if (std::get<0>(ka) != std::get<0>(kb)) {
-            return std::get<0>(ka) < std::get<0>(kb);
-        }
-        if (std::get<1>(ka) != std::get<1>(kb)) {
-            return std::get<1>(ka) < std::get<1>(kb);
-        }
-        return std::get<2>(ka) < std::get<2>(kb);
-    });
+    // Respetar el sembrado inteligente (IA Heurística) generado por Python
 
     const double kerf_a_usar = kerf_override;
     std::mt19937 local_rng(static_cast<uint32_t>(std::random_device{}()));
@@ -970,7 +1195,7 @@ PackResult empaquetar_una_hoja_mc(
     SheetOut mejor_hoja;
     std::vector<PieceIn> mejor_restos = pool_base;
 
-    const int iteraciones = std::max(1, std::min(mc_iterations, 50));
+    const int iteraciones = std::max(1, std::min(mc_iterations, 2000));
 
     auto es_mejor = [](const SheetOut& hoja, const std::vector<PieceIn>& restos,
                        const SheetOut& mejor, const std::vector<PieceIn>& mejor_restos) -> bool {
