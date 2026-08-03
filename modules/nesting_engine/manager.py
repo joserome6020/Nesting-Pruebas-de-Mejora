@@ -3413,29 +3413,35 @@ class MotorNesting:
         prev_cc = _bind_pack_cancel_checker(self._cancelado)
         try:
             import os
-            from modules.nesting_engine.ai_heuristic import smart_seed_order
-            from modules.nesting_engine.hive_mind_nests import (
-                force_eddie_policy,
-                suggest_seed_policy,
-            )
 
             _engine_id = getattr(self, "active_engine_id", "default")
             try:
-                kerf_g = 0.15
-                if isinstance(config_kerf, dict):
-                    kerf_g = float(next(iter(config_kerf.values()), 0.15) or 0.15)
-                else:
-                    kerf_g = float(config_kerf or 0.15)
-                sug = suggest_seed_policy(piezas or [], kerf=kerf_g)
-                force_eddie_policy(str(_engine_id), str(sug.get("policy") or "host_parasite"))
-                print(
-                    f"[HIVE-ML] engine={_engine_id} suggest={sug.get('policy')} "
-                    f"conf={sug.get('confidence')} neighbors={sug.get('neighbors')}",
-                    flush=True,
+                from modules.nesting_engine.ai_heuristic import smart_seed_order
+                from modules.nesting_engine.hive_mind_nests import (
+                    force_eddie_policy,
+                    suggest_seed_policy,
                 )
-            except Exception as _hive_exc:
-                print(f"[HIVE-ML] seed skip: {_hive_exc}", flush=True)
-            piezas = smart_seed_order(piezas or [], engine_id=_engine_id)
+
+                try:
+                    kerf_g = 0.15
+                    if isinstance(config_kerf, dict):
+                        kerf_g = float(next(iter(config_kerf.values()), 0.15) or 0.15)
+                    else:
+                        kerf_g = float(config_kerf or 0.15)
+                    sug = suggest_seed_policy(piezas or [], kerf=kerf_g)
+                    force_eddie_policy(
+                        str(_engine_id), str(sug.get("policy") or "host_parasite")
+                    )
+                    print(
+                        f"[HIVE-ML] engine={_engine_id} suggest={sug.get('policy')} "
+                        f"conf={sug.get('confidence')} neighbors={sug.get('neighbors')}",
+                        flush=True,
+                    )
+                except Exception as _hive_exc:
+                    print(f"[HIVE-ML] seed skip: {_hive_exc}", flush=True)
+                piezas = smart_seed_order(piezas or [], engine_id=_engine_id)
+            except Exception as _eddie_exc:
+                print(f"[EDDIE] seed skip: {_eddie_exc}", flush=True)
 
             return self._procesar_grupo_parallel_impl(
                 clave,
@@ -4789,35 +4795,39 @@ class MotorNesting:
             clave_out = clave
             
             # --- APRENDIZAJE IA POR MOTOR (señal de grupo + compactación Venom) ---
-            import os
-            from .ai_heuristic import record_telemetry, get_last_seed_info
-            engine_id = getattr(self, "active_engine_id", None) or os.environ.get(
-                "ARGA_MOTOR_NESTING", "svgnest_ultra"
-            )
-            eff_real = float(
-                efi_grupo.get("eficiencia_tanque_real")
-                or efi_grupo.get("efficiency_real")
-                or efi_grupo.get("eficiencia_real")
-                or 0.0
-            )
-            seed_info = get_last_seed_info(engine_id)
-            nest_reward = None
-            c_pre = c_post = None
-            if venom_sheets > 0:
-                c_pre = venom_compact_pre / venom_sheets
-                c_post = venom_compact_post / venom_sheets
-                # Reward compuesto: eficiencia real del tanque + Δcompactación media.
-                nest_reward = eff_real + (venom_reward_total / venom_sheets)
-            if eff_real > 0.5 or nest_reward is not None:
-                record_telemetry(
-                    piezas,
-                    eff_real,
-                    engine_id,
-                    compactness_pre=c_pre,
-                    compactness_post=c_post,
-                    seed_policy=seed_info.get("policy"),
-                    nest_reward=nest_reward if nest_reward is not None else eff_real,
+            try:
+                import os
+                from .ai_heuristic import record_telemetry, get_last_seed_info
+
+                engine_id = getattr(self, "active_engine_id", None) or os.environ.get(
+                    "ARGA_MOTOR_NESTING", "svgnest_ultra"
                 )
+                eff_real = float(
+                    efi_grupo.get("eficiencia_tanque_real")
+                    or efi_grupo.get("efficiency_real")
+                    or efi_grupo.get("eficiencia_real")
+                    or 0.0
+                )
+                seed_info = get_last_seed_info(engine_id)
+                nest_reward = None
+                c_pre = c_post = None
+                if venom_sheets > 0:
+                    c_pre = venom_compact_pre / venom_sheets
+                    c_post = venom_compact_post / venom_sheets
+                    # Reward compuesto: eficiencia real del tanque + Δcompactación media.
+                    nest_reward = eff_real + (venom_reward_total / venom_sheets)
+                if eff_real > 0.5 or nest_reward is not None:
+                    record_telemetry(
+                        piezas,
+                        eff_real,
+                        engine_id,
+                        compactness_pre=c_pre,
+                        compactness_post=c_post,
+                        seed_policy=seed_info.get("policy"),
+                        nest_reward=nest_reward if nest_reward is not None else eff_real,
+                    )
+            except Exception as _ai_tel_exc:
+                print(f"[EDDIE] telemetry skip: {_ai_tel_exc}", flush=True)
             # --------------------------------
             
             return clave_out, resultado_placas
