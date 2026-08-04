@@ -76,3 +76,9 @@ modules/nesting_engine/arga_nest_core*.pyd
 # Local secrets
 .env
 
+
+# Code-sign secrets
+*.pfx
+native/codesign/arga_codesign_dev.pfx
+native/codesign/last_thumbprint.txt
+
