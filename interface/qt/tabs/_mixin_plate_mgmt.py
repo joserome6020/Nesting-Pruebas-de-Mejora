@@ -173,6 +173,14 @@ class PlateManagementMixin:
             self.lbl_placa_resumen.setText("SIN PLACA ACTIVA")
             self.lbl_placa_stats.setText("-")
             self.lbl_placa_dims.setText("-")
+            for name in (
+                "btn_panel_renest_placa",
+                "btn_panel_cambiar_placa",
+                "btn_panel_renest_calibre",
+            ):
+                btn = getattr(self, name, None)
+                if btn is not None:
+                    btn.setEnabled(False)
             return
 
         placa_id = str(hoja.get("placa_id", "-") or "-")
@@ -209,11 +217,15 @@ class PlateManagementMixin:
         self.btn_panel_cambiar_placa.setEnabled(acciones_ok and not es_cu)
         self.btn_panel_renest_calibre.setEnabled(bool(clave))
         if hasattr(self, "btn_panel_renest_placa"):
-            self.btn_panel_renest_placa.setText(
-                "RENESTEAR POR BARRA" if es_cu else "RENESTEAR ESTA PLACA"
+            self.btn_panel_renest_placa.setText("Renest barra" if es_cu else "Renestear")
+            self.btn_panel_renest_placa.setToolTip(
+                "Renestear barra cobre (gap/largo)"
+                if es_cu
+                else "Renestear la placa activa"
             )
         if hasattr(self, "btn_panel_renest_calibre"):
-            self.btn_panel_renest_calibre.setText("RENESTEAR CALIBRE COMPLETO")
+            self.btn_panel_renest_calibre.setText("Calibre")
+            self.btn_panel_renest_calibre.setToolTip("Renestear calibre completo")
 
     def _actualizar_seccion_pieza_seleccionada(self, piezas=None):
         if not hasattr(self, "lbl_pieza_sel"):
@@ -318,51 +330,14 @@ class PlateManagementMixin:
             self.cambiar_placa_y_renestear(clave, hoja, candidata)
 
     def _reposicionar_panel_ajuste(self):
-        from interface.qt.tabs.tab_nesting_ui import PANEL_TOOLS_MIN_WIDTH
-
-        host = getattr(self, "visor_host", None)
+        # Panel flotante retirado: acciones en cinta «Placa».
         frame = getattr(self, "frame_ajuste_container", None)
-        if not host or not frame or not frame.isVisible():
-            return
-        marg = 10
-        host_h = max(1, host.height())
-        host_w = max(1, host.width())
-        max_frame_h = max(340, host_h - marg * 2)
-        panel_w = min(max(PANEL_TOOLS_MIN_WIDTH, int(host_w * 0.21)), host_w - marg * 2)
-
-        frame.setFixedWidth(panel_w)
-        self.panel_ajuste_contenido.setFixedWidth(panel_w)
-        self.btn_toggle_ajuste.setFixedWidth(panel_w)
-
-        toggle_h = self.btn_toggle_ajuste.sizeHint().height() + 12
-        footer_h = self.btn_ajustar_vista.sizeHint().height() + 18 if hasattr(self, "btn_ajustar_vista") else 0
-        content_cap = max(300, max_frame_h - toggle_h)
-        if self.ajuste_desplegado:
-            self.panel_ajuste_contenido.setMinimumHeight(content_cap)
-            self.panel_ajuste_contenido.setMaximumHeight(content_cap)
-            scroll = getattr(self, "_panel_tools_scroll", None)
-            if scroll is not None:
-                scroll.setMinimumHeight(max(200, content_cap - footer_h))
-        else:
-            self.panel_ajuste_contenido.setMinimumHeight(0)
-            self.panel_ajuste_contenido.setMaximumHeight(content_cap)
-
-        frame.setMaximumHeight(max_frame_h)
-        fh = min(frame.sizeHint().height(), max_frame_h)
-        x = max(0, host_w - panel_w - marg)
-        y = max(0, host_h - fh - marg)
-        frame.setGeometry(x, y, panel_w, fh)
-        frame.raise_()
+        if frame is not None:
+            frame.hide()
 
     def toggle_ajuste_placa(self):
-        if self.ajuste_desplegado:
-            self.panel_ajuste_contenido.hide()
-            self.btn_toggle_ajuste.setText("HERRAMIENTAS DE PLACA")
-            self.ajuste_desplegado = False
-        else:
-            self.panel_ajuste_contenido.show()
-            self.btn_toggle_ajuste.setText("OCULTAR PANEL")
-            self.ajuste_desplegado = True
+        # Compat no-op (botón eliminado; acciones en cinta).
+        self.ajuste_desplegado = False
         self._reposicionar_panel_ajuste()
 
     def dibujar_hoja_full(self, hoja, clave):
@@ -396,10 +371,8 @@ class PlateManagementMixin:
         except Exception as exc:
             print(f"[NESTING][VISOR][WARN] dibujar_hoja_full: {exc}")
             raise
-        self.frame_ajuste_container.show()
-        if not self.ajuste_desplegado:
-            self.panel_ajuste_contenido.hide()
-            self.btn_toggle_ajuste.setText("HERRAMIENTAS DE PLACA")
+        self.frame_ajuste_container.hide()
+        self.ajuste_desplegado = False
         self._reposicionar_panel_ajuste()
         self._sync_kerf_widget()
         self._actualizar_panel_placa(hoja, clave)
@@ -758,7 +731,26 @@ class PlateManagementMixin:
                 for i, hoja in enumerate(hojas_del_material):
                     es_retazo = hoja.get('es_retazo', False)
                     nombre_placa = hoja.get('placa_id', f"P#{i+1}")
-                    origen_str = " (PROVEEDOR)" if hoja.get('origen_placa') == "PROVEEDOR" else ""
+                    origen_up = str(hoja.get("origen_placa") or "").upper()
+                    es_rem_ui = (
+                        "REMANENTE" in origen_up
+                        or str(nombre_placa).upper().startswith("REM-")
+                        or str(nombre_placa).upper().startswith("PL-")
+                    )
+                    if es_rem_ui and not str(nombre_placa).upper().startswith("REM-"):
+                        # Legacy PL-…: no mostrar como SKU de catálogo
+                        try:
+                            w_in = float(hoja.get("placa_w") or 0) / 25.4
+                            h_in = float(hoja.get("placa_h") or 0) / 25.4
+                            cal = str(hoja.get("placa_cal") or "").strip() or "?"
+                            nombre_placa = f"REM-{cal}-{w_in:g}x{h_in:g}"
+                        except Exception:
+                            nombre_placa = f"REM-{nombre_placa}"
+                    origen_str = (
+                        " (REMANENTE)"
+                        if es_rem_ui
+                        else (" (PROVEEDOR)" if hoja.get('origen_placa') == "PROVEEDOR" else "")
+                    )
                     efi_txt = formatear_eficiencias_placa(hoja)
                     if not es_retazo:
                         iguales = [
@@ -899,13 +891,6 @@ class PlateManagementMixin:
                 self._safe_ctx(
                     "Transferencia",
                     lambda c=clave, h=hoja: abrir_modal_transferencia_masiva(self, c, h),
-                ),
-            )
-            menu.addAction(
-                "COMPENSAR PLASMA",
-                self._safe_ctx(
-                    "Compensación",
-                    lambda c=clave, h=hoja: self.compensar_solo_placa(c, h),
                 ),
             )
             info_grupo = (self.app.resultados_nesting or {}).get(clave)

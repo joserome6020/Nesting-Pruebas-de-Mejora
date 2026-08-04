@@ -1,0 +1,12 @@
+{
+  "case_id": "r62174",
+  "status": "source_unavailable",
+  "required_artifacts": [
+    "62174.arganest",
+    "DXF del BOM",
+    "snapshot de placas",
+    "referencia de largos"
+  ],
+  "capture_rule": "Copiar DXF a dxf/ y reescribir cualquier ruta como relativa antes de ejecutar el runner.",
+  "reason": "El workspace indicado no existe en el equipo y el directorio de DXF de red no responde con archivos."
+}

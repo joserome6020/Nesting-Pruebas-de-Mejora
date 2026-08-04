@@ -90,6 +90,49 @@ def precalentar_cache_dxf(rutas: set[str], *, workers: int | None = None) -> int
     return len(paths)
 
 
+def invalidar_cache_dxf(rutas: set[str] | list[str] | None = None) -> int:
+    """
+    Limpia cache de geometría DXF (display 1:1).
+    Si rutas es None, vacía todo. Si no, solo entradas de esas rutas.
+    Necesario tras REPROCESAR AUTODXF: en Windows el mtime puede no cambiar
+    dentro del mismo segundo y el cache seguiría sirviendo la geometría vieja.
+    """
+    removed = 0
+    with _DXF_CACHE_LOCK:
+        if not rutas:
+            removed = len(_DXF_LOCAL_CACHE)
+            _DXF_LOCAL_CACHE.clear()
+        else:
+            wanted = {os.path.normcase(os.path.normpath(str(r))) for r in rutas if r}
+            if wanted:
+                stale = [
+                    k
+                    for k in list(_DXF_LOCAL_CACHE.keys())
+                    if os.path.normcase(os.path.normpath(str(k[0]))) in wanted
+                ]
+                for k in stale:
+                    _DXF_LOCAL_CACHE.pop(k, None)
+                    removed += 1
+    with _TRANSFORM_CACHE_LOCK:
+        # La huella de transform también puede quedar obsoleta tras regenerar DXF.
+        _TRANSFORM_ROT_CACHE.clear()
+    return removed
+
+
+def invalidar_sellos_geom_hoja(hoja: dict) -> int:
+    """Obliga a recalcular transform/display 1:1 tras renest o DXF regenerado."""
+    n = 0
+    for pz in (hoja or {}).get("piezas") or []:
+        if not isinstance(pz, dict) or _es_pieza_virtual_nombre(pz.get("nombre")):
+            continue
+        invalidar_sello_transform_export(pz)
+        # Forzar re-inferencia: rot/shift de enriquecer previo a Venom quedan stale.
+        for k in ("rot_deg", "shift_x", "shift_y", "rot_origin_cx", "rot_origin_cy"):
+            pz.pop(k, None)
+        n += 1
+    return n
+
+
 def _inferir_transformacion(p_orig: dict, pieza: dict):
     from .manager import _inferir_transformacion_desde_resultado
 
@@ -366,6 +409,142 @@ def _iou_poligonos(a_rings, b_rings) -> float:
         return inter / union
     except Exception:
         return 0.0
+
+
+def renovar_pieza_desde_dxf_en_pose(pieza: dict) -> bool:
+    """
+    Sustituye poligonos de una pieza colocada por el DXF actual (PARTS),
+    anclando centroide + rotación a la pose del nest.
+
+    Pensado para reparar espejo/regeneración DXF sin re-empaquetar ni abrir
+    placas extra: mismas piezas, misma placa, geometría corregida.
+    """
+    if not isinstance(pieza, dict) or _es_pieza_virtual_nombre(pieza.get("nombre")):
+        return False
+    ruta = str(pieza.get("ruta") or "").strip()
+    if not ruta or not os.path.isfile(ruta):
+        return False
+    nested = pieza.get("poligonos") or []
+    if not nested or not nested[0] or len(nested[0]) < 3:
+        return False
+
+    nest_poly = reconstruir_poly_seguro(nested)
+    if nest_poly is None or nest_poly.is_empty:
+        return False
+
+    loaded = _cargar_poly_local_dxf(ruta)
+    if loaded is None:
+        return False
+    poly_local, marks_local, orig_minx, orig_miny = loaded
+    if poly_local is None or getattr(poly_local, "is_empty", True):
+        return False
+
+    nminx, nminy, _, _ = nest_poly.bounds
+    nest_zero = affinity.translate(nest_poly, -nminx, -nminy)
+    nest_cx, nest_cy = float(nest_poly.centroid.x), float(nest_poly.centroid.y)
+    rot_origin = _origen_rotacion(poly_local)
+
+    best_ang = 0.0
+    best_iou = -1.0
+    # Incluye espejo X/Y: nests hechos con DXF espejado deben anclarse igual.
+    for mx, my in ((1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)):
+        local = poly_local
+        if mx != 1.0 or my != 1.0:
+            try:
+                local = affinity.scale(poly_local, mx, my, origin=rot_origin)
+            except Exception:
+                continue
+        for ang in (0, 45, 90, 135, 180, 225, 270, 315):
+            try:
+                test = affinity.rotate(local, ang, origin=rot_origin)
+                tminx, tminy, _, _ = test.bounds
+                test_zero = affinity.translate(test, -tminx, -tminy)
+                inter = float(test_zero.intersection(nest_zero).area)
+                union = float(test_zero.union(nest_zero).area)
+                iou = (inter / union) if union > 1e-12 else 0.0
+            except Exception:
+                continue
+            if iou > best_iou:
+                best_iou = iou
+                best_ang = float(ang)
+
+    # Colocar SIEMPRE el DXF correcto (sin espejo), con la rotación que mejor
+    # alinea y el centroide del nest (misma pose en placa).
+    try:
+        rotated = affinity.rotate(poly_local, best_ang, origin=rot_origin)
+        rcx, rcy = float(rotated.centroid.x), float(rotated.centroid.y)
+        placed = affinity.translate(rotated, nest_cx - rcx, nest_cy - rcy)
+    except Exception:
+        return False
+    if placed is None or placed.is_empty:
+        return False
+
+    pols = poligonos_desde_shapely(placed)
+    if not pols or not pols[0]:
+        return False
+
+    pieza["poligonos"] = pols
+    pieza["orig_minx"] = float(orig_minx)
+    pieza["orig_miny"] = float(orig_miny)
+    pieza["rot_deg"] = float(best_ang)
+    # shift coherente con rotación + anclaje a bounds del nest
+    try:
+        tminx, tminy, _, _ = affinity.rotate(poly_local, best_ang, origin=rot_origin).bounds
+        pminx, pminy, _, _ = placed.bounds
+        pieza["shift_x"] = float(pminx - tminx)
+        pieza["shift_y"] = float(pminy - tminy)
+    except Exception:
+        pieza["shift_x"] = 0.0
+        pieza["shift_y"] = 0.0
+    pieza["rot_origin_cx"] = float(rot_origin[0])
+    pieza["rot_origin_cy"] = float(rot_origin[1])
+    pieza["_transform_export_ok"] = True
+    pieza["_geom_dxf_ok"] = True
+    pieza.pop("_poly_cache", None)
+    pieza.pop("_bounds_cache", None)
+
+    if marks_local is not None and not getattr(marks_local, "is_empty", True):
+        try:
+            mk = affinity.translate(
+                affinity.rotate(marks_local, best_ang, origin=rot_origin),
+                float(pieza.get("shift_x", 0) or 0),
+                float(pieza.get("shift_y", 0) or 0),
+            )
+            from modules.nesting_engine.manager import _marks_geom_to_lista
+
+            lista = _marks_geom_to_lista(mk)
+            if lista:
+                pieza["marcas"] = lista
+        except Exception:
+            pass
+    return True
+
+
+def renovar_hoja_desde_dxf_en_pose(hoja: dict, *, rutas_por_nombre: dict | None = None) -> tuple[int, int]:
+    """
+    Renueva geometría de piezas reales de una hoja desde DXF, sin re-nest.
+    Retorna (ok, fallidas).
+    """
+    if not isinstance(hoja, dict):
+        return 0, 0
+    ok = fallidas = 0
+    for pz in hoja.get("piezas") or []:
+        if not isinstance(pz, dict) or _es_pieza_virtual_nombre(pz.get("nombre")):
+            continue
+        if rutas_por_nombre:
+            canon = str(pz.get("nombre") or "").strip()
+            # match flexible por basename
+            ruta = rutas_por_nombre.get(canon) or ""
+            if not ruta:
+                base = canon.split(",")[0].strip()
+                ruta = rutas_por_nombre.get(base) or ""
+            if ruta:
+                pz["ruta"] = ruta
+        if renovar_pieza_desde_dxf_en_pose(pz):
+            ok += 1
+        else:
+            fallidas += 1
+    return ok, fallidas
 
 
 def refrescar_poligonos_display_pieza(pieza: dict, *, force: bool = False) -> bool:

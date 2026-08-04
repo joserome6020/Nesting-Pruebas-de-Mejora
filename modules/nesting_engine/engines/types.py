@@ -21,7 +21,7 @@ class PackSheetRequest:
     piezas: list
     w_placa: float
     h_placa: float
-    kerf_override: float = 0.3
+    kerf_override: float = 0.15
     margin_override: float = 0.15
     opt_override: str = "OPTIMIZAR LARGO Y ANCHO"
     corner_override: str = "INFERIOR IZQUIERDA"

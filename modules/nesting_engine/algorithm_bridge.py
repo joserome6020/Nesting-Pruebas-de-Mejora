@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import os
+import random
 from collections import Counter
 
 from .nest_engine_context import get_active_engine_id
@@ -78,7 +79,7 @@ def _piece_to_native(piece):
         area = float(piece.get("area") or poly.area or 0.0)
     except Exception:
         area = 0.0
-    return {
+    out = {
         "nombre": str(piece.get("nombre") or ""),
         "area": area,
         "calibre": str(piece.get("calibre") or ""),
@@ -86,6 +87,11 @@ def _piece_to_native(piece):
         "rings": _rings_from_shapely_polygon(poly),
         "marks": _marks_from_shapely(marks),
     }
+    if piece.get("grain_locked"):
+        out["grain_locked"] = True
+    if piece.get("allowed_rotations") is not None:
+        out["allowed_rotations"] = piece.get("allowed_rotations")
+    return out
 
 
 def _build_piece_lookup_lists(piezas):
@@ -144,7 +150,7 @@ def empaquetar_una_hoja_arga_base(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
@@ -325,7 +331,7 @@ def empaquetar_una_hoja_burke_blf(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
@@ -384,7 +390,7 @@ def empaquetar_una_hoja_libnest2d(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
@@ -445,7 +451,7 @@ def empaquetar_una_hoja_svgnest_ultra(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
@@ -561,6 +567,72 @@ def empaquetar_una_hoja_svgnest_ultra(
         use_pip: bool | None = None,
         seed_order=None,
     ):
+        # ANS C++: ruta ArgaNestCore cuando ARGA_NEST_CORE=1
+        try:
+            from . import arga_nest_core_bridge as _anc
+
+            if _anc.core_enabled() and limite_rings is None and not seed_order:
+                req = _anc.prepare_pack_request(
+                    plate_w=float(w_placa),
+                    plate_h=float(h_placa),
+                    pieces=native_piezas,
+                    kerf=float(kerf_override),
+                    margin=float(margin_override),
+                    engine="svgnest_ultra",
+                    ga_population=int(pop_n if pop_n is not None else pop),
+                    ga_generations=int(generations),
+                    rotation_step_deg=float(rot if rot is not None else rot_step),
+                    part_in_part=bool(pip if use_pip is None else use_pip),
+                    certify=True,
+                    enable_tabu=True,
+                    tabu_seed_trials=3,
+                    extra={"opt": opt_override, "corner": corner_override},
+                )
+                raw = _anc.pack_sheet_json(req)
+                if not (raw.get("certify") or {}).get("ok", raw.get("ok", False)):
+                    issues = (raw.get("certify") or {}).get("issues") or []
+                    raise RuntimeError(f"ArgaNestCore certify fail: {issues}")
+                try:
+                    from .ai_telemetry import log_nest_event
+
+                    log_nest_event(
+                        engine="svgnest_ultra",
+                        profile=str(os.environ.get("ARGA_NEST_MODE") or "first"),
+                        n_piezas=len(native_piezas or []),
+                        n_sheets=1,
+                        efi=float((raw.get("metrics") or {}).get("eficiencia") or 0.0),
+                        seed_order=[str(p.get("nombre") or "") for p in (native_piezas or [])],
+                        certify_ok=True,
+                        kerf=float(kerf_override),
+                        plate_w=float(w_placa),
+                        plate_h=float(h_placa),
+                        source="algorithm_bridge_core",
+                    )
+                except Exception:
+                    pass
+                hoja_native = {
+                    "piezas": [
+                        {
+                            "nombre": p.get("nombre"),
+                            "area": p.get("area"),
+                            "calibre": p.get("calibre"),
+                            "material": p.get("material"),
+                            "poligonos": p.get("poligonos") or [],
+                        }
+                        for p in (raw.get("placed") or [])
+                    ],
+                    "area_usada": float((raw.get("metrics") or {}).get("area_usada") or 0.0),
+                    "eficiencia": float((raw.get("metrics") or {}).get("eficiencia") or 0.0),
+                }
+                restos_native = [{"nombre": n} for n in (raw.get("leftovers") or [])]
+                hoja, restos = _assemble_pack_result(hoja_native, restos_native, piezas)
+                return hoja, restos, []
+        except Exception as _anc_exc:
+            # Degradación limpia al algorithm_cpp legacy
+            if str(os.environ.get("ARGA_NEST_CORE_STRICT", "")).strip() in ("1", "true", "yes"):
+                raise
+            print(f"[ARGA_NEST_CORE] fallback algorithm_cpp: {_anc_exc}", flush=True)
+
         args = dict(
             piezas=native_piezas,
             w_placa=w_placa,
@@ -687,18 +759,330 @@ def empaquetar_una_hoja_svgnest_ultra(
             os.environ["ARGA_ULTRA_TILT_DEG"] = prev_tilt
 
 
+def empaquetar_una_hoja_arga_apex(
+    piezas,
+    w_placa,
+    h_placa,
+    kerf_override=0.15,
+    margin_override=0.0,
+    opt_override="OPTIMIZAR LARGO Y ANCHO",
+    corner_override="INFERIOR IZQUIERDA",
+    limite_poly=None,
+    cancel_checker=None,
+):
+    """
+    ARGA APEX — pipeline completo (calidad + velocidad + aprendizaje):
+
+      0) OCCT: sanear/extruir contornos
+      1) Hive ML: sugerir política de sembrado + Eddie ordena
+      2) CUDA opt-in (si runtime disponible)
+      3) Explore NFP/GA (+ heartbeat)
+      4) Refine solo si hay restos
+      5) Venom + guardar episodio en hive_mind_nests + aprender
+    """
+    import threading
+    import time
+
+    from .nest_hardware import apply_nest_thread_env, hardware_nest_budget
+    from .nest_optimization import get_engine_profile
+
+    def _cancelled() -> bool:
+        try:
+            return bool(cancel_checker and cancel_checker())
+        except Exception:
+            return False
+
+    if _cancelled():
+        return (
+            {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+            list(piezas or []),
+        )
+
+    # --- Prep OCCT ---
+    piezas_in = list(piezas or [])
+    occt_stats: dict = {}
+    try:
+        from .apex_occt_prep import prepare_pieces_for_apex
+
+        piezas_in, occt_stats = prepare_pieces_for_apex(piezas_in)
+        print(
+            f"[APEX-OCCT] enabled={int(bool(occt_stats.get('enabled')))} "
+            f"ok={occt_stats.get('ok', 0)} fail={occt_stats.get('fail', 0)} "
+            f"skip={occt_stats.get('skip', 0)} "
+            f"holes={occt_stats.get('holes_in', 0)}->{occt_stats.get('holes_out', 0)} "
+            f"{occt_stats.get('error') or ''}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[APEX-OCCT] skip: {exc}", flush=True)
+        piezas_in = list(piezas or [])
+
+    # --- Fase 3: ML sembrado (hive kNN → Eddie) ---
+    seed_policy = ""
+    ml_info: dict = {}
+    try:
+        from .ai_heuristic import get_last_seed_info, smart_seed_order
+        from .hive_mind_nests import force_eddie_policy, suggest_seed_policy
+
+        ml_info = suggest_seed_policy(
+            piezas_in,
+            w_placa=float(w_placa),
+            h_placa=float(h_placa),
+            kerf=float(kerf_override or 0.15),
+        )
+        pol = str(ml_info.get("policy") or "host_parasite")
+        force_eddie_policy("arga_apex", pol)
+        piezas_in = smart_seed_order(piezas_in, "arga_apex")
+        seed_policy = str(get_last_seed_info("arga_apex").get("policy") or pol)
+        print(
+            f"[APEX-ML] suggest={pol} conf={ml_info.get('confidence')} "
+            f"neighbors={ml_info.get('neighbors')} used={seed_policy} "
+            f"reason={ml_info.get('reason')}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[APEX-ML] skip: {exc}", flush=True)
+
+    try:
+        from . import algorithm_cpp
+    except ImportError as exc:
+        raise NestingEngineUnavailableError(_CPP_REQUIRED_MSG) from exc
+
+    if not hasattr(algorithm_cpp, "empaquetar_una_hoja_svgnest_ultra"):
+        raise NestingEngineUnavailableError(
+            "algorithm_cpp.pyd desactualizado (falta empaquetar_una_hoja_svgnest_ultra). "
+            "Recompila con build_cpp_engine.ps1."
+        )
+
+    profile = get_engine_profile("arga_apex")
+    budget = hardware_nest_budget()
+    apply_nest_thread_env(budget)
+
+    pop = max(8, min(16, int(profile.get("ga_population", 10) or 10)))
+    explore_gens = max(1, int(profile.get("apex_explore_gens", 1) or 1))
+    refine_gens = max(1, int(profile.get("ga_generations", 2) or 2))
+    explore_rot = float(profile.get("apex_explore_rot_deg", 15.0) or 15.0)
+    refine_rot = float(profile.get("rotation_step_deg", 5.0) or 5.0)
+    pip = bool(profile.get("part_in_part", True))
+    seeds = 1
+    try:
+        from .venom_ai import venom_enabled
+
+        do_venom = bool(profile.get("apex_venom_polish", False)) and venom_enabled()
+    except Exception:
+        do_venom = False
+
+    n_piezas = len(piezas_in)
+
+    if n_piezas >= 25:
+        refine_gens = min(refine_gens, 1)
+        refine_rot = max(refine_rot, 15.0)
+
+    if str(os.environ.get("ARGA_APEX_SMOKE", "")).strip() in ("1", "true", "yes"):
+        seeds = 1
+        pop = min(pop, 6)
+        explore_gens = 1
+        refine_gens = 1
+        print("[APEX] smoke_mode=1", flush=True)
+
+    # --- Fase 4: CUDA ---
+    cuda_used = False
+    cuda_ctx = None
+    try:
+        from .nest_cuda import (
+            cuda_status_for_engine,
+            engine_cuda_enabled,
+            nest_cuda_env,
+        )
+
+        want_cuda = bool(profile.get("apex_cuda", True)) and engine_cuda_enabled(
+            "arga_apex"
+        )
+        st = cuda_status_for_engine("arga_apex")
+        print(
+            f"[APEX-CUDA] want={int(want_cuda)} flag={int(st.get('flag_enabled'))} "
+            f"runtime={int(st.get('runtime_available'))} detail={st.get('detail')}",
+            flush=True,
+        )
+        if want_cuda:
+            cuda_ctx = nest_cuda_env(True)
+            cuda_ctx.__enter__()
+            cuda_used = True
+    except Exception as exc:
+        print(f"[APEX-CUDA] skip: {exc}", flush=True)
+
+    print(
+        f"[APEX] start piezas={n_piezas} pop={pop} "
+        f"explore={explore_gens}@{explore_rot}° refine={refine_gens}@{refine_rot}° "
+        f"pip={int(pip)} seeds={seeds} venom={int(do_venom)} cuda={int(cuda_used)} "
+        f"threads={budget.get('nest_threads')}",
+        flush=True,
+    )
+
+    native_piezas = [_piece_to_native(p) for p in piezas_in]
+    limite_rings = None
+    if limite_poly is not None:
+        limite_rings = _rings_from_shapely_polygon(limite_poly)
+
+    def _run_cpp(generations: int, seed: int, rot: float, seed_order=None):
+        args = dict(
+            piezas=native_piezas,
+            w_placa=w_placa,
+            h_placa=h_placa,
+            kerf_override=kerf_override,
+            margin_override=margin_override,
+            opt_override=opt_override,
+            corner_override=corner_override,
+            limite_rings=limite_rings,
+            ga_population=int(pop),
+            ga_generations=int(generations),
+            rotation_step_deg=float(rot),
+            part_in_part=bool(pip),
+            ga_seed=int(seed),
+        )
+        try:
+            raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(
+                **args,
+                seed_order=list(seed_order) if seed_order else None,
+            )
+        except TypeError:
+            raw = algorithm_cpp.empaquetar_una_hoja_svgnest_ultra(**args)
+        if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+            hoja_native, restos_native, orden_native = raw[0], raw[1], raw[2]
+        else:
+            hoja_native, restos_native = raw[0], raw[1]
+            orden_native = []
+        hoja, restos = _assemble_pack_result(hoja_native, restos_native, piezas_in)
+        orden = [int(x) for x in (orden_native or [])]
+        return hoja, restos, orden
+
+    def _run_cpp_heartbeat(label: str, *args, **kwargs):
+        """Fase 1: heartbeat cada 5s mientras el C++ trabaja."""
+        box: dict = {}
+
+        def _target():
+            try:
+                box["out"] = _run_cpp(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001
+                box["err"] = exc
+
+        th = threading.Thread(target=_target, name=f"apex-{label}", daemon=True)
+        th.start()
+        t_hb = time.perf_counter()
+        while th.is_alive():
+            th.join(5.0)
+            if th.is_alive():
+                print(
+                    f"[APEX] ... sigue nestando ({time.perf_counter() - t_hb:.0f}s) "
+                    f"fase={label}",
+                    flush=True,
+                )
+            if _cancelled():
+                print(f"[APEX] cancel pedido durante {label}", flush=True)
+                break
+        if "err" in box:
+            raise box["err"]
+        return box.get("out") or (
+            {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+            list(piezas_in),
+            [],
+        )
+
+    t0 = time.perf_counter()
+    mejor_h = {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}
+    mejor_r = list(piezas_in)
+    mejor_o: list[int] = []
+
+    try:
+        if not _cancelled():
+            hoja, restos, orden = _run_cpp_heartbeat(
+                "explore", explore_gens, 1001, explore_rot
+            )
+            n_ok = len((hoja or {}).get("piezas") or [])
+            print(
+                f"[APEX] explore_seed=1/1 placed={n_ok} restos={len(restos or [])} "
+                f"· {time.perf_counter() - t0:.1f}s",
+                flush=True,
+            )
+            mejor_h, mejor_r, mejor_o = hoja, restos, orden
+
+        do_refine = (
+            not _cancelled()
+            and bool(mejor_o)
+            and bool(mejor_h.get("piezas"))
+            and bool(mejor_r)
+            and refine_gens > 0
+        )
+        if do_refine:
+            t_ref = time.perf_counter()
+            h2, r2, o2 = _run_cpp_heartbeat(
+                "refine", refine_gens, 2001, refine_rot, seed_order=mejor_o
+            )
+            print(
+                f"[APEX] refine@{refine_rot}° "
+                f"placed={len((h2 or {}).get('piezas') or [])} "
+                f"restos={len(r2 or [])} · {time.perf_counter() - t_ref:.1f}s",
+                flush=True,
+            )
+            if _svgnest_is_better(h2, r2, mejor_h, mejor_r):
+                mejor_h, mejor_r, mejor_o = h2, r2, o2
+                print("[APEX] refine wins", flush=True)
+        elif not (mejor_r or []):
+            print("[APEX] refine skipped (sin restos)", flush=True)
+    finally:
+        if cuda_ctx is not None:
+            try:
+                cuda_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    mejor_h["engine_id"] = "arga_apex"
+    mejor_h["placa_w"] = float(w_placa)
+    mejor_h["placa_h"] = float(h_placa)
+    mejor_h["apex_occt"] = dict(occt_stats) if occt_stats else {}
+    mejor_h["apex_ml"] = dict(ml_info) if ml_info else {}
+    mejor_h["apex_cuda"] = bool(cuda_used)
+    try:
+        mejor_h["kerf_usado"] = float(kerf_override)
+    except Exception:
+        mejor_h["kerf_usado"] = 0.15
+
+    if do_venom and (mejor_h.get("piezas") or []) and not _cancelled():
+        try:
+            from . import venom_ai
+
+            venom_ai.apply_smart_polisher(
+                mejor_h, "arga_apex", kerf_in=float(kerf_override)
+            )
+            print("[APEX] venom_polish done", flush=True)
+        except Exception as exc:
+            print(f"[APEX] venom_polish skip: {exc}", flush=True)
+
+    elapsed = time.perf_counter() - t0
+    mejor_h["apex_elapsed_s"] = elapsed
+    print(
+        f"[APEX] done placed={len(mejor_h.get('piezas') or [])} "
+        f"restos={len(mejor_r or [])} · {elapsed:.1f}s",
+        flush=True,
+    )
+
+    # Hive learn lo publica Venom (todos los motores). Aquí solo dejamos meta.
+    mejor_h["apex_seed_policy"] = seed_policy
+    return mejor_h, mejor_r
+
+
 def empaquetar_una_hoja_legacy_mc(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
     mc_iterations=None,
 ):
-    """Empaque C++ Monte Carlo legacy (referencia / diagnóstico)."""
+    """Empaque C++ Monte Carlo Lite (rápido). No sustituye por FORCE/base."""
     from .nest_optimization import get_engine_profile
 
     profile = get_engine_profile("arga_lite")
@@ -783,11 +1167,66 @@ def _lite_orden_desde_mejor(hoja: dict, restos: list, pool_src: list) -> list:
     return ordenadas
 
 
+def _lite_batch_desde_hoja(hoja: dict, pool_src: list) -> list:
+    """Piezas pack-ready correspondientes a las ya colocadas en la hoja."""
+    lookup = _build_piece_lookup_lists(pool_src)
+    batch: list = []
+    for pz in list(hoja.get("piezas") or []):
+        restored = _piece_from_native_rest(
+            {"nombre": str(pz.get("nombre") or "")},
+            lookup,
+        )
+        if restored is not None:
+            batch.append(restored)
+    return batch
+
+
+def _lite_plate_renest_enabled(profile: dict) -> bool:
+    env = str(os.environ.get("ARGA_LITE_PLATE_RENEST", "") or "").strip().lower()
+    if env in ("0", "false", "off", "no"):
+        return False
+    if env in ("1", "true", "yes", "on"):
+        return True
+    return bool(profile.get("lite_plate_renest", True))
+
+
+def _lite_resolve_passes(profile: dict) -> int:
+    env = str(os.environ.get("ARGA_LITE_PASSES", "") or "").strip()
+    if env:
+        try:
+            return max(1, min(int(env), 5))
+        except ValueError:
+            pass
+    pases = int(profile.get("lite_refine_passes", 1) or 1)
+    return max(1, min(pases, 5))
+
+
+def _lite_resolve_renest_tries(profile: dict) -> int:
+    env = str(os.environ.get("ARGA_LITE_PLATE_RENEST_TRIES", "") or "").strip()
+    if env:
+        try:
+            return max(1, min(int(env), 4))
+        except ValueError:
+            pass
+    tries = int(profile.get("lite_plate_renest_tries", 1) or 1)
+    return max(1, min(tries, 4))
+
+
+def _lite_resolve_renest_mc(profile: dict) -> int:
+    env = str(os.environ.get("ARGA_LITE_PLATE_RENEST_MC", "") or "").strip()
+    if env:
+        try:
+            return max(1, min(int(env), 4))
+        except ValueError:
+            pass
+    return max(1, min(int(profile.get("lite_plate_renest_mc", 1) or 1), 4))
+
+
 def empaquetar_una_hoja_arga_lite(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.15,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
@@ -795,17 +1234,20 @@ def empaquetar_una_hoja_arga_lite(
     mc_iterations=None,
 ):
     """
-    ARGA LITE: MC clásico con 3 pases explore→refine (estilo Ultra light).
+    ARGA LITE (rápido): 1 pase MC + opcional 1 renest de placa (1 MC, keep-if-better).
 
-    Pase 1: exploración corta. Pases 2–3: parten del mejor orden previo y
-    amplían intentos MC; solo se acepta si mejora (piezas / área / restos).
-    Sin recompilar C++.
+    Opt-in más calidad (más lento):
+      ARGA_LITE_PASSES=2  ARGA_LITE_PLATE_RENEST_TRIES=2  ARGA_LITE_PLATE_RENEST_MC=2
+    Opt-out renest: ARGA_LITE_PLATE_RENEST=0
     """
     from .nest_optimization import get_engine_profile
 
     profile = get_engine_profile("arga_lite")
-    pases = int(profile.get("lite_refine_passes", 3) or 3)
-    pases = max(1, min(pases, 5))
+    pases = _lite_resolve_passes(profile)
+    do_plate_renest = _lite_plate_renest_enabled(profile)
+    renest_tries = _lite_resolve_renest_tries(profile)
+    renest_mc = _lite_resolve_renest_mc(profile)
+
     if mc_iterations is not None:
         # Compat: si piden iterations explícitas, un solo shot MC.
         iters = max(1, min(int(mc_iterations), 8))
@@ -832,13 +1274,15 @@ def empaquetar_una_hoja_arga_lite(
     mejoras = 0
 
     print(
-        f"[LITE] explore->refine | pases={pases} (base=mejor anterior)",
+        f"[LITE] explore->refine | pases={pases} "
+        f"plate_renest={int(do_plate_renest)} "
+        f"renest_tries={renest_tries} renest_mc={renest_mc}",
         flush=True,
     )
 
     for pase in range(1, pases + 1):
-        # Más intentos MC en pases posteriores (1 → 2 → 3 estrategias internas).
-        iters_pase = max(1, min(pase, 4))
+        # Cap bajo: Lite no debe escalar MC con el número de pase.
+        iters_pase = 1 if pases <= 1 else max(1, min(pase, 2))
         print(
             f"[LITE] pase {pase}/{pases} · mc_iters={iters_pase} · "
             f"pool={len(orden_actual)}",
@@ -871,15 +1315,83 @@ def empaquetar_una_hoja_arga_lite(
         else:
             print(f"[LITE] pase {pase} sin mejora · se conserva mejor", flush=True)
 
-        # Siguiente pase nace del mejor actual (orden espacial + restos).
         orden_actual = _lite_orden_desde_mejor(mejor_hoja, mejor_restos, pool0)
 
+    # Renest placa sola — barato: 1 MC por try (no explore→refine anidado).
+    if do_plate_renest and (mejor_hoja.get("piezas") or []):
+        batch = _lite_batch_desde_hoja(mejor_hoja, pool0)
+        if len(batch) >= 2:
+            print(
+                f"[LITE] plate_renest · tries={renest_tries} · "
+                f"mc={renest_mc} · piezas={len(batch)}",
+                flush=True,
+            )
+            for intento in range(renest_tries):
+                if intento == 0:
+                    orden0 = sorted(
+                        batch,
+                        key=lambda x: float(x.get("area", 0) or 0),
+                        reverse=True,
+                    )
+                else:
+                    orden0 = list(batch)
+                    random.shuffle(orden0)
+                    orden0.sort(
+                        key=lambda x: float(x.get("area", 0) or 0),
+                        reverse=True,
+                    )
+
+                hoja_r, restos_r = empaquetar_una_hoja_legacy_mc(
+                    orden0,
+                    w_placa,
+                    h_placa,
+                    kerf_override=kerf_override,
+                    margin_override=margin_override,
+                    opt_override=opt_override,
+                    corner_override=corner_override,
+                    limite_poly=limite_poly,
+                    mc_iterations=renest_mc,
+                )
+                n_ok = len(hoja_r.get("piezas") or [])
+                if n_ok < len(batch) or restos_r:
+                    print(
+                        f"[LITE] plate_renest try={intento + 1} "
+                        f"rechazado (no caben todas: {n_ok}/{len(batch)})",
+                        flush=True,
+                    )
+                    continue
+                if _svgnest_is_better(
+                    hoja_r, mejor_restos, mejor_hoja, mejor_restos
+                ):
+                    mejoras += 1
+                    mejor_hoja = hoja_r
+                    print(
+                        f"[LITE] plate_renest mejora try={intento + 1} · "
+                        f"efi={float(hoja_r.get('eficiencia') or 0):.1f}%",
+                        flush=True,
+                    )
+                    break  # con 1 mejora basta; no gastar más tries
+                print(
+                    f"[LITE] plate_renest try={intento + 1} sin mejora",
+                    flush=True,
+                )
+
     print(
-        f"[LITE] fin · mejoras={mejoras}/{pases} · "
+        f"[LITE] fin · mejoras={mejoras} · "
         f"colocadas={len(mejor_hoja.get('piezas') or [])} "
         f"restos={len(mejor_restos or [])}",
         flush=True,
     )
+    try:
+        from . import compact_lite
+
+        if compact_lite.compact_enabled() and (mejor_hoja.get("piezas") or []):
+            mejor_hoja.setdefault("placa_w", float(w_placa or 0))
+            mejor_hoja.setdefault("placa_h", float(h_placa or 0))
+            mejor_hoja.setdefault("kerf_usado", float(kerf_override or 0))
+            compact_lite.apply_band_compact(mejor_hoja, engine_id="arga_lite")
+    except Exception as compact_ex:
+        print(f"[LITE] compact skip: {compact_ex}", flush=True)
     return mejor_hoja, mejor_restos
 
 
@@ -887,7 +1399,7 @@ def empaquetar_una_hoja_mc(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.0,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",

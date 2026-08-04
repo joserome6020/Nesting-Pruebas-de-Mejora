@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <optional>
 #include <random>
 #include <vector>
 
 #include "clipper2/clipper.h"
 #include "clipper2/clipper.minkowski.h"
+#include "cuda/nest_accel_raster.hpp"
 
 namespace arga {
 namespace {
@@ -462,6 +465,8 @@ bool colocar_pieza_burke(
     double mejor_py = 0.0;
     double mejor_score = std::numeric_limits<double>::infinity();
 
+    std::optional<cuda::DenseMask> cuda_board;
+
     for (const auto& var : variaciones) {
         std::vector<std::pair<double, double>> anclajes;
         anclajes.emplace_back(margin_px, margin_px);
@@ -473,6 +478,10 @@ bool colocar_pieza_burke(
             append_nfp_candidates(anclajes, state.fijas_buff_paths[idx], var.outer_norm);
         }
 
+        std::vector<std::pair<double, double>> cand_xy;
+        cand_xy.reserve(anclajes.size());
+        std::vector<std::pair<double, double>> cand_pxpy;
+        cand_pxpy.reserve(anclajes.size());
         for (const auto& anclaje : anclajes) {
             double px = anclaje.first - var.b_minx;
             double py = anclaje.second - var.b_miny;
@@ -482,6 +491,28 @@ bool colocar_pieza_burke(
                 || py + var.b_maxy > h_placa - margin_px + 0.1) {
                 continue;
             }
+            cand_xy.emplace_back(px, py);
+            cand_pxpy.emplace_back(px, py);
+        }
+        const auto rejected = [&]() -> std::vector<std::uint8_t> {
+            if (!cuda::filter_worthwhile(cand_xy.size(), state.fijas_buff_paths.size())) {
+                return {};
+            }
+            if (!cuda_board.has_value()) {
+                cuda_board = cuda::rasterize_union_occupancy(
+                    state.fijas_buff_paths, w_placa, h_placa, 8.0);
+            }
+            return cuda::filter_against_board(
+                *cuda_board, to_paths_d(var.poly_buff), cand_xy, 8.0);
+        }();
+
+        for (std::size_t ci = 0; ci < cand_pxpy.size(); ++ci) {
+            if (!rejected.empty() && rejected[ci] != 0) {
+                continue;
+            }
+            double px = cand_pxpy[ci].first;
+            double py = cand_pxpy[ci].second;
+
             if (comprobar_colision(px, py, var, limit, state.fijas_bounds, state.fijas_buff_paths)) {
                 continue;
             }
@@ -581,7 +612,9 @@ PackResult empaquetar_una_hoja_burke_blf(
     const std::string& /*opt_override*/,
     const std::string& /*corner_override*/,
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
-    int hill_climb_iterations) {
+    int hill_climb_iterations,
+    std::uint32_t rng_seed,
+    bool preserve_input_order) {
     PackResult out;
     out.restos = piezas;
     out.hoja.eficiencia = 0.0;
@@ -594,15 +627,19 @@ PackResult empaquetar_una_hoja_burke_blf(
     }
 
     std::vector<PieceIn> pool_base = piezas;
-    std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
-        return piece_area(a) > piece_area(b);
-    });
+    if (!preserve_input_order) {
+        // Legado FFD interno (rompe seed_order del bridge/IA).
+        std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
+            return piece_area(a) > piece_area(b);
+        });
+    }
 
     SheetOut mejor_hoja;
     std::vector<PieceIn> mejor_restos = pool_base;
 
     const int iteraciones = std::max(1, std::min(hill_climb_iterations, 50));
-    std::mt19937 rng(static_cast<uint32_t>(std::random_device{}()));
+    std::mt19937 rng(
+        rng_seed != 0 ? rng_seed : static_cast<uint32_t>(std::random_device{}()));
 
     for (int i = 0; i < iteraciones; ++i) {
         std::vector<PieceIn> pool_intento = pool_base;

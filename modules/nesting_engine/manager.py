@@ -60,6 +60,23 @@ def _es_motor_arga_force(engine_id=None) -> bool:
     return eid == ENGINE_ARGA_FORCE
 
 
+def _usar_pack_combinado_grupo(pendientes_est, accesorios) -> bool:
+    """
+    Empacar estructurales+accesorios en la misma llamada C++.
+    FORCE siempre; Lite/otros cuando Compact-lite está ON (evita P1 vacía + P2 floja).
+    """
+    if not (pendientes_est and accesorios):
+        return False
+    if _es_motor_arga_force():
+        return True
+    try:
+        from .compact_lite import compact_enabled
+
+        return bool(compact_enabled())
+    except Exception:
+        return False
+
+
 def _clave_es_cobre(clave) -> bool:
     """True si la clave de grupo es cobre (independiente del motor de acero)."""
     s = str(clave or "").strip().upper()
@@ -608,6 +625,17 @@ def enriquecer_piezas_hoja_con_fuentes(hoja: dict, piezas_origen: list) -> int:
         p_final["ruta"] = ruta
         p_final["orig_minx"] = p_orig.get("orig_minx", 0.0)
         p_final["orig_miny"] = p_orig.get("orig_miny", 0.0)
+        if p_orig.get("plasma_compensada_manual"):
+            p_final["plasma_compensada_manual"] = True
+            p_final["plasma_offset_mm_manual"] = float(
+                p_orig.get("plasma_offset_mm_manual") or 0.0
+            )
+            if p_orig.get("plasma_fuente_ya_compensada"):
+                p_final["plasma_fuente_ya_compensada"] = True
+            if p_orig.get("ruta_plasma"):
+                p_final["ruta_plasma"] = p_orig.get("ruta_plasma")
+        if p_orig.get("cu_especial_vertical"):
+            p_final["cu_especial_vertical"] = True
 
         transform = _inferir_transformacion_desde_resultado(p_orig, p_final)
         rot_origin = _origen_rotacion_pieza(p_orig.get("poly_exact") or p_orig.get("poly"))
@@ -2078,8 +2106,11 @@ class MotorNesting:
         self._cancel_checker = None
         self.orientacion_cobre_por_ruta = {}
         self.cu_especial_por_ruta = {}
+        self.plasma_compensada_por_ruta = {}
+        self.plasma_dxf_por_ruta = {}
         self.active_engine_id = get_active_engine_id()
         self._ultima_comparacion_motores = None
+        self._remnant_ids_consumidos: set[str] = set()
         try:
             profile = get_engine_profile(self.active_engine_id)
             mode = str(os.environ.get("ARGA_NEST_MODE", "first")).strip().lower()
@@ -2499,6 +2530,11 @@ class MotorNesting:
             if w_in <= 0 or h_in <= 0:
                 continue
 
+            placa_id = str(placa[2])
+            consumidos = getattr(self, "_remnant_ids_consumidos", None) or set()
+            if placa_id in consumidos:
+                continue
+
             libras_totales_placa = (
                 self._extraer_numero(placa[5]) if len(placa) > 5 else 0.0
             )
@@ -2514,19 +2550,32 @@ class MotorNesting:
                 if precio_mxn > 0
                 else (libras_totales_placa * precio_usd_lb)
             )
+            es_rem = (
+                "REMANENTE" in origen_placa
+                or placa_id.upper().startswith("PL-")
+                or placa_id.upper().startswith("REM-")
+            )
+            # Preferir remanentes: precio efectivo bajo + flag de orden
+            if es_rem and costo_placa_completa <= 0:
+                costo_placa_completa = max(1.0, w_in * h_in * 0.01)
             datos_placa_dict = {
                 "data": placa,
                 "w": w_in * 25.4,
                 "h": h_in * 25.4,
                 "precio": costo_placa_completa,
-                "id": str(placa[2]),
+                "id": placa_id,
                 "origen": origen_placa,
-                "precio_lb": precio_usd_lb,
+                "precio_lb": 0.0 if es_rem else precio_usd_lb,
                 "calibre": str(p_cal).strip(),
                 "delta_thk": self._delta_espesor(req_cal, p_cal),
+                "es_remanente": es_rem,
             }
 
-            es_emp = "EMPRESA" in origen_placa or origen_placa.strip() == ""
+            es_emp = (
+                "EMPRESA" in origen_placa
+                or "REMANENTE" in origen_placa
+                or origen_placa.strip() == ""
+            )
             if self._espesor_exacto(req_cal, p_cal):
                 (placas_exactas_emp if es_emp else placas_exactas_prov).append(
                     datos_placa_dict
@@ -2536,6 +2585,7 @@ class MotorNesting:
         if exactas:
             exactas.sort(
                 key=lambda x: (
+                    0 if x.get("es_remanente") else 1,
                     x.get("delta_thk", 999.0),
                     x["precio_lb"],
                     x["precio"],
@@ -2583,6 +2633,57 @@ class MotorNesting:
             resultados[clave] = merged
             return
         resultados[clave] = nuevo
+
+    @staticmethod
+    def _partir_piezas_plasma(piezas):
+        plasma, normal = [], []
+        for p in piezas or []:
+            if isinstance(p, dict) and p.get("plasma_compensada_manual"):
+                plasma.append(p)
+            else:
+                normal.append(p)
+        return normal, plasma
+
+    @staticmethod
+    def _jobs_acero_separando_plasma(grupos_acero_ord):
+        """Un job por lote; si hay plasma PARTS, primero lote plasma y luego el resto."""
+        jobs = []
+        for clave, piezas in grupos_acero_ord:
+            normal, plasma = MotorNesting._partir_piezas_plasma(piezas)
+            if plasma:
+                jobs.append((clave, plasma, True))
+            if normal:
+                jobs.append((clave, normal, False))
+        return jobs
+
+    @staticmethod
+    def _marcar_resultado_lote_plasma(resultado_grupo):
+        """Marca hojas de un lote nestado solo con piezas compensadas (PARTS)."""
+        if not isinstance(resultado_grupo, dict) or resultado_grupo.get("error"):
+            return resultado_grupo
+        hojas = resultado_grupo.get("hojas") or []
+        for h in hojas:
+            off = 0.0
+            n_comp = 0
+            for pz in h.get("piezas") or []:
+                if not isinstance(pz, dict):
+                    continue
+                nom = str(pz.get("nombre") or "")
+                if nom.startswith(
+                    ("REF__", "TATUAJE__", "RETAZO_GUILLOTINA__", "CU_CORTE__", "REMANENTE__")
+                ):
+                    continue
+                pz["plasma_compensada_manual"] = True
+                off_pz = float(pz.get("plasma_offset_mm_manual") or 0.0)
+                if off_pz > 0:
+                    off = off_pz
+                n_comp += 1
+            if n_comp > 0:
+                h["plasma_compensado_manual"] = True
+                if off > 0:
+                    h["plasma_offset_mm_manual"] = off
+                h["plasma_piezas_compensadas"] = int(n_comp)
+        return resultado_grupo
 
     @staticmethod
     def _parse_thickness_value(value):
@@ -2639,6 +2740,8 @@ class MotorNesting:
         self._plate_formats_allowed = allowed
         self._plate_format_limits = limits
         self._plate_format_used = {}
+        self._remnant_ids_consumidos = set()
+        self._last_wo_name = str(wo_name or "")
 
         def _release_engine_context():
             if engine_token is not None:
@@ -2668,6 +2771,29 @@ class MotorNesting:
             try:
                 from .ai_heuristic import ai_learn_from_feedback
                 ai_learn_from_feedback()
+            except Exception:
+                pass
+            try:
+                from .ai_ranker import train_from_telemetry
+                from .ai_telemetry import ai_ranker_enabled, summarize
+
+                if ai_ranker_enabled():
+                    tr = train_from_telemetry(min_events=8)
+                    try:
+                        from .ai_ranker import last_policy, record_policy_reward
+
+                        # Refuerzo inmediato del nest actual si hay efi en result
+                        efi_now = 0.0
+                        if isinstance(result, dict):
+                            efi_now = float(
+                                (result.get("eficiencia") or result.get("efi") or 0) or 0
+                            )
+                        if efi_now > 0.5 and last_policy():
+                            record_policy_reward(last_policy(), efi_now)
+                    except Exception:
+                        pass
+                    print(f"[AI-RANKER] train={tr.get('ok')} bandit_upd={tr.get('bandit_updates')}", flush=True)
+                print(f"[AI-TELEMETRY] {summarize()}", flush=True)
             except Exception:
                 pass
             return result
@@ -2719,7 +2845,63 @@ class MotorNesting:
                 f"[PRE-PARSER] clave={clave} | pieza={pieza} | qty={qty} | status={st} | ruta={ruta}"
             )
 
-            poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta)
+            ruta_parse = ruta
+            plasma_flag = False
+            plasma_off = 0.0
+            ruta_plasma = ""
+            if not es_material_cobre(mat):
+                clave_ruta = clave_orientacion_cobre_ruta(ruta)
+                plasma_flag = bool(
+                    (getattr(self, "plasma_compensada_por_ruta", {}) or {}).get(
+                        clave_ruta, False
+                    )
+                )
+            if plasma_flag:
+                try:
+                    from modules.plasma_compensator import (
+                        asegurar_dxf_plasma_compensado,
+                        compute_plasma_offset_mm,
+                    )
+
+                    thk_in = self._parse_thickness_value(cal)
+                    if thk_in is None:
+                        thk_in = float(self._extraer_numero(cal) or 0.0)
+                    plasma_off = float(compute_plasma_offset_mm(float(thk_in or 0.0)))
+                    mapa_dxf = getattr(self, "plasma_dxf_por_ruta", {}) or {}
+                    prec = str(mapa_dxf.get(clave_ruta) or "").strip()
+                    if prec and os.path.isfile(prec):
+                        ruta_parse = prec
+                        ruta_plasma = prec
+                    else:
+                        out_dxf, err_dxf = asegurar_dxf_plasma_compensado(
+                            ruta, plasma_off
+                        )
+                        if out_dxf and os.path.isfile(out_dxf):
+                            ruta_parse = out_dxf
+                            ruta_plasma = out_dxf
+                            if not hasattr(self, "plasma_dxf_por_ruta") or self.plasma_dxf_por_ruta is None:
+                                self.plasma_dxf_por_ruta = {}
+                            self.plasma_dxf_por_ruta[clave_ruta] = out_dxf
+                        else:
+                            plasma_flag = False
+                            plasma_off = 0.0
+                            _dbg_nesting(
+                                f"[PLASMA-DXF-FAIL] clave={clave} | pieza={pieza} | {err_dxf}"
+                            )
+                    if plasma_flag:
+                        _dbg_nesting(
+                            f"[PLASMA-DXF] clave={clave} | pieza={pieza} | "
+                            f"offset_mm={plasma_off:.3f} | src={ruta_parse}"
+                        )
+                except Exception as exc:
+                    plasma_flag = False
+                    plasma_off = 0.0
+                    ruta_parse = ruta
+                    _dbg_nesting(
+                        f"[PLASMA-DXF-ERR] clave={clave} | pieza={pieza} | {exc}"
+                    )
+
+            poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta_parse)
 
             if es_material_cobre(mat):
                 rot_deg = int(
@@ -2839,7 +3021,7 @@ class MotorNesting:
                             clave_orientacion_cobre_ruta(ruta), False
                         )
                     )
-                grupos[clave].append({
+                item_pz = {
                     "nombre": pieza,
                     # Geometría exacta al motor: misma malla que exporta/visibiliza (con barrenos).
                     "poly": poly_exact,
@@ -2847,6 +3029,7 @@ class MotorNesting:
                     "area": poly_exact.area,
                     "calibre": str(cal).strip(),
                     "material": str(mat).strip(),
+                    # Láser / fuente 1:1: siempre el Processed original.
                     "ruta": ruta,
                     "orig_minx": minx,
                     "orig_miny": miny,
@@ -2854,8 +3037,15 @@ class MotorNesting:
                     "poly_exact": poly_exact,
                     "marks_exact": marks_exact,
                     "cu_especial_vertical": especial_cu,
-                    "debug_id": f"{clave}::{pieza}::rep{idx_qty + 1}"
-                })
+                    "debug_id": f"{clave}::{pieza}::rep{idx_qty + 1}",
+                }
+                if plasma_flag:
+                    item_pz["plasma_compensada_manual"] = True
+                    item_pz["plasma_offset_mm_manual"] = float(plasma_off)
+                    item_pz["plasma_fuente_ya_compensada"] = True
+                    if ruta_plasma:
+                        item_pz["ruta_plasma"] = ruta_plasma
+                grupos[clave].append(item_pz)
 
             _dbg_nesting(
                 f"[GRUPO-ADD] clave={clave} | pieza={pieza} | qty_insertada={int(qty)} | "
@@ -3011,17 +3201,20 @@ class MotorNesting:
                     base_pct,
                 )
                 prev_cc = _bind_pack_cancel_checker(self._cancelado)
+                acero_jobs = self._jobs_acero_separando_plasma(grupos_acero_ord)
+                n_jobs = max(1, len(acero_jobs))
                 try:
-                    for i, (clave, piezas) in enumerate(grupos_acero_ord):
+                    for i, (clave, piezas, es_plasma_lote) in enumerate(acero_jobs):
                         if self._cancelado():
                             notificar(
                                 "Nesting detenido: se conserva lo calculado hasta ahora.",
-                                base_pct + (i / max(1, n_acero)) * (1.0 - base_pct),
+                                base_pct + (i / n_jobs) * (1.0 - base_pct),
                             )
                             break
+                        tag = "plasma" if es_plasma_lote else "láser"
                         notificar(
-                            f"Ultra optimizando lote acero {i + 1}/{n_acero}: {clave}",
-                            base_pct + (i / max(1, n_acero)) * (1.0 - base_pct),
+                            f"Ultra lote acero {i + 1}/{n_jobs} ({tag}): {clave}",
+                            base_pct + (i / n_jobs) * (1.0 - base_pct),
                         )
                         try:
                             clave_w, resultado_grupo = self._procesar_grupo_parallel(
@@ -3034,6 +3227,10 @@ class MotorNesting:
                                 config_corner,
                                 wo_name,
                             )
+                            if es_plasma_lote:
+                                resultado_grupo = self._marcar_resultado_lote_plasma(
+                                    resultado_grupo
+                                )
                             self._merge_resultado_en_mapa(
                                 resultados, clave_w or clave, resultado_grupo
                             )
@@ -3044,8 +3241,10 @@ class MotorNesting:
                     _unbind_pack_cancel_checker(prev_cc)
             else:
                 # Multiproceso normal solo para acero.
+                acero_jobs = self._jobs_acero_separando_plasma(grupos_acero_ord)
+                n_jobs = max(1, len(acero_jobs))
                 nucleos_totales = multiprocessing.cpu_count()
-                nucleos_a_usar = max(1, min(nucleos_totales - 2, n_acero))
+                nucleos_a_usar = max(1, min(nucleos_totales - 2, n_jobs))
                 if not str(os.environ.get("ARGA_NEST_OMP_THREADS", "")).strip():
                     intra = max(1, nucleos_totales // max(1, nucleos_a_usar))
                     os.environ["ARGA_NEST_OMP_THREADS"] = str(intra)
@@ -3081,8 +3280,8 @@ class MotorNesting:
                                 plate_allowed,
                                 plate_limits,
                             ),
-                        ): clave
-                        for clave, piezas in grupos_acero_ord
+                        ): (clave, es_plasma_lote)
+                        for clave, piezas, es_plasma_lote in acero_jobs
                     }
 
                     pendientes = set(futuros.keys())
@@ -3099,7 +3298,7 @@ class MotorNesting:
                             notificar(
                                 "Nesting cancelado: deteniendo workers...",
                                 base_pct
-                                + (completados / max(1, n_acero)) * (1.0 - base_pct),
+                                + (completados / n_jobs) * (1.0 - base_pct),
                             )
                             break
 
@@ -3113,7 +3312,7 @@ class MotorNesting:
 
                         for futuro in done:
                             pendientes.discard(futuro)
-                            clave = futuros[futuro]
+                            clave, es_plasma_lote = futuros[futuro]
                             try:
                                 raw_result = futuro.result()
 
@@ -3124,10 +3323,18 @@ class MotorNesting:
                                     clave_worker, resultado_grupo = raw_result
                                     if not clave_worker:
                                         clave_worker = clave
+                                    if es_plasma_lote:
+                                        resultado_grupo = self._marcar_resultado_lote_plasma(
+                                            resultado_grupo
+                                        )
                                     self._merge_resultado_en_mapa(
                                         resultados, clave_worker, resultado_grupo
                                     )
                                 elif isinstance(raw_result, dict):
+                                    if es_plasma_lote:
+                                        raw_result = self._marcar_resultado_lote_plasma(
+                                            raw_result
+                                        )
                                     self._merge_resultado_en_mapa(
                                         resultados, clave, raw_result
                                     )
@@ -3165,7 +3372,7 @@ class MotorNesting:
                                     notificar(
                                         f"Fallo duro en {clave}: deteniendo workers hermanos...",
                                         base_pct
-                                        + (completados / max(1, n_acero))
+                                        + (completados / n_jobs)
                                         * (1.0 - base_pct),
                                     )
                             except Exception:
@@ -3174,10 +3381,10 @@ class MotorNesting:
                             completados += 1
                             progreso_actual = (
                                 base_pct
-                                + (completados / max(1, n_acero)) * (1.0 - base_pct)
+                                + (completados / n_jobs) * (1.0 - base_pct)
                             )
                             notificar(
-                                f"Acero procesado: {completados}/{n_acero}",
+                                f"Acero procesado: {completados}/{n_jobs}",
                                 progreso_actual,
                             )
 
@@ -3219,6 +3426,10 @@ class MotorNesting:
             child.set_cancel_checker(self._cancel_checker)
             child.orientacion_cobre_por_ruta = dict(self.orientacion_cobre_por_ruta or {})
             child.cu_especial_por_ruta = dict(self.cu_especial_por_ruta or {})
+            child.plasma_compensada_por_ruta = dict(
+                self.plasma_compensada_por_ruta or {}
+            )
+            child.plasma_dxf_por_ruta = dict(self.plasma_dxf_por_ruta or {})
             return child
 
         bundle = ejecutar_comparacion_motores(
@@ -3413,35 +3624,29 @@ class MotorNesting:
         prev_cc = _bind_pack_cancel_checker(self._cancelado)
         try:
             import os
+            from modules.nesting_engine.ai_heuristic import smart_seed_order
+            from modules.nesting_engine.hive_mind_nests import (
+                force_eddie_policy,
+                suggest_seed_policy,
+            )
 
             _engine_id = getattr(self, "active_engine_id", "default")
             try:
-                from modules.nesting_engine.ai_heuristic import smart_seed_order
-                from modules.nesting_engine.hive_mind_nests import (
-                    force_eddie_policy,
-                    suggest_seed_policy,
+                kerf_g = 0.15
+                if isinstance(config_kerf, dict):
+                    kerf_g = float(next(iter(config_kerf.values()), 0.15) or 0.15)
+                else:
+                    kerf_g = float(config_kerf or 0.15)
+                sug = suggest_seed_policy(piezas or [], kerf=kerf_g)
+                force_eddie_policy(str(_engine_id), str(sug.get("policy") or "host_parasite"))
+                print(
+                    f"[HIVE-ML] engine={_engine_id} suggest={sug.get('policy')} "
+                    f"conf={sug.get('confidence')} neighbors={sug.get('neighbors')}",
+                    flush=True,
                 )
-
-                try:
-                    kerf_g = 0.15
-                    if isinstance(config_kerf, dict):
-                        kerf_g = float(next(iter(config_kerf.values()), 0.15) or 0.15)
-                    else:
-                        kerf_g = float(config_kerf or 0.15)
-                    sug = suggest_seed_policy(piezas or [], kerf=kerf_g)
-                    force_eddie_policy(
-                        str(_engine_id), str(sug.get("policy") or "host_parasite")
-                    )
-                    print(
-                        f"[HIVE-ML] engine={_engine_id} suggest={sug.get('policy')} "
-                        f"conf={sug.get('confidence')} neighbors={sug.get('neighbors')}",
-                        flush=True,
-                    )
-                except Exception as _hive_exc:
-                    print(f"[HIVE-ML] seed skip: {_hive_exc}", flush=True)
-                piezas = smart_seed_order(piezas or [], engine_id=_engine_id)
-            except Exception as _eddie_exc:
-                print(f"[EDDIE] seed skip: {_eddie_exc}", flush=True)
+            except Exception as _hive_exc:
+                print(f"[HIVE-ML] seed skip: {_hive_exc}", flush=True)
+            piezas = smart_seed_order(piezas or [], engine_id=_engine_id)
 
             return self._procesar_grupo_parallel_impl(
                 clave,
@@ -3627,11 +3832,12 @@ class MotorNesting:
                 break
             pool_est_snapshot = copy.deepcopy(pendientes_est)
             pool_acc_snapshot = copy.deepcopy(accesorios)
-            usar_pack_combinado = bool(
-                pendientes_est
-                and accesorios
-                and _es_motor_arga_force()
-            )
+            usar_pack_combinado = _usar_pack_combinado_grupo(pendientes_est, accesorios)
+            if usar_pack_combinado:
+                _dbg_nesting(
+                    f"[PACK-COMBINADO] clave={clave} | est={len(pendientes_est)} | "
+                    f"acc={len(accesorios)} | motor={get_active_engine_id()}"
+                )
             pool_combined_snapshot = (
                 pool_est_snapshot + pool_acc_snapshot if usar_pack_combinado else None
             )
@@ -4190,6 +4396,27 @@ class MotorNesting:
                 'opt_usado': config_opt, 'corner_usado': config_corner,
                 'es_retazo': False, 'origen_placa': candidato_ganador['origen']
             })
+            # Consumir remanente de inventario (no reutilizar en la misma corrida)
+            try:
+                origen_g = str(candidato_ganador.get("origen") or "").upper()
+                pid_g = str(candidato_ganador.get("id") or "")
+                if candidato_ganador.get("es_remanente") or "REMANENTE" in origen_g:
+                    if not hasattr(self, "_remnant_ids_consumidos"):
+                        self._remnant_ids_consumidos = set()
+                    self._remnant_ids_consumidos.add(pid_g)
+                    from .remnants_inventory import mark_remnant_used
+
+                    area_in2 = (
+                        float(candidato_ganador.get("w", 0) or 0)
+                        * float(candidato_ganador.get("h", 0) or 0)
+                        / (25.4 * 25.4)
+                    )
+                    mk = mark_remnant_used(pid_g, area_in2=area_in2)
+                    _dbg_nesting(
+                        f"[REMNANT-USED] clave={clave} | placa_id={pid_g} | {mk}"
+                    )
+            except Exception as rem_ex:
+                _dbg_nesting(f"[REMNANT-USED-ERR] {rem_ex}")
             
             if usar_pack_combinado:
                 pendientes_est = mejor_restos_est
@@ -4199,37 +4426,44 @@ class MotorNesting:
             else:
                 accesorios = mejor_restos_acc
 
-            # Fill-first: antes de RTZ / siguiente madre, empujar leftovers a huecos/patio.
+            # Compact-lite: backfill remanente L + band-close ANTES de RTZ / hoja nueva.
             pool_fill = list(pendientes_est or []) + list(accesorios or [])
-            if pool_fill:
-                from .sheet_integrity import (
-                    calcular_restos_por_delta,
-                    contar_piezas_reales_hoja,
-                )
+            if pool_fill or (hoja_ganadora.get("piezas") or []):
+                from .sheet_integrity import calcular_restos_por_delta, contar_piezas_reales_hoja
+                from . import compact_lite
 
                 conteo_antes = contar_piezas_reales_hoja(hoja_ganadora)
-                _rellenar_accesorios_en_huecos_hoja(
+                engine_compact = str(
+                    getattr(self, "active_engine_id", None) or "arga_lite"
+                )
+                pool_after = compact_lite.densify_sheet(
                     hoja_ganadora,
                     pool_fill,
-                    candidato_ganador["w"],
-                    candidato_ganador["h"],
-                    config_kerf,
-                    config_margin,
-                    config_opt,
-                    config_corner,
-                    mc_iterations=mc_iters,
-                    accesorios_retries=max(4, int(cu_acc_retries or 4)),
+                    w_placa=float(candidato_ganador["w"]),
+                    h_placa=float(candidato_ganador["h"]),
+                    kerf=config_kerf,
+                    margin=config_margin,
+                    opt=config_opt,
+                    corner=config_corner,
+                    mc_iterations=max(1, int(mc_iters or 1)),
                     clave=clave,
-                    solo_interiores=False,
+                    engine_id=engine_compact,
                 )
                 delta = contar_piezas_reales_hoja(hoja_ganadora) - conteo_antes
                 if delta:
                     pendientes_est = calcular_restos_por_delta(pendientes_est, delta)
                     accesorios = calcular_restos_por_delta(accesorios, delta)
                     _dbg_nesting(
-                        f"[FILL-ANTES-RTZ] clave={clave} | "
+                        f"[COMPACT-ANTES-RTZ] clave={clave} | "
                         f"colocadas={sum(delta.values())} | "
-                        f"restan_est={len(pendientes_est)} | restan_acc={len(accesorios)}"
+                        f"restan_est={len(pendientes_est)} | restan_acc={len(accesorios)} | "
+                        f"pool_after={len(pool_after or [])}"
+                    )
+                elif pool_fill and not delta:
+                    # Solo band-close; pools intactos.
+                    _dbg_nesting(
+                        f"[COMPACT-ANTES-RTZ] clave={clave} | solo_band_close | "
+                        f"pool={len(pool_fill)}"
                     )
                 actualizar_eficiencias_hoja(hoja_ganadora)
 
@@ -4747,15 +4981,25 @@ class MotorNesting:
                 if h.get('origen_placa') != "EMPRESA" and not h.get('es_retazo')
             )
 
-            # --- VENOM POLISHER AI (coarse C++ + Shapely + CUDA opt-in) ---
+            # --- Compact-lite (barato) + Venom opt-in ---
             import os
             venom_reward_total = 0.0
             venom_compact_pre = 0.0
             venom_compact_post = 0.0
             venom_sheets = 0
+            engine_id = getattr(self, "active_engine_id", "default")
+            try:
+                from . import compact_lite
+
+                if compact_lite.compact_enabled():
+                    for hoja in hojas_finales:
+                        if isinstance(hoja, dict) and (hoja.get("piezas") or []):
+                            compact_lite.apply_band_compact(hoja, engine_id=engine_id)
+            except Exception as compact_ex:
+                _dbg_nesting(f"[COMPACT-BATCH-ERR] {compact_ex}")
             try:
                 from . import venom_ai
-                engine_id = getattr(self, "active_engine_id", "default")
+
                 for hoja in hojas_finales:
                     venom_ai.apply_smart_polisher(hoja, engine_id)
                     if "venom_reward" in hoja:
@@ -4795,39 +5039,66 @@ class MotorNesting:
             clave_out = clave
             
             # --- APRENDIZAJE IA POR MOTOR (señal de grupo + compactación Venom) ---
+            import os
+            from .ai_heuristic import record_telemetry, get_last_seed_info
+            engine_id = getattr(self, "active_engine_id", None) or os.environ.get(
+                "ARGA_MOTOR_NESTING", "svgnest_ultra"
+            )
+            eff_real = float(
+                efi_grupo.get("eficiencia_tanque_real")
+                or efi_grupo.get("efficiency_real")
+                or efi_grupo.get("eficiencia_real")
+                or 0.0
+            )
+            seed_info = get_last_seed_info(engine_id)
+            nest_reward = None
+            c_pre = c_post = None
+            if venom_sheets > 0:
+                c_pre = venom_compact_pre / venom_sheets
+                c_post = venom_compact_post / venom_sheets
+                # Reward compuesto: eficiencia real del tanque + Δcompactación media.
+                nest_reward = eff_real + (venom_reward_total / venom_sheets)
+            if eff_real > 0.5 or nest_reward is not None:
+                record_telemetry(
+                    piezas,
+                    eff_real,
+                    engine_id,
+                    compactness_pre=c_pre,
+                    compactness_post=c_post,
+                    seed_policy=seed_info.get("policy"),
+                    nest_reward=nest_reward if nest_reward is not None else eff_real,
+                )
             try:
-                import os
-                from .ai_heuristic import record_telemetry, get_last_seed_info
+                from .ai_telemetry import log_nest_event
 
-                engine_id = getattr(self, "active_engine_id", None) or os.environ.get(
-                    "ARGA_MOTOR_NESTING", "svgnest_ultra"
+                hojas = list(resultado_placas.get("hojas") or [])
+                rem_ids = [
+                    str(h.get("placa_id") or "")
+                    for h in hojas
+                    if "REMANENTE" in str(h.get("origen_placa") or "").upper()
+                    or str(h.get("placa_id") or "").upper().startswith("PL-")
+                ]
+                log_nest_event(
+                    wo=str(getattr(self, "_last_wo_name", "") or ""),
+                    calibre=str(req_cal or ""),
+                    material=str(req_mat or ""),
+                    engine=str(engine_id or ""),
+                    profile=str(os.environ.get("ARGA_NEST_MODE") or ""),
+                    n_piezas=len(piezas or []),
+                    n_sheets=len(hojas),
+                    efi=float(eff_real or 0.0),
+                    remnant_used=bool(rem_ids),
+                    remnant_ids=rem_ids,
+                    seed_policy=str(seed_info.get("policy") or ""),
+                    seed_order=[str(p.get("nombre") or "") for p in (piezas or [])],
+                    nest_reward=float(
+                        nest_reward if nest_reward is not None else eff_real or 0.0
+                    ),
+                    source="manager_grupo",
+                    extra={"clave": str(clave), "match_mode": str(match_mode)},
                 )
-                eff_real = float(
-                    efi_grupo.get("eficiencia_tanque_real")
-                    or efi_grupo.get("efficiency_real")
-                    or efi_grupo.get("eficiencia_real")
-                    or 0.0
-                )
-                seed_info = get_last_seed_info(engine_id)
-                nest_reward = None
-                c_pre = c_post = None
-                if venom_sheets > 0:
-                    c_pre = venom_compact_pre / venom_sheets
-                    c_post = venom_compact_post / venom_sheets
-                    # Reward compuesto: eficiencia real del tanque + Δcompactación media.
-                    nest_reward = eff_real + (venom_reward_total / venom_sheets)
-                if eff_real > 0.5 or nest_reward is not None:
-                    record_telemetry(
-                        piezas,
-                        eff_real,
-                        engine_id,
-                        compactness_pre=c_pre,
-                        compactness_post=c_post,
-                        seed_policy=seed_info.get("policy"),
-                        nest_reward=nest_reward if nest_reward is not None else eff_real,
-                    )
-            except Exception as _ai_tel_exc:
-                print(f"[EDDIE] telemetry skip: {_ai_tel_exc}", flush=True)
+            except Exception:
+                pass
             # --------------------------------
             
             return clave_out, resultado_placas

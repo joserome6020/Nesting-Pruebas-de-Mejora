@@ -1,0 +1,14 @@
+{
+  "case_id": "r_1000kva",
+  "scenario": "r_1000kva_critical",
+  "source_kind": "workspace_geometry_snapshot",
+  "workspace_job": "1000 kva de prueba",
+  "group": "0.375_CARBONO",
+  "sheet_index": 9,
+  "sheet_code": "W.O. 21 X3-H24",
+  "all_piece_count": 23,
+  "source_piece_count": 23,
+  "piece_count": 23,
+  "plate_w_mm": 3048.0,
+  "plate_h_mm": 1828.8
+}

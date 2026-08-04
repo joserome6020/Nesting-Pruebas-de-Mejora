@@ -17,7 +17,13 @@ from PySide6.QtGui import (
     QTransform,
 )
 from interface.qt.curve_refine import refine_enabled, refine_ring
-from interface.material_colors import CAD_VIEW_BG, es_contexto_cobre, paleta_pieza_nesting
+from interface.material_colors import (
+    CAD_VIEW_BG,
+    NEST_SEL_EDGE,
+    NEST_SEL_FILL,
+    es_contexto_cobre,
+    paleta_pieza_nesting,
+)
 from reporte_pdf_nesting import _resolve_piece_meta
 
 from PySide6.QtWidgets import (
@@ -615,17 +621,33 @@ def _piece_style(
         return None, QPen(Qt.PenStyle.NoPen), Qt.BrushStyle.NoBrush
 
     pal = paleta_pieza_nesting(pieza, hoja, clave)
-    edge_color = QColor("#FF2222") if compensada else QColor(pal.edge)
+    if compensada:
+        edge_color = COLOR_COMP_EDGE
+    else:
+        edge_color = QColor(pal.edge)
 
-    if selected:
-        fill = QBrush(QColor(pal.sel_fill))
-        edge = QPen(QColor(pal.sel_edge), 1.6)
+    if selected and not compensada:
+        fill = QBrush(QColor(NEST_SEL_FILL))
+        edge = QPen(QColor(NEST_SEL_EDGE), 1.6)
+    elif selected and compensada:
+        # Selección azul + contorno rojo plasma bien visible
+        fill = QBrush(QColor(NEST_SEL_FILL))
+        edge = QPen(COLOR_COMP_EDGE, 2.8)
+        edge.setCosmetic(True)
     elif ring_i == 0:
         fill = QBrush(QColor(pal.fill))
-        edge = QPen(edge_color, 1.5 if compensada else 0.75)
+        if compensada:
+            edge = QPen(COLOR_COMP_EDGE, 2.6)
+            edge.setCosmetic(True)
+        else:
+            edge = QPen(edge_color, 0.75)
     else:
         fill = QBrush(QColor(CAD_VIEW_BG))
-        edge = QPen(edge_color, 0.65)
+        if compensada:
+            edge = QPen(COLOR_COMP_EDGE, 1.8)
+            edge.setCosmetic(True)
+        else:
+            edge = QPen(edge_color, 0.65)
     return fill, edge, Qt.BrushStyle.SolidPattern
 
 

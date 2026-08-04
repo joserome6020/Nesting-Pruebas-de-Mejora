@@ -1,0 +1,14 @@
+{
+  "case_id": "r_2500kva_x30",
+  "scenario": "r_2500kva_x30_critical",
+  "source_kind": "workspace_geometry_snapshot",
+  "workspace_job": "2500 KVA X30",
+  "group": "0.375_CARBONO",
+  "sheet_index": 8,
+  "sheet_code": "W.O. 15 X15-H179",
+  "all_piece_count": 256,
+  "source_piece_count": 256,
+  "piece_count": 40,
+  "plate_w_mm": 3048.0,
+  "plate_h_mm": 1219.1999999999998
+}

@@ -1,0 +1,53 @@
+{
+  "engine": "cpp_v2_poc",
+  "results": [
+    {
+      "scenario": "s0_micro",
+      "pieces": 9,
+      "ordered_pairs_per_iteration": 72,
+      "iterations": 3,
+      "calls": 216,
+      "uncached_ms": 8.970899973064661,
+      "cached_lookup_ms": 0.4826,
+      "preparation_ms": 0.2522,
+      "cached_total_ms": 0.7347999999999999,
+      "lookup_speedup": 18.588686226822755,
+      "end_to_end_speedup": 12.208628161492463,
+      "cache": {
+        "hits": 194,
+        "misses": 22,
+        "evictions": 0,
+        "entries": 22,
+        "capacity": 4096,
+        "requests": 216,
+        "hit_rate": 0.8981481481481481
+      },
+      "cache_hit_rate": 0.8981481481481481,
+      "kerf_mm": 6.35
+    },
+    {
+      "scenario": "s1_single_plate",
+      "pieces": 33,
+      "ordered_pairs_per_iteration": 1056,
+      "iterations": 3,
+      "calls": 3168,
+      "uncached_ms": 61.13269994966686,
+      "cached_lookup_ms": 2.7524,
+      "preparation_ms": 0.5819,
+      "cached_total_ms": 3.3343000000000003,
+      "lookup_speedup": 22.210688835077335,
+      "end_to_end_speedup": 18.334492981935295,
+      "cache": {
+        "hits": 3132,
+        "misses": 36,
+        "evictions": 0,
+        "entries": 36,
+        "capacity": 4096,
+        "requests": 3168,
+        "hit_rate": 0.9886363636363636
+      },
+      "cache_hit_rate": 0.9886363636363636,
+      "kerf_mm": 6.35
+    }
+  ]
+}

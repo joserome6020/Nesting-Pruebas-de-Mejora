@@ -1,0 +1,228 @@
+{
+  "version": 1,
+  "scenario": "r_autodxf_desktop_cal11",
+  "level": "REAL",
+  "source_kind": "nestsim_snapshot",
+  "plate_w_in": 120.0,
+  "plate_h_in": 48.0,
+  "kerf_in": 0.3,
+  "margin_in": 0.15,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "nest_mode": "standard",
+  "mc_iterations": 1,
+  "require_full_place": false,
+  "notes": "Snapshot AutoDXF local, calibre 0.11811; qty extraída del nombre de archivo.",
+  "pieces": [
+    {
+      "ruta": "dxf/FB-10-10-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "qty": 16,
+      "nombre": "FB-10-10-A, A 36, QTY 16, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/FB-10-12-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "qty": 16,
+      "nombre": "FB-10-12-A, A 36, QTY 16, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKS-10-001, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKS-10-001, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-223, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-223, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-224, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-224, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-240, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKT-240, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-241, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-241, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-261, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKT-261, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-262, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKT-262, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-287, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-287, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-294, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-294, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-295, A 36, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKT-295, A 36, QTY 1, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-297, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-297, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-299, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-299, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-304, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "qty": 8,
+      "nombre": "GENE-BKT-304, A 36 Galv, QTY 8, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-306, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "qty": 8,
+      "nombre": "GENE-BKT-306, A 36 Galv, QTY 8, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-308, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-BKT-308, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-RLG-122, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-RLG-122, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-BKT-RLG-123, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-BKT-RLG-123, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-DF-20-201, A 36, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-DF-20-201, A 36, QTY 1, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-DF-20-202, A 36, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-DF-20-202, A 36, QTY 1, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-DF-RLG-103, A 36, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-DF-RLG-103, A 36, QTY 2, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-DF-RLG-104, A 36, QTY 7, Cal 0.11811.dxf",
+      "qty": 7,
+      "nombre": "GENE-DF-RLG-104, A 36, QTY 7, Cal 0.11811",
+      "material": "A 36",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-GS-0820-708, A 36 Galv, QTY 24, Cal 0.11811.dxf",
+      "qty": 24,
+      "nombre": "GENE-GS-0820-708, A 36 Galv, QTY 24, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-HFM-10-102, A 36 Galv, QTY 10, Cal 0.11811.dxf",
+      "qty": 10,
+      "nombre": "GENE-HFM-10-102, A 36 Galv, QTY 10, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-HFM-12-102, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "qty": 2,
+      "nombre": "GENE-HFM-12-102, A 36 Galv, QTY 2, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-SIVC-40-40-112, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "qty": 1,
+      "nombre": "GENE-SIVC-40-40-112, A 36 Galv, QTY 1, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-VFM-20-101, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "qty": 8,
+      "nombre": "GENE-VFM-20-101, A 36 Galv, QTY 8, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-VFM-20-102, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "qty": 8,
+      "nombre": "GENE-VFM-20-102, A 36 Galv, QTY 8, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    },
+    {
+      "ruta": "dxf/GENE-VS-20-151, A 36 Galv, QTY 4, Cal 0.11811.dxf",
+      "qty": 4,
+      "nombre": "GENE-VS-20-151, A 36 Galv, QTY 4, Cal 0.11811",
+      "material": "A 36 Galv",
+      "calibre_source": "0.11811"
+    }
+  ]
+}

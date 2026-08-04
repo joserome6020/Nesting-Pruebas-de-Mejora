@@ -1,0 +1,22 @@
+{
+  "scenario": "s1_single_plate",
+  "engine_id": "arga_force",
+  "elapsed_ms": 2780.1787999924272,
+  "placed": 33,
+  "expected": 33,
+  "efi_directa": 42.81111111111112,
+  "solape_ok": true,
+  "kerf_violations": 0,
+  "min_gap_in": 0.25025836614173214,
+  "in_holes": 0,
+  "restos": 0,
+  "efi_real": 42.81111111111112,
+  "pass_ok": true,
+  "error": "",
+  "baseline_delta_pp": null,
+  "notes": "Single-plate local (sustituto reproducible de PLC152-P3). Geometría embebida; no depende de red.",
+  "overlap_detail": "",
+  "gap_details": [],
+  "nest_mode": "standard",
+  "level": "S1"
+}

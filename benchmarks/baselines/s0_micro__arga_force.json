@@ -1,0 +1,22 @@
+{
+  "scenario": "s0_micro",
+  "engine_id": "arga_force",
+  "elapsed_ms": 224.91610003635287,
+  "placed": 9,
+  "expected": 9,
+  "efi_directa": 25.000000000000007,
+  "solape_ok": true,
+  "kerf_violations": 0,
+  "min_gap_in": 0.25024606299212554,
+  "in_holes": 0,
+  "restos": 0,
+  "efi_real": 25.000000000000007,
+  "pass_ok": true,
+  "error": "",
+  "baseline_delta_pp": null,
+  "notes": "Micro corpus sintético: TINY/NARROW/WIDE + hole-fill. Sin DXF de red.",
+  "overlap_detail": "",
+  "gap_details": [],
+  "nest_mode": "standard",
+  "level": "S0"
+}

@@ -218,6 +218,14 @@ def lanzar_occt_robotica(
     resultados: list[tuple[str, bool, str]] = []
     universal = step_universal_sin_camas_activo()
 
+    from .step_export_prefs import step_enabled_for_label
+
+    def _step_ok(label: str) -> bool:
+        ok = step_enabled_for_label(label)
+        if not ok:
+            print(f"[STEP][OCCT][SKIP] {label}: desactivado en Configuración → STEPS")
+        return ok
+
     def _fmt_for_dxf(path: str) -> str:
         nombre = os.path.basename(path)
         if nombre in fmt_map:
@@ -243,7 +251,7 @@ def lanzar_occt_robotica(
     jobs: list[tuple] = []
     robot_jobs: list[tuple] = []
 
-    if es_cobre and rutas.get("nesteos_cobre_dxf"):
+    if es_cobre and rutas.get("nesteos_cobre_dxf") and _step_ok("NESTEOS DE COBRE"):
         dxf_dir, candidatos = _dxfs("nesteos_cobre_dxf")
         if fmt_map:
             candidatos = [p for p in candidatos if _cu_dxf_requiere_3d(_fmt_for_dxf(p))]
@@ -277,6 +285,8 @@ def lanzar_occt_robotica(
             ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step"),
             ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step"),
         ):
+            if not _step_ok(etiqueta):
+                continue
             if not rutas.get(dxf_key) and not rutas.get(step_key):
                 continue
             dxf_dir, candidatos = _dxfs(dxf_key)
@@ -295,7 +305,7 @@ def lanzar_occt_robotica(
             )
     else:
         # Robot: jobs emparejados A+B (1 build → 2 camas).
-        if rutas.get("robot_laser_dxf"):
+        if rutas.get("robot_laser_dxf") and _step_ok("ROBOT LASER"):
             dxf_dir, candidatos = _dxfs("robot_laser_dxf")
             robot_jobs.append(
                 (
@@ -308,7 +318,7 @@ def lanzar_occt_robotica(
                 )
             )
 
-        if rutas.get("robot_plasma_dxf"):
+        if rutas.get("robot_plasma_dxf") and _step_ok("ROBOT PLASMA"):
             dxf_dir, candidatos = _dxfs("robot_plasma_dxf")
             robot_jobs.append(
                 (
@@ -388,6 +398,13 @@ def generar_steps_cobre_fuentes_occt(
     progress_cb: ProgressCb | None = None,
 ) -> int:
     """STEP in-place junto a cada DXF fuente cobre (paridad FreeCAD)."""
+    from .step_export_prefs import step_enabled_for_label
+
+    _log = log_fn or (lambda _msg: None)
+    if not step_enabled_for_label("NESTEOS DE COBRE"):
+        _log("STEP cobre OCCT in-place: SKIP (desactivado en Configuración → STEPS)")
+        return 0
+
     from modules.cobre_step_fuentes import (
         escribir_manifest_cobre,
         recolectar_fuentes_cobre_desde_resultados,
@@ -395,7 +412,6 @@ def generar_steps_cobre_fuentes_occt(
 
     from .exporter import RUTA_NESTEOS_COBRE
 
-    _log = log_fn or (lambda _msg: None)
     manifest = recolectar_fuentes_cobre_desde_resultados(resultados or {})
     fuentes = manifest.get("fuentes") or []
     if not fuentes:

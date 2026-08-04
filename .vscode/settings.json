@@ -33,5 +33,16 @@
             "username": "user",
             "password": "password"
         }
-    ]
+    ],
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#5e8ee638",
+        "titleBar.inactiveBackground": "#5e8ee61f",
+        "titleBar.border": "#5e8ee6",
+        "statusBar.border": "#5e8ee6",
+        "statusBar.foreground": "#5e8ee6",
+        "activityBar.activeBorder": "#5e8ee6",
+        "focusBorder": "#5e8ee680",
+        "__omnify": "xlr8:subtle"
+    },
+    "omnify.alien": "xlr8"
 }

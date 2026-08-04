@@ -1,0 +1,91 @@
+{
+  "schema": "arga_plate_selection_evidence_v1",
+  "case_id": "ps_synth_many_formats",
+  "engine_id": "arga_force",
+  "label": "baseline_seq",
+  "elapsed_ms_total": 86467.5886999903,
+  "sim_elapsed_ms_total": 37101.331049983855,
+  "sim_candidates_started": 3.0,
+  "sim_candidates_finished": 3.0,
+  "sim_candidates_skipped": 2.0,
+  "expected_pieces": 44,
+  "placed_pieces": 44,
+  "sheet_count": 1,
+  "remnant_sheet_count": 0,
+  "cost_total": 505.0,
+  "cost_empresa": 505.0,
+  "cost_proveedor": 0.0,
+  "mean_efi_direct": 71.66666666666669,
+  "mean_efi_real": 71.66666666666669,
+  "integrity_ok": true,
+  "integrity_failures": [],
+  "selected_plates": [
+    {
+      "group": "0.1196_A36",
+      "plate_id": "F60x48",
+      "w_mm": 1524.0,
+      "h_mm": 1219.1999999999998,
+      "price": 505.0,
+      "source": "EMPRESA",
+      "is_remnant": false,
+      "piece_count": 44,
+      "efficiency": 71.66666666666669
+    }
+  ],
+  "winner_plate_ids": [
+    "F60x48"
+  ],
+  "oracle": {
+    "max_cost_total": 1600,
+    "max_sheets": 4
+  },
+  "oracle_ok": true,
+  "error": "",
+  "pass_ok": true,
+  "probe": {
+    "label": "baseline_seq",
+    "sim_candidates_started": 3,
+    "sim_candidates_finished": 3,
+    "sim_candidates_skipped": 2,
+    "sim_winners": 1,
+    "sim_elapsed_ms_total": 37008.64439998986,
+    "sim_elapsed_ms_max": 14073.82520000101,
+    "sim_elapsed_ms_mean": 12336.21479999662,
+    "winner_plate_ids": [
+      "F60x48"
+    ]
+  },
+  "case_title": "Muchos formatos similares: cuello SIM multi-placa (tiempo)",
+  "case_kind": "synthetic_multiformat",
+  "created_at": "2026-07-30T14:32:07.619926+00:00",
+  "dual_objective": [
+    "mejor_acomodo",
+    "menor_impacto_costo"
+  ],
+  "runs": 2,
+  "pass_ok_all": true,
+  "integrity_ok_all": true,
+  "run_details": [
+    {
+      "pass_ok": true,
+      "cost_total": 505.0,
+      "sheet_count": 1,
+      "sim_elapsed_ms_total": 37194.01769997785,
+      "elapsed_ms_total": 87170.79589999048,
+      "winner_plate_ids": [
+        "F60x48"
+      ]
+    },
+    {
+      "pass_ok": true,
+      "cost_total": 505.0,
+      "sheet_count": 1,
+      "sim_elapsed_ms_total": 37008.64439998986,
+      "elapsed_ms_total": 85764.38149999012,
+      "winner_plate_ids": [
+        "F60x48"
+      ]
+    }
+  ],
+  "baseline_role": "production_reference"
+}

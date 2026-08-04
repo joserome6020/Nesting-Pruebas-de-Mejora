@@ -43,6 +43,7 @@ Z_GEOM_STROKE = 5.0
 Z_HOLE_FILL = 2.0
 Z_HOLE_STROKE = 6.0
 Z_MARK = 15.0
+Z_PLASMA = 12.0
 
 
 def _stroke_pen(color: str, span: float, factor_conversion: float, *, dashed: bool = False, cosmetic: bool = False) -> QPen:
@@ -102,6 +103,7 @@ class CadPartGraphicsView(QGraphicsView):
         self._dim_items: list = []
         self._preview_items: list = []
         self._snap_items: list = []
+        self._plasma_items: list = []
         self._placeholder: QGraphicsSimpleTextItem | None = None
         self._is_panning = False
         self._pan_last = QPointF()
@@ -136,6 +138,7 @@ class CadPartGraphicsView(QGraphicsView):
         self._dim_items.clear()
         self._preview_items.clear()
         self._snap_items.clear()
+        self._plasma_items.clear()
         self._placeholder = None
         self._model = None
         self._fit_rect = None
@@ -219,6 +222,164 @@ class CadPartGraphicsView(QGraphicsView):
                 True,
                 area=model.area_neta,
             )
+
+    def clear_plasma_overlay(self) -> None:
+        for it in self._plasma_items:
+            try:
+                self._scene.removeItem(it)
+            except Exception:
+                pass
+        self._plasma_items.clear()
+
+    def set_plasma_overlay(
+        self,
+        offset_mm: float,
+        *,
+        label: str | None = None,
+    ) -> dict | None:
+        """
+        Dibuja contorno compensado (rojo) sobre OUTER del modelo cargado.
+        offset_mm es el buffer plasma en mm (misma regla que nesting).
+        Retorna métricas compensadas en unidades de escena o None.
+        """
+        self.clear_plasma_overlay()
+        model = self._model
+        if model is None or float(offset_mm or 0.0) <= 0:
+            return None
+        rings = list(getattr(model, "outer_rings", None) or [])
+        if not rings:
+            return None
+
+        from shapely.geometry import Polygon
+
+        fc = float(model.factor_conversion or 25.4) or 25.4
+        off_scene = float(offset_mm) / fc
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        area_comp = 0.0
+        perim_comp = 0.0
+
+        pen = QPen(QColor("#FF1A1A"))
+        pen.setWidthF(2.4)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        for ring in rings:
+            if len(ring) < 3:
+                continue
+            try:
+                poly = Polygon(ring)
+                if not poly.is_valid:
+                    poly = poly.buffer(0)
+                if poly.is_empty:
+                    continue
+                buff = poly.buffer(off_scene, join_style=1, quad_segs=16)
+                if buff is None or buff.is_empty:
+                    continue
+                geoms = list(buff.geoms) if hasattr(buff, "geoms") else [buff]
+                for g in geoms:
+                    if not hasattr(g, "exterior"):
+                        continue
+                    coords = list(g.exterior.coords)
+                    if len(coords) < 3:
+                        continue
+                    path = self._path_from_pts(coords, closed=True)
+                    item = QGraphicsPathItem(path)
+                    item.setPen(pen)
+                    item.setBrush(Qt.BrushStyle.NoBrush)
+                    item.setZValue(Z_PLASMA)
+                    self._scene.addItem(item)
+                    self._plasma_items.append(item)
+                    xs = [p[0] for p in coords]
+                    ys = [p[1] for p in coords]
+                    minx = min(minx, min(xs))
+                    maxx = max(maxx, max(xs))
+                    miny = min(miny, min(ys))
+                    maxy = max(maxy, max(ys))
+                    area_comp += float(g.area)
+                    perim_comp += float(g.length)
+            except Exception:
+                continue
+
+        if label:
+            txt = QGraphicsSimpleTextItem(str(label))
+            txt.setBrush(QBrush(QColor("#FCA5A5")))
+            f = txt.font()
+            f.setPointSize(10)
+            f.setBold(True)
+            txt.setFont(f)
+            # Escena tiene Y invertida en vista; texto con escala Y=-1 para leerse.
+            txt.setTransform(QTransform.fromScale(1.0, -1.0))
+            cx = (minx + maxx) * 0.5 if minx < maxx else float(self._centro_pieza[0])
+            top = maxy if maxy > miny else float(self._centro_pieza[1])
+            br = txt.boundingRect()
+            txt.setPos(cx - br.width() * 0.5, top + br.height() + off_scene * 2)
+            txt.setZValue(Z_PLASMA + 1)
+            self._scene.addItem(txt)
+            self._plasma_items.append(txt)
+
+        if minx >= maxx:
+            return None
+        return {
+            "min_x": minx,
+            "max_x": maxx,
+            "min_y": miny,
+            "max_y": maxy,
+            "area": area_comp,
+            "perimetro": perim_comp,
+            "offset_mm": float(offset_mm),
+        }
+
+    def emphasize_plasma_outers(self, *, label: str | None = None) -> None:
+        """Contorno rojo grueso sobre OUTER del modelo (DXF ya compensado)."""
+        self.clear_plasma_overlay()
+        model = self._model
+        if model is None:
+            return
+        rings = list(getattr(model, "outer_rings", None) or [])
+        if not rings:
+            return
+
+        pen = QPen(QColor("#FF1A1A"))
+        pen.setWidthF(3.2)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        for ring in rings:
+            if len(ring) < 3:
+                continue
+            path = self._path_from_pts(ring, closed=True)
+            item = QGraphicsPathItem(path)
+            item.setPen(pen)
+            item.setBrush(Qt.BrushStyle.NoBrush)
+            item.setZValue(Z_PLASMA)
+            self._scene.addItem(item)
+            self._plasma_items.append(item)
+            xs = [p[0] for p in ring]
+            ys = [p[1] for p in ring]
+            minx = min(minx, min(xs))
+            maxx = max(maxx, max(xs))
+            miny = min(miny, min(ys))
+            maxy = max(maxy, max(ys))
+
+        if label and minx < maxx:
+            txt = QGraphicsSimpleTextItem(str(label))
+            txt.setBrush(QBrush(QColor("#FCA5A5")))
+            f = txt.font()
+            f.setPointSize(10)
+            f.setBold(True)
+            txt.setFont(f)
+            txt.setTransform(QTransform.fromScale(1.0, -1.0))
+            cx = (minx + maxx) * 0.5
+            br = txt.boundingRect()
+            txt.setPos(cx - br.width() * 0.5, maxy + br.height() + 4)
+            txt.setZValue(Z_PLASMA + 1)
+            self._scene.addItem(txt)
+            self._plasma_items.append(txt)
 
     def fit_view(self) -> None:
         rect = self._content_rect

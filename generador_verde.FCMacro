@@ -259,6 +259,20 @@ def _cad_base_from_dxf_name(name: str) -> str:
         step_base = name[idx:].strip()
     return step_base
 
+_NESTING_THK_IN_RE = re.compile(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+
+
+def _thk_mm_from_dxf_name(path_or_name: str, default_mm: float) -> float:
+    """Calibre desde NESTING_<pulgadas>_… → mm (fallback default_mm)."""
+    name = os.path.basename(str(path_or_name or ""))
+    m = _NESTING_THK_IN_RE.search(name)
+    if not m:
+        return float(default_mm)
+    try:
+        return float(m.group(1)) * 25.4
+    except Exception:
+        return float(default_mm)
+
 def _configure_export_units():
     unit = _env_str("FREECAD_EXPORT_LINEAR_UNIT", "").strip().upper()
     fmt = _export_format()
@@ -1078,6 +1092,8 @@ def _collect_cut_outer_edges(doc):
 
 def procesar_dxf(dxf_path, step_out_dir, thk_mm, scale, origen_tipo, off_x, off_y, off_z):
     name = os.path.splitext(os.path.basename(dxf_path))[0]
+    thk_mm = _thk_mm_from_dxf_name(dxf_path, thk_mm)
+    print(f"[{name}] FREECAD_THK_MM efectivo: {float(thk_mm):.4f}")
 
     # Queremos conservar el identificador útil para seguimiento:
     # ejemplo:

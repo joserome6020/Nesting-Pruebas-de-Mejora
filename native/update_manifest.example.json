@@ -1,0 +1,14 @@
+{
+  "latest_version": "0.3.0",
+  "download_url": "https://example.local/ans-cpp/ANS_CPP_portable_0.3.0.zip",
+  "sha256": "REPLACE_WITH_REAL_HASH",
+  "notes": "Ejemplo de manifiesto. Code-sign con signtool antes de publicar.",
+  "codesign": {
+    "required": true,
+    "tool": "signtool sign /fd SHA256 /a /tr http://timestamp.digicert.com /td SHA256",
+    "targets": [
+      "native/bin/ArgaNestWorker.exe",
+      "modules/nesting_engine/arga_nest_core*.pyd"
+    ]
+  }
+}

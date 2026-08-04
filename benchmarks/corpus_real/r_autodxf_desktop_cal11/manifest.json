@@ -1,0 +1,232 @@
+{
+  "case_id": "r_autodxf_desktop_cal11",
+  "scenario": "r_autodxf_desktop_cal11",
+  "source_kind": "autodxf_snapshot",
+  "source_dir": "AutoDXF",
+  "calibre_token": "0.11811",
+  "dxf_count": 30,
+  "total_requested_pieces": 140,
+  "skipped_dxf_count": 1,
+  "skipped": [
+    {
+      "source_name": "GENE-BKT-239, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "reason": "GENE-BKT-239, A 36 Galv, QTY 1, Cal 0.11811: Multi-contorno outer (4 cuerpos significativos). El nesting requiere una sola pieza; revise DXF/capas."
+    }
+  ],
+  "plate_w_in": 120.0,
+  "plate_h_in": 48.0,
+  "kerf_in": 0.3,
+  "margin_in": 0.15,
+  "files": [
+    {
+      "file": "dxf/FB-10-10-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "source_name": "FB-10-10-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "sha256": "22b25580558a25f8b62ef4e02101d5b4e0ca9ad4975e34de8a7d8bdfec68424c",
+      "bytes": 306752,
+      "qty": 16
+    },
+    {
+      "file": "dxf/FB-10-12-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "source_name": "FB-10-12-A, A 36, QTY 16, Cal 0.11811.dxf",
+      "sha256": "9efa378b2c3b82ef1e9757448ab5c531231d2dfa9f4670e838fff1ac24f4b2f4",
+      "bytes": 306655,
+      "qty": 16
+    },
+    {
+      "file": "dxf/GENE-BKS-10-001, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKS-10-001, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "09f8493ec533ad52764ef8b331ac9214b2a483a97db54823dbb10d46274843e0",
+      "bytes": 373590,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-223, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-223, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "7e40a314d50de98d58e572ebc5a65ad226b2f62de2c68b87cdd2ee7f0b4a2e35",
+      "bytes": 368737,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-224, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-224, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "c8e7b64824f5495c8aef06052fe5c9d7d4832ab22dc419833936554a34120f9f",
+      "bytes": 368861,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-240, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-240, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "0d000cb4e55cba2e8cebdd51321c4c0335a89fb90ec6266e24ca4164bc9d71ad",
+      "bytes": 367153,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-241, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-241, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "c724d54042e00d1e132c5eb84168bc57b1e2a0d59acfb6253600593487539052",
+      "bytes": 372782,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-261, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-261, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "4c048cf4953de23cd76d77e73a502d5262133c3a20e40f6a6dc3b65dc210e6c9",
+      "bytes": 366699,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-262, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-262, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "6ca5ad3bb3a0767333dd6b1f2be37ed8d6b1722d5c6eb9bdf44a6f1ef21e628a",
+      "bytes": 366668,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-287, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-287, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "f948e5fe31dec139a6724250d589a0e9d5d8f1223d25b6f32a21209da5cc0dd0",
+      "bytes": 365747,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-294, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-294, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "f044e432314c7848f3690bb578c202a4ac8812299dbe64a781610f603c7379b8",
+      "bytes": 366552,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-295, A 36, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-295, A 36, QTY 1, Cal 0.11811.dxf",
+      "sha256": "76f667febd252e418cfc12d019561f2eb92219bfe95b5af19edba2040b146b3b",
+      "bytes": 365308,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-297, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-297, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "dd6ee545239468a88eaab79ff05171531acaccd967e12f076e3af1dbcb1b75bb",
+      "bytes": 364885,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-299, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-299, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "ebc8efcd64c20456d7cfdea6a8eabdc26dfdfa0e1da595bfc0f7e2f3ce8f8b46",
+      "bytes": 363202,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-304, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-304, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "sha256": "781bdda81e1c45c3aab6c42328c7fad15065e26d370893241455f13b1ab1b86d",
+      "bytes": 367084,
+      "qty": 8
+    },
+    {
+      "file": "dxf/GENE-BKT-306, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-306, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "sha256": "2665fec826aa5fdfb189a9573c5fec7b0c073100dbb44e8eda25376fa15e826e",
+      "bytes": 367109,
+      "qty": 8
+    },
+    {
+      "file": "dxf/GENE-BKT-308, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-308, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "40a9bfddfda76af05c49b1d7b7a906cb6f069b18af11a395f6c4f7663c0a5bbf",
+      "bytes": 364828,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-BKT-RLG-122, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-RLG-122, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "355fd5561614c793e1442188bab6f98d7e65f934a0d905bc8fb80244137f5947",
+      "bytes": 365752,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-BKT-RLG-123, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-BKT-RLG-123, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "15947d598fd021d0ae67922797ab4b894b096bf8cc603074a9db8f4ffd7c88f1",
+      "bytes": 365392,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-DF-20-201, A 36, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-DF-20-201, A 36, QTY 1, Cal 0.11811.dxf",
+      "sha256": "ed6e6dba0a18e9fd93e9c527c8c77602cca8d190420bd070f98764bce21973a4",
+      "bytes": 409579,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-DF-20-202, A 36, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-DF-20-202, A 36, QTY 1, Cal 0.11811.dxf",
+      "sha256": "da0d5e89b1273cb31186ca3d77785480dcc9e5ce11981ee7ed0419b9d1ea3030",
+      "bytes": 398917,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-DF-RLG-103, A 36, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-DF-RLG-103, A 36, QTY 2, Cal 0.11811.dxf",
+      "sha256": "aa762158f2cd4bd273f5e71206c35442a666e0bf1cfdf2b854368a8063ccab03",
+      "bytes": 371004,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-DF-RLG-104, A 36, QTY 7, Cal 0.11811.dxf",
+      "source_name": "GENE-DF-RLG-104, A 36, QTY 7, Cal 0.11811.dxf",
+      "sha256": "5fff490f2953b218b58103519d139aef15a8a62ea759baf61d2408d5cebc9bb8",
+      "bytes": 371709,
+      "qty": 7
+    },
+    {
+      "file": "dxf/GENE-GS-0820-708, A 36 Galv, QTY 24, Cal 0.11811.dxf",
+      "source_name": "GENE-GS-0820-708, A 36 Galv, QTY 24, Cal 0.11811.dxf",
+      "sha256": "6eded9fde471ba73be944396f7f83dd12da78eca320840e5bd3777686b763b3f",
+      "bytes": 361989,
+      "qty": 24
+    },
+    {
+      "file": "dxf/GENE-HFM-10-102, A 36 Galv, QTY 10, Cal 0.11811.dxf",
+      "source_name": "GENE-HFM-10-102, A 36 Galv, QTY 10, Cal 0.11811.dxf",
+      "sha256": "5c1499aa6ec4ddf2987b87df23be327de599e5034c5a7aff1e37455d887a7ad6",
+      "bytes": 388697,
+      "qty": 10
+    },
+    {
+      "file": "dxf/GENE-HFM-12-102, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "source_name": "GENE-HFM-12-102, A 36 Galv, QTY 2, Cal 0.11811.dxf",
+      "sha256": "c8f10ba41e65e8e84bc2ff353f10537e214e793f7e3dce96b8d9a0f98f489e3e",
+      "bytes": 395222,
+      "qty": 2
+    },
+    {
+      "file": "dxf/GENE-SIVC-40-40-112, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "source_name": "GENE-SIVC-40-40-112, A 36 Galv, QTY 1, Cal 0.11811.dxf",
+      "sha256": "0cf9debc6fc91fadc6bf87afa646edca28040ab3602821b13ae5bd72fde773e9",
+      "bytes": 373907,
+      "qty": 1
+    },
+    {
+      "file": "dxf/GENE-VFM-20-101, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "source_name": "GENE-VFM-20-101, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "sha256": "b032dfbd8a66cd15857abf99f1c63fea2b976c8283533cb2b438da43e56471fa",
+      "bytes": 421794,
+      "qty": 8
+    },
+    {
+      "file": "dxf/GENE-VFM-20-102, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "source_name": "GENE-VFM-20-102, A 36 Galv, QTY 8, Cal 0.11811.dxf",
+      "sha256": "23552512a938d03cdddb57b1b6ca26a68f438469ed11610ddf5460a6170c1141",
+      "bytes": 414672,
+      "qty": 8
+    },
+    {
+      "file": "dxf/GENE-VS-20-151, A 36 Galv, QTY 4, Cal 0.11811.dxf",
+      "source_name": "GENE-VS-20-151, A 36 Galv, QTY 4, Cal 0.11811.dxf",
+      "sha256": "ca93d42bcdc800ad886dbc63af9a646bb5cf1cc3e93e3ec44fa186fde025fde6",
+      "bytes": 378897,
+      "qty": 4
+    }
+  ]
+}

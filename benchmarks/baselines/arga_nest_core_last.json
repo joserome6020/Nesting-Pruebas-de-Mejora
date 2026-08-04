@@ -1,0 +1,45 @@
+{
+  "core": {
+    "env_ARGA_NEST_CORE": false,
+    "module_loaded": true,
+    "active": false,
+    "version": "ArgaNestCore 0.3.0 (ANS C++ product line)",
+    "load_error": null,
+    "abi": "1.2.0"
+  },
+  "cuda": {
+    "build_has_cuda": true,
+    "detail": "CUDA runtime disponible para algorithm_cpp.",
+    "env_requested": false,
+    "runtime_available": true
+  },
+  "rows": [
+    {
+      "scenario": "s0_micro",
+      "engine": "arga_nest_core/svgnest_ultra",
+      "placed": "9/9",
+      "placed_count": 9,
+      "expected": 9,
+      "efi": 18.0,
+      "solape_ok": true,
+      "kerf_ok": true,
+      "elapsed_ms": 327.99,
+      "certify_issues": [],
+      "pass": true
+    },
+    {
+      "scenario": "s1_single_plate",
+      "engine": "arga_nest_core/svgnest_ultra",
+      "placed": "33/33",
+      "placed_count": 33,
+      "expected": 33,
+      "efi": 8.725694444444445,
+      "solape_ok": true,
+      "kerf_ok": true,
+      "elapsed_ms": 7507.61,
+      "certify_issues": [],
+      "pass": true
+    }
+  ],
+  "all_pass": true
+}

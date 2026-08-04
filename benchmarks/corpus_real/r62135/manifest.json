@@ -1,0 +1,13 @@
+{
+  "case_id": "r62135",
+  "status": "source_unavailable",
+  "required_artifacts": [
+    "62135 2.arganest",
+    "DXF 0.375 A36",
+    "DXF 0.5 A36",
+    "DXF RTZ",
+    "snapshot de placas"
+  ],
+  "capture_rule": "Capturar al menos una placa por calibre y conservar la marca RTZ en el manifest.",
+  "reason": "El workspace indicado no existe en el equipo; la ruta de AutoDXF accesible no enumeró archivos utilizables."
+}

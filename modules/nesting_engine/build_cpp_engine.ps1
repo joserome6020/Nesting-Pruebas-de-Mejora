@@ -402,6 +402,21 @@ Prueba:
     Write-Host "[OK] Toolchain MSVC listo: $($toolchain.Path)" -ForegroundColor Green
 }
 
+function Find-CudaToolkit {
+    $roots = Get-ChildItem `
+        -Path "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA" `
+        -Directory `
+        -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending
+    foreach ($root in $roots) {
+        $nvcc = Join-Path $root.FullName "bin\nvcc.exe"
+        if (Test-Path -LiteralPath $nvcc) {
+            return $root.FullName
+        }
+    }
+    return $null
+}
+
 function Invoke-CmakeConfigure {
     param(
         [string]$CmakeExe,
@@ -409,12 +424,28 @@ function Invoke-CmakeConfigure {
         [string]$SourceDir
     )
 
+    $cudaToolkit = Find-CudaToolkit
+    if ($cudaToolkit) {
+        $env:CUDA_PATH = $cudaToolkit
+        $env:CudaToolkitDir = "$cudaToolkit\"
+        Write-Host "[INFO] CUDA Toolkit: $cudaToolkit" -ForegroundColor Cyan
+    }
+
     $vs = Get-VisualStudioInstall
     if ($vs) {
         $generator = Get-CmakeGeneratorForVs $vs.Version
         Write-Host "[INFO] Visual Studio detectado: $($vs.Path)" -ForegroundColor Cyan
         Write-Host "[INFO] Generador CMake: $generator (x64)" -ForegroundColor Cyan
-        & $CmakeExe $SourceDir -G $generator -A x64 -DPython_EXECUTABLE="$PyExe"
+        $cmakeArgs = @(
+            $SourceDir,
+            "-G", $generator,
+            "-A", "x64",
+            "-DPython_EXECUTABLE=$PyExe"
+        )
+        if ($cudaToolkit) {
+            $cmakeArgs += @("-T", "cuda=$cudaToolkit")
+        }
+        & $CmakeExe @cmakeArgs
         if ($LASTEXITCODE -ne 0) { throw "CMake configure falló con generador $generator." }
         return "vs"
     }

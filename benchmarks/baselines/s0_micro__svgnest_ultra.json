@@ -1,0 +1,22 @@
+{
+  "scenario": "s0_micro",
+  "engine_id": "svgnest_ultra",
+  "elapsed_ms": 795.5190000357106,
+  "placed": 9,
+  "expected": 9,
+  "efi_directa": 24.999999999999996,
+  "solape_ok": true,
+  "kerf_violations": 0,
+  "min_gap_in": 0.2499384842519682,
+  "in_holes": 1,
+  "restos": 0,
+  "efi_real": 24.999999999999996,
+  "pass_ok": true,
+  "error": "",
+  "baseline_delta_pp": null,
+  "notes": "Micro corpus sintético: TINY/NARROW/WIDE + hole-fill. Sin DXF de red.",
+  "overlap_detail": "",
+  "gap_details": [],
+  "nest_mode": "standard",
+  "level": "S0"
+}

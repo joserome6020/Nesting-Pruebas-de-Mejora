@@ -1,0 +1,36 @@
+{
+  "case_id": "ps_synth_many_formats",
+  "title": "Muchos formatos similares: cuello SIM multi-placa (tiempo)",
+  "kind": "synthetic_multiformat",
+  "notes": [
+    "6 formatos EMPRESA del mismo calibre con precios cercanos para forzar",
+    "varias simulaciones antes del early-exit. Sirve para medir wall-time SIM,",
+    "no una trampa de costo extrema. Oracle: cualquier ganador válido con",
+    "todas las piezas y costo <= 550."
+  ],
+  "engine_id": "arga_force",
+  "kerf_in": 0.25,
+  "margin_in": 0.15,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "calibre": "0.1196",
+  "material": "A36",
+  "pieces": [
+    {"nombre": "HOST-A", "qty": 6, "w_in": 18.0, "h_in": 10.0},
+    {"nombre": "PANEL-B", "qty": 10, "w_in": 12.0, "h_in": 6.0},
+    {"nombre": "BKT-C", "qty": 16, "w_in": 3.0, "h_in": 2.5},
+    {"nombre": "STRIP-D", "qty": 12, "w_in": 8.0, "h_in": 1.5}
+  ],
+  "plates": [
+    {"id": "F48x48", "calibre": "0.1196", "material": "A36", "length_in": 48, "width_in": 48, "lb": 160, "mxn": 500, "usd_lb": 1.0, "stock": "DISPONIBLE", "origen": "EMPRESA"},
+    {"id": "F60x30", "calibre": "0.1196", "material": "A36", "length_in": 60, "width_in": 30, "lb": 120, "mxn": 480, "usd_lb": 1.0, "stock": "DISPONIBLE", "origen": "EMPRESA"},
+    {"id": "F72x36", "calibre": "0.1196", "material": "A36", "length_in": 72, "width_in": 36, "lb": 170, "mxn": 510, "usd_lb": 1.0, "stock": "DISPONIBLE", "origen": "EMPRESA"},
+    {"id": "F96x48", "calibre": "0.1196", "material": "A36", "length_in": 96, "width_in": 48, "lb": 280, "mxn": 520, "usd_lb": 0.95, "stock": "DISPONIBLE", "origen": "EMPRESA"},
+    {"id": "F60x48", "calibre": "0.1196", "material": "A36", "length_in": 60, "width_in": 48, "lb": 200, "mxn": 505, "usd_lb": 1.0, "stock": "DISPONIBLE", "origen": "EMPRESA"},
+    {"id": "F84x36", "calibre": "0.1196", "material": "A36", "length_in": 84, "width_in": 36, "lb": 210, "mxn": 495, "usd_lb": 1.0, "stock": "DISPONIBLE", "origen": "EMPRESA"}
+  ],
+  "oracle": {
+    "max_cost_total": 1600,
+    "max_sheets": 4
+  }
+}

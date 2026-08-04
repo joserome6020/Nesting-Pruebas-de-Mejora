@@ -1,0 +1,36 @@
+﻿{
+    "timestamp_url":  "http://timestamp.digicert.com",
+    "thumbprint":  "37122CAFE56B71712031A7F187AC33E3C6B88471",
+    "signed_at":  "2026-07-31T10:01:08.7136361-06:00",
+    "note":  "Auto-firmado local OK para cadena interna. Sustituir por cert CA/empresa para SmartScreen.",
+    "artifacts":  [
+                      {
+                          "path":  "modules/nesting_engine/arga_nest_core.cp314-win_amd64.pyd",
+                          "sha256":  "814EF6212147F59F1BC851AFF75DB9017FEEBEC06D932DDC2E9CEF99E0221A25",
+                          "status":  "UnknownError",
+                          "signer":  "CN=ARGA Nesting Suite Code Signing",
+                          "thumbprint":  "37122CAFE56B71712031A7F187AC33E3C6B88471"
+                      },
+                      {
+                          "path":  "native/ArgaNestCore/build/Release/arga_nest_core.cp314-win_amd64.pyd",
+                          "sha256":  "775205EF7351A5090A956D3CB260B1683841DC22EE6CF7497B6FFE27770DD0BB",
+                          "status":  "UnknownError",
+                          "signer":  "CN=ARGA Nesting Suite Code Signing",
+                          "thumbprint":  "37122CAFE56B71712031A7F187AC33E3C6B88471"
+                      },
+                      {
+                          "path":  "native/ArgaNestCore/build/Release/ArgaNestWorker.exe",
+                          "sha256":  "580074B26B1A6D37D2A1CE43091AEA7FE2C5894FE9EFACB5E4BFCB66CEFDABD4",
+                          "status":  "UnknownError",
+                          "signer":  "CN=ARGA Nesting Suite Code Signing",
+                          "thumbprint":  "37122CAFE56B71712031A7F187AC33E3C6B88471"
+                      },
+                      {
+                          "path":  "native/bin/ArgaNestWorker.exe",
+                          "sha256":  "9AC9D41798C5E6684B8798CB4B4A37324975BAB9F4DB70D19458FF317D1FE3A7",
+                          "status":  "UnknownError",
+                          "signer":  "CN=ARGA Nesting Suite Code Signing",
+                          "thumbprint":  "37122CAFE56B71712031A7F187AC33E3C6B88471"
+                      }
+                  ]
+}

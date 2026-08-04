@@ -1,0 +1,57 @@
+{
+  "scenario": "s0_micro",
+  "level": "S0",
+  "plate_w_in": 36.0,
+  "plate_h_in": 18.0,
+  "kerf_in": 0.25,
+  "margin_in": 0.15,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "nest_mode": "standard",
+  "mc_iterations": 1,
+  "require_full_place": true,
+  "notes": "Micro corpus sintético: TINY/NARROW/WIDE + hole-fill. Sin DXF de red.",
+  "pieces": [
+    {
+      "nombre": "TINY1x1",
+      "qty": 4,
+      "w_in": 1.0,
+      "h_in": 1.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "NARROW2x5",
+      "qty": 2,
+      "w_in": 2.0,
+      "h_in": 5.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "WIDE13x5",
+      "qty": 1,
+      "w_in": 13.0,
+      "h_in": 5.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "HOST-HOLE",
+      "qty": 1,
+      "w_in": 10.0,
+      "h_in": 8.0,
+      "hole_in": [2.0, 2.0, 4.0, 3.0],
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "BKT-IN-HOLE",
+      "qty": 1,
+      "w_in": 2.5,
+      "h_in": 2.0,
+      "calibre": "11",
+      "material": "A36"
+    }
+  ]
+}

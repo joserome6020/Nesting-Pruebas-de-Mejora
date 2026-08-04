@@ -98,6 +98,8 @@ class VisorDXF:
         self._rotacion_vista_deg = 0
         self._persist_rotation_hook = None
         self._material = ""
+        self._plasma_offset_mm = 0.0
+        self._plasma_base_metrics = None
 
         self.construir_tabla_3_columnas()
         self.mostrar_patron_prueba()
@@ -142,20 +144,130 @@ class VisorDXF:
         _metric("PERIMETRO", "lbl_perim")
         _metric("REFERENCIA", "lbl_ref")
         self.lbl_ref.setMinimumWidth(120)
+
+        plasma_wrap = QWidget()
+        plasma_wrap.setStyleSheet("background:transparent;")
+        plasma_wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        pl = QVBoxLayout(plasma_wrap)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(1)
+        self.lbl_plasma_cap = QLabel("PLASMA")
+        self.lbl_plasma_cap.setStyleSheet(
+            "color:#64748B;font-size:10px;font-weight:700;background:transparent;"
+        )
+        self.lbl_plasma = QLabel("—")
+        self.lbl_plasma.setStyleSheet(
+            "color:#FCA5A5;font-size:13px;font-weight:700;background:transparent;"
+        )
+        self.lbl_plasma.setMinimumWidth(100)
+        pl.addWidget(self.lbl_plasma_cap)
+        pl.addWidget(self.lbl_plasma)
+        row.addWidget(plasma_wrap, 0)
         row.addStretch(1)
 
     def actualizar_datos(self, min_x, max_x, min_y, max_y, perimetro, valido, area=None, referencia=""):
         if not valido:
             return
+        self._plasma_base_metrics = {
+            "min_x": float(min_x),
+            "max_x": float(max_x),
+            "min_y": float(min_y),
+            "max_y": float(max_y),
+            "perimetro": float(perimetro or 0.0),
+            "area": float(area) if area is not None else None,
+            "referencia": str(referencia or ""),
+        }
+        self._pintar_metricas(
+            min_x, max_x, min_y, max_y, perimetro, area=area, referencia=referencia
+        )
+        if self._plasma_offset_mm > 0:
+            self._reaplicar_overlay_plasma()
+
+    def _pintar_metricas(
+        self, min_x, max_x, min_y, max_y, perimetro, *, area=None, referencia="", compensada=False
+    ):
         ancho_in = abs(max_x - min_x) / self.factor_conversion
         alto_in = abs(max_y - min_y) / self.factor_conversion
         perim_in = perimetro / self.factor_conversion
         area_in2 = (float(area) / (self.factor_conversion**2)) if area is not None else 0.0
+        color = "#FCA5A5" if compensada else "#E2E8F0"
+        for lbl in (self.lbl_width, self.lbl_height, self.lbl_area, self.lbl_perim):
+            lbl.setStyleSheet(
+                f"color:{color};font-size:13px;font-weight:700;background:transparent;"
+            )
         self.lbl_width.setText(f'{ancho_in:.2f}"')
         self.lbl_height.setText(f'{alto_in:.2f}"')
         self.lbl_area.setText(f"{area_in2:.2f} in²")
         self.lbl_perim.setText(f'{perim_in:.2f}"')
-        self.lbl_ref.setText(str(referencia or "-"))
+        if referencia:
+            self.lbl_ref.setText(str(referencia or "-"))
+
+    def _reaplicar_overlay_plasma(self):
+        off = float(self._plasma_offset_mm or 0.0)
+        if off <= 0:
+            self._cad.clear_plasma_overlay()
+            if hasattr(self, "lbl_plasma"):
+                self.lbl_plasma.setText("—")
+                self.lbl_plasma.setStyleSheet(
+                    "color:#64748B;font-size:13px;font-weight:700;background:transparent;"
+                )
+            return
+        off_in = off / 25.4
+        meta = self._cad.set_plasma_overlay(
+            off,
+            label=f"COMPENSADA +{off_in:.4f}\"",
+        )
+        if hasattr(self, "lbl_plasma"):
+            self.lbl_plasma.setText(f'+{off_in:.4f}"')
+            self.lbl_plasma.setStyleSheet(
+                "color:#FCA5A5;font-size:13px;font-weight:700;background:transparent;"
+            )
+        if meta:
+            self._pintar_metricas(
+                meta["min_x"],
+                meta["max_x"],
+                meta["min_y"],
+                meta["max_y"],
+                meta["perimetro"],
+                area=meta["area"],
+                compensada=True,
+            )
+
+    def set_plasma_contour_emphasis(self, activo: bool, *, offset_in: float | None = None):
+        """Resalta OUTER en rojo (pieza plasma). No altera la geometría del DXF."""
+        if not activo:
+            self._cad.clear_plasma_overlay()
+            if hasattr(self, "lbl_plasma"):
+                self.lbl_plasma.setText("—")
+                self.lbl_plasma.setStyleSheet(
+                    "color:#64748B;font-size:13px;font-weight:700;background:transparent;"
+                )
+            return
+        label = None
+        if offset_in is not None and float(offset_in) > 0:
+            label = f"COMPENSADA +{float(offset_in):.4f}\""
+            if hasattr(self, "lbl_plasma"):
+                self.lbl_plasma.setText(f'+{float(offset_in):.4f}"')
+                self.lbl_plasma.setStyleSheet(
+                    "color:#FCA5A5;font-size:13px;font-weight:700;background:transparent;"
+                )
+        self._cad.emphasize_plasma_outers(label=label)
+
+    def set_plasma_offset_mm(self, offset_mm: float | None):
+        self._plasma_offset_mm = float(offset_mm or 0.0)
+        self._reaplicar_overlay_plasma()
+        if self._plasma_offset_mm <= 0 and self._plasma_base_metrics:
+            m = self._plasma_base_metrics
+            self._pintar_metricas(
+                m["min_x"],
+                m["max_x"],
+                m["min_y"],
+                m["max_y"],
+                m["perimetro"],
+                area=m["area"],
+                referencia=m.get("referencia") or "",
+                compensada=False,
+            )
 
     def actualizar_info_extra(self, area_in2=None, referencia=None):
         if area_in2 is not None:
@@ -206,7 +318,7 @@ class VisorDXF:
         self.renderizar_dxf(self._ruta_actual)
         self._restaurar_metricas_ui(snap)
 
-    def renderizar_dxf(self, ruta_dxf, rotacion_vista_deg=None):
+    def renderizar_dxf(self, ruta_dxf, rotacion_vista_deg=None, plasma_offset_mm=None):
         self.limpiar_lienzo()
         try:
             if self._ruta_actual and str(self._ruta_actual) != str(ruta_dxf):
@@ -217,12 +329,21 @@ class VisorDXF:
             elif rotacion_vista_deg is not None:
                 self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
             self._ruta_actual = ruta_dxf
+            if plasma_offset_mm is not None:
+                self._plasma_offset_mm = float(plasma_offset_mm or 0.0)
             self._cad.set_material(self._material)
             model = load_dxf_part(ruta_dxf, self._rotacion_vista_deg)
             if model is None:
                 return False
             self.factor_conversion = model.factor_conversion
             self._cad.load_model(model, fit=True)
+            # load_model dispara metrics_callback → aplica overlay si hay offset.
+            if self._plasma_offset_mm > 0:
+                self._reaplicar_overlay_plasma()
+            else:
+                self._cad.clear_plasma_overlay()
+                if hasattr(self, "lbl_plasma"):
+                    self.lbl_plasma.setText("—")
             return True
         except Exception:
             return False

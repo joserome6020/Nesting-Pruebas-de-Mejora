@@ -1,0 +1,72 @@
+{
+  "schema": "arga_plate_selection_evidence_v1",
+  "case_id": "ps_synth_cost_trap",
+  "engine_id": "arga_force",
+  "label": "candidate",
+  "elapsed_ms_total": 12033.912699989742,
+  "sim_elapsed_ms_total": 1737.8376999986358,
+  "sim_candidates_started": 1,
+  "sim_candidates_finished": 1,
+  "sim_candidates_skipped": 1,
+  "expected_pieces": 20,
+  "placed_pieces": 20,
+  "sheet_count": 1,
+  "remnant_sheet_count": 0,
+  "cost_total": 420.0,
+  "cost_empresa": 420.0,
+  "cost_proveedor": 0.0,
+  "mean_efi_direct": 43.33333333333333,
+  "mean_efi_real": 43.33333333333333,
+  "integrity_ok": true,
+  "integrity_failures": [],
+  "selected_plates": [
+    {
+      "group": "0.1196_A36",
+      "plate_id": "GOOD_FIT_60x30",
+      "w_mm": 1524.0,
+      "h_mm": 762.0,
+      "price": 420.0,
+      "source": "EMPRESA",
+      "is_remnant": false,
+      "piece_count": 20,
+      "efficiency": 43.33333333333333
+    }
+  ],
+  "winner_plate_ids": [
+    "GOOD_FIT_60x30"
+  ],
+  "oracle": {
+    "winner_plate_ids": [
+      "GOOD_FIT_60x30"
+    ],
+    "winner_formats_in": [
+      "30.000x60.000"
+    ],
+    "max_cost_total": 480,
+    "max_sheets": 2
+  },
+  "oracle_ok": true,
+  "error": "",
+  "pass_ok": true,
+  "probe": {
+    "label": "candidate",
+    "sim_candidates_started": 1,
+    "sim_candidates_finished": 1,
+    "sim_candidates_skipped": 1,
+    "sim_winners": 1,
+    "sim_elapsed_ms_total": 1737.8376999986358,
+    "sim_elapsed_ms_max": 1737.8376999986358,
+    "sim_elapsed_ms_mean": 1737.8376999986358,
+    "winner_plate_ids": [
+      "GOOD_FIT_60x30"
+    ]
+  },
+  "case_title": "Trampa de costo: placa barata sobredimensionada vs formato óptimo",
+  "case_kind": "synthetic_multiformat",
+  "created_at": "2026-07-30T13:59:15.393145+00:00",
+  "dual_objective": [
+    "mejor_acomodo",
+    "menor_impacto_costo"
+  ],
+  "baseline_role": "production_reference"
+}

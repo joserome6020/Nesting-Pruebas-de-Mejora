@@ -1,0 +1,22 @@
+{
+  "scenario": "s0_micro",
+  "engine_id": "cpp_v2_poc",
+  "elapsed_ms": 7.7324999729171395,
+  "placed": 9,
+  "expected": 9,
+  "efi_directa": 25.0,
+  "solape_ok": true,
+  "kerf_violations": 0,
+  "min_gap_in": 0.2559055118110236,
+  "in_holes": 0,
+  "restos": 0,
+  "efi_real": 25.0,
+  "pass_ok": true,
+  "error": "",
+  "baseline_delta_pp": null,
+  "notes": "Micro corpus sintético: TINY/NARROW/WIDE + hole-fill. Sin DXF de red.",
+  "overlap_detail": "",
+  "gap_details": [],
+  "nest_mode": "standard",
+  "level": "S0"
+}

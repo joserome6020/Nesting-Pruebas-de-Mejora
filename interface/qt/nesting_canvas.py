@@ -20,7 +20,13 @@ from shapely import wkt as shapely_wkt
 from shapely.affinity import translate
 from shapely.geometry import Polygon, box, Point, LineString
 
-from interface.material_colors import paleta_pieza_nesting
+from interface.material_colors import (
+    NEST_LIBRE_EDGE,
+    NEST_LIBRE_FILL,
+    NEST_SEL_EDGE,
+    NEST_SEL_FILL,
+    paleta_pieza_nesting,
+)
 from interface.qt.nesting_graphics import (
     COLOR_REF_EDGE,
     COLOR_REF_FILL,
@@ -772,12 +778,23 @@ class VisorNesting(QWidget):
             ):
                 continue
             pal = paleta_pieza_nesting(pieza, hoja, clave)
+            compensada = bool(pieza.get("plasma_compensada_manual"))
             if idx in libre:
-                main.setBrush(QBrush(QColor("#A855F7")))
-                main.setPen(QPen(QColor("#581C87"), 1.6))
+                main.setBrush(QBrush(QColor(NEST_LIBRE_FILL)))
+                main.setPen(QPen(QColor(NEST_LIBRE_EDGE), 1.6))
+            elif idx in selected and compensada:
+                main.setBrush(QBrush(QColor(NEST_SEL_FILL)))
+                pen = QPen(QColor("#FF1A1A"), 2.8)
+                pen.setCosmetic(True)
+                main.setPen(pen)
             elif idx in selected:
-                main.setBrush(QBrush(QColor(pal.sel_fill)))
-                main.setPen(QPen(QColor(pal.sel_edge), 1.6))
+                main.setBrush(QBrush(QColor(NEST_SEL_FILL)))
+                main.setPen(QPen(QColor(NEST_SEL_EDGE), 1.6))
+            elif compensada:
+                main.setBrush(QBrush(QColor(pal.fill)))
+                pen = QPen(QColor("#FF1A1A"), 2.6)
+                pen.setCosmetic(True)
+                main.setPen(pen)
             else:
                 main.setBrush(QBrush(QColor(pal.fill)))
                 main.setPen(QPen(QColor(pal.edge), 0.75))

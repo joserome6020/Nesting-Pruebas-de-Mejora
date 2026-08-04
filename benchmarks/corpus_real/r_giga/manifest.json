@@ -1,0 +1,12 @@
+{
+  "case_id": "r_giga",
+  "status": "source_unavailable",
+  "required_artifacts": [
+    "GIGA FLUIDSTACK.arganest",
+    "subset GENE 0.1196 GALV",
+    "escenario PLC152",
+    "snapshot de placas"
+  ],
+  "capture_rule": "Usar capture_real_corpus.py para copiar el subset GENE y convertir rutas DXF a dxf/<archivo>.",
+  "reason": "El escenario PLC152 histórico conserva las rutas UNC, pero los DXF ya no están presentes en dichas rutas."
+}

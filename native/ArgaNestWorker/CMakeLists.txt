@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.18)
+project(ArgaNestWorker LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+add_executable(ArgaNestWorker main.cpp)
+if(MSVC)
+    target_compile_options(ArgaNestWorker PRIVATE /W3 /EHsc)
+endif()

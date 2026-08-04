@@ -121,5 +121,16 @@ class PlatesManager:
                 f"[PLATES] Nesting: {len(datos_empresa_disponibles)}/{total} placas EMPRESA "
                 f"DISPONIBLE ({excluidas} excluidas por stock Herinox)"
             )
-        # MODO ESTRICTO: solo stock físico de Grupo Arga (DISPONIBLE en hoja EMPRESA).
+        # Remanentes de inventario (CSV/Postgres) antepuestos con costo bajo.
+        try:
+            from modules.nesting_engine.remnants_inventory import (
+                inject_remnants_into_datos_placas,
+            )
+
+            datos_empresa_disponibles = inject_remnants_into_datos_placas(
+                datos_empresa_disponibles
+            )
+        except Exception as ex:
+            print(f"[PLATES] remnants inject skip: {ex}", flush=True)
+        # MODO ESTRICTO: stock físico EMPRESA + remanentes (si hay).
         return datos_empresa_disponibles

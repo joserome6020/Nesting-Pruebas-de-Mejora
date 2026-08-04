@@ -1,0 +1,22 @@
+{
+  "case_id": "ps_giga_cal11_x1",
+  "title": "Corpus real local AutoDXF cal 11 (×1) + snapshot Herinox",
+  "kind": "autodxf_real",
+  "notes": [
+    "Usa benchmarks/corpus_real/r_giga_cal11/dxf y cache/herinox_plates_snapshot.json.",
+    "Baseline de producción: captura con --write-baseline tras una corrida limpia.",
+    "Oracle vacío: la evidencia es A/B vs baseline capturado, no un ganador inventado."
+  ],
+  "engine_id": "arga_force",
+  "source_dir": "benchmarks/corpus_real/r_giga_cal11/dxf",
+  "plates_snapshot": "cache/herinox_plates_snapshot.json",
+  "steel_gauge": 11,
+  "calibre": "0.1181",
+  "material": "",
+  "multiplier": 1,
+  "kerf_in": 0.3,
+  "margin_in": 0.15,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "oracle": {}
+}

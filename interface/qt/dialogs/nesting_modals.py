@@ -189,10 +189,17 @@ def preguntar_barras_cobre_renest(
 
 
 def abrir_modal_configuracion(parent):
+    from modules.nesting_engine.step_export_prefs import (
+        STEP_FOLDER_SPECS,
+        load_step_export_prefs,
+        save_step_export_prefs,
+    )
+
     dlg = QDialog(parent)
     dlg.setWindowTitle("Configuración Global")
     dlg.setModal(True)
-    dlg.setFixedSize(390, 270)
+    dlg.setMinimumWidth(420)
+    dlg.resize(440, 520)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -222,6 +229,29 @@ def abrir_modal_configuracion(parent):
     row_m.addWidget(ent_margin)
     lay.addLayout(row_m)
 
+    sep = QFrame()
+    sep.setFrameShape(QFrame.Shape.HLine)
+    sep.setStyleSheet("color:#CBD5E1;")
+    lay.addWidget(sep)
+
+    step_tit = QLabel("STEPS — carpetas al exportar")
+    step_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(step_tit)
+    step_hint = QLabel(
+        "Marca en cuáles carpetas se generan STEP cuando elijas 3D al exportar."
+    )
+    step_hint.setWordWrap(True)
+    step_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(step_hint)
+
+    prefs0 = load_step_export_prefs()
+    step_checks: dict[str, QCheckBox] = {}
+    for key, label in STEP_FOLDER_SPECS:
+        cb = QCheckBox(label)
+        cb.setChecked(bool(prefs0.get(key, True)))
+        step_checks[key] = cb
+        lay.addWidget(cb)
+
     def guardar_y_aplicar():
         try:
             from modules.nesting_engine.nest_poka_yoke import (
@@ -238,6 +268,10 @@ def abrir_modal_configuracion(parent):
                     "\n".join(x for x in (err_k, err_m) if x),
                 )
                 return
+
+            old_k = float(getattr(parent, "global_kerf_val", 0.15) or 0.15)
+            old_m = float(getattr(parent, "global_margin_val", 0.15) or 0.15)
+
             parent.global_margin_val = margin_val
             parent.global_kerf_val = kerf_val
             if hasattr(parent, "_sync_kerf_widget"):
@@ -247,8 +281,15 @@ def abrir_modal_configuracion(parent):
                     parent.ent_kerf.setText(str(kerf_val))
                 except Exception:
                     pass
+
+            new_prefs = {k: cb.isChecked() for k, cb in step_checks.items()}
+            save_step_export_prefs(new_prefs)
+            parent.step_export_prefs = dict(new_prefs)
+
             dlg.accept()
-            parent.ejecutar_nesting()
+            # Re-nest solo si cambió kerf/margen (STEPS no afecta el nest).
+            if abs(old_k - kerf_val) > 1e-9 or abs(old_m - margin_val) > 1e-9:
+                parent.ejecutar_nesting()
         except Exception:
             QMessageBox.critical(dlg, "Error", "Kerf y Margen deben ser valores numéricos.")
 

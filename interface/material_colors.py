@@ -7,6 +7,12 @@ from dataclasses import dataclass
 
 CAD_VIEW_BG = "#0B1220"
 
+# Nesting: selección = azul (distinto del morado de edición libre).
+NEST_SEL_FILL = "#60A5FA"
+NEST_SEL_EDGE = "#1E40AF"
+NEST_LIBRE_FILL = "#A855F7"
+NEST_LIBRE_EDGE = "#581C87"
+
 
 @dataclass(frozen=True)
 class MaterialPalette:
@@ -22,46 +28,46 @@ class MaterialPalette:
 _PALETTES: dict[str, MaterialPalette] = {
     # Acero genérico — gris neutro
     "default": MaterialPalette(
-        "#A3A8B0", "#52525B", CAD_VIEW_BG, "#C4C8CE", "#D4D4D8",
+        "#A3A8B0", "#52525B", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
     ),
     # A 36 — gris acero (no azul)
     "a36": MaterialPalette(
-        "#9CA3AF", "#4B5563", CAD_VIEW_BG, "#B8BEC8", "#D1D5DB",
+        "#9CA3AF", "#4B5563", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#F3F4F6", "#E5E7EB",
     ),
     # Galvanizado — gris plata
     "galv": MaterialPalette(
-        "#C5C9CE", "#6B7280", CAD_VIEW_BG, "#D8DCE1", "#E5E7EB",
+        "#C5C9CE", "#6B7280", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#ECEFF3", "#E2E6EC",
     ),
     # Carbono — gris oscuro
     "carbono": MaterialPalette(
-        "#8B9099", "#3F3F46", CAD_VIEW_BG, "#A8ADB5", "#D1D5DB",
+        "#8B9099", "#3F3F46", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#EEF1F4", "#E4E9EE",
     ),
     # A 514 — gris cálido
     "a514": MaterialPalette(
-        "#9A9590", "#57534E", CAD_VIEW_BG, "#B5B0AB", "#D6D3D1",
+        "#9A9590", "#57534E", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#F0EEEC", "#E7E5E4",
     ),
     # A 572 — gris verdoso suave
     "a572": MaterialPalette(
-        "#8A9188", "#4D524A", CAD_VIEW_BG, "#A3AAA1", "#D1D5DB",
+        "#8A9188", "#4D524A", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#E8EDE7", "#DCE4DA",
     ),
     # Aluminio — claro como placas
     "aluminio": MaterialPalette(
-        "#DDE4EC", "#64748B", CAD_VIEW_BG, "#EEF2F7", "#94A3B8",
+        "#DDE4EC", "#64748B", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#F4F7FA", "#E8EDF3",
     ),
     # Inox — gris cromo
     "inox": MaterialPalette(
-        "#B0B8C0", "#52525B", CAD_VIEW_BG, "#CCD2D9", "#D1D5DB",
+        "#B0B8C0", "#52525B", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#ECEFF2", "#E2E7EC",
     ),
-    # Cobre — cuerpo cobre; huecos siempre fondo oscuro vía paleta_cad_hex / nesting
+    # Cobre — cuerpo cobre; selección nesting en azul (igual que acero)
     "cu": MaterialPalette(
-        "#B87333", "#4A2F1A", CAD_VIEW_BG, "#E8A55C", "#FDE68A",
+        "#B87333", "#4A2F1A", CAD_VIEW_BG, NEST_SEL_FILL, NEST_SEL_EDGE,
         "#F3E2CF", "#E8D4BC",
     ),
 }

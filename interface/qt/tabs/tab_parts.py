@@ -187,8 +187,9 @@ class TabParts(QWidget, TimerHost):
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if txt == "ESP.":
                 lbl.setToolTip(
-                    "Cobre Amada (solo 5\"): vertical sin gap "
-                    "(sin MARK/INNER) → AMADA/VERTICAL + AMADA/FIXTURA"
+                    "Cobre: Amada 5\" (VERTICAL + FIXTURA).\n"
+                    "Acero/otros: marcar para compensación plasma "
+                    "(reprocesa geometría y nestea en placas solo-plasma)."
                 )
             self._parts_head_grid.addWidget(lbl, 0, i)
         header_wrap_lay.addWidget(self._parts_head, 1)
@@ -342,6 +343,10 @@ class TabParts(QWidget, TimerHost):
             self._apply_parts_grid_columns(row_lay)
 
             valores = [pieza, mat, str(qty_unidad), str(tot_val), cal, st]
+            es_cu = self._es_material_cobre(mat)
+            es_plasma = bool(ruta) and not es_cu and self._plasma_guardada(ruta)
+            if es_plasma:
+                valores[5] = "PLASMA"
             for i, conf in enumerate(self.local_col_config):
                 if i < 6:
                     if i == 0:
@@ -352,7 +357,10 @@ class TabParts(QWidget, TimerHost):
                         )
                     else:
                         lbl = QLabel(valores[i])
-                        lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+                        if i == 5 and es_plasma:
+                            lbl.setStyleSheet("color:#2563EB;font-weight:700;")
+                        else:
+                            lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
                         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                     row_lay.addWidget(lbl, 0, i)
@@ -362,21 +370,34 @@ class TabParts(QWidget, TimerHost):
                     chk_lay.setContentsMargins(0, 0, 0, 0)
                     chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     chk = QCheckBox()
-                    es_cu = self._es_material_cobre(mat)
-                    chk.setEnabled(bool(es_cu and ruta))
-                    chk.setVisible(bool(es_cu))
-                    chk.setToolTip(
-                        "Amada 5\": AMADA/VERTICAL + AMADA/FIXTURA (sin gap)"
-                        if es_cu
-                        else ""
-                    )
                     if es_cu and ruta:
+                        chk.setEnabled(True)
+                        chk.setVisible(True)
+                        chk.setToolTip(
+                            "Amada 5\": AMADA/VERTICAL + AMADA/FIXTURA (sin gap)"
+                        )
                         chk.setChecked(self._cu_especial_guardada(ruta))
                         chk.toggled.connect(
                             lambda checked, r=ruta, c=chk: self._persistir_cu_especial(
                                 r, checked, checkbox=c
                             )
                         )
+                    elif ruta and not es_cu:
+                        chk.setEnabled(True)
+                        chk.setVisible(True)
+                        chk.setToolTip(
+                            "Plasma: compensar esta pieza y nestearla en placas solo-plasma"
+                        )
+                        chk.setChecked(self._plasma_guardada(ruta))
+                        chk.toggled.connect(
+                            lambda checked, r=ruta, calibre=cal, c=chk: self._persistir_plasma(
+                                r, calibre, checked, checkbox=c
+                            )
+                        )
+                    else:
+                        chk.setEnabled(False)
+                        chk.setVisible(False)
+                        chk.setToolTip("")
                     chk_lay.addWidget(chk)
                     row_lay.addWidget(chk_wrap, 0, i)
                 elif i == 7:
@@ -761,6 +782,133 @@ class TabParts(QWidget, TimerHost):
         especiales = getattr(self.app, "cu_especial_por_ruta", None) or {}
         return bool(especiales.get(clave_orientacion_cobre_ruta(ruta_dxf), False))
 
+    def _plasma_guardada(self, ruta_dxf) -> bool:
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        marcas = getattr(self.app, "plasma_compensada_por_ruta", None) or {}
+        return bool(marcas.get(clave_orientacion_cobre_ruta(ruta_dxf), False))
+
+    def _offset_plasma_desde_calibre(self, calibre) -> float | None:
+        from modules.plasma_compensator import compute_plasma_offset_mm
+
+        try:
+            parse_thk = getattr(self.app.motor_nesting, "_parse_thickness_value", None)
+            thk = parse_thk(calibre) if callable(parse_thk) else None
+            if thk is None:
+                thk = float(self.app.motor_nesting._extraer_numero(calibre))
+        except Exception:
+            thk = 0.0
+        if thk is None or float(thk) <= 0:
+            return None
+        return float(compute_plasma_offset_mm(float(thk)))
+
+    def _validar_compensacion_plasma_dxf(self, ruta_dxf, offset_mm: float) -> tuple[bool, str]:
+        """Genera DXF compensado (mismo pipeline OUTER+/INNER−) y valida que exista."""
+        from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+        out, err = asegurar_dxf_plasma_compensado(ruta_dxf, float(offset_mm), forzar=True)
+        if not out:
+            return False, err or "No se pudo generar DXF compensado."
+        return True, out
+
+    def _persistir_plasma(self, ruta_dxf, calibre, checked: bool, checkbox=None):
+        if not ruta_dxf:
+            return
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+        if (
+            not hasattr(self.app, "plasma_compensada_por_ruta")
+            or self.app.plasma_compensada_por_ruta is None
+        ):
+            self.app.plasma_compensada_por_ruta = {}
+        if (
+            not hasattr(self.app, "plasma_dxf_por_ruta")
+            or self.app.plasma_dxf_por_ruta is None
+        ):
+            self.app.plasma_dxf_por_ruta = {}
+        clave = clave_orientacion_cobre_ruta(ruta_dxf)
+
+        def _revert_check():
+            if checkbox is not None:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(False)
+                checkbox.blockSignals(False)
+
+        if checked:
+            offset_mm = self._offset_plasma_desde_calibre(calibre)
+            if offset_mm is None:
+                QMessageBox.warning(
+                    self,
+                    "Plasma",
+                    "No se pudo leer el calibre para calcular la compensación.",
+                )
+                _revert_check()
+                return
+            ok, out_or_msg = self._validar_compensacion_plasma_dxf(ruta_dxf, offset_mm)
+            if not ok:
+                QMessageBox.warning(self, "Plasma — DXF no usable", out_or_msg)
+                _revert_check()
+                return
+            ruta_comp = str(out_or_msg)
+            self.app.plasma_compensada_por_ruta[clave] = True
+            self.app.plasma_dxf_por_ruta[clave] = ruta_comp
+            # Visor: DXF ya compensado (mismo parse que nesting), no overlay fake.
+            try:
+                if getattr(self, "visor", None) is not None:
+                    self.visor.renderizar_dxf(ruta_comp, plasma_offset_mm=0.0)
+                    off_in = float(offset_mm) / 25.4
+                    self.visor.set_plasma_contour_emphasis(True, offset_in=off_in)
+            except Exception:
+                pass
+            QTimer.singleShot(
+                0,
+                lambda r=ruta_dxf: self._refrescar_parts_tras_plasma(r),
+            )
+            return
+
+        self.app.plasma_compensada_por_ruta.pop(clave, None)
+        self.app.plasma_dxf_por_ruta.pop(clave, None)
+        try:
+            if getattr(self, "visor", None) is not None:
+                self.visor.renderizar_dxf(ruta_dxf, plasma_offset_mm=0.0)
+                self.visor.set_plasma_contour_emphasis(False)
+        except Exception:
+            pass
+        QTimer.singleShot(
+            0,
+            lambda r=ruta_dxf: self._refrescar_parts_tras_plasma(r),
+        )
+
+    def _refrescar_parts_tras_plasma(self, ruta_dxf):
+        datos = getattr(self.app, "datos_partes_actuales", []) or []
+        self.app.cargar_datos_parts(datos, thumbnails_async=True)
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+        for item in datos:
+            try:
+                pieza, mat, _q, _cal, _st, ruta = item
+            except Exception:
+                continue
+            if str(ruta or "") != str(ruta_dxf or ""):
+                continue
+            self.visor.set_material(mat)
+            vista = ruta
+            if self._plasma_guardada(ruta):
+                clave = clave_orientacion_cobre_ruta(ruta)
+                vista = str(
+                    (getattr(self.app, "plasma_dxf_por_ruta", {}) or {}).get(clave)
+                    or ruta
+                )
+            self.visor.renderizar_dxf(vista, plasma_offset_mm=0.0)
+            if self._plasma_guardada(ruta):
+                off = float(self._offset_plasma_desde_calibre(_cal) or 0.0)
+                self.visor.set_plasma_contour_emphasis(
+                    True, offset_in=(off / 25.4) if off > 0 else None
+                )
+            else:
+                self.visor.set_plasma_contour_emphasis(False)
+            self.visor.actualizar_info_extra(referencia=pieza)
+            return
+
     def _dims_pieza_cobre_in(self, ruta_dxf, rot_deg: int) -> tuple[float, float] | None:
         """(largo X in, ancho Y in) con la orientación indicada."""
         try:
@@ -958,7 +1106,55 @@ class TabParts(QWidget, TimerHost):
             self._material_fila_actual = material
             self.visor.set_material(material)
             rot_vista = self._orientacion_cobre_guardada(ruta_dxf) if self._es_material_cobre(material) else 0
-            self.visor.renderizar_dxf(ruta_dxf, rotacion_vista_deg=rot_vista)
+            vista_dxf = ruta_dxf
+            if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):
+                from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+                clave = clave_orientacion_cobre_ruta(ruta_dxf)
+                vista_dxf = str(
+                    (getattr(self.app, "plasma_dxf_por_ruta", {}) or {}).get(clave)
+                    or ruta_dxf
+                )
+                if not os.path.isfile(vista_dxf):
+                    # Regenera si faltó el archivo compensado.
+                    calibre = None
+                    for item in getattr(self.app, "datos_partes_actuales", []) or []:
+                        try:
+                            _p, _m, _q, cal, _st, ruta = item
+                            if str(ruta or "") == str(ruta_dxf):
+                                calibre = cal
+                                break
+                        except Exception:
+                            continue
+                    off = self._offset_plasma_desde_calibre(calibre)
+                    if off:
+                        from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+                        out, _err = asegurar_dxf_plasma_compensado(ruta_dxf, off)
+                        if out:
+                            self.app.plasma_dxf_por_ruta[clave] = out
+                            vista_dxf = out
+            self.visor.renderizar_dxf(
+                vista_dxf,
+                rotacion_vista_deg=rot_vista,
+                plasma_offset_mm=0.0,
+            )
+            if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):
+                calibre = None
+                for item in getattr(self.app, "datos_partes_actuales", []) or []:
+                    try:
+                        _p, _m, _q, cal, _st, ruta = item
+                        if str(ruta or "") == str(ruta_dxf):
+                            calibre = cal
+                            break
+                    except Exception:
+                        continue
+                off = float(self._offset_plasma_desde_calibre(calibre) or 0.0)
+                self.visor.set_plasma_contour_emphasis(
+                    True, offset_in=(off / 25.4) if off > 0 else None
+                )
+            else:
+                self.visor.set_plasma_contour_emphasis(False)
             # Mantener una sola fuente de verdad para medidas: el propio render del visor (con detección de unidades).
             self.visor.actualizar_info_extra(referencia=nombre_pieza)
 
@@ -1319,7 +1515,7 @@ class TabParts(QWidget, TimerHost):
             "AutoDXF reprocesado",
             f"Se actualizaron {total} pieza(s) en PARTS desde AutoDXF.\n\n"
             "Para corregir un nest afectado:\n"
-            "NESTING → HERRAMIENTAS DE PLACA → RENESTEAR ESTA PLACA.\n"
+            "NESTING → cinta Placa → Renestear.\n"
             "El renest usa automáticamente el DXF regenerado.",
         )
 

@@ -615,6 +615,29 @@ def _iterar_exports_pqart(resultados_motor):
 
 def _guardar_pqart_wo(cursor, nombre_wo, resultados_motor):
     exports = list(_iterar_exports_pqart(resultados_motor))
+    if not exports:
+        raise RuntimeError(f"WO '{nombre_wo}' no produjo rutas PQART válidas.")
+    rutas = [str(row.get("ruta") or "").casefold() for row in exports]
+    if len(rutas) != len(set(rutas)):
+        raise RuntimeError(
+            f"WO '{nombre_wo}' contiene rutas PQART duplicadas; se canceló antes de persistir."
+        )
+
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+        FROM public.pqart_wo
+        WHERE nombre_wo = %s
+          AND COALESCE(procesado_con_swo, '') ILIKE 'Procesado%%'
+        """,
+        (nombre_wo,),
+    )
+    fila_protegida = cursor.fetchone()
+    if int(fila_protegida[0] or 0) > 0:
+        raise RuntimeError(
+            f"WO '{nombre_wo}' ya forma parte de una SWO procesada; "
+            "no se reemplazó su PQART canónico."
+        )
 
     cursor.execute("""
         DELETE FROM public.pqart_wo
@@ -661,13 +684,54 @@ def _guardar_pqart_wo(cursor, nombre_wo, resultados_motor):
     return total
 
 
-def _guardar_pqart_swo(cursor, nombre_swo, resultados_motor):
+def _guardar_pqart_swo(cursor, nombre_swo, resultados_motor, *, reemplazar: bool = True):
     exports = list(_iterar_exports_pqart(resultados_motor))
+    if not exports:
+        raise RuntimeError(f"SWO '{nombre_swo}' no produjo rutas PQART válidas.")
+    rutas = [str(row.get("ruta") or "").casefold() for row in exports]
+    if len(rutas) != len(set(rutas)):
+        raise RuntimeError(
+            f"SWO '{nombre_swo}' contiene rutas PQART duplicadas dentro del lote."
+        )
 
-    cursor.execute("""
-        DELETE FROM public.pqart_swo
-        WHERE nombre_swo = %s
-    """, (nombre_swo,))
+    # Una re-exportación empieza limpia con el primer lote. Los lotes
+    # posteriores de la misma SWO deben acumular sus DXF; borrarlos aquí
+    # dejaba visible únicamente el último nesteo.
+    if reemplazar:
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM public.pqart_swo
+            WHERE nombre_swo = %s
+              AND COALESCE(ls, '') NOT ILIKE 'Pendiente%%'
+            """,
+            (nombre_swo,),
+        )
+        fila_protegida = cursor.fetchone()
+        if int(fila_protegida[0] or 0) > 0:
+            raise RuntimeError(
+                f"SWO '{nombre_swo}' ya tiene PQART fuera de pendiente; "
+                "no se reemplazó una representación operacional."
+            )
+        cursor.execute("""
+            DELETE FROM public.pqart_swo
+            WHERE nombre_swo = %s
+        """, (nombre_swo,))
+    elif rutas:
+        cursor.execute(
+            """
+            SELECT LOWER(ruta)
+            FROM public.pqart_swo
+            WHERE nombre_swo = %s AND LOWER(ruta) = ANY(%s)
+            """,
+            (nombre_swo, rutas),
+        )
+        repetidas = [row[0] for row in cursor.fetchall() or []]
+        if repetidas:
+            raise RuntimeError(
+                f"SWO '{nombre_swo}' intenta acumular rutas PQART ya registradas: "
+                + ", ".join(sorted(set(str(r) for r in repetidas))[:3])
+            )
 
     total = 0
     for row in exports:
@@ -820,6 +884,8 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
     print(f"\n[BD] Iniciando guardado ESTRUCTURADO para el Job: {nombre_job}...")
     
     try:
+        from modules.nesting_engine.efficiency_metrics import _es_pieza_real_nombre
+
         conexion = psycopg2.connect(**db_config)
         cursor = conexion.cursor()
         piezas_guardadas = 0
@@ -851,7 +917,11 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         # =======================================================
         # MAGIA SWO: Detectamos si es una Súper Orden
         # =======================================================
-        es_swo = "S.W.O" in nombre_job.upper() or "SWO" in nombre_job.upper()
+        es_swo = (
+            "S.W.O" in nombre_job.upper()
+            or str(nombre_job).upper().startswith("SWO")
+            or "SWO" in nombre_job.upper()
+        )
         job_original = nombre_job
 
         if es_swo:
@@ -869,6 +939,23 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     (nombre_job,)
                 )
                 print("[BD] S.W.O. Detectada: Se limpiaron los registros individuales previos para insertar el layout maestro.")
+        else:
+            # Reexportar una WO pendiente debe reemplazar su snapshot técnico,
+            # no acumular filas idénticas bajo el mismo work_order.
+            cursor.execute(
+                """
+                DELETE FROM reporte_cortes
+                WHERE BTRIM(work_order) = %s
+                  AND BTRIM(job) = %s
+                  AND estatus ILIKE 'Pendiente%%'
+                """,
+                (str(nombre_wo).strip(), str(nombre_job).strip()),
+            )
+            if cursor.rowcount:
+                print(
+                    f"[BD] WO '{nombre_wo}': se reemplazaron "
+                    f"{cursor.rowcount} registro(s) pendiente(s) previos."
+                )
 
 
         for grupo_calibre, datos_grupo in iterar_grupos_nesting_ordenados(resultados_motor):
@@ -902,15 +989,9 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 placa_id_final = sheet_meta["sheet_display_name"]
 
                 for pieza in hoja.get('piezas', []):
-                    item_name_crudo = pieza['nombre']
-                    es_pieza_especial = (
-                        item_name_crudo.startswith("REMANENTE")
-                        or item_name_crudo.startswith("RETAZO")
-                        or item_name_crudo.startswith("TATUAJE")
-                        or item_name_crudo.startswith("REF__")
-                    )
-
-                    if es_pieza_especial:
+                    item_name_crudo = str(pieza.get('nombre') or '')
+                    # Overlays auxiliares no van a reporte_cortes ni a PQART.
+                    if not _es_pieza_real_nombre(item_name_crudo):
                         continue
 
                     exterior = [{"x": round(pt[0], 2), "y": round(pt[1], 2)} for pt in pieza['poligonos'][0]] if pieza.get('poligonos') else []
@@ -1075,7 +1156,12 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     piezas_guardadas += 1
 
         if es_swo:
-            _guardar_pqart_swo(cursor, nombre_job, resultados_motor)
+            _guardar_pqart_swo(
+                cursor,
+                nombre_job,
+                resultados_motor,
+                reemplazar=bool(limpiar_previos),
+            )
             _marcar_wos_como_procesadas_en_pqart(cursor, wos_origen_swo)
         else:
             _guardar_pqart_wo(cursor, nombre_wo, resultados_motor)
@@ -1084,7 +1170,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         print(f"[BD] ¡ÉXITO! Se guardaron {piezas_guardadas} piezas. Estado 3D: {estado_3d}. Ruta inyectada.")
 
         # =======================================================
-        # IMPORTACIÓN NO BLOQUEANTE DE LISTA DE LARGOS POR JOB
+        # IMPORTACIÓN VERIFICADA DE LISTA DE LARGOS POR JOB
         # =======================================================
         print(
             f"[DEBUG][LISTA_LARGOS] es_swo={es_swo} | "
@@ -1104,6 +1190,11 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     propagar_material=False,
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
+                if not resultado_largos.get("ok"):
+                    raise RuntimeError(
+                        "No se importó la lista de largos "
+                        f"(estado={resultado_largos.get('status', 'desconocido')})."
+                    )
                 pedidos = resultado_largos.get("pedidos_material")
                 if pedidos:
                     _reportar_pedidos_material(
@@ -1111,10 +1202,10 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                         f"import job='{job_original}'",
                     )
             except Exception as e:
-                print(
-                    f"[BD][LISTA_LARGOS][WARN] No se pudo importar la lista de largos "
-                    f"del job '{job_original}': {e}"
-                )
+                raise RuntimeError(
+                    f"No se pudo importar la lista de largos del job "
+                    f"'{job_original}': {e}"
+                ) from e
 
             # material_requerido_ldg se aplica desde NESTEO DE LARGOS al exportar
             # (plan calculado con el nesting + exclusiones elegidas por el usuario).
@@ -1122,7 +1213,77 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 f"[BD][LISTA_LARGOS] Sin propagación automática a material_requerido_ldg "
                 f"(job='{job_original}' wo='{nombre_wo}')."
             )
-        elif es_swo and db_config:
+        elif es_swo and db_config and ruta_exportacion:
+            # SWO: importar largos SOLO de jobs presentes en el nest
+            # (reporte_cortes). El diccionario puede tener prefijos viejos
+            # (p. ej. W.O. 1 X11 → 251007) que no están en esta fusión y
+            # no deben tumbar el export con autodir_no_existe.
+            _aplicar_env_db_config(db_config)
+            jobs_swo = set()
+            try:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT TRIM(job) AS job
+                    FROM reporte_cortes
+                    WHERE TRIM(super_work_order) = %s AND job IS NOT NULL
+                    """,
+                    (str(nombre_job).strip(),),
+                )
+                for r in cursor.fetchall() or []:
+                    j = str((r[0] if not isinstance(r, dict) else r.get("job")) or "").strip()
+                    if j:
+                        jobs_swo.add(j)
+            except Exception as e_jobs:
+                raise RuntimeError(
+                    f"No se pudieron resolver los jobs fuente de SWO '{nombre_job}': {e_jobs}"
+                ) from e_jobs
+
+            fallos_largos_swo = []
+            jobs_importables = [
+                j for j in sorted(jobs_swo)
+                if j
+                and not str(j).upper().startswith("SWO")
+                and "S.W.O" not in str(j).upper()
+            ]
+            if not jobs_importables:
+                raise RuntimeError(
+                    f"SWO '{nombre_job}' no tiene jobs fuente trazables para importar largos."
+                )
+            for j_imp in jobs_importables:
+                try:
+                    print(f"[DEBUG][LISTA_LARGOS] SWO import job={j_imp}")
+                    resultado_largos = importar_lista_largos_job(
+                        job=j_imp,
+                        ruta_exportacion=ruta_exportacion,
+                        db_config=db_config,
+                        work_order_alcance=str(nombre_wo or "").strip() or None,
+                        propagar_material=False,
+                    )
+                    print(f"[BD][LISTA_LARGOS] SWO job={j_imp}: {resultado_largos}")
+                    if not resultado_largos.get("ok"):
+                        status = str(resultado_largos.get("status") or "estado desconocido")
+                        # Job del nest sin carpeta AutoDXF: avisar, no tumbar PQART
+                        # si ya hay demanda de largos en BD para ese job.
+                        if status == "autodir_no_existe":
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM lista_largos_job WHERE TRIM(job) = %s",
+                                (j_imp,),
+                            )
+                            n_exist = int((cursor.fetchone() or [0])[0] or 0)
+                            if n_exist > 0:
+                                print(
+                                    f"[BD][LISTA_LARGOS][WARN] job={j_imp}: "
+                                    f"autodir_no_existe; se reutilizan {n_exist} filas en BD."
+                                )
+                                continue
+                        fallos_largos_swo.append(f"{j_imp} ({status})")
+                except Exception as e:
+                    fallos_largos_swo.append(f"{j_imp} ({e})")
+            if fallos_largos_swo:
+                raise RuntimeError(
+                    f"SWO '{nombre_job}': falló importación de largos para "
+                    + ", ".join(fallos_largos_swo)
+                )
             print(
                 f"[BD][LISTA_LARGOS] SWO '{nombre_job}': material_requerido_ldg "
                 "se aplica al exportar desde el plan de NESTEO DE LARGOS."

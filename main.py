@@ -11,12 +11,47 @@ for _p in (_ROOT, _IFACE):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    # ANS C++ defaults de adopción (opt-out: ARGA_NEST_CORE=0 / ARGA_NEST_CUDA=0 / ARGA_NEST_WORKER=0)
+    os.environ.setdefault("ARGA_NEST_CORE", "1")
+    os.environ.setdefault("ARGA_NEST_CUDA", "1")
+    os.environ.setdefault("ARGA_NEST_WORKER", "1")
+    os.environ.setdefault("ARGA_NEST_MODE", os.environ.get("ARGA_NEST_MODE") or "first")
+    os.environ.setdefault("ARGA_NEST_KERF_CONTRACT", "identity")
+    os.environ.setdefault("ARGA_NEST_REMNANTS_SOURCE", "auto")
+    # Remanentes en nest: OFF por default (opt-in). No inventar placas tipo PL-CARB en UI.
+    os.environ.setdefault("ARGA_NEST_REMNANTS_IN_NEST", "0")
+    os.environ.setdefault("ARGA_NEST_TELEMETRY", "1")
+    os.environ.setdefault("ARGA_NEST_AI", "1")  # L1 ranker ON (opt-out: ARGA_NEST_AI=0)
+    # Venom OFF por default (cuello de botella en tanques). Opt-in: ARGA_NEST_VENOM=1
+    os.environ.setdefault("ARGA_NEST_VENOM", "0")
+    os.environ.setdefault("ARGA_NEST_CORRIDOR_FILL", "0")
+    # Compact-lite ON: band-close + backfill (Lite = MC propio, no FORCE)
+    os.environ.setdefault("ARGA_NEST_COMPACT", "1")
+    os.environ.setdefault("ARGA_NEST_BAND_CLOSE", "0")  # viene vía COMPACT
+    # Lite rápido: 1 pase MC + 1 renest placa (1 MC). Más calidad: ARGA_LITE_PASSES=2
+    os.environ.setdefault("ARGA_LITE_PASSES", "1")
+    os.environ.setdefault("ARGA_LITE_PLATE_RENEST", "1")
+    os.environ.setdefault("ARGA_LITE_PLATE_RENEST_TRIES", "1")
+    os.environ.setdefault("ARGA_LITE_PLATE_RENEST_MC", "1")
     try:
         from modules.win_dll_bootstrap import bootstrap_proceso_nesting
 
         bootstrap_proceso_nesting()
     except Exception:
         pass
+    try:
+        from modules.nesting_engine import arga_nest_core_bridge as _ancb
+
+        _st = _ancb.core_status()
+        _w = _st.get("worker") or {}
+        print(
+            f"[ANS-CPP] core_active={_st.get('active')} version={_st.get('version')} "
+            f"kerf={_st.get('kerf_contract')} worker_active={_w.get('active')} "
+            f"cuda_env={os.environ.get('ARGA_NEST_CUDA')}",
+            flush=True,
+        )
+    except Exception as _exc_core:
+        print(f"[ANS-CPP] core status unavailable: {_exc_core}", flush=True)
     try:
         import faulthandler
         from pathlib import Path

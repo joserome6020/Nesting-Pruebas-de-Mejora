@@ -1,0 +1,47 @@
+{
+  "engine": "cpp_v2_poc",
+  "results": [
+    {
+      "scenario": "s0_micro",
+      "iterations": 5,
+      "elapsed_ms": {
+        "min": 1.9775000400841236,
+        "median": 2.341700019314885,
+        "max": 2.7849000180140138
+      },
+      "nfp_cache": {
+        "hits_median": 2496,
+        "misses_median": 24,
+        "hit_rate_median": 0.9904761904761905
+      },
+      "validation": {
+        "placed": 9,
+        "expected": 9,
+        "efi_directa": 25.0,
+        "solape_ok": true,
+        "kerf_violations": 0
+      }
+    },
+    {
+      "scenario": "s1_single_plate",
+      "iterations": 5,
+      "elapsed_ms": {
+        "min": 88.72250001877546,
+        "median": 100.82019993569702,
+        "max": 105.14899995177984
+      },
+      "nfp_cache": {
+        "hits_median": 260087,
+        "misses_median": 55,
+        "hit_rate_median": 0.9997885770079418
+      },
+      "validation": {
+        "placed": 33,
+        "expected": 33,
+        "efi_directa": 42.8111111111111,
+        "solape_ok": true,
+        "kerf_violations": 0
+      }
+    }
+  ]
+}

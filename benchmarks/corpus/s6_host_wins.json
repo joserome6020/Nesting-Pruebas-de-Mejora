@@ -1,0 +1,57 @@
+{
+  "scenario": "s6_host_wins",
+  "level": "S0",
+  "plate_w_in": 22.0,
+  "plate_h_in": 14.0,
+  "kerf_in": 0.12,
+  "margin_in": 0.08,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "nest_mode": "standard",
+  "mc_iterations": 1,
+  "require_full_place": false,
+  "notes": "Host+parasites ganan efi vs BIG-first. Stress IA host_first/host_blend.",
+  "pieces": [
+    {
+      "nombre": "BIG-BLOCK",
+      "qty": 1,
+      "w_in": 13.0,
+      "h_in": 11.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "HOST-DEEP",
+      "qty": 1,
+      "w_in": 12.0,
+      "h_in": 10.0,
+      "hole_in": [1.2, 1.2, 8.5, 7.0],
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "FILL-A",
+      "qty": 2,
+      "w_in": 4.0,
+      "h_in": 3.2,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "FILL-B",
+      "qty": 2,
+      "w_in": 3.5,
+      "h_in": 3.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "EDGE-BAR",
+      "qty": 2,
+      "w_in": 8.0,
+      "h_in": 1.8,
+      "calibre": "11",
+      "material": "A36"
+    }
+  ]
+}

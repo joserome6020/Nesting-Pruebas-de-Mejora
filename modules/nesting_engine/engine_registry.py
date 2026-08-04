@@ -5,7 +5,9 @@ import time
 from typing import Callable, Optional, Type
 
 from .engines import (
+    ArgaApexEngine,
     ArgaForceEngine,
+    ArgaLabPilotEngine,
     ArgaLiteEngine,
     BurkeBlfEngine,
     Libnest2dEngine,
@@ -24,7 +26,9 @@ _ENGINE_CLASSES: dict[str, Type] = {
     BurkeBlfEngine.META.engine_id: BurkeBlfEngine,
     Libnest2dEngine.META.engine_id: Libnest2dEngine,
     SvgnestUltraEngine.META.engine_id: SvgnestUltraEngine,
+    ArgaApexEngine.META.engine_id: ArgaApexEngine,
     ArgaLiteEngine.META.engine_id: ArgaLiteEngine,
+    ArgaLabPilotEngine.META.engine_id: ArgaLabPilotEngine,
 }
 
 
@@ -71,7 +75,7 @@ def empaquetar_una_hoja(
     piezas,
     w_placa,
     h_placa,
-    kerf_override=0.3,
+    kerf_override=0.15,
     margin_override=0.15,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",

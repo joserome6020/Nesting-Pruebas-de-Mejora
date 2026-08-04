@@ -31,8 +31,8 @@ except Exception:
     HAS_QT = False
 
 
-OUTER_LAYERS_DEFAULT = ("CUT_OUTER", "OUTER_CUT")
-INNER_LAYERS_DEFAULT = ("CUT_INNER", "INNER_CUT")
+OUTER_LAYERS_DEFAULT = ("CUT_OUTER", "OUTER_CUT", "IV_OUTER_PROFILE", "OUTER", "CORTE_EXTERNO")
+INNER_LAYERS_DEFAULT = ("CUT_INNER", "INNER_CUT", "IV_INTERIOR_PROFILES")
 NESTING_DXF_SEGMENTS = (
     ("CAMA LASER SIN MINI NEST", "DXF"),
     ("CAMA LASER 12 KW SIN MINI NEST", "DXF"),
@@ -43,13 +43,108 @@ NESTING_DXF_SEGMENTS = (
 
 def compute_plasma_offset_mm(thickness_in: float) -> float:
     """
-    Replica la regla usada en el exportador actual:
+    Regla de compensación plasma (export + PARTS):
     - > 0.75 in  => 0.250 in
     - <= 0.75 in => 0.0125 in
     Convertido a mm.
     """
-    base_in = 0.250 if float(thickness_in) > 0.75 else 0.0625
+    base_in = 0.250 if float(thickness_in) > 0.75 else 0.0125
     return base_in * 25.4
+
+
+def aplicar_compensacion_poligono(poly, offset_mm: float):
+    """Buffer exterior (join redondo) para geometría nesting/export. None si falla."""
+    try:
+        off = float(offset_mm or 0.0)
+        if poly is None or getattr(poly, "is_empty", True) or off <= 0:
+            return None
+        p = poly.buffer(0)
+        if p is None or p.is_empty:
+            return None
+        c = p.buffer(off, join_style=1, quad_segs=24)
+        if c is None or c.is_empty:
+            return None
+        if isinstance(c, MultiPolygon):
+            c = max(c.geoms, key=lambda g: float(g.area))
+        return c.buffer(0)
+    except Exception:
+        return None
+
+
+def _rol_capa_plasma(layer: str) -> str | None:
+    """outer / inner / None — alineado a Processed / nesting."""
+    u = str(layer or "").upper().strip()
+    if not u:
+        return None
+    if any(
+        m in u
+        for m in ("MARK", "ETCH", "IV_MARK", "IV_FEATURE", "GRABADO", "MARCAJE", "SCRIBE")
+    ):
+        return None
+    if ("CUT_INNER" in u) or ("INNER_CUT" in u) or ("IV_INTERIOR" in u) or (
+        "INTERIOR" in u and "OUTER" not in u
+    ):
+        return "inner"
+    if (
+        ("CUT_OUTER" in u)
+        or ("OUTER_CUT" in u)
+        or ("IV_OUTER" in u)
+        or u in ("0", "OUTER", "CORTE_EXTERNO")
+    ):
+        return "outer"
+    if "CUT" in u:
+        return "outer"
+    return None
+
+
+def ruta_dxf_plasma_compensado(ruta_origen: str | Path) -> Path:
+    """
+    Processed Files/foo.dxf → Processed Files/Plasma Compensated/foo.dxf
+    (si no hay carpeta Processed, crea Plasma Compensated junto al DXF).
+    """
+    src = Path(str(ruta_origen or ""))
+    parent = src.parent
+    if parent.name.lower() == "processed files":
+        out_dir = parent / "Plasma Compensated"
+    else:
+        out_dir = parent / "Plasma Compensated"
+    return out_dir / src.name
+
+
+def asegurar_dxf_plasma_compensado(
+    ruta_origen: str | Path,
+    offset_mm: float,
+    *,
+    forzar: bool = False,
+) -> tuple[str | None, str]:
+    """
+    Genera DXF compensado (OUTER+, INNER−) desde el Processed original.
+    Returns (ruta_salida, error).
+    """
+    src = Path(str(ruta_origen or ""))
+    if not src.is_file():
+        return None, f"No existe el DXF origen:\n{src}"
+    off = float(offset_mm or 0.0)
+    if off <= 0:
+        return None, "Offset plasma inválido."
+    dst = ruta_dxf_plasma_compensado(src)
+    try:
+        if (
+            not forzar
+            and dst.is_file()
+            and dst.stat().st_mtime >= src.stat().st_mtime
+            and dst.stat().st_size > 0
+        ):
+            return str(dst), ""
+        stats = compensate_dxf_for_plasma(src, dst, offset_mm=off)
+        if int(stats.get("changed") or 0) <= 0:
+            return None, (
+                "No se pudo compensar el DXF (sin contornos CUT_OUTER/CUT_INNER cerrados). "
+                f"targets={stats.get('total_targets')} skipped={stats.get('skipped')}"
+            )
+        return str(dst), ""
+    except Exception as exc:
+        return None, f"Error al compensar DXF:\n{exc}"
 
 
 def _is_closed_polyline(entity) -> bool:
@@ -215,24 +310,67 @@ def compensate_dxf_for_plasma(
     outer_set = _normalize_layers(outer_layers)
     inner_set = _normalize_layers(inner_layers)
 
+    # offset_mm → unidades del DXF (INSUNITS). Antes se aplicaba mm crudo sobre
+    # coords en pulgadas y el OUTER crecía ~0.32" en vez de 0.0125".
+    insunits = int(doc.header.get("$INSUNITS", 0) or 0)
+    if insunits == 4:  # mm
+        unit_to_mm = 1.0
+    elif insunits == 5:  # cm
+        unit_to_mm = 10.0
+    elif insunits == 1:  # inches
+        unit_to_mm = 25.4
+    else:
+        # ANS Processed suele venir en pulgadas sin INSUNITS fiable.
+        unit_to_mm = 25.4
+    off_dxf = float(offset_mm) / unit_to_mm
+
     changed = 0
     skipped = 0
+    circles = 0
 
     targets = []
     for e in list(msp):
         layer = str(e.dxf.layer or "").upper()
-        if layer in outer_set or layer in inner_set:
-            if e.dxftype() in {"LWPOLYLINE", "POLYLINE"}:
-                targets.append(e)
+        rol = _rol_capa_plasma(layer)
+        if rol is None and layer not in outer_set and layer not in inner_set:
+            continue
+        if e.dxftype() in {"LWPOLYLINE", "POLYLINE", "CIRCLE"}:
+            targets.append(e)
 
     for e in targets:
         layer = str(e.dxf.layer or "").upper()
+        rol = _rol_capa_plasma(layer)
+        if rol is None:
+            if layer in outer_set:
+                rol = "outer"
+            elif layer in inner_set:
+                rol = "inner"
+            else:
+                skipped += 1
+                continue
+
+        # OUTER: agranda path; INNER/barreno: reduce (kerf abre el hueco).
+        dist = off_dxf if rol == "outer" else -off_dxf
+
+        if e.dxftype() == "CIRCLE":
+            try:
+                r0 = float(e.dxf.radius)
+                r_new = r0 + dist
+                if r_new <= 1e-9:
+                    skipped += 1
+                    continue
+                e.dxf.radius = r_new
+                changed += 1
+                circles += 1
+            except Exception:
+                skipped += 1
+            continue
+
         pts = _entity_points_xy(e)
         if not pts:
             skipped += 1
             continue
 
-        dist = offset_mm if layer in outer_set else -offset_mm
         new_rings = _buffer_polygon_points(pts, dist)
         if not new_rings:
             skipped += 1
@@ -251,7 +389,14 @@ def compensate_dxf_for_plasma(
 
     output_dxf.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_dxf))
-    return {"changed": changed, "skipped": skipped, "total_targets": len(targets)}
+    return {
+        "changed": changed,
+        "skipped": skipped,
+        "total_targets": len(targets),
+        "circles": circles,
+        "offset_dxf": off_dxf,
+        "unit_to_mm": unit_to_mm,
+    }
 
 
 def _collect_inputs(explicit_files: Sequence[str], input_dir: Optional[str]) -> List[Path]:

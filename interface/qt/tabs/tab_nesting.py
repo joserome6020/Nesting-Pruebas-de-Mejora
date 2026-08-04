@@ -143,6 +143,12 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
 
         self.global_margin_val = DEFAULT_MARGIN_IN
         self.global_kerf_val = DEFAULT_KERF_IN
+        try:
+            from modules.nesting_engine.step_export_prefs import load_step_export_prefs
+
+            self.step_export_prefs = load_step_export_prefs()
+        except Exception:
+            self.step_export_prefs = {}
         self.global_corner_val = "INFERIOR IZQUIERDA"
         self.costo_usd_val = 0.0
         self.costo_mxn_val = 0.0
@@ -630,9 +636,11 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
         if hasattr(self, "switch_edicion_libre"):
             self.switch_edicion_libre.setEnabled(estado_switch)
         if n > 1:
-            self.btn_transferir.setText(f"MUDAR {n} PIEZAS")
+            self.btn_transferir.setText(f"Mudar ({n})")
+            self.btn_transferir.setToolTip(f"Mudar {n} piezas a otra placa")
         else:
-            self.btn_transferir.setText("MUDAR A OTRA PLACA")
+            self.btn_transferir.setText("Mudar")
+            self.btn_transferir.setToolTip("Mudar pieza seleccionada a otra placa")
         self._actualizar_seccion_pieza_seleccionada(piezas)
 
     def _set_switch_edicion_libre(self, activo: bool):

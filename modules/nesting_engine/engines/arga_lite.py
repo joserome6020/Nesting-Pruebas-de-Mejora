@@ -11,8 +11,8 @@ class ArgaLiteEngine:
         engine_id="arga_lite",
         display_name="ARGA LITE",
         description=(
-            "MC clásico en 3 pases explore→refine (parte del mejor anterior). "
-            "Rápido y decente: respaldo urgente sin quedar en nest ‘malo malo’."
+            "MC rápido + pack combinado + compact (band-close/backfill). "
+            "No usa pipeline FORCE. Venom opt-in. Más pases: ARGA_LITE_PASSES=2."
         ),
         phase=0,
         status="ready",

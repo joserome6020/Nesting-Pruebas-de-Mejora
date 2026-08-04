@@ -1,4 +1,10 @@
-# Contexto Global del Proyecto: New Arga Nesting Suite
+# Contexto Global del Proyecto: ANS C++ (Arga Nesting Suite — Native Core)
+
+> **IMPORTANTE:** Este árbol es la línea de evolución nativa en `C:\Proyectos\ANS C++`.  
+> El ANS original vive en `C:\Proyectos\New Arga Nesting Suite` y no debe modificarse desde esta línea.  
+> **Seguimiento vivo para agentes:** `AGENT_TRACKING.md` y `docs/cpp_migration/AGENT_TRACKING.md`  
+> **Arquitectura del core:** `docs/cpp_migration/ARCHITECTURE.md`  
+> **README de esta línea:** `README_ANS_CPP.md`
 
 Este documento centraliza el estado actual del proyecto, la arquitectura del software y la visión a futuro del desarrollo del motor de nesting. **Cursor debe leer este documento para entender el contexto completo del proyecto antes de sugerir cambios arquitectónicos o de bajo nivel.**
 

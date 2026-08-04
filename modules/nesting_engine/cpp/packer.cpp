@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 
 #include "clipper2/clipper.h"
+#include "cuda/nest_accel_raster.hpp"
 
 namespace arga {
 namespace {
@@ -494,7 +496,13 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
         double mejor_score = std::numeric_limits<double>::infinity();
         std::vector<std::pair<double, double>> mejor_anchors;
 
+        std::optional<cuda::DenseMask> cuda_board;
+
         for (const auto& var : variaciones) {
+            std::vector<std::pair<double, double>> cand_xy;
+            cand_xy.reserve(anclajes.size());
+            std::vector<std::pair<double, double>> cand_pxpy;
+            cand_pxpy.reserve(anclajes.size());
             for (const auto& anclaje : anclajes) {
                 const double ax = anclaje.first;
                 const double ay = anclaje.second;
@@ -506,6 +514,26 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
                     || py + var.b_maxy > h_placa - margin_px + 0.1) {
                     continue;
                 }
+                cand_xy.emplace_back(px, py);
+                cand_pxpy.emplace_back(px, py);
+            }
+            std::vector<std::uint8_t> rejected;
+            if (cuda::filter_worthwhile(cand_xy.size(), fijas_buff_paths.size())) {
+                if (!cuda_board.has_value()) {
+                    cuda_board = cuda::rasterize_union_occupancy(
+                        fijas_buff_paths, w_placa, h_placa, 8.0);
+                }
+                rejected = cuda::filter_against_board(
+                    *cuda_board, to_paths_d(var.poly_buff), cand_xy, 8.0);
+            }
+
+            for (std::size_t ci = 0; ci < cand_pxpy.size(); ++ci) {
+                if (!rejected.empty() && rejected[ci] != 0) {
+                    continue;
+                }
+                double px = cand_pxpy[ci].first;
+                double py = cand_pxpy[ci].second;
+
                 if (comprobar_colision(px, py, var, limit, fijas_bounds, fijas_buff_paths)) {
                     continue;
                 }

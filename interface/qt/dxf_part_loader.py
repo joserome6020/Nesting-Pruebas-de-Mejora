@@ -41,6 +41,8 @@ class DxfPartModel:
     snap_ctx: object = None
     doc: object = None
     msp: object = None
+    # Contornos OUTER en coords de escena (unidades DXF), para overlay plasma.
+    outer_rings: list = field(default_factory=list)
 
 
 def _insunits_factor(doc) -> float:
@@ -203,11 +205,27 @@ def load_dxf_part(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | 
             )
 
     outers, inners = clasificar_contornos_cerrados(shapes_cerrados)
+    model.outer_rings = []
     for sh in outers:
         if sh.get("kind") == "circle":
-            area_neta += math.pi * sh["rr"] ** 2
+            rr = float(sh.get("rr") or sh.get("r") or 0.0)
+            cx = float(sh.get("cx") or 0.0)
+            cy = float(sh.get("cy") or 0.0)
+            area_neta += math.pi * rr ** 2
+            if rr > 0:
+                ring = [
+                    (
+                        cx + rr * math.cos(2.0 * math.pi * i / 24.0),
+                        cy + rr * math.sin(2.0 * math.pi * i / 24.0),
+                    )
+                    for i in range(24)
+                ]
+                model.outer_rings.append(ring)
         else:
-            area_neta += poly_area_2d(sh.get("pts") or [])
+            pts = list(sh.get("pts") or [])
+            area_neta += poly_area_2d(pts)
+            if len(pts) >= 3:
+                model.outer_rings.append([(float(x), float(y)) for x, y in pts])
     for sh in inners:
         if sh.get("kind") == "circle":
             area_neta -= math.pi * sh["rr"] ** 2

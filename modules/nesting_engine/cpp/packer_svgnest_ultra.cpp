@@ -17,6 +17,7 @@
 
 #include "clipper2/clipper.h"
 #include "clipper2/clipper.minkowski.h"
+#include "cuda/nest_accel_raster.hpp"
 
 namespace arga {
 namespace {
@@ -1187,6 +1188,8 @@ bool colocar_pieza_nfp(
     double mejor_py = 0.0;
     double mejor_score = std::numeric_limits<double>::infinity();
 
+    std::optional<cuda::DenseMask> cuda_board;
+
     for (const auto& var : variaciones) {
         // Deepnest placeParts: Inner-NFP del bin/orificio − unión NFP de piezas fijadas.
         PathsD bin_ifp = build_bin_inner_nfp(
@@ -1221,6 +1224,10 @@ bool colocar_pieza_nfp(
         }
         dedupe_anchors(anclajes);
 
+        std::vector<std::pair<double, double>> cand_xy;
+        cand_xy.reserve(anclajes.size());
+        std::vector<std::pair<double, double>> cand_pxpy;
+        cand_pxpy.reserve(anclajes.size());
         for (const auto& anclaje : anclajes) {
             double px = anclaje.first - var.b_minx;
             double py = anclaje.second - var.b_miny;
@@ -1230,6 +1237,28 @@ bool colocar_pieza_nfp(
                 || py + var.b_maxy > h_placa - margin_px + 0.1) {
                 continue;
             }
+            cand_xy.emplace_back(px, py);
+            cand_pxpy.emplace_back(px, py);
+        }
+        const auto rejected = [&]() -> std::vector<std::uint8_t> {
+            if (!cuda::filter_worthwhile(cand_xy.size(), state.fijas_buff_paths.size())) {
+                return {};
+            }
+            if (!cuda_board.has_value()) {
+                cuda_board = cuda::rasterize_union_occupancy(
+                    state.fijas_buff_paths, w_placa, h_placa, 8.0);
+            }
+            return cuda::filter_against_board(
+                *cuda_board, to_paths_d(var.poly_buff), cand_xy, 8.0);
+        }();
+
+        for (std::size_t ci = 0; ci < cand_pxpy.size(); ++ci) {
+            if (!rejected.empty() && rejected[ci] != 0) {
+                continue;
+            }
+            double px = cand_pxpy[ci].first;
+            double py = cand_pxpy[ci].second;
+
             if (comprobar_colision(px, py, var, place_limit, state, kerf_radio)) {
                 continue;
             }
@@ -1371,16 +1400,30 @@ std::vector<CavidadAbierta> listar_cavidades_abiertas_por_host(const PlacementSt
         if (free_in.empty()) {
             free_in = Difference(PathsD{aabb}, host_solid, FillRule::EvenOdd);
         }
+        const double area_mat = piece_area(
+            PieceIn{placed.nombre, placed.area, placed.calibre, placed.material, placed.poligonos, placed.marcas});
+        const bool open_profile = bbox_area > 0.0 && (area_mat / bbox_area) < 0.85;
         for (const auto& path : free_in) {
             const double a = std::abs(Area(path));
-            if (a < 5.0 * 645.16 || a > bbox_area * 0.85) {
+            if (a < 5.0 * 645.16) {
                 continue;
             }
             const Bounds pb = bounds_of_paths({path});
             const double pw = pb.maxx - pb.minx;
             const double ph = pb.maxy - pb.miny;
-            if (pw > bw * 0.92 && ph > bh * 0.92) {
-                continue;
+            const bool reject_legacy =
+                (a > bbox_area * 0.85) || (pw > bw * 0.92 && ph > bh * 0.92);
+            if (reject_legacy) {
+                // Perfil abierto VFM/C: aceptar bahías internas (tocan <=2 lados del AABB).
+                constexpr double tol = 2.0;
+                int sides = 0;
+                if (std::abs(pb.minx - bb.minx) <= tol) ++sides;
+                if (std::abs(pb.maxx - bb.maxx) <= tol) ++sides;
+                if (std::abs(pb.miny - bb.miny) <= tol) ++sides;
+                if (std::abs(pb.maxy - bb.maxy) <= tol) ++sides;
+                if (!(open_profile && sides <= 2)) {
+                    continue;
+                }
             }
             auto rings = from_paths_d({path});
             if (!rings.empty()) {

@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 
@@ -9,6 +10,8 @@
 #include "packer_burke_blf.hpp"
 #include "packer_libnest2d.hpp"
 #include "packer_svgnest_ultra.hpp"
+#include "cuda/nest_accel.hpp"
+#include "cuda/nest_accel_raster.hpp"
 
 namespace py = pybind11;
 
@@ -241,7 +244,9 @@ PYBIND11_MODULE(algorithm_cpp, m) {
            const std::string& opt_override,
            const std::string& corner_override,
            py::object limite_rings_obj,
-           int hill_climb_iterations) {
+           int hill_climb_iterations,
+           std::uint32_t rng_seed,
+           bool preserve_input_order) {
             std::vector<arga::PieceIn> piezas;
             piezas.reserve(piezas_in.size());
             for (const auto& item : piezas_in) {
@@ -268,7 +273,9 @@ PYBIND11_MODULE(algorithm_cpp, m) {
                     opt_override,
                     corner_override,
                     limite,
-                    hill_climb_iterations);
+                    hill_climb_iterations,
+                    rng_seed,
+                    preserve_input_order);
             }
 
             py::list restos;
@@ -285,7 +292,9 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
         py::arg("corner_override") = "INFERIOR IZQUIERDA",
         py::arg("limite_rings") = py::none(),
-        py::arg("hill_climb_iterations") = 10);
+        py::arg("hill_climb_iterations") = 10,
+        py::arg("rng_seed") = 1,
+        py::arg("preserve_input_order") = true);
 
     m.def(
         "empaquetar_una_hoja_libnest2d",
@@ -430,6 +439,88 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("part_in_part") = true,
         py::arg("ga_seed") = 0,
         py::arg("seed_order") = py::none());
+
+    m.def(
+        "nest_cuda_available",
+        []() { return arga::cuda::available(); },
+        "True si el build/runtime CUDA está disponible en algorithm_cpp.");
+    m.def(
+        "nest_cuda_status",
+        []() { return arga::cuda::availability_detail(); },
+        "Detalle textual del estado CUDA.");
+    m.def(
+        "nest_cuda_requested",
+        []() { return arga::cuda::requested(); },
+        "True si ARGA_NEST_CUDA (u override por motor) está activo.");
+    m.def(
+        "nest_filter_translations",
+        [](const py::list& fixed_rings_list,
+           const py::list& piece_rings,
+           double plate_w_mm,
+           double plate_h_mm,
+           const py::list& translations_xy,
+           double cell_mm) {
+            std::vector<Clipper2Lib::PathsD> fixed;
+            fixed.reserve(fixed_rings_list.size());
+            for (const auto& item : fixed_rings_list) {
+                Clipper2Lib::PathsD paths;
+                const py::list rings = py::cast<py::list>(item);
+                for (const auto& ring_obj : rings) {
+                    const auto ring = parse_ring(py::cast<py::list>(ring_obj));
+                    if (ring.size() < 3) {
+                        continue;
+                    }
+                    Clipper2Lib::PathD path;
+                    path.reserve(ring.size());
+                    for (const auto& p : ring) {
+                        path.emplace_back(p.x, p.y);
+                    }
+                    paths.push_back(std::move(path));
+                }
+                if (!paths.empty()) {
+                    fixed.push_back(std::move(paths));
+                }
+            }
+
+            Clipper2Lib::PathsD piece;
+            for (const auto& ring_obj : piece_rings) {
+                const auto ring = parse_ring(py::cast<py::list>(ring_obj));
+                if (ring.size() < 3) {
+                    continue;
+                }
+                Clipper2Lib::PathD path;
+                path.reserve(ring.size());
+                for (const auto& p : ring) {
+                    path.emplace_back(p.x, p.y);
+                }
+                piece.push_back(std::move(path));
+            }
+
+            std::vector<std::pair<double, double>> xy;
+            xy.reserve(translations_xy.size());
+            for (const auto& t : translations_xy) {
+                const py::tuple pt = py::cast<py::tuple>(t);
+                if (pt.size() < 2) {
+                    continue;
+                }
+                xy.emplace_back(py::cast<double>(pt[0]), py::cast<double>(pt[1]));
+            }
+
+            const auto rejected = arga::cuda::filter_translations(
+                fixed, piece, plate_w_mm, plate_h_mm, xy, cell_mm);
+            py::list out;
+            for (auto flag : rejected) {
+                out.append(static_cast<int>(flag));
+            }
+            return out;
+        },
+        py::arg("fixed_rings_list"),
+        py::arg("piece_rings"),
+        py::arg("plate_w_mm"),
+        py::arg("plate_h_mm"),
+        py::arg("translations_xy"),
+        py::arg("cell_mm") = 8.0,
+        "Cribado batch: 1=rechazo seguro raster, 0=validar exacto (Clipper/Shapely).");
 
     m.attr("ENGINE_NAME") = "cpp_clipper2";
     m.attr("ENGINE_BASE_NAME") = "arga_base_pizarron";

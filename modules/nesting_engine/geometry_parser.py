@@ -1,5 +1,6 @@
 import math
 import os
+from collections import defaultdict
 
 import ezdxf
 from ezdxf import path
@@ -110,16 +111,10 @@ def _anillos_cerrados_entidad(entity) -> list[list[tuple[float, float]]]:
             return out
 
         if typ == "ARC":
-            c = entity.dxf.center
-            r = float(entity.dxf.radius) * escala
-            if r <= 1e-9:
-                return out
-            cx, cy = float(c.x) * escala, float(c.y) * escala
-            pts = _anillo_arco_ccw(
-                cx, cy, r, entity.dxf.start_angle, entity.dxf.end_angle
-            )
-            if len(pts) >= 2:
-                out.append(pts)
+            # Un ARC normal es un tramo abierto. Debe aplanarse en
+            # `entidad_a_lineas` para unirlo a los demás segmentos del perfil;
+            # tratarlo como anillo hace que Polygon cierre la cuerda y cree
+            # islas falsas (por ejemplo, varios "cuerpos" en IV_OUTER_PROFILE).
             return out
 
         p = path.make_path(entity)
@@ -214,6 +209,95 @@ def _poligonos_cerrados_de_lineas(lineas) -> list[Polygon]:
     except Exception:
         pass
     return candidatos
+
+
+def _poligonos_por_ciclos_de_extremos(
+    lineas,
+    *,
+    tolerancia_mm: float = 0.05,
+) -> list[Polygon]:
+    """Reconstruye ciclos CAD cuando polygonize pierde un perfil AutoDXF.
+
+    AutoDXF puede entregar un perfil exterior como LINE/ARC ya aplanado cuyos
+    extremos difieren por ruido de coma flotante. El grafo de extremos conserva
+    el contorno sin bufferizarlo ni alterar su kerf: solo cierra una junta menor
+    a la tolerancia CAD.
+    """
+    if not lineas:
+        return []
+
+    tol = max(float(tolerancia_mm), 1e-6)
+
+    def _key(point):
+        return (
+            int(round(float(point[0]) / tol)),
+            int(round(float(point[1]) / tol)),
+        )
+
+    def _distance(left, right) -> float:
+        return math.hypot(float(left[0]) - float(right[0]), float(left[1]) - float(right[1]))
+
+    segments: list[list[tuple[float, float]]] = []
+    by_endpoint: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for line in lineas:
+        try:
+            coords = [(float(x), float(y)) for x, y, *_ in line.coords]
+        except Exception:
+            continue
+        if len(coords) < 2:
+            continue
+        index = len(segments)
+        segments.append(coords)
+        by_endpoint[_key(coords[0])].append(index)
+        by_endpoint[_key(coords[-1])].append(index)
+
+    used: set[int] = set()
+    candidates: list[Polygon] = []
+    for initial_index, initial in enumerate(segments):
+        if initial_index in used:
+            continue
+        used.add(initial_index)
+        ring = list(initial)
+        # Un ciclo simple usa cada segmento una sola vez. El guard evita que un
+        # DXF malformado pueda ciclar indefinidamente.
+        for _ in range(len(segments) + 1):
+            current = ring[-1]
+            if _distance(current, ring[0]) <= tol:
+                break
+            key_x, key_y = _key(current)
+            options: list[tuple[float, int, bool]] = []
+            # La celda cuantizada solo acelera la búsqueda. La continuidad se
+            # decide por distancia real: endpoints sobre el borde de una celda
+            # pueden caer en bins distintos por redondeo binario.
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for index in by_endpoint.get((key_x + dx, key_y + dy), []):
+                        if index in used:
+                            continue
+                        segment = segments[index]
+                        start_distance = _distance(segment[0], current)
+                        end_distance = _distance(segment[-1], current)
+                        if start_distance <= tol:
+                            options.append((start_distance, index, False))
+                        if end_distance <= tol:
+                            options.append((end_distance, index, True))
+            if not options:
+                break
+            _distance_to_join, next_index, reverse = min(options, key=lambda item: (item[0], item[1]))
+            next_segment = segments[next_index]
+            if reverse:
+                next_segment = list(reversed(next_segment))
+            used.add(next_index)
+            ring.extend(next_segment[1:])
+        if _distance(ring[-1], ring[0]) > tol or len(ring) < 4:
+            continue
+        # Cerrar con el punto inicial elimina el ruido < tolerancia sin cambiar
+        # la topología ni desplazar segmentos existentes.
+        ring[-1] = ring[0]
+        poly = _anillo_a_poligono(ring)
+        if poly is not None:
+            candidates.append(poly)
+    return candidates
 
 
 def _hueco_dentro_shell(h: Polygon, shell: Polygon) -> bool:
@@ -398,6 +482,14 @@ def recuperar_geometria_robusta_detalle(ruta_dxf):
             )
 
         candidatos_outer = _poligonos_cerrados_de_lineas(lines_outer)
+        ciclos_outer = _poligonos_por_ciclos_de_extremos(lines_outer)
+        if ciclos_outer:
+            area_legacy = max((float(poly.area or 0.0) for poly in candidatos_outer), default=0.0)
+            area_ciclos = max((float(poly.area or 0.0) for poly in ciclos_outer), default=0.0)
+            # Preferir el ciclo solo cuando recupera un perfil materialmente
+            # mayor; en DXF normales se conserva la ruta ya probada.
+            if not candidatos_outer or area_ciclos > area_legacy * 1.02:
+                candidatos_outer = ciclos_outer
         for ring in anillos_outer_directos:
             p = _anillo_a_poligono(ring)
             if p is not None:

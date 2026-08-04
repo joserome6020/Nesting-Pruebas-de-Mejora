@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from interface.qt.nesting_canvas import VisorNesting
 from interface.qt.widgets.herinox_switch import HerinoxSwitch
+from interface.qt.widgets.nesting_ribbon import build_nesting_ribbon
 from interface.qt.dialogs.nesting_modals import abrir_modal_configuracion, abrir_modal_transferencia
 from interface.qt.layout_helpers import (
     finalize_splitter,
@@ -26,7 +27,7 @@ from interface.qt.layout_helpers import (
 )
 from interface.qt.theme import COLOR_GRIS_DARK, COLOR_TEXTO_TITULO, apply_herinox_combo, apply_push_button
 
-DEFAULT_KERF_IN = 0.3
+DEFAULT_KERF_IN = 0.15
 PANEL_TOOLS_MIN_WIDTH = 234
 
 
@@ -83,7 +84,7 @@ NEST_TAB_INDEX = 3  # FILES=0, PARTS=1, SHEETS=2, NESTING=3
 
 
 def _nest_sidebar_width_from_tabbar(tab) -> int:
-    """Ancho del panel lista = borde derecho de la pestaña NESTING."""
+    """Ancho del panel lista = borde derecho de la pestaña NESTING (sin pad de colisión)."""
     tabview = getattr(getattr(tab, "app", None), "tabview", None)
     if tabview is None:
         return NEST_SIDEBAR_WIDTH_FALLBACK_PX
@@ -93,10 +94,14 @@ def _nest_sidebar_width_from_tabbar(tab) -> int:
     rect = bar.tabRect(NEST_TAB_INDEX)
     if rect.width() <= 0:
         return NEST_SIDEBAR_WIDTH_FALLBACK_PX
-    return max(280, int(rect.right()))
+    pad = getattr(tab, "_nest_tab_width_pad", None)
+    pad_w = int(pad.width()) if pad is not None else 0
+    return max(280, int(rect.right()) - max(0, pad_w))
 
 
 def apply_nest_sidebar_width(tab) -> None:
+    if getattr(tab, "_nest_sidebar_user_resized", False):
+        return
     splitter = getattr(tab, "_nest_splitter", None)
     if splitter is None:
         return
@@ -175,35 +180,10 @@ def build_tab_nesting_ui(tab) -> None:
     panel_der_wrap = QWidget()
     der_wrap_lay = QVBoxLayout(panel_der_wrap)
     der_wrap_lay.setContentsMargins(0, 0, 0, 0)
-    der_wrap_lay.setSpacing(6)
+    der_wrap_lay.setSpacing(0)
 
-    tab.frame_header_der = QFrame()
-    tab.frame_header_der.setObjectName("ToolbarStrip")
-    hdr = QHBoxLayout(tab.frame_header_der)
-    hdr.setContentsMargins(8, 6, 8, 6)
-    hdr.setSpacing(6)
-
-    def _btn(text, slot, bg=COLOR_GRIS_DARK, enabled=True):
-        b = QPushButton(text)
-        b.setFixedHeight(30)
-        apply_push_button(b, bg, font_size=11, padding="6px 12px")
-        b.setEnabled(enabled)
-        b.clicked.connect(slot)
-        hdr.addWidget(b)
-        return b
-
-    tab.btn_exportar = _btn("EXPORTAR DXF/STEP", tab.exportar_resultados_dxf)
-    tab.btn_ver_step = _btn("VER STEP", tab.abrir_visor_step)
-    tab.btn_ver_lotes = _btn("HISTORIAL DE W.O.", tab.reabrir_modal_escenarios)
-    tab.btn_costos = _btn("COSTOS DE ORDEN", lambda: __import__("interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]).abrir_modal_costos(tab))
-    tab.btn_nesting_largos = _btn("NESTEO DE LARGOS", tab.abrir_nesting_largos)
-    tab.btn_nest_sim_lab = _btn("LAB · COMPARAR", tab.abrir_nest_sim_lab)
-    tab.btn_config = _btn("CONFIGURACIÓN", lambda: abrir_modal_configuracion(tab))
-    tab.btn_pdf_nesting = _btn("PDF NESTING", tab.exportar_reporte_pdf_nesting)
-    tab.btn_editar_lote = _btn("EDITAR LOTE", tab.editar_lote_activo)
-    tab.btn_guardar_nest = _btn("GUARDAR NEST", tab.guardar_workspace_nesting)
-    tab.btn_abrir_nest = _btn("ABRIR NEST", tab.abrir_workspace_nesting)
-    hdr.addStretch()
+    # Cinta dentro del panel (no overlay sobre el QTabBar: eso deformaba las pestañas).
+    tab.frame_header_der = build_nesting_ribbon(tab)
     der_wrap_lay.addWidget(tab.frame_header_der)
 
     tab.panel_der = make_panel_dark()
@@ -216,147 +196,27 @@ def build_tab_nesting_ui(tab) -> None:
     tab.visor = VisorNesting(tab.visor_host, tab.app, tab.on_piece_selected)
     tab.visor_host.set_visor(tab.visor)
 
+    # Acciones de placa/pieza viven en la cinta («Placa»). Stubs ocultos por compat.
     tab.frame_ajuste_container = QFrame(tab.visor_host)
-    tab.frame_ajuste_container.setStyleSheet("background:transparent;border:none;")
     tab.frame_ajuste_container.hide()
     tab.ajuste_desplegado = False
-    adj_lay = QVBoxLayout(tab.frame_ajuste_container)
-    adj_lay.setContentsMargins(0, 0, 0, 0)
-    adj_lay.setSpacing(4)
-
-    tab.panel_ajuste_contenido = QFrame()
-    tab.panel_ajuste_contenido.setMinimumWidth(PANEL_TOOLS_MIN_WIDTH)
-    tab.panel_ajuste_contenido.setStyleSheet(
-        "background:#0F172A;border:1px solid #475569;border-radius:10px;"
-    )
+    tab.panel_ajuste_contenido = QWidget(tab)
     tab.panel_ajuste_contenido.hide()
-    pc_lay = QVBoxLayout(tab.panel_ajuste_contenido)
-    pc_lay.setContentsMargins(12, 10, 12, 10)
-    pc_lay.setSpacing(6)
-
-    scroll_panel = QScrollArea()
-    scroll_panel.setObjectName("PanelToolsScroll")
-    scroll_panel.setWidgetResizable(True)
-    scroll_panel.setFrameShape(QFrame.Shape.NoFrame)
-    scroll_panel.setStyleSheet(
-        "QScrollArea#PanelToolsScroll{background:transparent;border:none;}"
-        "QScrollArea#PanelToolsScroll QScrollBar:vertical{"
-        "background:transparent;width:6px;margin:2px 0;}"
-        "QScrollArea#PanelToolsScroll QScrollBar::handle:vertical{"
-        "background:rgba(148,163,184,0.38);border-radius:3px;min-height:22px;}"
-        "QScrollArea#PanelToolsScroll QScrollBar::handle:vertical:hover{"
-        "background:rgba(148,163,184,0.62);}"
-        "QScrollArea#PanelToolsScroll QScrollBar::add-line:vertical,"
-        "QScrollArea#PanelToolsScroll QScrollBar::sub-line:vertical{height:0;}"
-        "QScrollArea#PanelToolsScroll QScrollBar::add-page:vertical,"
-        "QScrollArea#PanelToolsScroll QScrollBar::sub-page:vertical{background:transparent;}"
-    )
-    scroll_panel.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    scroll_panel.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-    tab._panel_tools_scroll = scroll_panel
-    scroll_inner = QWidget()
-    scroll_inner.setStyleSheet("background:transparent;")
-    scroll_inner.setMinimumWidth(PANEL_TOOLS_MIN_WIDTH - 28)
-    si_lay = QVBoxLayout(scroll_inner)
-    si_lay.setContentsMargins(0, 0, 6, 0)
-    si_lay.setSpacing(5)
-
-    si_lay.addWidget(_section_title("PLACA ACTIVA"))
-    tab.lbl_placa_resumen = QLabel("-")
-    tab.lbl_placa_resumen.setStyleSheet(_STYLE_VAL)
-    tab.lbl_placa_resumen.setWordWrap(True)
-    si_lay.addWidget(tab.lbl_placa_resumen)
-    tab.lbl_placa_stats = QLabel("-")
-    tab.lbl_placa_stats.setStyleSheet(_STYLE_MUTED)
-    tab.lbl_placa_stats.setWordWrap(True)
-    si_lay.addWidget(tab.lbl_placa_stats)
-    tab.lbl_placa_dims = QLabel("-")
-    tab.lbl_placa_dims.setStyleSheet(_STYLE_MUTED)
-    tab.lbl_placa_dims.setWordWrap(True)
-    si_lay.addWidget(tab.lbl_placa_dims)
-
-    _sep(si_lay)
-    si_lay.addWidget(_section_title("PIEZA SELECCIONADA"))
-    tab.frame_pieza_sel = QFrame()
-    tab.frame_pieza_sel.setStyleSheet("background:transparent;border:none;")
-    fps_lay = QVBoxLayout(tab.frame_pieza_sel)
-    fps_lay.setContentsMargins(0, 0, 0, 0)
-    fps_lay.setSpacing(6)
-    tab.lbl_pieza_sel = QLabel("SIN SELECCIÓN — CLIC EN EL CANVAS")
-    tab.lbl_pieza_sel.setStyleSheet(_STYLE_MUTED)
-    tab.lbl_pieza_sel.setWordWrap(True)
-    fps_lay.addWidget(tab.lbl_pieza_sel)
-
-    tab.btn_transferir = _panel_action_btn("MUDAR A OTRA PLACA", padding="6px 12px")
-    tab.btn_transferir.setEnabled(False)
-    tab.btn_transferir.clicked.connect(lambda: abrir_modal_transferencia(tab))
-    fps_lay.addWidget(tab.btn_transferir)
-
-    rot_row = QHBoxLayout()
-    rot_row.setSpacing(4)
-    tab.btn_rot_90 = QPushButton("90°")
-    tab.btn_rot_90.setEnabled(False)
-    apply_push_button(tab.btn_rot_90, "#334155", font_size=10, padding="6px 8px")
-    tab.btn_rot_90.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(90))
-    tab.btn_rot_m1 = QPushButton("-1°")
-    tab.btn_rot_m1.setEnabled(False)
-    apply_push_button(tab.btn_rot_m1, "#334155", font_size=10, padding="6px 8px")
-    tab.btn_rot_m1.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(-1))
-    tab.btn_rot_p1 = QPushButton("+1°")
-    tab.btn_rot_p1.setEnabled(False)
-    apply_push_button(tab.btn_rot_p1, "#334155", font_size=10, padding="6px 8px")
-    tab.btn_rot_p1.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(1))
-    tab.btn_limpiar_sel = QPushButton("LIMPIAR")
-    apply_push_button(tab.btn_limpiar_sel, "#1E293B", font_size=10, padding="6px 8px")
-    tab.btn_limpiar_sel.clicked.connect(tab.panel_limpiar_seleccion)
-    rot_row.addWidget(tab.btn_rot_m1)
-    rot_row.addWidget(tab.btn_rot_p1)
-    rot_row.addWidget(tab.btn_rot_90)
-    rot_row.addWidget(tab.btn_limpiar_sel)
-    fps_lay.addLayout(rot_row)
-
-    tab.switch_edicion_libre = HerinoxSwitch(
-        label_on="EDICIÓN LIBRE ENTRE SELECCIÓN",
-        label_off="EDICIÓN LIBRE (OFF)",
-        checked=False,
-    )
-    tab.switch_edicion_libre.setEnabled(False)
-    tab.switch_edicion_libre.toggled.connect(tab._on_toggle_edicion_libre)
-    fps_lay.addWidget(tab.switch_edicion_libre)
-    tab.lbl_edicion_libre = QLabel(
-        "SOLO COLISIONA CON PLACA Y PIEZAS FUERA DEL GRUPO. EN MODO ACTIVO: MORADO."
-    )
-    tab.lbl_edicion_libre.setWordWrap(True)
-    tab.lbl_edicion_libre.setStyleSheet("color:#94A3B8;font-size:10px;background:transparent;")
-    fps_lay.addWidget(tab.lbl_edicion_libre)
-
-    si_lay.addWidget(tab.frame_pieza_sel)
-
-    _sep(si_lay)
-    si_lay.addWidget(_section_title("ACCIONES DE PLACA"))
-    tab.btn_panel_renest_placa = _panel_action_btn("RENESTEAR ESTA PLACA")
-    tab.btn_panel_renest_placa.clicked.connect(tab.panel_renestear_placa)
-    si_lay.addWidget(tab.btn_panel_renest_placa)
-
-    tab.btn_panel_renest_calibre = _panel_action_btn("RENESTEAR CALIBRE COMPLETO")
-    tab.btn_panel_renest_calibre.clicked.connect(tab.panel_renestear_calibre)
-    si_lay.addWidget(tab.btn_panel_renest_calibre)
-
-    tab.btn_panel_cambiar_placa = _panel_action_btn("CAMBIAR PLACA MADRE")
-    tab.btn_panel_cambiar_placa.clicked.connect(tab.panel_cambiar_placa_madre)
-    si_lay.addWidget(tab.btn_panel_cambiar_placa)
-
-    scroll_panel.setWidget(scroll_inner)
-    scroll_panel.setMinimumHeight(160)
-    pc_lay.addWidget(scroll_panel, 1)
-
-    util_row = QHBoxLayout()
-    tab.btn_ajustar_vista = QPushButton("AJUSTAR VISTA")
-    apply_push_button(tab.btn_ajustar_vista, "#1E293B", font_size=10, padding="5px 10px")
-    tab.btn_ajustar_vista.clicked.connect(tab.panel_ajustar_vista)
-    util_row.addWidget(tab.btn_ajustar_vista)
-    util_row.addStretch()
-    pc_lay.addLayout(util_row)
+    tab.btn_toggle_ajuste = QPushButton(tab)
+    tab.btn_toggle_ajuste.hide()
+    tab.lbl_placa_resumen = QLabel("-", tab)
+    tab.lbl_placa_resumen.hide()
+    tab.lbl_placa_stats = QLabel("-", tab)
+    tab.lbl_placa_stats.hide()
+    tab.lbl_placa_dims = QLabel("-", tab)
+    tab.lbl_placa_dims.hide()
+    tab.lbl_pieza_sel = QLabel("SIN SELECCIÓN", tab)
+    tab.lbl_pieza_sel.hide()
+    tab.lbl_edicion_libre = QLabel("", tab)
+    tab.lbl_edicion_libre.hide()
+    tab.frame_pieza_sel = QWidget(tab)
+    tab.frame_pieza_sel.hide()
+    tab._panel_tools_scroll = None
 
     # Kerf / optimización: widgets ocultos (CONFIGURACIÓN global + lógica de renesteo)
     tab._kern_opt_host = QWidget(tab)
@@ -367,15 +227,6 @@ def build_tab_nesting_ui(tab) -> None:
     tab.cmb_opt.addItems(["OPTIMIZAR LARGO Y ANCHO", "OPTIMIZAR LARGO", "OPTIMIZAR ANCHO"])
     _ko.addWidget(tab.ent_kerf)
     _ko.addWidget(tab.cmb_opt)
-
-    adj_lay.addWidget(tab.panel_ajuste_contenido)
-    tab.btn_toggle_ajuste = QPushButton("HERRAMIENTAS DE PLACA")
-    tab.btn_toggle_ajuste.setMinimumWidth(PANEL_TOOLS_MIN_WIDTH)
-    tab.btn_toggle_ajuste.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-    apply_push_button(tab.btn_toggle_ajuste, "#FFFFFF", font_size=11)
-    tab.btn_toggle_ajuste.clicked.connect(tab.toggle_ajuste_placa)
-    adj_lay.addWidget(tab.btn_toggle_ajuste)
-    tab.frame_ajuste_container.raise_()
 
     der_wrap_lay.addWidget(tab.panel_der, 1)
 

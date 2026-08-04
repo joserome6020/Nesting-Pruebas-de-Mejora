@@ -297,6 +297,14 @@ def draw_amada_fixture_provisional(msp, bar_l_mm: float, bar_w_mm: float) -> Non
     """
     if draw_amada_fixture_real(msp, bar_l_mm, bar_w_mm):
         return
+    path = resolve_amada_fixture_dxf()
+    print(
+        "[AMADA-FIXTURE] DXF real no disponible — usando contorno simulado "
+        f"(path={path!r}). Coloque "
+        "'FIXTURA AMADA/FICSTURA MEJORADA CORTE BUENO .25IN.DXF' "
+        "o defina AMADA_FIXTURE_DXF.",
+        flush=True,
+    )
     _draw_amada_fixture_fallback(msp, bar_l_mm, bar_w_mm)
 
 

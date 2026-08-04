@@ -399,7 +399,7 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
     Overlay STEP_UNIVERSAL_SIN_CAMAS: 1 STEP por cada DXF de acero (sin A/B).
     Cobre: STEP solo si la hoja requiere 3D.
     Barras Amada (ESP.): 1 DXF VERTICAL por barra + 1 FIXTURA por pieza ESP. única.
-    VERTICAL y FIXTURA son solo DXF (sin STEP). El RTZCU de esas barras va a DXF/STEP normal.
+    El RTZCU de esas barras va a DXF/STEP normal.
     """
     n_dxf = 0
     n_step = 0
@@ -425,6 +425,10 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
             if generar_plasma:
                 n_dxf += 1
             if not generar_step:
+                continue
+            from .step_export_prefs import step_enabled_for_carpeta
+
+            if not step_enabled_for_carpeta(carpeta):
                 continue
             if carpeta == RUTA_NESTEOS_COBRE:
                 if _cu_dxf_requiere_3d(_hoja_cobre_export_3d(hoja)):
@@ -481,7 +485,15 @@ def _validar_steps_tras_export(
     universal = step_universal_sin_camas_activo()
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
     resumen = _auditar_steps_en_rutas(rutas, cu_formato_por_dxf=cu_formato_por_dxf)
+    from .step_export_prefs import step_enabled_for_label
+
     for etiqueta, counts in resumen.items():
+        if not step_enabled_for_label(etiqueta):
+            _log(
+                f"3D audit [{etiqueta}] ({motor_label}): SKIP "
+                "(desactivado en Configuración → STEPS)"
+            )
+            continue
         n_dxf = int(counts.get("dxf") or 0)
         n_dxf_3d = int(counts.get("dxf_3d") if counts.get("dxf_3d") is not None else n_dxf)
         n_step = int(counts.get("step") or 0)
@@ -547,6 +559,8 @@ def _validar_steps_tras_export(
                 ("ROBOT LASER", "robot_laser_step_A", "robot_laser_step_B"),
                 ("ROBOT PLASMA", "robot_plasma_step_A", "robot_plasma_step_B"),
             ):
+                if not step_enabled_for_label(etiqueta):
+                    continue
                 ok_ab, msg_ab = validar_step_cama_ab_pares(
                     rutas.get(key_a, ""),
                     rutas.get(key_b, ""),
@@ -570,6 +584,13 @@ def _validar_steps_tras_export(
 
 def _generar_steps_cobre_fuentes_in_place(resultados: dict, job_root_dir: str, *, log_fn=None) -> int:
     """Escribe manifiesto de DXF fuente cobre y genera STEP junto a cada DXF (sin mover)."""
+    from .step_export_prefs import step_enabled_for_label
+
+    if not step_enabled_for_label("NESTEOS DE COBRE"):
+        if log_fn:
+            log_fn("STEP cobre in-place: SKIP (desactivado en Configuración → STEPS)")
+        return 0
+
     from modules.cobre_step_fuentes import (
         escribir_manifest_cobre,
         procesar_steps_cobre_en_ubicacion_fuentes,
@@ -920,7 +941,6 @@ def _registrar_exportacion_pqart_hoja(
     *,
     ruta_dxf: str,
     tipo_corte: str,
-    export_3d_format: str | None = None,
 ):
     if not isinstance(hoja, dict):
         return
@@ -931,11 +951,6 @@ def _registrar_exportacion_pqart_hoja(
 
     exports = hoja.setdefault("pqart_exports", [])
 
-    if export_3d_format is not None:
-        fmt3d = str(export_3d_format or "dxf").strip().lower()
-    else:
-        fmt3d = str(hoja.get("export_3d_format") or "step").strip().lower()
-
     payload = {
         "nombre_dxf": os.path.basename(ruta_normalizada),
         "ruta": ruta_normalizada,
@@ -943,7 +958,7 @@ def _registrar_exportacion_pqart_hoja(
         "sheet_uid": str(hoja.get("sheet_uid") or "").strip(),
         "sheet_code": str(hoja.get("sheet_code") or "").strip(),
         "sheet_display_name": str(hoja.get("sheet_display_name") or "").strip(),
-        "export_3d_format": fmt3d,
+        "export_3d_format": str(hoja.get("export_3d_format") or "step").strip().lower(),
     }
 
     ruta_cmp = os.path.normcase(ruta_normalizada)
@@ -1058,8 +1073,16 @@ def lanzar_freecad_robotica(
 
     universal = step_universal_sin_camas_activo()
 
+    from .step_export_prefs import step_enabled_for_label
+
+    def _step_ok(label: str) -> bool:
+        ok = step_enabled_for_label(label)
+        if not ok:
+            print(f"[STEP][SKIP] {label}: desactivado en Configuración → STEPS")
+        return ok
+
     # NESTEOS DE COBRE (largos CU: madre + RTZCU) — siempre igual (no entra al overlay)
-    if es_cobre and rutas.get("nesteos_cobre_dxf"):
+    if es_cobre and rutas.get("nesteos_cobre_dxf") and _step_ok("NESTEOS DE COBRE"):
         os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
         if not fmt_map:
             print(
@@ -1091,6 +1114,8 @@ def lanzar_freecad_robotica(
             ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step", str(plasma_off)),
         )
         for etiqueta, dxf_key, step_key, plasma_env in acero_jobs:
+            if not _step_ok(etiqueta):
+                continue
             if not rutas.get(dxf_key) and not rutas.get(step_key):
                 continue
             os.environ["FREECAD_PLASMA_OFFSET"] = plasma_env
@@ -1110,7 +1135,7 @@ def lanzar_freecad_robotica(
         # CAMA LASER (acero): solo DXF — no genera STEP.
 
         # ROBOT LASER
-        if rutas.get("robot_laser_dxf"):
+        if rutas.get("robot_laser_dxf") and _step_ok("ROBOT LASER"):
             os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
             _convertir(
                 "ROBOT LASER A",
@@ -1132,7 +1157,7 @@ def lanzar_freecad_robotica(
             )
 
         # ROBOT PLASMA
-        if rutas.get("robot_plasma_dxf"):
+        if rutas.get("robot_plasma_dxf") and _step_ok("ROBOT PLASMA"):
             os.environ["FREECAD_PLASMA_OFFSET"] = str(plasma_off)
             _convertir(
                 "ROBOT PLASMA A",
@@ -1326,8 +1351,10 @@ def exportar_resultados_a_dxf(
             thickness_para_step = espesor_pulgadas * 25.4
 
         # Conserva tu regla actual de compensación para plasma
+        from modules.plasma_compensator import compute_plasma_offset_mm
+
         espesor_ref = espesor_pulgadas if espesor_pulgadas is not None else 0.25
-        plasma_offset_job = (0.250 if espesor_ref > 0.75 else 0.0125) * 25.4
+        plasma_offset_job = float(compute_plasma_offset_mm(float(espesor_ref)))
 
         # Mantiene la lógica visible actual por grupo de calibre
         contador_placas = {}
@@ -1575,11 +1602,21 @@ def exportar_resultados_a_dxf(
                         plasma_outer, plasma_holes = outer_main, holes_main
 
                     ruta_src = str(pz.get("ruta") or "").strip()
-                    plasma_ruta = (
-                        ruta_src
-                        if ruta_src and os.path.isfile(ruta_src) and not es_linea_corte
-                        else ""
-                    )
+                    ruta_plasma_src = str(pz.get("ruta_plasma") or "").strip()
+                    ya_comp = bool(pz.get("plasma_fuente_ya_compensada"))
+                    # Si PARTS ya generó DXF compensado, exportar 1:1 desde ese archivo
+                    # (no volver a aplicar offset).
+                    if ya_comp and ruta_plasma_src and os.path.isfile(ruta_plasma_src):
+                        plasma_ruta = ruta_plasma_src
+                        off_export = 0.0
+                        use_plasma_source = True
+                    else:
+                        plasma_ruta = (
+                            ruta_src
+                            if ruta_src and os.path.isfile(ruta_src) and not es_linea_corte
+                            else ""
+                        )
+                        use_plasma_source = bool(plasma_ruta) and off_export > 0
 
                     placements_plasma.append({
                         "part_name": nom + "_PLASMA",
@@ -1591,7 +1628,7 @@ def exportar_resultados_a_dxf(
                         "prefer_source_dxf": False,
                         "compensated": compensada_pieza,
                         "plasma_export": True,
-                        "compensated_plasma_source": bool(plasma_ruta) and off_export > 0,
+                        "compensated_plasma_source": use_plasma_source,
                         "plasma_offset_mm": off_export,
                         "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
@@ -1677,7 +1714,6 @@ def exportar_resultados_a_dxf(
                             hoja,
                             ruta_dxf=path_vertical,
                             tipo_corte=_normalizar_tipo_corte_pqart(RUTA_COBRE_VERTICAL),
-                            export_3d_format="dxf",  # AMADA/VERTICAL: solo DXF, sin STEP
                         )
                     else:
                         log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
@@ -1846,7 +1882,6 @@ def exportar_resultados_a_dxf(
                 hoja_pqart,
                 ruta_dxf=path_fx,
                 tipo_corte=_normalizar_tipo_corte_pqart(RUTA_COBRE_FIXTURA),
-                export_3d_format="dxf",  # AMADA/FIXTURA: solo DXF, sin STEP
             )
         else:
             log(
@@ -1867,17 +1902,27 @@ def exportar_resultados_a_dxf(
             step_done=0,
         )
         if motor == "occt":
-            # Arga Nesting Suite: reutilizar FreeCAD/generador_verde si está
-            # instalado (mismo resultado de producción). OCCT solo de respaldo.
-            from freecad_runner import freecad_listo_para_step
+            # OCCT real: no redirigir a FreeCAD (antes: FreeCAD si estaba instalado).
+            # Opt-in legacy: ARGA_EXPORT_3D_OCCT_ALLOW_FREECAD=1
+            allow_fc = str(
+                os.environ.get("ARGA_EXPORT_3D_OCCT_ALLOW_FREECAD", "0")
+            ).strip().lower() in ("1", "true", "yes", "on")
+            use_freecad = False
+            if allow_fc:
+                try:
+                    from freecad_runner import freecad_listo_para_step
 
-            if freecad_listo_para_step(prefer_verde=True):
+                    use_freecad = bool(freecad_listo_para_step(prefer_verde=True))
+                except Exception:
+                    use_freecad = False
+
+            if use_freecad:
                 log(
-                    "Arga Nesting Suite: usando FreeCAD + generador_verde "
-                    "(motor de producción; sin reimplementar STEP)"
+                    "Arga Nesting Suite: ARGA_EXPORT_3D_OCCT_ALLOW_FREECAD=1 → "
+                    "FreeCAD + generador_verde"
                 )
                 _progress(
-                    mensaje="Arga Nesting Suite → FreeCAD (generador_verde)…",
+                    mensaje="Arga Nesting Suite → FreeCAD (legacy)…",
                     step_done=0,
                 )
                 lanzar_freecad_robotica(
@@ -1896,13 +1941,9 @@ def exportar_resultados_a_dxf(
                     mensaje="Validando STEP (FreeCAD vía Arga)…",
                     step_done=n_step_est,
                 )
-                # Auditoría como FreeCAD (mismo motor real)
                 motor = "freecad"
             else:
-                log(
-                    "Arga Nesting Suite: FreeCAD no disponible → "
-                    "fallback OCCT embebido"
-                )
+                log("Arga Nesting Suite: convirtiendo STEP con OCCT embebido")
                 from .occt_step_export import (
                     generar_steps_cobre_fuentes_occt,
                     lanzar_occt_robotica,

@@ -352,26 +352,25 @@ class ExportMixin:
         Motor STEP tras 'SI, generar 3D'.
         Returns: 'freecad' | 'occt' | None (cancelar toda la exportación).
 
-        FreeCAD / generador_verde = producción.
-        Arga Nesting Suite = mismo FreeCAD si está instalado; OCCT solo si no hay FreeCAD.
+        FreeCAD = generador_verde (producción clásica).
+        Arga Nesting Suite / OCCT = motor embebido CAD (OCCT), sin FreeCAD.
         """
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle("Motor 3D (STEP)")
         box.setText("¿Con qué motor generar los archivos STEP?")
         box.setInformativeText(
-            "FreeCAD: producción (generador_verde).\n\n"
-            "Arga Nesting Suite: reutiliza FreeCAD si está instalado "
-            "(mismo resultado); solo usa OCCT embebido si FreeCAD no está disponible.\n\n"
-            "El visor 3D OCCT no se desconecta en ningún caso."
+            "FreeCAD: producción clásica (generador_verde).\n\n"
+            "Arga Nesting Suite (OCCT): motor embebido — no usa FreeCAD.\n\n"
+            "El visor 3D OCCT funciona con STEPs de cualquiera de los dos."
         )
         btn_fc = box.addButton("FreeCAD", QMessageBox.ButtonRole.YesRole)
-        btn_occt = box.addButton("Arga Nesting Suite", QMessageBox.ButtonRole.ActionRole)
+        btn_occt = box.addButton("OCCT (Arga)", QMessageBox.ButtonRole.ActionRole)
         btn_cancel = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-        for btn, min_w in ((btn_fc, 120), (btn_occt, 180), (btn_cancel, 104)):
+        for btn, min_w in ((btn_fc, 120), (btn_occt, 140), (btn_cancel, 104)):
             btn.setMinimumWidth(min_w)
             btn.setMinimumHeight(34)
-        box.setDefaultButton(btn_fc)
+        box.setDefaultButton(btn_occt)
         box.exec()
         clicked = box.clickedButton()
         if clicked is None or clicked == btn_cancel:
@@ -855,10 +854,25 @@ class ExportMixin:
 
         motor_3d = "freecad"
         if respuesta_3d:
-            elegido = self._preguntar_motor_3d_export()
-            if elegido is None:
-                return
-            motor_3d = elegido
+            # ANS C++: preferir OCCT por defecto (opt-out ARGA_EXPORT_3D_MOTOR=freecad)
+            prefer = str(os.environ.get("ARGA_EXPORT_3D_MOTOR", "occt")).strip().lower()
+            if prefer in ("occt", "arga", "nans") and str(
+                os.environ.get("ARGA_EXPORT_3D_ASK", "1")
+            ).strip().lower() in ("0", "false", "no", "off"):
+                motor_3d = "occt"
+                print("[ANS-CPP] Motor 3D forzado OCCT (ARGA_EXPORT_3D_ASK=0)", flush=True)
+            else:
+                elegido = self._preguntar_motor_3d_export()
+                if elegido is None:
+                    return
+                motor_3d = elegido
+                # Si el usuario elige FreeCAD pero el core/OCCT está listo, dejar traza
+                if motor_3d == "freecad" and prefer in ("occt", "arga", "nans"):
+                    print(
+                        "[ANS-CPP] Hint: default recomendado es OCCT "
+                        "(ARGA_EXPORT_3D_MOTOR=occt)",
+                        flush=True,
+                    )
         print(f"[DEBUG] Motor 3D: {motor_3d}")
 
         # Totales estimados (todos los lotes) para la pantalla dual

@@ -1,0 +1,22 @@
+{
+  "scenario": "s1_single_plate",
+  "engine_id": "cpp_v2_poc",
+  "elapsed_ms": 570.7865000003949,
+  "placed": 33,
+  "expected": 33,
+  "efi_directa": 42.8111111111111,
+  "solape_ok": true,
+  "kerf_violations": 0,
+  "min_gap_in": 0.2559055118110236,
+  "in_holes": 0,
+  "restos": 0,
+  "efi_real": 42.8111111111111,
+  "pass_ok": true,
+  "error": "",
+  "baseline_delta_pp": null,
+  "notes": "Single-plate local (sustituto reproducible de PLC152-P3). Geometría embebida; no depende de red.",
+  "overlap_detail": "",
+  "gap_details": [],
+  "nest_mode": "standard",
+  "level": "S1"
+}

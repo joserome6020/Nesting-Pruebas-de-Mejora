@@ -38,6 +38,15 @@ QMainWindow, QWidget {{
     font-size: 12px;
 }}
 
+/* Tooltips: texto negro (la cinta/dark panels usan color claro y lo heredaban). */
+QToolTip {{
+    background-color: #FFFFFF;
+    color: #111827;
+    border: 1px solid #CFD7E6;
+    padding: 4px 8px;
+    border-radius: 4px;
+}}
+
 QLabel {{
     color: {COLOR_TEXTO_TITULO};
     background: transparent;
@@ -514,6 +523,25 @@ QFrame#ToolbarStrip {{
     border: 1px solid {COLOR_BORDE_SUAVE};
     border-radius: 10px;
 }}
+QFrame#NestingRibbon {{
+    background: #1E293B;
+    border: 1px solid #0F172A;
+    border-radius: 6px;
+}}
+QFrame#NestingRibbon QFrame#RibbonPanel,
+QFrame#NestingRibbon QLabel {{
+    background: transparent;
+    color: #CBD5E1;
+}}
+QFrame#NestingRibbon QLabel#RibbonPanelTitle {{
+    color: #94A3B8;
+    padding: 10px 4px 1px 4px;
+    min-height: 16px;
+}}
+QFrame#NestingRibbon QFrame#RibbonSep {{
+    background: #475569;
+    border: none;
+}}
 """
 
 
@@ -618,4 +646,8 @@ def apply_theme(app) -> None:
         app.setStyle("Fusion")
     except Exception:
         pass
+    pal = app.palette()
+    pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#FFFFFF"))
+    pal.setColor(QPalette.ColorRole.ToolTipText, QColor(COLOR_TEXTO_TITULO))
+    app.setPalette(pal)
     app.setStyleSheet(APP_STYLESHEET)

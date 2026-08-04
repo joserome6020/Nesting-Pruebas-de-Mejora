@@ -1,0 +1,57 @@
+{
+  "scenario": "s2_host_fill",
+  "level": "S0",
+  "plate_w_in": 28.0,
+  "plate_h_in": 16.0,
+  "kerf_in": 0.15,
+  "margin_in": 0.1,
+  "corner": "INFERIOR IZQUIERDA",
+  "opt": "OPTIMIZAR LARGO Y ANCHO",
+  "nest_mode": "standard",
+  "mc_iterations": 1,
+  "require_full_place": true,
+  "notes": "Host con hueco + parásitos + sólido grande. Ranker host-first debe ayudar part-in-part.",
+  "pieces": [
+    {
+      "nombre": "BIG-SOLID",
+      "qty": 1,
+      "w_in": 14.0,
+      "h_in": 10.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "HOST-MED",
+      "qty": 1,
+      "w_in": 9.0,
+      "h_in": 8.0,
+      "hole_in": [1.5, 1.5, 5.5, 4.5],
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "PARA-A",
+      "qty": 2,
+      "w_in": 2.4,
+      "h_in": 2.0,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "PARA-B",
+      "qty": 2,
+      "w_in": 2.0,
+      "h_in": 1.8,
+      "calibre": "11",
+      "material": "A36"
+    },
+    {
+      "nombre": "MID-RECT",
+      "qty": 2,
+      "w_in": 5.0,
+      "h_in": 3.5,
+      "calibre": "11",
+      "material": "A36"
+    }
+  ]
+}
