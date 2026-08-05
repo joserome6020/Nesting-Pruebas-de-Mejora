@@ -29,9 +29,14 @@
 
 ```powershell
 cd "C:\Proyectos\ANS C++"
+py -3.14 tests\native\run_regresiones.py   # obligatorio: candados de bugs ya corregidos
 py -3.14 tests\native\test_compact_lite.py
 py -3.14 tests\native\test_band_close.py
 ```
+
+`run_regresiones.py` no necesita BD ni core compilado. **Cada bug corregido agrega
+su candado ahí**, con el caso real que lo motivó y verificando que falle contra el
+código viejo. Un bug sin candado vuelve.
 
 ## Siguiente foco
 
@@ -59,7 +64,16 @@ py -3.14 tests\native\test_band_close.py
   export (`plan_swo_canonico`), que antes descartaba el caché ×1 y ocultaba el bug: la
   compra salía bien pero el modal, el PDF de piso y los switches ‘Pedir’ iban en X1.
 - Verificado contra BD: `SWO-003` pasa de 14 a 154 piezas (14 base × 11).
-  `tests/native/test_largos_swo_factor.py`.
+- Equivalencia comprobada: una WO X11 y una SWO de X3+X3+X3+X2 del mismo job dan
+  el mismo plan (mismas piezas, mismas barras, mismos cortes por barra).
+- **Por qué se escapó**: la expansión correcta por WO (`_obtener_jobs_de_swo` +
+  `_expandir_lista_para_wo`) existe en `api/legacy_core.py` desde el commit inicial.
+  El precálculo de escritorio (`calcular_planes_largos_nesting`, commit `7df25e1`)
+  reimplementó la resolución de demanda por su cuenta con `factor_lote` y nunca
+  cubrió el caso SWO. No fue una regresión: fueron dos caminos calculando lo mismo
+  distinto, y el modal usaba el nuevo. Regla 9 de `AGENTS.md`.
+- Candados: `tests/native/test_largos_swo_factor.py` (8 casos, sin BD) dentro de
+  `tests/native/run_regresiones.py`. Verificado que fallan contra el código viejo.
 
 ### 2026-08-05a — Job sin lista de largos ya no tumba el export
 

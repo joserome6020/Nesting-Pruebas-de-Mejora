@@ -10,4 +10,12 @@
    `C:\Proyectos\ANS C++`.
 5. Default runtime = motor legacy (`algorithm_cpp`). Core nuevo con `ARGA_NEST_CORE=1`.
 6. Tras cambios en C++: recompilar y correr `python tests/native/smoke_arga_nest_core.py --require-core`.
-7. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.
+7. **Todo bug corregido deja un candado en `tests/native/run_regresiones.py`.**
+   Escribe el test con el caso real que lo motivó, comprueba que *falla* con el
+   código viejo y agrégalo a la lista. Un bug sin candado vuelve.
+8. Corre `python tests/native/run_regresiones.py` (sin BD ni core) antes de
+   cerrar sesión o publicar build. Debe salir `REGRESIONES PASS`.
+9. Antes de reimplementar una regla de negocio (cantidades, factores, WO/SWO,
+   costos), busca si ya existe en `api/legacy_core.py` y **reúsala**. Los bugs
+   de este tipo han venido de tener dos caminos que calculan lo mismo distinto.
+10. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.
