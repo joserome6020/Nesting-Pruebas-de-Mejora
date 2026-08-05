@@ -998,6 +998,38 @@ def _auditar_recuperacion_plan_largos(
         print(f"[LARGOS_NESTING][CHECKPOINT][WARN] recovery: {exc}")
 
 
+def _demanda_largos_confirmada_vacia(app) -> bool:
+    """
+    ¿El job realmente no lleva largos?
+
+    Consulta la misma fuente que DEMANDA DE LARGOS: primero el CSV de AutoDXF y
+    luego ``lista_largos_job``. Ante cualquier duda (sin job, error de BD)
+    devuelve False para no dejar pasar una orden que sí debía pedir material.
+    """
+    job = str(getattr(app, "job_activo", "") or "").strip()
+    if not job:
+        return False
+
+    conexion = None
+    cursor = None
+    try:
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
+        filas, _origen = _obtener_filas_demanda_lote(app, cursor, job, 1)
+        return not filas
+    except Exception as exc:
+        print(
+            f"[LARGOS_NESTING][WARN] No se pudo verificar la demanda de largos "
+            f"del job '{job}': {exc}"
+        )
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
 def _recuperar_plan_largos_persistido_tras_export(
     app,
     lote_idx: int,
@@ -1073,6 +1105,21 @@ def _recuperar_plan_largos_persistido_tras_export(
 
     sin_demanda = getattr(app, "plan_largos_sin_demanda_por_lote", set()) or set()
     if idx in sin_demanda:
+        return None, "sin_demanda", None
+
+    # El caché del precálculo se pierde al reabrir un workspace o si el cálculo
+    # se interrumpió a medio lote. Antes de bloquear la exportación se consulta
+    # la fuente real (CSV de AutoDXF / lista_largos_job): un job sin perfiles
+    # no tiene nada que pedir.
+    if _demanda_largos_confirmada_vacia(app):
+        if isinstance(sin_demanda, set):
+            sin_demanda.add(idx)
+        else:
+            app.plan_largos_sin_demanda_por_lote = {idx}
+        print(
+            f"[LARGOS_NESTING] {tipo} {orden} lote={idx}: sin demanda de largos "
+            "confirmada contra CSV/lista_largos_job; no requiere pedido MRL."
+        )
         return None, "sin_demanda", None
 
     error_precalculo = str(getattr(app, "plan_largos_error", "") or "").strip()

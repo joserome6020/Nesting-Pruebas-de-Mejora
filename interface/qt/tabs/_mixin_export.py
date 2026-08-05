@@ -65,7 +65,11 @@ from nesting_workspace import (
     filetypes_workspace_guardar,
     filetypes_workspace_abrir,
 )
-from postgres_connector import guardar_nesting_en_postgresql
+from postgres_connector import (
+    guardar_nesting_en_postgresql,
+    obtener_wos_sin_lista_largos,
+    reiniciar_avisos_lista_largos,
+)
 from reporte_pdf_nesting import exportar_pdf_nesting
 from interface.export_checkpoint_service import (
     checkpoint_export_ok,
@@ -462,6 +466,93 @@ class ExportMixin:
             raise RuntimeError("No hay grupos de material para publicar el reporte SWO.")
         return consolidado
 
+    def _revertir_wos_persistidas(
+        self,
+        db_conf: dict,
+        wos_persistidas: list,
+        job_activo: str,
+        es_swo: bool,
+    ) -> list:
+        """
+        Deshace las WO que ya se escribieron en PostgreSQL cuando la corrida
+        aborta antes de centralizar.
+
+        Solo se invoca antes de VSM/ContPAQ: a partir de ahí la exportación es
+        válida y únicamente falta reanudar la sincronización. Sin esto, cada
+        intento fallido dejaba una orden a medias que además consumía el
+        consecutivo del siguiente intento.
+        """
+        import psycopg2
+
+        orden = str(job_activo or "").strip()
+        etiquetas = [str(w).strip() for w in (wos_persistidas or []) if str(w).strip()]
+        if not etiquetas:
+            return []
+
+        revertidas = []
+        try:
+            with psycopg2.connect(**db_conf) as conexion:
+                with conexion.cursor() as cursor:
+                    if es_swo:
+                        # La SWO comparte un solo layout maestro: se borra una vez.
+                        cursor.execute(
+                            """
+                            DELETE FROM reporte_cortes
+                            WHERE BTRIM(super_work_order) = %s
+                              AND estatus ILIKE 'Pendiente%%'
+                            """,
+                            (orden,),
+                        )
+                        revertidas.append(f"{orden} ({cursor.rowcount} pieza(s))")
+                        cursor.execute(
+                            "DELETE FROM public.pqart_swo WHERE BTRIM(nombre_swo) = %s",
+                            (orden,),
+                        )
+                        cursor.execute(
+                            "DELETE FROM material_requerido_ldg WHERE BTRIM(orden_id) = %s",
+                            (orden,),
+                        )
+                    else:
+                        for wo in etiquetas:
+                            cursor.execute(
+                                """
+                                DELETE FROM reporte_cortes
+                                WHERE BTRIM(work_order) = %s
+                                  AND BTRIM(job) = %s
+                                  AND estatus ILIKE 'Pendiente%%'
+                                """,
+                                (wo, orden),
+                            )
+                            revertidas.append(f"{wo} ({cursor.rowcount} pieza(s))")
+                            cursor.execute(
+                                "DELETE FROM public.pqart_wo WHERE BTRIM(nombre_wo) = %s",
+                                (wo,),
+                            )
+                            cursor.execute(
+                                "DELETE FROM material_requerido_ldg WHERE BTRIM(orden_id) = %s",
+                                (wo,),
+                            )
+
+                    for wo in etiquetas:
+                        cursor.execute(
+                            """
+                            DELETE FROM costos_prorrateo
+                            WHERE BTRIM(work_order) = %s AND BTRIM(job) = %s
+                            """,
+                            (wo, orden),
+                        )
+                        cursor.execute(
+                            "DELETE FROM public.export_stage_checkpoints WHERE scope_id = %s",
+                            (wo,),
+                        )
+        except Exception as exc:
+            print(f"[EXPORT][ROLLBACK][ERROR] No se pudo revertir la corrida: {exc}")
+            return []
+
+        for detalle in revertidas:
+            print(f"[EXPORT][ROLLBACK] {detalle} revertida(s).")
+        return revertidas
+
     def _centralizar_exportacion_confirmada(
         self,
         *,
@@ -669,18 +760,23 @@ class ExportMixin:
             if _pendiente("REPORTE_SWO"):
                 resultado_reporte = enviar_reporte_a_api(job_activo, reporte_swo)
                 if not resultado_reporte:
+                    # El reporte web solo alimenta el dashboard: la SWO ya quedó
+                    # exportada en CAD, PostgreSQL, MRL, VSM y ContPAQ. Se avisa
+                    # en consola y queda pendiente para ‘Reanudar sync’, pero no
+                    # se convierte en un error de exportación para el usuario.
                     detalle = resultado_reporte.summary()
                     _checkpoint(
                         "REPORTE_SWO",
-                        status="FAILED",
+                        status="WARNING",
                         detail=detalle,
                         resultado=resultado_reporte,
                     )
-                    raise ExportStageError(
-                        "REPORTE_SWO",
-                        "La exportación, VSM y ContPAQ están confirmados, pero "
-                        f"el reporte web no: {detalle}. Use ‘Reanudar sync’.",
+                    print(
+                        f"[CENTRALIZED][WARN] REPORTE_SWO {job_activo}: el reporte "
+                        f"web no confirmó ({detalle}). La exportación sigue válida; "
+                        "use ‘Reanudar sync’ para reintentarlo."
                     )
+                    return
                 _checkpoint(
                     "REPORTE_SWO",
                     status="OK",
@@ -934,6 +1030,13 @@ class ExportMixin:
                 self.app.actualizar_progreso(msg or "Exportando…", pct)
 
         def worker():
+            # WO ya escritas en PostgreSQL en esta corrida. Si el export aborta
+            # antes de centralizar, se revierten todas.
+            wos_persistidas_run = []
+            centralizacion_iniciada = False
+            db_conf = {}
+            job_activo = ""
+            es_swo_flag = False
             try:
                 _on_export_progress(
                     mensaje="Preparando geometría / carpetas…",
@@ -963,6 +1066,7 @@ class ExportMixin:
                 os.makedirs(r_base, exist_ok=True)
 
                 rutas_generadas = []
+                reiniciar_avisos_lista_largos()
                 job_activo = getattr(self.app, 'job_activo', 'JOB').strip().upper()
                 es_swo_flag = _es_job_swo(job_activo)
                 export_run_id = nuevo_export_run_id()
@@ -1235,6 +1339,7 @@ class ExportMixin:
                             "POSTGRESQL",
                             detail=f"PQART y reporte de corte confirmados ({resultado_bd} pieza(s)).",
                         )
+                        wos_persistidas_run.append(str(n_wo))
 
                     # La WO queda visible solo cuando los DXF y PostgreSQL ya
                     # coinciden; evita que el UI anuncie una orden inexistente.
@@ -1314,6 +1419,7 @@ class ExportMixin:
                             detail=f"{msg_ldg} {msg_mrl}",
                         )
 
+                    centralizacion_iniciada = True
                     self._centralizar_exportacion_confirmada(
                         db_conf=db_conf,
                         job_activo=job_activo,
@@ -1334,6 +1440,13 @@ class ExportMixin:
                         f"Se exportaron {total_carpetas} lotes en modo local.\n"
                         f"Carpeta base: {desktop_nesteos_locales()}\n\n"
                         "No se envió información a PostgreSQL ni al servidor centralizado."
+                    )
+
+                wos_sin_largos = obtener_wos_sin_lista_largos()
+                if wos_sin_largos:
+                    mensaje_final += (
+                        "\n\nSin lista de largos (no se generó pedido MRL):\n"
+                        + "\n".join(f"  • {w}" for w in wos_sin_largos)
                     )
 
                 if respuesta_3d:
@@ -1358,6 +1471,27 @@ class ExportMixin:
 
             except Exception as e:
                 mensaje_error = str(e)
+                if not centralizacion_iniciada and wos_persistidas_run:
+                    revertidas = self._revertir_wos_persistidas(
+                        db_conf,
+                        wos_persistidas_run,
+                        job_activo,
+                        es_swo_flag,
+                    )
+                    if revertidas:
+                        self.app.wo_reales_por_lote = {}
+                        mensaje_error += (
+                            "\n\nNo quedó ninguna orden a medias: se revirtieron "
+                            + ", ".join(revertidas)
+                            + "."
+                        )
+                    else:
+                        mensaje_error += (
+                            "\n\nATENCIÓN: no se pudieron revertir las órdenes ya "
+                            "escritas en PostgreSQL ("
+                            + ", ".join(str(w) for w in wos_persistidas_run)
+                            + "). Revísalas antes de reexportar."
+                        )
                 self.app.after(0, lambda msg=mensaje_error: self.finalizar_exportacion(False, msg, ""))
 
         threading.Thread(target=worker, daemon=True).start()

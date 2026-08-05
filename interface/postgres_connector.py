@@ -49,6 +49,33 @@ def _aplicar_env_db_config(db_config: dict | None) -> None:
         os.environ["NESTING_DB_NAME"] = str(dbname)
 
 
+# Un job sin perfiles nunca genera CSV en AutoDXF. Eso no es una falla de
+# ingeniería: la WO simplemente no lleva largos y no debe tumbar el export.
+ESTADOS_LARGOS_SIN_LISTA = frozenset({"csv_no_encontrado", "csv_vacio"})
+
+_wos_sin_lista_largos: list[str] = []
+
+
+def reiniciar_avisos_lista_largos() -> None:
+    _wos_sin_lista_largos.clear()
+
+
+def obtener_wos_sin_lista_largos() -> list[str]:
+    return list(_wos_sin_lista_largos)
+
+
+def _registrar_wo_sin_lista_largos(nombre_wo: str, job: str, status: str) -> None:
+    wo = str(nombre_wo or "").strip()
+    job_txt = str(job or "").strip()
+    etiqueta = " · ".join(p for p in (wo, job_txt) if p)
+    if etiqueta and etiqueta not in _wos_sin_lista_largos:
+        _wos_sin_lista_largos.append(etiqueta)
+    print(
+        f"[BD][LISTA_LARGOS][AVISO] job='{job_txt}' wo='{wo}': no lleva lista de "
+        f"largos (estado={status}). Se continúa sin pedido MRL."
+    )
+
+
 def _reportar_pedidos_material(logs: list | None, contexto: str) -> None:
     if not logs:
         print(
@@ -1166,12 +1193,13 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         else:
             _guardar_pqart_wo(cursor, nombre_wo, resultados_motor)
 
-        conexion.commit()
-        print(f"[BD] ¡ÉXITO! Se guardaron {piezas_guardadas} piezas. Estado 3D: {estado_3d}. Ruta inyectada.")
+        print(f"[BD] Preparadas {piezas_guardadas} piezas. Estado 3D: {estado_3d}. Ruta inyectada.")
 
         # =======================================================
         # IMPORTACIÓN VERIFICADA DE LISTA DE LARGOS POR JOB
         # =======================================================
+        # El commit va después de este bloque: si la importación falla, la WO
+        # no debe quedar a medias en reporte_cortes/pqart_wo.
         print(
             f"[DEBUG][LISTA_LARGOS] es_swo={es_swo} | "
             f"job_original={job_original} | "
@@ -1190,10 +1218,12 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     propagar_material=False,
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
-                if not resultado_largos.get("ok"):
+                status_largos = str(resultado_largos.get("status") or "desconocido")
+                if status_largos in ESTADOS_LARGOS_SIN_LISTA:
+                    _registrar_wo_sin_lista_largos(nombre_wo, job_original, status_largos)
+                elif not resultado_largos.get("ok"):
                     raise RuntimeError(
-                        "No se importó la lista de largos "
-                        f"(estado={resultado_largos.get('status', 'desconocido')})."
+                        f"No se importó la lista de largos (estado={status_largos})."
                     )
                 pedidos = resultado_largos.get("pedidos_material")
                 if pedidos:
@@ -1260,8 +1290,11 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                         propagar_material=False,
                     )
                     print(f"[BD][LISTA_LARGOS] SWO job={j_imp}: {resultado_largos}")
+                    status = str(resultado_largos.get("status") or "estado desconocido")
+                    if status in ESTADOS_LARGOS_SIN_LISTA:
+                        _registrar_wo_sin_lista_largos(nombre_wo, j_imp, status)
+                        continue
                     if not resultado_largos.get("ok"):
-                        status = str(resultado_largos.get("status") or "estado desconocido")
                         # Job del nest sin carpeta AutoDXF: avisar, no tumbar PQART
                         # si ya hay demanda de largos en BD para ese job.
                         if status == "autodir_no_existe":
@@ -1294,6 +1327,9 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 f"es_swo={es_swo} | ruta_exportacion={ruta_exportacion!r} | "
                 f"db_config={'set' if db_config else 'none'}"
             )
+
+        conexion.commit()
+        print(f"[BD] ¡ÉXITO! WO '{nombre_wo}': {piezas_guardadas} piezas confirmadas.")
 
         return True, piezas_guardadas
 

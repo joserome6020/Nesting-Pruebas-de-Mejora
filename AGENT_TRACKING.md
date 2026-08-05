@@ -35,11 +35,106 @@ py -3.14 tests\native\test_band_close.py
 
 ## Siguiente foco
 
-1. Relleno de huecos VFM **barato** en Lite (sin llamar FORCE/base)
-2. Telemetría WO → AI UI default  
-3. L4 sigue aparcado
+1. Fase 4 Spark: obtener SSH key vía NVIDIA Sync (`arga_dev`) y levantar `nest_remote_server` en `192.168.2.35:8765`
+2. Relleno de huecos VFM **barato** en Lite (sin llamar FORCE/base)
+3. Telemetría WO → AI UI default (ya hay `result.runtime` en packs)
 
 ## Changelog
+
+### 2026-08-05a — Job sin lista de largos ya no tumba el export
+
+- Caso real: `251008-COMPARTMENT` no lleva perfiles → AutoDXF sin CSV → `csv_no_encontrado`
+  hacía fallar `guardar_nesting_en_postgresql` y abortaba el multi-lote completo.
+- `postgres_connector`: `ESTADOS_LARGOS_SIN_LISTA` (`csv_no_encontrado`, `csv_vacio`) es aviso,
+  no error (rama WO y rama SWO). Acumulador `obtener_wos_sin_lista_largos()`.
+- `_mixin_export`: reinicia avisos por corrida y lista las WO sin largos en el mensaje final.
+- Limpieza BD/servidor de W.O. 3/4/5 X2 zombis (commit de `reporte_cortes` previo al fallo).
+- `guardar_nesting_en_postgresql`: el `commit` pasó a **después** del import de largos →
+  una WO que falla ya no deja filas huérfanas en `reporte_cortes`/`pqart_wo`.
+- `REPORTE_SWO` (reporte web / dashboard) ya no lanza `ExportStageError`: queda como
+  checkpoint `WARNING` + aviso en consola, reintentable con ‘Reanudar sync’.
+- MRL: `_demanda_largos_confirmada_vacia` verifica CSV/`lista_largos_job` antes de
+  bloquear. El caché `plan_largos_sin_demanda_por_lote` se pierde al reabrir workspace
+  o si el precálculo se corta a medio lote, y eso tumbaba la etapa MRL.
+- **Fixes de bug van a los dos proyectos** (`ANS C++` y `New Arga Nesting Suite`);
+  regla nueva en `AGENTS.md`.
+- `_revertir_wos_persistidas`: si la corrida aborta **antes** de VSM/ContPAQ se borran
+  todas las WO ya escritas (`reporte_cortes`, `pqart_wo|swo`, `costos_prorrateo`,
+  `material_requerido_ldg`, checkpoints). Después de centralizar no se toca nada:
+  ahí la exportación es válida y solo aplica ‘Reanudar sync’.
+
+### 2026-08-04k — VALIDACIÓN ABSOLUTA Spark PASS (6/6)
+
+- Hotfix poly + server reiniciado → `validate_spark_all_engines.py` **PASS**.
+- Remoto OK: Lite, Force, Ultra, APEX, Burke, Libnest2d (`runtime=spark`, 3 piezas c/u).
+- CUDA APEX disponible en Spark (GB10). Switch UI ANS C++ listo para nestear en producción de prueba.
+
+### 2026-08-04j — Fix poly wire + Spark FULL smoke OK
+
+- Spark build FULL OK: `algorithm_cpp` + CUDA GB10, motores ready, server `:8765`.
+- Validación remota falló `'poly'` → `_piece_to_native` ahora acepta `poligonos/rings` sin Shapely.
+- Hotfix PC→Spark: copiar `algorithm_bridge.py` + `nest_engine_job.py` y reiniciar server (sin rebuild).
+
+### 2026-08-04i — Spark FULL: todos los motores + APEX CUDA
+
+- `tools/build_spark_full.sh`: ArgaNestCore + `algorithm_cpp` con CUDA (archs 75…120 / override).
+- `tools/validate_spark_all_engines.py`: valida Lite/Force/Ultra/APEX/Burke/Libnest2d remoto estricto.
+- Package `package_spark_worker.ps1` + docs `NEST_RUNTIME_SPARK.md` actualizados.
+- CMake: `ARGA_CUDA_ARCHITECTURES` override + PIC en algorithm_cpp.
+- Pendiente en Spark Sync: curl paquete → `./tools/build_spark_full.sh` → nohup server → validate desde PC.
+
+### 2026-08-04h — Cualquier motor vía Spark
+
+- `engine_registry.empaquetar_una_hoja_detalle` enruta Local/Spark/Auto para **Lite/Force/APEX/…** (no solo ArgaNestCore).
+- Nuevo cmd TCP `pack_engine` + `nest_engine_job` (serialize). Fallback local si Spark falla / sin motor.
+- Nota: en Spark ARM hace falta el mismo `.so` del motor (p.ej. `algorithm_cpp` para Lite); si no está, Auto cae a este PC.
+
+### 2026-08-04g — Switch UI NESTEAR EN SPARK (footer)
+
+- Footer ANS C++: `HerinoxSwitch` **NESTEAR EN SPARK** / **NESTEAR EN ESTE PC** junto al de exportar servidor.
+- ON → `prefer=auto` (+ ping); OFF → `prefer=local`. Persiste en `_config/nest_runtime.json`.
+
+### 2026-08-04f — Nest real en Spark ARM OK
+
+- Server `nest_remote_server` en `spark-7e79:8765` con ArgaNestCore **0.5.3 aarch64**.
+- Desde PC: ping OK + `pack_sheet` remoto → `placed_count=2`, `runtime=spark`, `certify=True`, ~35 ms executor.
+- Uso ANS: Configuración Global → Ejecutar en **Spark** o **Auto**, host `192.168.2.35`, puerto `8765`. Dejar el server corriendo en el Spark.
+
+### 2026-08-04e — Core ARM compiló en Spark; fix import package
+
+- Build aarch64 OK: `arga_nest_core.cpython-312-aarch64-linux-gnu.so` (~1.2 MB).
+- `modules/nesting_engine/__init__.py` ya no exige `MotorNesting`/plate_stock (worker Spark).
+- Pendiente: smoke `core_status` + `run_nest_remote_server` en `:8765`.
+
+### 2026-08-04d — Paquete Spark listo para build ARM
+
+- `tools/package_spark_worker.ps1` → `_spark_deploy/ans_cpp_spark_worker.tgz` (~0.9 MB fuentes).
+- `tools/build_arga_nest_core_linux.sh` (cmake/ninja, CUDA off por default).
+- HTTP LAN: `http://192.168.2.52:8766/ans_cpp_spark_worker.tgz` (PC Wi‑Fi).
+- Siguiente en Spark: curl → build → `run_nest_remote_server.py :8765`.
+
+### 2026-08-04c — Spark red OK (stub aarch64)
+
+- Host `spark-7e79`: Linux **aarch64**, 20 cores, ~121 GiB RAM, Python 3.12.3.
+- Stub TCP `:8765` en Spark → ping desde PC **OK** (`version=spark-ping-stub aarch64`).
+- Nest real en Spark sigue pendiente de **build ArgaNestCore para Linux ARM** (el `.pyd` Windows no aplica).
+
+### 2026-08-04b — Nest runtime Local / Spark / Auto (Fases 1–3 OK; 4 bloqueada SSH)
+
+- **F1 contrato** `nest_runtime_contract` v1.0.0 + meta `runtime` en resultados.
+- **F2 executor** `nest_executor` + prefs `_config/nest_runtime.json` (gitignored) + UI en Configuración Global (Local/Spark/Auto, host/puerto, Probar).
+- **F3 servidor LAN** `nest_remote_server` (TCP JSON-line, mismo protocolo worker). Validado: `tests/native/test_nest_runtime_phases.py` **PASS** (local, auto→fallback, spark remoto localhost, auto→remoto).
+- **F4 Spark**: docs `docs/NEST_RUNTIME_SPARK.md` + `tools/spark_ssh_smoke.py`. SSH `arga_dev@192.168.2.35` → Permission denied (falta llave en esta shell; usar NVIDIA Sync). No se guardan credenciales en repo.
+- Bridge: `pack_sheet_json` enruta por prefer; `pack_sheet_json_local` evita recursión del server.
+- Arranque server: `py -3.14 tools\run_nest_remote_server.py --port 8765`
+
+### 2026-08-04 — APEX CUDA A/B (local GPU)
+
+- Bench `ans_engines_cuda_ab` fuerza `ARGA_APEX_CUDA_OFF` en brazo CPU (APEX ya no “engancha” CUDA por default en el A/B).
+- `s2_host_fill` (1×): CPU 11.9 s → CUDA 4.9 s · **speedup ≈ 2.4×** · gate pass · `apex_cuda` on/off OK.
+- `r_1000kva_critical` (2×): CPU 14.5 s ↔ CUDA 14.8 s · **~paridad** · calidad igual (23 pcs) · gate pass (sin regresión >10%).
+- Conclusión: CUDA en APEX **sí engancha** en esta máquina; ganancia no es automática en WO críticos. Spark sigue siendo paso aparte (worker remoto / port).
+- Artefactos: `benchmarks/results_real/apex_cuda_ab_s2.json`, `apex_cuda_ab_r1000.json`.
 
 ### 2026-08-03y — Revert Lite→FORCE void-first
 
