@@ -41,6 +41,26 @@ py -3.14 tests\native\test_band_close.py
 
 ## Changelog
 
+### 2026-08-05b — Largos de SWO se multiplican por WO, no por lote
+
+- Síntoma: `SWO-003` (fusiona `W.O. 3 X11` de `251008-COMP-HI`) mostraba el nesteo de
+  largos en X1 — `NESTEO · SWO · LOTE X1` — mientras la WO original sí salía en X11.
+- Causa: el multiplicador salía de `lote_k` del nesteo. Una SWO se nestea como **un solo
+  lote**, así que `lote_k = 1`. En una WO normal `lote_k` sí es el número de tanques, por
+  eso el mismo código acertaba ahí. Las placas nunca fallaron porque vienen contadas
+  desde `reporte_cortes`, no recalculadas.
+- El multiplicador real de una SWO es la **suma de los factores de sus WO** (X2+X3+…),
+  no un escalar del lote: las WO fusionadas pueden traer factores distintos.
+- `largos_nesting_service`: `resolver_wos_fuente_swo` (pares job/WO desde `reporte_cortes`,
+  fallback `meta_pdf_por_ruta` cuando la SWO aún no se exporta), `factor_demanda_swo`,
+  `_filas_desde_bd_para_wo`, `_filas_desde_csv_para_pares` y `_filas_demanda_swo`.
+  `_obtener_filas_demanda_lote` desvía a esa ruta cuando el job es SWO; la ruta WO queda igual.
+- Prioriza `lista_largos_job` sobre el CSV para empatar con el plan canónico que valida el
+  export (`plan_swo_canonico`), que antes descartaba el caché ×1 y ocultaba el bug: la
+  compra salía bien pero el modal, el PDF de piso y los switches ‘Pedir’ iban en X1.
+- Verificado contra BD: `SWO-003` pasa de 14 a 154 piezas (14 base × 11).
+  `tests/native/test_largos_swo_factor.py`.
+
 ### 2026-08-05a — Job sin lista de largos ya no tumba el export
 
 - Caso real: `251008-COMPARTMENT` no lleva perfiles → AutoDXF sin CSV → `csv_no_encontrado`

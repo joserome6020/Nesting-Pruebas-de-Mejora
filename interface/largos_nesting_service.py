@@ -63,6 +63,8 @@ def resolver_contexto_largos(app, tab) -> dict[str, Any]:
     """Contexto para nesteo de largos: orden real o vista previa por job/lote."""
     job = str(getattr(app, "job_activo", "") or "").strip()
     factor = _factor_lote(tab)
+    if job.upper().startswith("SWO"):
+        factor = factor_demanda_swo(app, job)
     ctx_orden = resolver_orden_largos(app, tab)
     if ctx_orden:
         orden_id, tipo_orden = ctx_orden
@@ -392,6 +394,62 @@ def resolver_jobs_fuente_demanda(app, job: str, cursor=None) -> list[str]:
     return [job]
 
 
+def resolver_wos_fuente_swo(app, swo: str, cursor=None) -> list[tuple[str, str]]:
+    """
+    Pares (job, work_order) que componen una SWO.
+
+    El multiplicador de una SWO no es el lote del nesteo (siempre X1): es el
+    factor propio de cada WO fusionada (X2 + X3 + ... ).
+    """
+    swo_limpia = str(swo or "").strip()
+    if not swo_limpia:
+        return []
+
+    pares: list[tuple[str, str]] = []
+    vistos: set[tuple[str, str]] = set()
+
+    def _add(job: Any, work_order: Any) -> None:
+        j = str(job or "").strip()
+        w = str(work_order or "").strip()
+        if not j or not w or _norm_job(j).startswith("SWO"):
+            return
+        clave = (_norm_job(j), w.upper())
+        if clave in vistos:
+            return
+        vistos.add(clave)
+        pares.append((j, w))
+
+    if cursor is not None:
+        try:
+            from api_server import _obtener_jobs_de_swo
+
+            for item in _obtener_jobs_de_swo(cursor, swo_limpia) or []:
+                _add(item.get("job"), item.get("work_order"))
+        except Exception:
+            pass
+    if pares:
+        return pares
+
+    # Nest abierto desde el selector de SWO: meta_pdf_por_ruta trae la WO origen.
+    try:
+        for info in (getattr(app, "meta_pdf_por_ruta", None) or {}).values():
+            if isinstance(info, dict):
+                _add(info.get("job"), info.get("work_order"))
+    except Exception:
+        pass
+    return pares
+
+
+def factor_demanda_swo(app, swo: str, cursor=None) -> int:
+    """Multiplicador real de una SWO: suma de los factores de sus WO."""
+    from api_server import _extraer_factor_wo
+
+    total = 0
+    for _job, work_order in resolver_wos_fuente_swo(app, swo, cursor=cursor):
+        total += max(1, int(_extraer_factor_wo(work_order) or 1))
+    return max(1, total)
+
+
 def _filas_desde_csv_para_job(app, job: str, factor_lote: int) -> list[dict]:
     """
     Misma demanda que la pestaña DEMANDA DE LARGOS (CSV del AutoDXF).
@@ -472,12 +530,107 @@ def _filas_desde_job_bd(cursor, job: str, factor_lote: int) -> list[dict]:
     return _expandir_lista_para_wo(cursor, job, wo_sintetica)
 
 
+def _filas_desde_bd_para_wo(cursor, job: str, work_order: str) -> list[dict]:
+    """Demanda de lista_largos_job expandida con el factor real de la WO."""
+    from api_server import _expandir_lista_para_wo, _obtener_lista_base_por_job
+
+    job = str(job or "").strip()
+    work_order = str(work_order or "").strip()
+    if not job or not work_order:
+        return []
+    if not _obtener_lista_base_por_job(cursor, job):
+        return []
+    return _expandir_lista_para_wo(cursor, job, work_order)
+
+
+def _filas_desde_csv_para_pares(app, pares: list[tuple[str, str]]) -> list[dict]:
+    """Demanda CSV del AutoDXF expandida con el factor propio de cada WO."""
+    from api_server import _extraer_factor_wo
+
+    parts = getattr(app, "vista_parts", None)
+    if parts is None or not hasattr(parts, "_cargar_listas_largos_desde_rutas"):
+        return []
+
+    grupos: dict[str, list[dict]] = {}
+    for grupo in parts._cargar_listas_largos_desde_rutas():
+        if grupo.get("status") != "ok":
+            continue
+        grupos.setdefault(_norm_job(grupo.get("job")), []).extend(grupo.get("rows") or [])
+    if not grupos:
+        return []
+
+    filas: list[dict] = []
+    for job, work_order in pares:
+        factor_wo = max(1, int(_extraer_factor_wo(work_order) or 1))
+        for row in grupos.get(_norm_job(job), []):
+            try:
+                cantidad_base = int(float(row.get("cantidad_base", row.get("cantidad")) or 0))
+            except Exception:
+                cantidad_base = 0
+            if cantidad_base <= 0:
+                continue
+            try:
+                largo_in = float(row.get("largo_in") or 0)
+            except Exception:
+                largo_in = 0.0
+            if largo_in <= 0:
+                continue
+            cantidad_wo = cantidad_base * factor_wo
+            filas.append(
+                {
+                    "job": job,
+                    "work_order": work_order,
+                    "factor_wo": factor_wo,
+                    "nombre": str(row.get("nombre") or "").strip(),
+                    "clasificacion": str(row.get("clasificacion") or "").strip(),
+                    "largo_in": largo_in,
+                    "cantidad": cantidad_wo,
+                    "cantidad_base": cantidad_base,
+                    "cantidad_wo": cantidad_wo,
+                    "proceso": str(row.get("proceso") or "").strip(),
+                }
+            )
+    return filas
+
+
+def _filas_demanda_swo(app, cursor, swo: str) -> tuple[list[dict], str]:
+    """
+    Demanda de una SWO expandida WO por WO.
+
+    Prioriza lista_largos_job para empatar con el plan canónico que valida el
+    export; si el job aún no tiene lista importada, cae al CSV del AutoDXF.
+    """
+    pares = resolver_wos_fuente_swo(app, swo, cursor=cursor)
+    if not pares:
+        return [], ""
+
+    if cursor is not None:
+        filas_bd: list[dict] = []
+        for job, work_order in pares:
+            filas_bd.extend(_filas_desde_bd_para_wo(cursor, job, work_order))
+        if filas_bd:
+            return filas_bd, "swo_bd"
+
+    filas_csv = _filas_desde_csv_para_pares(app, pares)
+    if filas_csv:
+        return filas_csv, "swo_csv"
+    return [], ""
+
+
 def _obtener_filas_demanda_lote(app, cursor, job: str, factor_lote: int) -> tuple[list[dict], str]:
     """
     Fuente única de demanda: CSV (como DEMANDA DE LARGOS), luego lista_largos_job.
     SWO hereda demanda de los jobs ligados.
     """
     job = str(job or "").strip()
+
+    # Una SWO se nestea como un solo lote (lote_k=1), así que factor_lote no
+    # representa su cantidad: hay que expandir cada WO con su propio factor.
+    if job.upper().startswith("SWO"):
+        filas_swo, origen_swo = _filas_demanda_swo(app, cursor, job)
+        if filas_swo:
+            return filas_swo, origen_swo
+
     rows = _filas_desde_csv_para_job(app, job, factor_lote)
     if rows:
         return rows, "csv"
@@ -900,11 +1053,15 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
         conexion, cursor_factory = _conexion_bd()
         cursor = conexion.cursor(cursor_factory=cursor_factory)
 
+        es_swo = job.upper().startswith("SWO")
+
         for idx, orden_obj in enumerate(resultados_list or []):
             try:
                 factor = max(1, int(orden_obj.get("lote_k", 1) or 1))
             except Exception:
                 factor = 1
+            if es_swo:
+                factor = factor_demanda_swo(app, job, cursor=cursor)
 
             wo_label = f"LOTE X{max(1, int(factor))}"
             rows, origen = _obtener_filas_demanda_lote(app, cursor, job, factor)
