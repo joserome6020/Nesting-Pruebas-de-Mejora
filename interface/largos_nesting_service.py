@@ -179,43 +179,60 @@ def _cap_cortes_a_util(cortes: list[dict], largo_com: float) -> list[dict]:
     return out
 
 
-def _split_cortes_en_unidades_comerciales(
+def _repartir_piezas_en_barras_comerciales(
     cortes: list[dict],
     largo_comercial: float,
-    n_unidades: int,
+    n_barras: int,
 ) -> list[list[dict]]:
-    """Reparte piezas (una a una) llenando cada barra comercial antes de la siguiente."""
+    """
+    First-fit decreasing: reparte TODAS las piezas en barras comerciales.
+
+    Nunca omite una pieza del mapa. Si no caben en ``n_barras``, abre barras
+    extra (eso señala que el pedido MRL quedó corto respecto al nesteo).
+    """
     import copy
 
-    piezas = _etiquetar_cortes_individuales(cortes)
-    if n_unidades <= 1:
-        return [_cap_cortes_a_util(piezas, largo_comercial)]
-
+    piezas = sorted(
+        _etiquetar_cortes_individuales(cortes),
+        key=lambda c: float(c.get("largo") or 0),
+        reverse=True,
+    )
     util = _util_comercial_in(largo_comercial)
-    buckets: list[list[dict]] = [[] for _ in range(n_unidades)]
-    used = [0.0] * n_unidades
-    bucket_idx = 0
+    n = max(1, int(n_barras or 1))
+    buckets: list[list[dict]] = [[] for _ in range(n)]
+    used = [0.0] * n
 
     for corte in piezas:
         largo = float(corte.get("largo") or 0)
         if largo <= 0:
             continue
-        while bucket_idx < n_unidades - 1:
-            kerf = KERF_LARGOS_IN if buckets[bucket_idx] else 0.0
-            if not buckets[bucket_idx] or used[bucket_idx] + kerf + largo <= util + 0.02:
-                break
-            bucket_idx += 1
-
-        kerf = KERF_LARGOS_IN if buckets[bucket_idx] else 0.0
-        if used[bucket_idx] + kerf + largo > util + 0.02:
-            # No cabe en ningún slot comercial de esta tira física — omitir en vista.
-            continue
-        buckets[bucket_idx].append(copy.deepcopy(corte))
-        used[bucket_idx] += kerf + largo
-        if bucket_idx < n_unidades - 1 and used[bucket_idx] >= util - 0.02:
-            bucket_idx += 1
+        mejor = -1
+        mejor_resto = float("inf")
+        for i, bucket in enumerate(buckets):
+            kerf = KERF_LARGOS_IN if bucket else 0.0
+            if used[i] + kerf + largo <= util + 0.02:
+                resto = util - (used[i] + kerf + largo)
+                if resto < mejor_resto:
+                    mejor_resto = resto
+                    mejor = i
+        if mejor < 0:
+            buckets.append([])
+            used.append(0.0)
+            mejor = len(buckets) - 1
+        kerf = KERF_LARGOS_IN if buckets[mejor] else 0.0
+        buckets[mejor].append(copy.deepcopy(corte))
+        used[mejor] += kerf + largo
 
     return buckets
+
+
+def _split_cortes_en_unidades_comerciales(
+    cortes: list[dict],
+    largo_comercial: float,
+    n_unidades: int,
+) -> list[list[dict]]:
+    """Reparto comercial FFD; no descarta piezas (abre barras si faltan)."""
+    return _repartir_piezas_en_barras_comerciales(cortes, largo_comercial, n_unidades)
 
 
 def _remanente_barra_vista(largo_stock: float, cortes: list[dict]) -> float:
@@ -272,17 +289,19 @@ def vista_barra_para_unidad_mrl(
         cortes_vista = _cap_cortes_a_util(cortes_slot, largo_com)
         largo_vista = largo_com
         nota_nesteo = (
-            f"Piezas en tira nesteo de {stock_origen:.0f}\" "
-            f"→ barra comercial {idx_local}/{n_slices} de {largo_com:.0f}\""
-        ) if n_slices > 1 else ""
+            f"Mapa comercial {largo_com:.0f}\" · unidad {idx_local}/{n_slices}"
+            f" (nesteo físico {stock_origen:.0f}\")"
+            if n_slices > 1
+            else ""
+        )
     elif n_slices > 1:
         splits = _split_cortes_en_unidades_comerciales(cortes_origen, largo_com, n_slices)
         idx = min(max(0, idx_local - 1), len(splits) - 1)
         cortes_vista = splits[idx]
         largo_vista = largo_com
         nota_nesteo = (
-            f"Piezas en tira nesteo de {stock_origen:.0f}\" "
-            f"→ barra comercial {idx_local}/{n_slices} de {largo_com:.0f}\""
+            f"Mapa comercial {largo_com:.0f}\" · unidad {idx_local}/{n_slices}"
+            f" (nesteo físico {stock_origen:.0f}\")"
         )
     else:
         cortes_vista = _cap_cortes_a_util(cortes_origen, largo_com or stock_origen)
@@ -851,32 +870,54 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
 
         largo_com = float(units[0].get("largo") or 0) if units else 0.0
         slots: list[dict] = []
+        todos_cortes: list[dict] = []
         for nest_key, barra in tiras:
             stock_t = float(barra.get("largo_stock") or 0)
             n_slots = _slots_comerciales_en_tira(stock_t, largo_com)
-            splits = _split_cortes_en_unidades_comerciales(
-                list(barra.get("cortes") or []), largo_com, n_slots
-            )
+            todos_cortes.extend(list(barra.get("cortes") or []))
             for local_i in range(n_slots):
                 slots.append(
                     {
                         "nesting_key": nest_key,
                         "unit_idx_en_tira": local_i + 1,
                         "n_slots_tira": n_slots,
-                        "cortes_slot": splits[local_i] if local_i < len(splits) else [],
                     }
                 )
 
-        for u, slot in zip(units, slots):
-            u["nesting_key"] = slot["nesting_key"]
-            u["unit_idx_en_tira"] = slot["unit_idx_en_tira"]
-            u["n_slots_tira"] = slot["n_slots_tira"]
-            u["cortes_slot"] = slot["cortes_slot"]
-            u["reparto_greedy"] = int(slot["n_slots_tira"]) > 1
-            u["n_unidades_tira"] = int(slot["n_slots_tira"])
+        # Reparto GLOBAL por material: las piezas de una tira de 480" pueden
+        # no caber en sus 2 mitades de 240", pero sí en el conjunto de barras
+        # comerciales pedidas. Partir tira-por-tira omitía piezas del mapa.
+        n_pedido = max(len(units), 1)
+        packs = _repartir_piezas_en_barras_comerciales(todos_cortes, largo_com, n_pedido)
+        if len(packs) > n_pedido:
+            huerfanas = sum(len(p) for p in packs[n_pedido:])
+            print(
+                f"[LARGOS_NESTING][WARN] {mat}: {huerfanas} pieza(s) no caben en "
+                f"las {n_pedido} barras comerciales del pedido "
+                f"(se necesitan {len(packs)}). El mapa muestra solo las que caben."
+            )
 
-        # Unidades MRL de más (desfase catálogo): sin mapa de corte — no reutilizar último slot.
+        for i, u in enumerate(units):
+            if i < len(slots):
+                slot = slots[i]
+                u["nesting_key"] = slot["nesting_key"]
+                u["unit_idx_en_tira"] = slot["unit_idx_en_tira"]
+                u["n_slots_tira"] = slot["n_slots_tira"]
+                u["n_unidades_tira"] = int(slot["n_slots_tira"])
+                u["reparto_greedy"] = int(slot["n_slots_tira"]) > 1
+            else:
+                u.pop("nesting_key", None)
+                u.pop("unit_idx_en_tira", None)
+                u.pop("n_slots_tira", None)
+                u["reparto_greedy"] = False
+                u["n_unidades_tira"] = 1
+            u["cortes_slot"] = packs[i] if i < len(packs) else []
+            u["mapa_reparto_global"] = True
+
+        # Unidades MRL de más (desfase catálogo): sin mapa de corte.
         for u in units[len(slots) :]:
+            if u.get("cortes_slot"):
+                continue
             u.pop("nesting_key", None)
             u.pop("cortes_slot", None)
             u.pop("unit_idx_en_tira", None)

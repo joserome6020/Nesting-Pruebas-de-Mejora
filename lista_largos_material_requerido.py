@@ -388,7 +388,11 @@ def enriquecer_pedido_herinox_cursor(
     tipo_orden: str,
     forzar_costo: bool = False,
 ) -> int:
-    """Completa codigo/costo en filas ya insertadas usando catálogo Herinox."""
+    """Completa codigo/costo y snapshot ContPAQ en filas ya insertadas.
+
+    Si Herinox no responde, igual aplica equivalencias ContPAQ ya VERIFIED
+    usando el código presente en la MRL (evita dejar PENDING con mapeo listo).
+    """
     try:
         from catalogo_largos import (
             _cargar_placas_largos_desde_herinox,
@@ -403,9 +407,10 @@ def enriquecer_pedido_herinox_cursor(
     except ImportError:
         return 0
 
-    catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
-    if not catalogo:
-        return 0
+    try:
+        catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False) or {}
+    except Exception:
+        catalogo = {}
 
     filas = obtener_filas_pedido(cursor, orden_id, tipo_orden)
     actualizadas = 0
@@ -440,18 +445,35 @@ def enriquecer_pedido_herinox_cursor(
             continue
         material_txt = str(fila.get("material") or "").strip()
         cantidad = int(fila.get("cantidad") or 1)
-        codigo_esperado = extraer_codigo_herinox_combo(material_txt)
-        codigo_actual = str(fila.get("codigo") or "").strip()
+        codigo_esperado = str(
+            extraer_codigo_herinox_combo(material_txt) or ""
+        ).strip()
+        codigo_actual = str(
+            fila.get("codigo_herinox") or fila.get("codigo") or ""
+        ).strip()
         costo_actual = fila.get("costo")
         tiene_costo = costo_actual is not None and float(costo_actual or 0) > 0
 
-        datos = datos_material_requerido_pedido(
-            material_txt,
-            cantidad,
-            catalogo=catalogo,
-        )
-        nuevo_codigo = str(datos.get("codigo") or codigo_esperado or "").strip()
-        nuevo_costo = datos.get("costo")
+        if catalogo:
+            datos = datos_material_requerido_pedido(
+                material_txt,
+                cantidad,
+                catalogo=catalogo,
+            )
+            nuevo_codigo = str(
+                datos.get("codigo") or codigo_esperado or codigo_actual or ""
+            ).strip()
+            nuevo_costo = datos.get("costo")
+            if nuevo_costo is None and not forzar_costo:
+                nuevo_costo = costo_actual
+        else:
+            # Sin catálogo Herinox: no inventar costo; sí mapear ContPAQ.
+            nuevo_codigo = str(codigo_esperado or codigo_actual or "").strip()
+            nuevo_costo = costo_actual
+
+        if not nuevo_codigo:
+            continue
+
         mapeo = resolver_codigo_contpaq(
             cursor,
             nuevo_codigo,
@@ -465,14 +487,11 @@ def enriquecer_pedido_herinox_cursor(
             "VERIFIED" if mapeo_verificado else str(mapeo.get("estatus") or "PENDING")
         )
 
-        if not nuevo_codigo and nuevo_costo is None:
-            continue
-
         if (
             not forzar_costo
             and tiene_costo
             and codigo_actual == nuevo_codigo
-            and codigo_actual == codigo_esperado
+            and (not codigo_esperado or codigo_actual == codigo_esperado)
             and nuevo_costo is not None
             and str(fila.get("codigo_contpaq") or "") == str(nuevo_codigo_contpaq or "")
             and str(fila.get("codigo_contpaq_estatus") or "PENDING")
@@ -543,6 +562,7 @@ def refrescar_pedido_herinox(orden_id: str, tipo_orden: str) -> Dict[str, Any]:
         actualizadas = enriquecer_pedido_herinox_cursor(
             cursor, orden_id, tipo_orden, forzar_costo=True
         )
+        sincronizar_codigos_contpaq_pedido(cursor, orden_id, tipo_orden)
         conexion.commit()
         filas = obtener_filas_pedido(cursor, orden_id, tipo_orden)
 
@@ -601,6 +621,8 @@ def insertar_pedido_desde_plan_cursor(
         )
 
     enriquecer_pedido_herinox_cursor(cursor, orden_id, tipo_orden, forzar_costo=True)
+    # Red de seguridad: copia equivalencias VERIFIED aunque Herinox no respondió.
+    sincronizar_codigos_contpaq_pedido(cursor, orden_id, tipo_orden)
     return True, "Pedido de compra generado correctamente."
 
 
@@ -687,6 +709,7 @@ def reconstruir_pedido_desde_filas(
         )
 
     enriquecer_pedido_herinox_cursor(cursor, orden, tipo, forzar_costo=True)
+    sincronizar_codigos_contpaq_pedido(cursor, orden, tipo)
     return True, "Pedido de compra regenerado desde el plan."
 
 

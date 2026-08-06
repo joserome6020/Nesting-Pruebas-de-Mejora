@@ -27,6 +27,10 @@ REGRESIONES = [
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),
+    (
+        "test_largos_mapa_comercial.py",
+        "2026-08-06a - mapa comercial 480->240 no debe omitir piezas (SWO-003 ANG037)",
+    ),
 ]
 
 

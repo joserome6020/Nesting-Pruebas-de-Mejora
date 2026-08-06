@@ -46,6 +46,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-06a — Mapa comercial de largos ya no omite piezas (480→240)
+
+- Síntoma: en `SWO-003` el pedido MRL estaba bien (10 ANG + 5 SLC, canal negado a
+  propósito), pero el mapa/PDF sumaba 62 de 66 piezas de ángulo y 42 de 44 de solera.
+- Causa: el nesteo arma tiras de 480\" y el mapa las partía en mitades de 240\"
+  tira-por-tira, omitiendo en silencio lo que no cabía en cada mitad. Una tira de
+  480\" pierde 1\" de puntas; dos de 240\" pierden 2\", y 13×35\" no caben en 2×239\".
+- Fix: `_repartir_piezas_en_barras_comerciales` (FFD) + reparto **global** por
+  material en `listar_unidades_mrl_plan`. Las piezas se redistribuyen entre todas
+  las barras comerciales del pedido; nunca se omiten. Si el pedido quedara corto
+  se abre barra extra en el reparto y se avisa en consola.
+- El pedido/PO no cambia: sigue saliendo de `ceil(stock/largo_cat)`.
+- Candado: `tests/native/test_largos_mapa_comercial.py` (demuestra que el algoritmo
+  viejo pierde piezas y el nuevo conserva las 66/44).
+
 ### 2026-08-05b — Largos de SWO se multiplican por WO, no por lote
 
 - Síntoma: `SWO-003` (fusiona `W.O. 3 X11` de `251008-COMP-HI`) mostraba el nesteo de
