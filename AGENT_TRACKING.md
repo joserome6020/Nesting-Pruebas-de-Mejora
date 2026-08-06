@@ -46,6 +46,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-06b — Export sin carpeta AutoDXF ya no tumba PQART (GIGA BOARD 5)
+
+- Síntoma: al final del export de `W.O. 5 X3` / job `GIGA BOARD 5` fallaba con
+  `PostgreSQL no confirmó el nesting/PQART … estado=autodxf_no_existe` aunque
+  DXF/PDF/.arganest ya estaban escritos en la red.
+- Causa: ese job no tiene `MODEL CORE FILES\AutoDXF` ni CSV de largos. El soft-fail
+  de 2026-08-05a solo cubría `csv_no_encontrado` / `csv_vacio` (carpeta presente
+  sin CSV); `autodxf_no_existe` seguía abortando el commit de `reporte_cortes` /
+  `pqart_wo`.
+- Fix: `ESTADOS_LARGOS_SIN_LISTA` incluye `autodxf_no_existe`; aviso y se continúa
+  sin pedido MRL (igual que jobs sin perfiles).
+- Candado: `tests/native/test_export_sin_lista_largos.py` (estructura tipo GIGA).
+
 ### 2026-08-06a — Mapa comercial de largos ya no omite piezas (480→240)
 
 - Síntoma: en `SWO-003` el pedido MRL estaba bien (10 ANG + 5 SLC, canal negado a

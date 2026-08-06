@@ -21,7 +21,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 REGRESIONES = [
     (
         "test_export_sin_lista_largos.py",
-        "2026-08-05a - job sin CSV de largos (251008-COMPARTMENT) no debe tumbar el export",
+        "2026-08-05a/06b - job sin CSV/AutoDXF de largos (COMPARTMENT, GIGA BOARD 5) no tumba export",
     ),
     (
         "test_largos_swo_factor.py",

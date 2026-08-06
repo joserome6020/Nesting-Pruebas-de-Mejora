@@ -49,9 +49,12 @@ def _aplicar_env_db_config(db_config: dict | None) -> None:
         os.environ["NESTING_DB_NAME"] = str(dbname)
 
 
-# Un job sin perfiles nunca genera CSV en AutoDXF. Eso no es una falla de
-# ingeniería: la WO simplemente no lleva largos y no debe tumbar el export.
-ESTADOS_LARGOS_SIN_LISTA = frozenset({"csv_no_encontrado", "csv_vacio"})
+# Un job sin perfiles nunca genera CSV en AutoDXF (y a veces ni siquiera la
+# carpeta AutoDXF, caso GIGA BOARD 5). Eso no es una falla de ingeniería: la WO
+# simplemente no lleva largos y no debe tumbar el export / PQART.
+ESTADOS_LARGOS_SIN_LISTA = frozenset(
+    {"csv_no_encontrado", "csv_vacio", "autodxf_no_existe"}
+)
 
 _wos_sin_lista_largos: list[str] = []
 
