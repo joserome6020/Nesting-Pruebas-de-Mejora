@@ -18,4 +18,10 @@
 9. Antes de reimplementar una regla de negocio (cantidades, factores, WO/SWO,
    costos), busca si ya existe en `api/legacy_core.py` y **reúsala**. Los bugs
    de este tipo han venido de tener dos caminos que calculan lo mismo distinto.
-10. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.
+10. **Tras corregir un bug: commit local + push remoto obligatorio** en
+    `New Arga Nesting Suite` (GitHub). No dejes el fix solo en disco: otras PCs
+    y builds se actualizan desde el remoto. Incluye el candado, `AGENTS.md` /
+    `AGENT_TRACKING.md` si cambiaron, y verifica `git status -sb` que HEAD =
+    `origin/<rama>`. `ANS C++` no es repo git: copia los archivos y confirma
+    igualdad con `Compare-Object`.
+11. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.

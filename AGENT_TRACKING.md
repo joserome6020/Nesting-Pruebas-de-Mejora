@@ -60,6 +60,7 @@ código viejo. Un bug sin candado vuelve.
 - El pedido/PO no cambia: sigue saliendo de `ceil(stock/largo_cat)`.
 - Candado: `tests/native/test_largos_mapa_comercial.py` (demuestra que el algoritmo
   viejo pierde piezas y el nuevo conserva las 66/44).
+- Regla 10 de `AGENTS.md`: todo bug fix lleva commit local + push remoto a GitHub.
 
 ### 2026-08-05b — Largos de SWO se multiplican por WO, no por lote
 
