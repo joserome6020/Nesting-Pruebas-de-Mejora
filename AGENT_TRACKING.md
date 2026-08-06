@@ -46,6 +46,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-06d — Renest Galv incompleto ya no se queda corto vs PARTS
+
+- Síntoma: tras edición manual de placas, el grupo `0.11811_GALVANIZADO` quedaba
+  con «faltan N colocaciones» y Guardar poka-yoke bloqueaba el `.arganest`.
+  Renestear el calibre no recuperaba las piezas perdidas.
+- Causa: el renesteo de calibre usaba solo el conteo del nest abierto; si la
+  edición dejó menos piezas en hojas que en `piezas_pool`/PARTS, renest «cerraba»
+  un inventário reducido. Además `_merge_resultado_en_mapa` unía hojas pero no
+  `piezas_pool` (desync entre lotes plasma/láser).
+- Fix: si el grupo ya está incompleto, el renest toma `max(PARTS, nest)` por
+  nombre; fusión de grupos concatena `piezas_pool`; al reconstruir geometría/
+  pack se prefiere material exacto del grupo (sinónimos solo de respaldo) y se
+  estampa la etiqueta del grupo para no “pasar” Galv a A 36.
+- Candado: `tests/native/test_renest_galv_incompleto.py`.
+
 ### 2026-08-06c — Nombre VSM vs carpeta corporate (GIGABOARD5 ↔ GIGA BOARD 5)
 
 - Síntoma: SWO-005 (misma WO recién exportada) fallaba al descargar con

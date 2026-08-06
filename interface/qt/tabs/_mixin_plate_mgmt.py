@@ -1237,30 +1237,45 @@ class PlateManagementMixin:
 
         material_hoja = clave.split("_")[1] if "_" in clave else clave
         calibre_hoja = clave.split("_")[0] if "_" in clave else ""
+        mat_clave = str(material_hoja or "").strip().upper()
 
         piezas_fuente = {}
-        for p_nom, mat, qty, cal, st, ruta in getattr(self.app, "datos_partes_actuales", []) or []:
-            if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
-                continue
-            if not self.app.motor_nesting._coinciden(material_hoja, mat):
-                continue
-            if p_nom in piezas_fuente:
-                continue
-            poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
-            if not poly:
-                continue
-            from shapely import affinity
+        filas = list(getattr(self.app, "datos_partes_actuales", []) or [])
 
-            mx, my, _, _ = poly.bounds
-            piezas_fuente[p_nom] = {
-                "nombre": p_nom,
-                "poly": affinity.translate(poly, -mx, -my),
-                "marks": affinity.translate(marks, -mx, -my) if not marks.is_empty else marks,
-                "area": poly.area,
-                "calibre": cal,
-                "material": mat,
-                "ruta": ruta,
-            }
+        def _cargar_pass(*, exacto: bool):
+            for p_nom, mat, qty, cal, st, ruta in filas:
+                if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                    continue
+                mat_u = str(mat or "").strip().upper()
+                if exacto:
+                    if mat_u != mat_clave:
+                        continue
+                else:
+                    if mat_u == mat_clave:
+                        continue
+                    if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                        continue
+                if p_nom in piezas_fuente:
+                    continue
+                poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
+                if not poly:
+                    continue
+                from shapely import affinity
+
+                mx, my, _, _ = poly.bounds
+                piezas_fuente[p_nom] = {
+                    "nombre": p_nom,
+                    "poly": affinity.translate(poly, -mx, -my),
+                    "marks": affinity.translate(marks, -mx, -my) if not marks.is_empty else marks,
+                    "area": poly.area,
+                    "calibre": cal,
+                    # Mantener etiqueta del grupo nest para no “pasar” a A 36.
+                    "material": material_hoja or mat,
+                    "ruta": ruta,
+                }
+
+        _cargar_pass(exacto=True)
+        _cargar_pass(exacto=False)
 
         out = []
         for nom, cnt in resumen.items():

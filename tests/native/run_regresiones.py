@@ -28,6 +28,10 @@ REGRESIONES = [
         "2026-08-06c - GIGA BOARD 5 ↔ GIGABOARD5 resuelve carpeta VSM con AutoDXF",
     ),
     (
+        "test_renest_galv_incompleto.py",
+        "2026-08-06d - renest de calibre Galv incompleto recupera piezas desde PARTS",
+    ),
+    (
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),

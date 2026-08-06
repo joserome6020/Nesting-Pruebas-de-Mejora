@@ -2613,6 +2613,19 @@ class MotorNesting:
             hojas = list(prev.get("hojas") or []) + list(nuevo.get("hojas") or [])
             merged = dict(prev)
             merged["hojas"] = hojas
+            # Unir demanda: si no se concatena el pool, el poka-yoke cree que
+            # faltan piezas del segundo lote (plasma/láser) tras la fusión.
+            if prev.get("piezas_pool_engine") or nuevo.get("piezas_pool_engine"):
+                pool = list(prev.get("piezas_pool") or []) + list(
+                    nuevo.get("piezas_pool") or []
+                )
+                merged["piezas_pool"] = pool
+                merged["piezas_pool_engine"] = True
+            pend = list(prev.get("piezas_pendientes") or []) + list(
+                nuevo.get("piezas_pendientes") or []
+            )
+            if pend:
+                merged["piezas_pendientes"] = pend
             merged["costo_total"] = float(prev.get("costo_total") or 0) + float(
                 nuevo.get("costo_total") or 0
             )

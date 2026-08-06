@@ -1179,13 +1179,22 @@ class NestingCalcMixin:
         except Exception:
             calibre_hoja, material_hoja = str(clave), ""
         conteo = {}
+        # Exacto primero, sinónimo (_coinciden) solo si no hay fila exacta del nombre.
+        exactas = {}
+        sinonimos = {}
+        mat_clave = str(material_hoja or "").strip().upper()
         for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
             nom = self._nombre_canonico_pieza(p_nom)
             if not nom:
                 continue
             if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
                 continue
-            if not self.app.motor_nesting._coinciden(material_hoja, mat):
+            mat_u = str(mat or "").strip().upper()
+            if mat_u == mat_clave:
+                bucket = exactas
+            elif self.app.motor_nesting._coinciden(material_hoja, mat):
+                bucket = sinonimos
+            else:
                 continue
             try:
                 q = max(0, int(qty or 0))
@@ -1193,8 +1202,45 @@ class NestingCalcMixin:
                 q = 0
             if q <= 0:
                 continue
-            conteo[nom] = conteo.get(nom, 0) + q
+            bucket[nom] = bucket.get(nom, 0) + q
+        for nom, q in exactas.items():
+            conteo[nom] = q
+        for nom, q in sinonimos.items():
+            if nom not in conteo:
+                conteo[nom] = q
         return conteo
+
+    def _grupo_inventario_incompleto(self, clave) -> bool:
+        grupo = (getattr(self.app, "resultados_nesting", None) or {}).get(clave) or {}
+        if not isinstance(grupo, dict):
+            return False
+        if grupo.get("inventario_ok") is False:
+            return True
+        msg = str(grupo.get("advertencia") or "").lower()
+        return (
+            "inventario incompleto" in msg
+            or "faltan" in msg
+            or "incompleta" in msg
+        )
+
+    def _conteo_para_renest_calibre(self, clave):
+        """Demanda para renesteo de calibre.
+
+        Por defecto conserva cantidades DEL NEST (evita inflar).
+        Si el grupo ya está incompleto vs PARTS (edición manual / fusión rota),
+        restaura con max(job, nest) para recuperar piezas perdidas.
+        """
+        conteo_job = self._conteo_piezas_job_grupo(clave)
+        conteo_nido = self._contar_piezas_reales_grupo(clave)
+        if self._grupo_inventario_incompleto(clave) and conteo_job:
+            nombres = set(conteo_job) | set(conteo_nido)
+            out = {}
+            for nom in nombres:
+                tot = max(int(conteo_job.get(nom, 0) or 0), int(conteo_nido.get(nom, 0) or 0))
+                if tot > 0:
+                    out[nom] = tot
+            return out
+        return conteo_nido if conteo_nido else conteo_job
 
     def _poly_desrotar_a_ejes(self, poly, marks=None):
         """
@@ -1384,27 +1430,42 @@ class NestingCalcMixin:
                     if not faltan:
                         return
                 # sin req: solo nombres que aún no están en fuente
-            for p_nom, mat, qty, cal, st, ruta in self._datos_partes_activos_para_nesting():
-                nom = str(p_nom or "").strip()
-                canon = self._nombre_canonico_pieza(nom)
-                if not canon or canon in fuente:
-                    continue
-                if faltan is not None and canon not in faltan:
-                    continue
-                if req is not None and canon not in req:
-                    continue
-                if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
-                    continue
-                if not self.app.motor_nesting._coinciden(material_hoja, mat):
-                    continue
-                poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
-                if not poly:
-                    continue
-                _agregar_fuente(nom, poly, marks, cal, mat, ruta, desrotar=False)
-                if faltan is not None:
-                    faltan.discard(canon)
-                    if not faltan:
-                        break
+            mat_clave = str(material_hoja or "").strip().upper()
+            filas = list(self._datos_partes_activos_para_nesting())
+
+            def _cargar_pass(*, exacto: bool):
+                nonlocal faltan
+                for p_nom, mat, qty, cal, st, ruta in filas:
+                    nom = str(p_nom or "").strip()
+                    canon = self._nombre_canonico_pieza(nom)
+                    if not canon or canon in fuente:
+                        continue
+                    if faltan is not None and canon not in faltan:
+                        continue
+                    if req is not None and canon not in req:
+                        continue
+                    if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
+                        continue
+                    mat_u = str(mat or "").strip().upper()
+                    if exacto:
+                        if mat_u != mat_clave:
+                            continue
+                    else:
+                        if mat_u == mat_clave:
+                            continue
+                        if not self.app.motor_nesting._coinciden(material_hoja, mat):
+                            continue
+                    poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
+                    if not poly:
+                        continue
+                    _agregar_fuente(nom, poly, marks, cal, mat, ruta, desrotar=False)
+                    if faltan is not None:
+                        faltan.discard(canon)
+                        if not faltan:
+                            return
+
+            _cargar_pass(exacto=True)
+            _cargar_pass(exacto=False)
 
         if prefer_dxf:
             _cargar_desde_dxf(solo_faltantes=False)
@@ -1689,11 +1750,7 @@ class NestingCalcMixin:
         )
 
     def _build_piezas_para_renest_calibre(self, clave):
-        conteo_job = self._conteo_piezas_job_grupo(clave)
-        conteo_nido = self._contar_piezas_reales_grupo(clave)
-        # Renesteo debe conservar las cantidades DEL NEST abierto.
-        # Usar el job cuando pide más piezas infla el nest (732→888) y clona.
-        conteo_total = conteo_nido if conteo_nido else conteo_job
+        conteo_total = self._conteo_para_renest_calibre(clave)
         if not conteo_total:
             self._renest_calibre_build_info = {}
             return []
