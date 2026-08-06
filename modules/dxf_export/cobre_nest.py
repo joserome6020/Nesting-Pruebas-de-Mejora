@@ -284,7 +284,14 @@ def export_cobre_hoja_to_dxf(
         if sheet_work.get("cu_export_amada"):
             from modules.dxf_export.amada_fixture import draw_amada_fixture_provisional
 
-            draw_amada_fixture_provisional(msp, _sheet_bar_l, _sheet_bar_w)
+            fid = str(sheet_work.get("cu_amada_fixtura_id") or "").strip() or None
+            draw_amada_fixture_provisional(
+                msp,
+                _sheet_bar_l,
+                _sheet_bar_w,
+                fixture_id=fid,
+                largo_pieza_in=float(_sheet_bar_l) / 25.4,
+            )
 
         if sin_gap:
             _export_cu_bar_inicio_marker_vertical(

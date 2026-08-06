@@ -187,7 +187,8 @@ class TabParts(QWidget, TimerHost):
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             if txt == "ESP.":
                 lbl.setToolTip(
-                    "Cobre: Amada 5\" (VERTICAL + FIXTURA).\n"
+                    "Cobre: Amada 5\" (VERTICAL + FIXTURA más justa).\n"
+                    "Fixtura 2 (~28.95\") u original (~35.33\") según el largo.\n"
                     "Acero/otros: marcar para compensación plasma "
                     "(reprocesa geometría y nestea en placas solo-plasma)."
                 )
@@ -937,14 +938,15 @@ class TabParts(QWidget, TimerHost):
 
     def _validar_amada_fixtura(self, ruta_dxf) -> tuple[bool, str, int | None]:
         """
-        Fixtura Amada:
+        Fixtura Amada (catálogo):
           - ancho Y exacto 5\" (±tol)
-          - largo X <= canal entre topes (DXF real / ~35.33\")
+          - largo X <= al menos una fixtura (se elige la más justa al exportar)
         Returns (ok, mensaje, rot_sugerida_o_None).
         """
         from modules.nesting_engine.cu_largos_nesting import (
             AMADA_FIXTURA_ANCHO_IN,
             TOL_ANCHO_IN_MIN,
+            amada_fixtura_elegir,
             amada_fixtura_largo_max_in,
         )
 
@@ -961,21 +963,29 @@ class TabParts(QWidget, TimerHost):
         largo_max = float(amada_fixtura_largo_max_in())
         rot_usar = None
 
+        def _msg_fixtura_elegida(largo: float) -> str:
+            elec = amada_fixtura_elegir(largo)
+            if not elec:
+                return ""
+            return (
+                f' Se usará {elec.get("label")} '
+                f'(canal {float(elec.get("canal_in") or 0):.2f}").'
+            )
+
         if abs(ancho_y - AMADA_FIXTURA_ANCHO_IN) > TOL_ANCHO_IN_MIN:
             rot_alt = (rot_actual + 90) % 360
             dims_alt = self._dims_pieza_cobre_in(ruta_dxf, rot_alt)
             if dims_alt is not None:
                 largo_alt, ancho_alt = dims_alt
                 if abs(ancho_alt - AMADA_FIXTURA_ANCHO_IN) <= TOL_ANCHO_IN_MIN:
-                    # Candidata a girar: validar largo en esa orientación.
                     if float(largo_alt) > largo_max + TOL_ANCHO_IN_MIN:
                         return (
                             False,
                             (
-                                f"Ese DXF no se puede usar en proceso Amada.\n\n"
+                                f"Ese DXF no se puede usar en fixtura Amada.\n\n"
                                 f'Aunque al girar 90° el ancho quede en '
                                 f'{AMADA_FIXTURA_ANCHO_IN:.0f}", el largo sería '
-                                f'{largo_alt:.3f}" y la fixtura solo admite hasta '
+                                f'{largo_alt:.3f}" y ninguna fixtura admite más de '
                                 f'{largo_max:.3f}" entre topes.\n\n'
                                 f"No se puede marcar ESP."
                             ),
@@ -988,7 +998,8 @@ class TabParts(QWidget, TimerHost):
                             f'{AMADA_FIXTURA_ANCHO_IN:.0f}" (actual: {ancho_y:.3f}").\n\n'
                             f'Al girar 90° el ancho quedaría en {ancho_alt:.3f}" '
                             f'y el largo en {largo_alt:.3f}" '
-                            f'(máx. fixtura {largo_max:.3f}").\n'
+                            f'(máx. catálogo {largo_max:.3f}").'
+                            f"{_msg_fixtura_elegida(float(largo_alt))}\n"
                             "¿Girar la pieza y marcar ESP.?"
                         ),
                         rot_alt,
@@ -997,22 +1008,21 @@ class TabParts(QWidget, TimerHost):
             return (
                 False,
                 (
-                    f"Ese DXF no se puede usar en proceso Amada.\n\n"
-                    f'La fixtura solo admite exactamente {AMADA_FIXTURA_ANCHO_IN:.0f}" de ancho '
+                    f"Ese DXF no se puede usar en fixtura Amada.\n\n"
+                    f'Las fixturas solo admiten exactamente {AMADA_FIXTURA_ANCHO_IN:.0f}" de ancho '
                     f"(ni más ancho ni más angosto).\n"
                     f'Ancho actual (Y): {ancho_y:.3f}".'
                 ),
                 None,
             )
 
-        # Ancho OK en orientación actual: validar largo.
         if float(largo_x) > largo_max + TOL_ANCHO_IN_MIN:
             return (
                 False,
                 (
-                    f"Ese DXF no se puede usar en proceso Amada.\n\n"
-                    f'La pieza mide {largo_x:.3f}" de largo y la fixtura Amada '
-                    f'solo admite hasta {largo_max:.3f}" entre topes.\n\n'
+                    f"Ese DXF no se puede usar en fixtura Amada.\n\n"
+                    f'La pieza mide {largo_x:.3f}" de largo y ninguna fixtura '
+                    f'admite más de {largo_max:.3f}" entre topes.\n\n'
                     f"No se puede marcar ESP."
                 ),
                 None,

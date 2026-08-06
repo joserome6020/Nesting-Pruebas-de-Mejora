@@ -197,7 +197,10 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     Sheet + placement de UNA pieza ESP. en origen (0,0) para barrenado Amada.
     Contorno cerrado + barrenos/marcaje; fixtura se dibuja al exportar.
     """
-    from modules.nesting_engine.cu_largos_nesting import AMADA_FIXTURA_ANCHO_IN
+    from modules.nesting_engine.cu_largos_nesting import (
+        AMADA_FIXTURA_ANCHO_IN,
+        amada_fixtura_elegir,
+    )
 
     pols = (pieza or {}).get("poligonos") or []
     if not pols:
@@ -225,6 +228,8 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     # Ancho de asiento = fixtura 5"; si la pieza es exactamente 5" queda flush.
     bar_w = max(float(w_piece), float(AMADA_FIXTURA_ANCHO_IN) * 25.4)
     bar_l = max(float(len_mm), 1.0)
+    largo_in = float(len_mm) / 25.4
+    fixtura = amada_fixtura_elegir(largo_in) or {}
     ruta = str(pieza.get("ruta") or "").strip()
     use_src = bool(ruta) and os.path.isfile(ruta)
     # Geometría ya en origen del nest: no reaplicar matriz del DXF fuente.
@@ -242,6 +247,8 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
         "cu_bar_w_mm": bar_w,
         "cu_bar_l_mm": bar_l,
         "cu_especial_vertical": True,
+        "cu_amada_fixtura_id": str(fixtura.get("id") or ""),
+        "cu_amada_fixtura_label": str(fixtura.get("label") or ""),
         "omit_cut_cu": True,
         "closed": True,
         "orig_minx": 0.0,
@@ -258,6 +265,8 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     sheet = {
         "modo_largos_cu": True,
         "cu_export_amada": True,
+        "cu_amada_fixtura_id": str(fixtura.get("id") or ""),
+        "cu_amada_fixtura_label": str(fixtura.get("label") or ""),
         "cu_modo_separacion_barra": "con_gap",
         "export_3d_format": "dxf",
         "length": bar_l,

@@ -43,26 +43,36 @@ from .cu_inventory import es_placa_largo_cu
 from .efficiency_metrics import calcular_eficiencias_grupo
 
 TOL_ANCHO_IN_MIN = 0.02  # ~1/50": DXF/medición (ej. 2.0015" sigue en tira 2")
-# Fixtura Amada actual: solo admite barras de exactamente 5" de ancho.
+# Fixturas Amada: solo admiten barras de exactamente 5" de ancho.
 AMADA_FIXTURA_ANCHO_IN = 5.0
-# Largo máximo del canal entre topes (fallback si no se puede leer el DXF).
-# El valor real se toma de modules.dxf_export.amada_fixture.get_amada_seat().width
+# Largo máximo absoluto (fallback): el mayor canal del catálogo (~35.33").
+# El valor real se toma de listar_fixturas_amada / amada_fixtura_largo_max_in().
 AMADA_FIXTURA_LARGO_MAX_IN = 35.33
 TOL_GEOM_MM = 0.15
 PREFIJO_CORTE_CU = "CU_CORTE__"
 
 
 def amada_fixtura_largo_max_in() -> float:
-    """Largo máximo del canal Amada (entre topes), en pulgadas."""
+    """Mayor canal Amada disponible (entre topes), en pulgadas."""
     try:
-        from modules.dxf_export.amada_fixture import get_amada_seat
+        from modules.dxf_export.amada_fixture import amada_fixtura_largo_max_in as _max
 
-        w = float(get_amada_seat().width)
+        w = float(_max())
         if w > 1.0:
             return w
     except Exception:
         pass
     return float(AMADA_FIXTURA_LARGO_MAX_IN)
+
+
+def amada_fixtura_elegir(largo_pieza_in: float) -> dict | None:
+    """Fixtura más justa que aún cabe el largo (None si no cabe en ninguna)."""
+    try:
+        from modules.dxf_export.amada_fixture import elegir_fixtura_amada
+
+        return elegir_fixtura_amada(float(largo_pieza_in))
+    except Exception:
+        return None
 
 
 def _tol_ancho_mm() -> float:

@@ -1,10 +1,14 @@
 """
 Fixtura Amada real para export AMADA/FIXTURA.
 
-Método de alineación (macheote del usuario):
-  1) En el DXF de fixtura, tomar la arista vertical (tope izq) y la
-     horizontal (riel inf) del canal — caras que empaman con el cobre.
-  2) Prolongar ambas con líneas rectas; su intersección = PUNTO 0.
+Hay dos fixturas físicas (canal 5\"). Siempre se elige la más justa
+(canal más corto) que todavía acepte el largo de la pieza: así los topes
+presionan el cobre hacia la esquina BL (Punto 0).
+
+Método de alineación:
+  1) En el DXF de fixtura, tomar pared vertical (tope izq) y riel horizontal
+     (base) del canal — caras que empaman con el cobre.
+  2) Prolongar ambas; su intersección = PUNTO 0.
   3) Colocar la esquina BL de la pieza exactamente en ese punto 0.
   4) La fixtura se copia ÍNTEGRA (no se borra geometría interna).
 
@@ -16,12 +20,16 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import ezdxf
 from ezdxf.math import Matrix44
 
 AMADA_FIXTURE_LAYER = "FIXTURE"
 _IN_TO_MM = 25.4
+
+# Tolerancia de largo al decidir si cabe (misma familia que PARTS).
+AMADA_FIT_TOL_IN = 0.02
 
 
 @dataclass(frozen=True)
@@ -32,13 +40,12 @@ class AmadaSeat:
     left/bottom = coordenadas del Punto 0 (pulgadas nativas).
     """
 
-    left: float  # X de la pared vertical de referencia
-    bottom: float  # Y del riel horizontal de referencia
+    left: float
+    bottom: float
     right: float
     top: float
     rail_x0: float
     rail_x1: float
-    # Segmentos de referencia (para auditoría / construcción)
     wall_y0: float = 0.0
     wall_y1: float = 0.0
     rail_x_start: float = 0.0
@@ -46,11 +53,11 @@ class AmadaSeat:
 
     @property
     def origin(self) -> tuple[float, float]:
-        """Punto 0: intersección pared × riel."""
         return (self.left, self.bottom)
 
     @property
     def width(self) -> float:
+        """Largo útil del canal (entre topes), en pulgadas."""
         return self.right - self.left
 
     @property
@@ -58,25 +65,71 @@ class AmadaSeat:
         return self.top - self.bottom
 
 
-# Constantes públicas (se sincronizan al detectar).
+@dataclass(frozen=True)
+class AmadaFixtureSpec:
+    id: str
+    label: str
+    filename: str
+    fallback_largo_in: float
+
+
+# Orden del catálogo: no decide prioridad; la elección es por canal más corto.
+AMADA_FIXTURE_CATALOG: tuple[AmadaFixtureSpec, ...] = (
+    AmadaFixtureSpec(
+        id="fixtura_2",
+        label="Fixtura 2",
+        filename="Fixtura 2.DXF",
+        fallback_largo_in=28.95,
+    ),
+    AmadaFixtureSpec(
+        id="original",
+        label="Fixtura original",
+        filename="FICSTURA MEJORADA CORTE BUENO .25IN.DXF",
+        fallback_largo_in=35.33,
+    ),
+)
+
+
+# Constantes públicas (se sincronizan al dibujar).
 SEAT_LEFT_IN = -17.6650
 SEAT_BOTTOM_IN = -5.0394
 SEAT_RIGHT_IN = 17.6650
 SEAT_TOP_IN = 0.0394
 
 
-def _default_fixture_path() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    return root / "FIXTURA AMADA" / "FICSTURA MEJORADA CORTE BUENO .25IN.DXF"
+def _fixture_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "FIXTURA AMADA"
 
 
-def resolve_amada_fixture_dxf() -> str | None:
+def _path_for_spec(spec: AmadaFixtureSpec) -> Path | None:
+    path = _fixture_dir() / spec.filename
+    return path if path.is_file() else None
+
+
+def resolve_amada_fixture_dxf(fixture_id: str | None = None) -> str | None:
+    """Ruta del DXF de fixtura. Sin id → env o fixtura original (compat)."""
     env = (os.environ.get("AMADA_FIXTURE_DXF") or "").strip()
+    if env and os.path.isfile(env) and not fixture_id:
+        return env
+
+    if fixture_id:
+        for spec in AMADA_FIXTURE_CATALOG:
+            if spec.id == fixture_id:
+                p = _path_for_spec(spec)
+                return str(p) if p else None
+
+    # Compat: env genérico o original.
     if env and os.path.isfile(env):
         return env
-    path = _default_fixture_path()
-    if path.is_file():
-        return str(path)
+    for spec in AMADA_FIXTURE_CATALOG:
+        if spec.id == "original":
+            p = _path_for_spec(spec)
+            if p:
+                return str(p)
+    for spec in AMADA_FIXTURE_CATALOG:
+        p = _path_for_spec(spec)
+        if p:
+            return str(p)
     return None
 
 
@@ -92,47 +145,34 @@ def detect_amada_seat(path: str | None = None) -> AmadaSeat:
     """
     Identifica pared izq + riel inf del canal Amada y calcula Punto 0.
 
-    Punto 0 = intersección de:
-      - prolongación vertical de la pared (x = wall_x)
-      - prolongación horizontal del riel (y = rail_y)
+    Si el DXF tiene varios canales ~5\" (Fixtura 2: exterior 35\" + interior
+    28.95\"), se prefiere el canal MÁS CORTO: es el que aprieta el cobre.
     """
     path = path or resolve_amada_fixture_dxf()
+    fallback = AmadaSeat(
+        SEAT_LEFT_IN,
+        SEAT_BOTTOM_IN,
+        SEAT_RIGHT_IN,
+        SEAT_TOP_IN,
+        -17.54,
+        17.54,
+        wall_y0=-4.9144,
+        wall_y1=-0.0856,
+        rail_x_start=-17.54,
+        rail_x_end=17.54,
+    )
     if not path:
-        return AmadaSeat(
-            SEAT_LEFT_IN,
-            SEAT_BOTTOM_IN,
-            SEAT_RIGHT_IN,
-            SEAT_TOP_IN,
-            -17.54,
-            17.54,
-            wall_y0=-4.9144,
-            wall_y1=-0.0856,
-            rail_x_start=-17.54,
-            rail_x_end=17.54,
-        )
+        return fallback
 
     horiz = []
     vert = []
     for x1, y1, x2, y2 in _iter_lines(ezdxf.readfile(path)):
         dx, dy = abs(x2 - x1), abs(y2 - y1)
         if dy < 1e-3 and dx > 20.0:
-            horiz.append(
-                (
-                    0.5 * (y1 + y2),
-                    min(x1, x2),
-                    max(x1, x2),
-                )
-            )
+            horiz.append((0.5 * (y1 + y2), min(x1, x2), max(x1, x2)))
         if dx < 1e-3 and dy > 1.0:
-            vert.append(
-                (
-                    0.5 * (x1 + x2),
-                    min(y1, y2),
-                    max(y1, y2),
-                )
-            )
+            vert.append((0.5 * (x1 + x2), min(y1, y2), max(y1, y2)))
 
-    # Candidatos de canal: par de rieles horizontales ~5"
     channels = []
     for i, a in enumerate(horiz):
         for b in horiz[i + 1 :]:
@@ -142,12 +182,12 @@ def detect_amada_seat(path: str | None = None) -> AmadaSeat:
             y0, y1 = min(a[0], b[0]), max(a[0], b[0])
             x0 = max(a[1], b[1])
             x1 = min(a[2], b[2])
-            if x1 - x0 < 30.0:
+            # Fixtura 2 tiene canal útil ~28.95"; no exigir 30"+.
+            if x1 - x0 < 25.0:
                 continue
             channels.append((y0, y1, x0, x1, gap))
 
     def _best_wall(y0, y1, x_rail0, side: str):
-        """Tope vertical que solapa el canal y queda junto al extremo del riel."""
         best = None
         for vx, ymin, ymax in vert:
             ov = min(ymax, y1) - max(ymin, y0)
@@ -176,8 +216,9 @@ def detect_amada_seat(path: str | None = None) -> AmadaSeat:
             continue
         wall_x, wall_y0, wall_y1 = left
         right_x, _, _ = right
-        # Preferir canal ~5.079" (con topes), no el bolsillo exacto 5" del marco.
-        score = (abs(gap - 5.079), -(x1 - x0))
+        canal = float(right_x) - float(wall_x)
+        # Preferir gap ~5.079" y, a igualdad, el canal MÁS CORTO (más justo).
+        score = (abs(gap - 5.079), canal)
         scored.append(
             (
                 score,
@@ -198,25 +239,12 @@ def detect_amada_seat(path: str | None = None) -> AmadaSeat:
 
     if scored:
         return sorted(scored, key=lambda t: t[0])[0][1]
-
-    return AmadaSeat(
-        SEAT_LEFT_IN,
-        SEAT_BOTTOM_IN,
-        SEAT_RIGHT_IN,
-        SEAT_TOP_IN,
-        -17.54,
-        17.54,
-        wall_y0=-4.9144,
-        wall_y1=-0.0856,
-        rail_x_start=-17.54,
-        rail_x_end=17.54,
-    )
+    return fallback
 
 
-@lru_cache(maxsize=1)
-def _load_fixture_bundle():
-    path = resolve_amada_fixture_dxf()
-    if not path:
+@lru_cache(maxsize=8)
+def _load_fixture_bundle(path: str):
+    if not path or not os.path.isfile(path):
         return None
     doc = ezdxf.readfile(path)
     seat = detect_amada_seat(path)
@@ -224,10 +252,96 @@ def _load_fixture_bundle():
     return {"path": path, "seat": seat, "ents": ents, "n_src": len(list(doc.modelspace()))}
 
 
-def get_amada_seat() -> AmadaSeat:
-    bundle = _load_fixture_bundle()
-    if bundle:
-        return bundle["seat"]
+def _seat_for_path(path: str | None, fallback_largo: float) -> AmadaSeat:
+    if path:
+        try:
+            return detect_amada_seat(path)
+        except Exception:
+            pass
+    half = float(fallback_largo) / 2.0
+    return AmadaSeat(
+        left=-half,
+        bottom=SEAT_BOTTOM_IN,
+        right=half,
+        top=SEAT_TOP_IN,
+        rail_x0=-half + 0.125,
+        rail_x1=half - 0.125,
+    )
+
+
+def listar_fixturas_amada() -> list[dict[str, Any]]:
+    """Catálogo con canal real (o fallback) de cada DXF presente."""
+    out: list[dict[str, Any]] = []
+    for spec in AMADA_FIXTURE_CATALOG:
+        path = _path_for_spec(spec)
+        seat = _seat_for_path(str(path) if path else None, spec.fallback_largo_in)
+        out.append(
+            {
+                "id": spec.id,
+                "label": spec.label,
+                "filename": spec.filename,
+                "path": str(path) if path else None,
+                "disponible": path is not None,
+                "canal_in": float(seat.width),
+                "alto_in": float(seat.height),
+                "seat": seat,
+            }
+        )
+    return out
+
+
+def amada_fixtura_largo_max_in() -> float:
+    """Mayor canal disponible entre todas las fixturas (límite absoluto ESP.)."""
+    largos = [float(f["canal_in"]) for f in listar_fixturas_amada() if f.get("disponible")]
+    if largos:
+        return max(largos)
+    return max(float(s.fallback_largo_in) for s in AMADA_FIXTURE_CATALOG)
+
+
+def elegir_fixtura_amada(
+    largo_pieza_in: float,
+    *,
+    tol_in: float = AMADA_FIT_TOL_IN,
+) -> dict[str, Any] | None:
+    """
+    Elige la fixtura más justa (canal más corto) que aún acepte el largo.
+
+    Así los topes ejercen presión hacia el Punto 0 / esquina BL.
+    """
+    largo = float(largo_pieza_in or 0)
+    if largo <= 0:
+        return None
+    cands: list[tuple[float, dict[str, Any]]] = []
+    for fx in listar_fixturas_amada():
+        if not fx.get("disponible"):
+            continue
+        canal = float(fx["canal_in"])
+        if largo <= canal + float(tol_in):
+            cands.append((canal, fx))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: (t[0], t[1]["id"]))
+    chosen = dict(cands[0][1])
+    chosen["holgura_in"] = float(chosen["canal_in"]) - largo
+    return chosen
+
+
+def get_amada_seat(fixture_id: str | None = None) -> AmadaSeat:
+    if fixture_id:
+        path = resolve_amada_fixture_dxf(fixture_id)
+        if path:
+            bundle = _load_fixture_bundle(path)
+            if bundle:
+                return bundle["seat"]
+        for spec in AMADA_FIXTURE_CATALOG:
+            if spec.id == fixture_id:
+                return _seat_for_path(None, spec.fallback_largo_in)
+
+    # Compat: la de mayor canal (misma API histórica ≈ original).
+    disponibles = [f for f in listar_fixturas_amada() if f.get("disponible")]
+    if disponibles:
+        best = max(disponibles, key=lambda f: float(f["canal_in"]))
+        return best["seat"]
     return AmadaSeat(
         SEAT_LEFT_IN,
         SEAT_BOTTOM_IN,
@@ -246,19 +360,38 @@ def _sync_public_seat_constants(seat: AmadaSeat) -> None:
     SEAT_TOP_IN = seat.top
 
 
-def draw_amada_fixture_real(msp, bar_l_mm: float, bar_w_mm: float) -> bool:
+def draw_amada_fixture_real(
+    msp,
+    bar_l_mm: float,
+    bar_w_mm: float,
+    *,
+    fixture_id: str | None = None,
+    largo_pieza_in: float | None = None,
+) -> bool:
     """
     Copia ÍNTEGRA de la fixtura, trasladada para que Punto 0 → (0,0) mm.
 
-    Punto 0 = intersección de prolongación pared izq × riel inf.
-    La pieza del nest debe tener su BL en (0,0) mm.
-
-    Si la pieza es más larga/alta que el canal, igual se dibuja la fixtura
-    real (no se cae a contorno simulado). Solo se rechaza si no hay DXF.
+    Si se pasa ``largo_pieza_in`` (o se deduce de ``bar_l_mm``) y no hay
+    ``fixture_id``, se elige automáticamente la más justa.
     """
     if bar_l_mm <= 1.0 or bar_w_mm <= 1.0:
         return False
-    bundle = _load_fixture_bundle()
+
+    fid = fixture_id
+    if not fid:
+        largo_in = (
+            float(largo_pieza_in)
+            if largo_pieza_in is not None and float(largo_pieza_in) > 0
+            else float(bar_l_mm) / _IN_TO_MM
+        )
+        eleccion = elegir_fixtura_amada(largo_in)
+        if eleccion:
+            fid = str(eleccion["id"])
+
+    path = resolve_amada_fixture_dxf(fid)
+    if not path:
+        return False
+    bundle = _load_fixture_bundle(path)
     if not bundle:
         return False
 
@@ -266,7 +399,6 @@ def draw_amada_fixture_real(msp, bar_l_mm: float, bar_w_mm: float) -> bool:
     _sync_public_seat_constants(seat)
     ents = bundle["ents"]
 
-    # Punto 0 (left, bottom) → origen del export.
     ox, oy = seat.origin
     m = Matrix44.chain(
         Matrix44.scale(_IN_TO_MM),
@@ -290,27 +422,45 @@ def draw_amada_fixture_real(msp, bar_l_mm: float, bar_w_mm: float) -> bool:
     return n_ok > 0
 
 
-def draw_amada_fixture_provisional(msp, bar_l_mm: float, bar_w_mm: float) -> None:
-    """
-    Compat: nombre histórico. Siempre intenta fixtura REAL.
-    El fallback simulado solo si falta el DXF fuente.
-    """
-    if draw_amada_fixture_real(msp, bar_l_mm, bar_w_mm):
+def draw_amada_fixture_provisional(
+    msp,
+    bar_l_mm: float,
+    bar_w_mm: float,
+    *,
+    fixture_id: str | None = None,
+    largo_pieza_in: float | None = None,
+) -> None:
+    """Compat: siempre intenta fixtura REAL; fallback simulado si falta DXF."""
+    if draw_amada_fixture_real(
+        msp,
+        bar_l_mm,
+        bar_w_mm,
+        fixture_id=fixture_id,
+        largo_pieza_in=largo_pieza_in,
+    ):
         return
-    path = resolve_amada_fixture_dxf()
+    path = resolve_amada_fixture_dxf(fixture_id)
     print(
         "[AMADA-FIXTURE] DXF real no disponible — usando contorno simulado "
-        f"(path={path!r}). Coloque "
-        "'FIXTURA AMADA/FICSTURA MEJORADA CORTE BUENO .25IN.DXF' "
+        f"(path={path!r}). Coloque los DXF en 'FIXTURA AMADA/' "
         "o defina AMADA_FIXTURE_DXF.",
         flush=True,
     )
     _draw_amada_fixture_fallback(msp, bar_l_mm, bar_w_mm)
 
 
-def validate_piece_in_seat(bar_l_mm: float, bar_w_mm: float) -> dict:
+def validate_piece_in_seat(
+    bar_l_mm: float,
+    bar_w_mm: float,
+    *,
+    fixture_id: str | None = None,
+) -> dict:
     """La pieza debe caber entre topes (sin solapar metal)."""
-    seat = get_amada_seat()
+    if fixture_id:
+        seat = get_amada_seat(fixture_id)
+    else:
+        eleccion = elegir_fixtura_amada(float(bar_l_mm) / _IN_TO_MM)
+        seat = eleccion["seat"] if eleccion else get_amada_seat()
     seat_w = seat.width * _IN_TO_MM
     seat_h = seat.height * _IN_TO_MM
     return {
@@ -326,6 +476,8 @@ def validate_piece_in_seat(bar_l_mm: float, bar_w_mm: float) -> dict:
         "clearance_y_mm": seat_h - bar_w_mm,
         "overlap_x_mm": max(0.0, bar_l_mm - seat_w),
         "overlap_y_mm": max(0.0, bar_w_mm - seat_h),
+        "fixture_id": fixture_id
+        or (elegir_fixtura_amada(float(bar_l_mm) / _IN_TO_MM) or {}).get("id"),
     }
 
 

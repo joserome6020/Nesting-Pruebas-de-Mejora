@@ -39,6 +39,10 @@ REGRESIONES = [
         "test_largos_mapa_comercial.py",
         "2026-08-06a - mapa comercial 480->240 no debe omitir piezas (SWO-003 ANG037)",
     ),
+    (
+        "test_amada_fixtura_catalogo.py",
+        "2026-08-06e - Amada elige Fixtura 2 (28.95) cuando es la más justa",
+    ),
 ]
 
 

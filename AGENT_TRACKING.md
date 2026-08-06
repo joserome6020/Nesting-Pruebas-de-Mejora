@@ -46,6 +46,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-06e — Fixtura Amada 2 (28.95\") + elección automática de la más justa
+
+- Catálogo de dos fixturas: `Fixtura 2.DXF` (canal ~28.95\") y la original
+  (~35.33\"). Mismo ancho exacto 5\".
+- Siempre se elige la del canal más corto que aún acepte el largo de la pieza
+  (presión de topes hacia el Punto 0). `GENE-BCU-5-170` (28.87\") → Fixtura 2;
+  piezas ~30\"–35.33\" → original.
+- Detector de asiento: acepta canales ≥25\" y, dentro de un mismo DXF, prefiere
+  el canal más corto (Fixtura 2 tenía exterior 35\" + interior 28.95\").
+- Export AMADA/FIXTURA dibuja el DXF de la fixtura elegida.
+- Candado: `tests/native/test_amada_fixtura_catalogo.py`.
+
 ### 2026-08-06d — Renest Galv incompleto ya no se queda corto vs PARTS
 
 - Síntoma: tras edición manual de placas, el grupo `0.11811_GALVANIZADO` quedaba
@@ -62,6 +74,7 @@ código viejo. Un bug sin candado vuelve.
 - Candado: `tests/native/test_renest_galv_incompleto.py`.
 
 ### 2026-08-06c — Nombre VSM vs carpeta corporate (GIGABOARD5 ↔ GIGA BOARD 5)
+
 
 - Síntoma: SWO-005 (misma WO recién exportada) fallaba al descargar con
   «No se encontró archivos .dxf para esta SWO.» La BD sí tenía 948 piezas
