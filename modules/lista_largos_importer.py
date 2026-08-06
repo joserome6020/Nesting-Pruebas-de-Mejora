@@ -43,15 +43,23 @@ def _norm_job(value: str) -> str:
     return re.sub(r"\s+", " ", _norm_text(value)).upper()
 
 
+def _job_compact(value: str) -> str:
+    """Clave VSM/carpeta: ignora espacios, guiones y underscores (GIGA BOARD 5 ≡ GIGABOARD5)."""
+    return re.sub(r"[\s_\-]+", "", _norm_job(value))
+
+
 def _jobs_equivalentes(job_a: str, job_b: str) -> bool:
     """
-    Compara job VSM (ej. 251007) vs carpeta/job_data (ej. 06_30_2322_TANK_251007).
+    Compara job VSM (ej. 251007 / GIGABOARD5) vs carpeta/job_data
+    (ej. 06_30_2322_TANK_251007 / GIGA BOARD 5).
     """
     a = _norm_job(job_a)
     b = _norm_job(job_b)
     if not a or not b:
         return True
     if a == b:
+        return True
+    if _job_compact(a) == _job_compact(b):
         return True
     if a.endswith("_" + b) or b.endswith("_" + a):
         return True
@@ -105,11 +113,14 @@ def _resolver_ruta_autodxf(ruta_exportacion: str) -> Path:
 def _buscar_carpeta_job_corporate(job: str) -> Path | None:
     """
     Localiza carpeta de job en ARGA METALS CORPORATE SYSTEM/TANKS
-    cuando la ruta de export es SWO (Máxima Optimización) y no tiene AutoDXF.
+    cuando la ruta de export no tiene AutoDXF (p. ej. duplicado «GIGA BOARD 5»
+    vs carpeta VSM «GIGABOARD5»).
+    Prefiere la carpeta que sí tenga MODEL CORE FILES/AutoDXF.
     """
     job_n = _norm_job(job)
     if not job_n:
         return None
+    job_key = _job_compact(job_n)
 
     roots = [
         Path(
@@ -122,25 +133,67 @@ def _buscar_carpeta_job_corporate(job: str) -> Path | None:
         f"*TANK{job_n}",
         f"*_{job_n}",
         job_n,
+        job_key,
     ]
+
+    candidatos_con_autodxf: list[Path] = []
+    candidatos_sin_autodxf: list[Path] = []
+
+    def _registrar(hit: Path) -> None:
+        autodxf = hit / "MODEL CORE FILES" / "AutoDXF"
+        try:
+            if autodxf.exists() and autodxf.is_dir():
+                candidatos_con_autodxf.append(hit)
+            else:
+                candidatos_sin_autodxf.append(hit)
+        except OSError:
+            pass
+
     for root in roots:
         try:
             if not root.exists():
                 continue
         except OSError:
             continue
+
+        vistos: set[str] = set()
         for pat in patrones:
             try:
-                hits = sorted(p for p in root.rglob(pat) if p.is_dir())
+                hits = [p for p in root.rglob(pat) if p.is_dir()]
             except OSError:
                 hits = []
-            for hit in hits:
-                autodxf = hit / "MODEL CORE FILES" / "AutoDXF"
-                try:
-                    if autodxf.exists():
-                        return hit
-                except OSError:
+            for hit in sorted(hits, key=lambda p: str(p).lower()):
+                clave = str(hit).lower()
+                if clave in vistos:
                     continue
+                vistos.add(clave)
+                _registrar(hit)
+
+        # Igualdad compacta (espacios/guiones): GIGA BOARD 5 ↔ GIGABOARD5.
+        try:
+            for producto in root.iterdir():
+                if not producto.is_dir():
+                    continue
+                for cliente in producto.iterdir():
+                    if not cliente.is_dir():
+                        continue
+                    for hit in cliente.iterdir():
+                        if not hit.is_dir():
+                            continue
+                        if _job_compact(hit.name) != job_key:
+                            continue
+                        clave = str(hit).lower()
+                        if clave in vistos:
+                            continue
+                        vistos.add(clave)
+                        _registrar(hit)
+        except OSError:
+            pass
+
+    if candidatos_con_autodxf:
+        return sorted(candidatos_con_autodxf, key=lambda p: str(p).lower())[0]
+    if candidatos_sin_autodxf:
+        return sorted(candidatos_sin_autodxf, key=lambda p: str(p).lower())[0]
     return None
 
 

@@ -24,6 +24,10 @@ REGRESIONES = [
         "2026-08-05a/06b - job sin CSV/AutoDXF de largos (COMPARTMENT, GIGA BOARD 5) no tumba export",
     ),
     (
+        "test_job_nombre_vsm.py",
+        "2026-08-06c - GIGA BOARD 5 ↔ GIGABOARD5 resuelve carpeta VSM con AutoDXF",
+    ),
+    (
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),

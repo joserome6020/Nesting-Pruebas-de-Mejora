@@ -46,6 +46,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-06c — Nombre VSM vs carpeta corporate (GIGABOARD5 ↔ GIGA BOARD 5)
+
+- Síntoma: SWO-005 (misma WO recién exportada) fallaba al descargar con
+  «No se encontró archivos .dxf para esta SWO.» La BD sí tenía 948 piezas
+  `Pendiente SWO` con `job=GIGA BOARD 5`.
+- Causa: en red coexisten `...\GIGA\GIGA BOARD 5` (sin AutoDXF) y
+  `...\GIGA\GIGABOARD5` (nombre VSM, con AutoDXF). La descarga SWO y el
+  importador de largos resolvían solo el match exacto / la carpeta vacía.
+- Fix: equivalencia compacta (ignora espacios/guiones) y preferencia por la
+  carpeta que tenga `MODEL CORE FILES/AutoDXF` en `obtener_ruta_real_job` y
+  `_buscar_carpeta_job_corporate`. No cambia el flujo VSM ni el job_id en BD.
+- Candado: `tests/native/test_job_nombre_vsm.py`.
+
 ### 2026-08-06b — Export sin carpeta AutoDXF ya no tumba PQART (GIGA BOARD 5)
 
 - Síntoma: al final del export de `W.O. 5 X3` / job `GIGA BOARD 5` fallaba con

@@ -835,8 +835,23 @@ class TabFiles(QWidget):
         dlg.exec()
 
     def obtener_ruta_real_job(self, ruta_raiz, nombre_job):
+        """Resuelve carpeta de job bajo producto/cliente.
+
+        El VSM a veces nombra el job sin espacios (GIGABOARD5) y en red queda
+        un duplicado con espacios (GIGA BOARD 5). Prefiere la carpeta que tenga
+        MODEL CORE FILES/AutoDXF para no tumbar la descarga SWO.
+        """
         if not os.path.exists(ruta_raiz):
             return None
+        job_pedido = str(nombre_job or "").strip()
+        if not job_pedido:
+            return None
+
+        def _compact(s: str) -> str:
+            return re.sub(r"[\s_\-]+", "", str(s or "").strip().upper())
+
+        job_key = _compact(job_pedido)
+        exactas, equivalentes = [], []
         try:
             for producto in os.listdir(ruta_raiz):
                 ruta_prod = os.path.join(ruta_raiz, producto)
@@ -846,12 +861,37 @@ class TabFiles(QWidget):
                     ruta_cli = os.path.join(ruta_prod, cliente)
                     if not os.path.isdir(ruta_cli):
                         continue
-                    ruta_job = os.path.join(ruta_cli, nombre_job)
-                    if os.path.isdir(ruta_job):
-                        return ruta_job
+                    # Match exacto histórico.
+                    ruta_exacta = os.path.join(ruta_cli, job_pedido)
+                    if os.path.isdir(ruta_exacta):
+                        exactas.append(ruta_exacta)
+                    try:
+                        for nombre in os.listdir(ruta_cli):
+                            ruta_job = os.path.join(ruta_cli, nombre)
+                            if not os.path.isdir(ruta_job):
+                                continue
+                            if _compact(nombre) == job_key:
+                                equivalentes.append(ruta_job)
+                    except Exception:
+                        continue
         except Exception:
-            pass
-        return None
+            return None
+
+        def _tiene_autodxf(ruta_job: str) -> bool:
+            return os.path.isdir(os.path.join(ruta_job, "MODEL CORE FILES", "AutoDXF"))
+
+        # Orden: equivalentes/exactas con AutoDXF primero (carpeta VSM real).
+        vistos, orden = set(), []
+        for grupo in (exactas, equivalentes):
+            for r in grupo:
+                k = os.path.normcase(os.path.normpath(r))
+                if k not in vistos:
+                    vistos.add(k)
+                    orden.append(r)
+        con_ad = [r for r in orden if _tiene_autodxf(r)]
+        if con_ad:
+            return con_ad[0]
+        return orden[0] if orden else None
 
     def procesar_descarga_swo(self, swo_id):
         self.app.abrir_ventana_carga(f"Descargando {swo_id}...")
