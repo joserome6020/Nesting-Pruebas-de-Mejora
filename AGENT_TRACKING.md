@@ -46,6 +46,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-07c — Muda cross-WO: pool 1:1 y conteo no ignora el calibre
+
+- Síntoma: 5/16 tenía 70; al mudar 1 pieza el donante quedaba en 66 (faltaba una
+  placa de 3) y `PIEZAS TOTALES: 130` / `PLACAS: 4` ignoraban todo ese calibre.
+- Causa: `_quitar_piezas_de_pool` descontaba la pieza por nombre exacto **y** otra
+  vez por nombre base → pool corto; al refrescar, `sanitizar_hojas_grupo`
+  eliminaba un bloque madre y el poka-yoke marcaba `error` en el grupo; los
+  labels saltaban grupos con `error`.
+- Fix: una pieza mudada = una baja en el pool; labels cuentan hojas aunque el
+  grupo tenga aviso/error de inventario.
+- Candado: `tests/native/test_transfer_pool_doble_descuento.py`.
+
 ### 2026-08-07b — WOs independientes: se elimina la réplica a gemelas
 
 - Síntoma: tras mudar `Top_Cover_1` WO1→WO2 (éxito), al volver a la WO donante

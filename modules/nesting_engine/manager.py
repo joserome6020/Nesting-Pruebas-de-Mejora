@@ -6448,13 +6448,11 @@ class MotorNesting:
         pool = list(grupo.get("piezas_pool") or [])
         if not pool or not piezas_mover:
             return
-        to_remove = Counter(
+        # Una entrada de piezas_mover = una sola baja en el pool.
+        # Antes se descontaba por nombre exacto Y además por base → 2× por pieza
+        # (Top_Cover_1 mudada 1 vez quitaba 2 del pool → reconciliar borraba una placa).
+        pendientes = Counter(
             str(p.get("nombre") or "").strip()
-            for p in piezas_mover
-            if str(p.get("nombre") or "").strip()
-        )
-        to_remove_base = Counter(
-            _piece_name_base(str(p.get("nombre") or ""))
             for p in piezas_mover
             if str(p.get("nombre") or "").strip()
         )
@@ -6464,12 +6462,17 @@ class MotorNesting:
             if not nom:
                 nuevo.append(entry)
                 continue
-            base = _piece_name_base(nom)
-            if to_remove.get(nom, 0) > 0:
-                to_remove[nom] -= 1
+            if pendientes.get(nom, 0) > 0:
+                pendientes[nom] -= 1
                 continue
-            if to_remove_base.get(base, 0) > 0:
-                to_remove_base[base] -= 1
+            base = _piece_name_base(nom)
+            hit = None
+            for key, cnt in pendientes.items():
+                if cnt > 0 and _piece_name_base(key) == base:
+                    hit = key
+                    break
+            if hit is not None:
+                pendientes[hit] -= 1
                 continue
             nuevo.append(entry)
         grupo["piezas_pool"] = nuevo

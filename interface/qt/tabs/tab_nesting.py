@@ -802,8 +802,10 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
             return 0
         total = 0
         for info in res.values():
-            if not isinstance(info, dict) or "error" in info:
+            if not isinstance(info, dict):
                 continue
+            # Contar aunque haya advertencia/error de inventario: las hojas siguen
+            # siendo reales; si no, PIEZAS/PLACAS «ignoraban» el calibre mudado.
             for hoja in info.get("hojas") or []:
                 if not isinstance(hoja, dict):
                     continue
@@ -823,7 +825,7 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
             return
         total = 0
         for info in res.values():
-            if isinstance(info, dict) and "error" not in info:
+            if isinstance(info, dict):
                 total += contar_piezas_grupo(info)
         self.lbl_piezas_totales.setText(f"PIEZAS TOTALES: {total}")
         if hasattr(self, "lbl_placas_totales"):

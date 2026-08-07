@@ -40,6 +40,10 @@ REGRESIONES = [
         "2026-08-07b - WOs independientes: sin réplica automática a gemelas / aliasing",
     ),
     (
+        "test_transfer_pool_doble_descuento.py",
+        "2026-08-07c - muda cross-WO no descuenta 2× del pool ni borra placa del donante",
+    ),
+    (
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),
