@@ -5164,9 +5164,25 @@ class MotorNesting:
     def _misma_pieza_visual(self, a, b):
         if a is b or id(a) == id(b):
             return True
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            return False
+        dbg_a = str(a.get("debug_id") or "").strip()
+        dbg_b = str(b.get("debug_id") or "").strip()
+        if dbg_a and dbg_b and dbg_a == dbg_b:
+            return True
         if str(a.get("nombre", "")) != str(b.get("nombre", "")):
             return False
-        return a.get("poligonos") == b.get("poligonos")
+        if a.get("poligonos") == b.get("poligonos"):
+            return True
+        # Tras deepcopy entre WOs, la geometría colocada suele conservar el mismo offset.
+        try:
+            return (
+                abs(float(a.get("shift_x", 0) or 0) - float(b.get("shift_x", 0) or 0)) <= 1e-6
+                and abs(float(a.get("shift_y", 0) or 0) - float(b.get("shift_y", 0) or 0)) <= 1e-6
+                and abs(float(a.get("rot_deg", 0) or 0) - float(b.get("rot_deg", 0) or 0)) <= 1e-6
+            )
+        except (TypeError, ValueError):
+            return False
 
     def _grupo_de_hoja(self, resultados_nesting, hoja):
         if not isinstance(hoja, dict):
@@ -5212,6 +5228,16 @@ class MotorNesting:
                     and abs(float(h_cand.get("placa_h", 0) or 0) - h_ref) <= 0.5
                 ):
                     return ni
+        # Evitar primera coincidencia ambigua por placa_id: solo si es única.
+        if pid:
+            matches = [
+                i
+                for i, h in enumerate(hojas)
+                if str(h.get("placa_id", "") or "") == pid
+                and bool(h.get("es_retazo", False)) == es_rtz
+            ]
+            if len(matches) == 1:
+                return matches[0]
         return -1
 
     def _resolver_hoja_viva(self, resultados, hoja):
@@ -5253,12 +5279,20 @@ class MotorNesting:
         for k, ps in enumerate(piezas_especificas):
             idx_hint = indices[k] if k < len(indices) else None
             encontrada = None
+            nombre_ps = str(ps.get("nombre", "") or "")
+            dbg_ps = str(ps.get("debug_id") or "").strip()
 
             if idx_hint is not None:
                 p_idx = self._pieza_real_en_hoja_por_idx(hoja_origen, idx_hint)
                 if p_idx is not None and id(p_idx) not in usados:
-                    nombre_ps = str(ps.get("nombre", "") or "")
-                    if not nombre_ps or str(p_idx.get("nombre", "") or "") == nombre_ps:
+                    nombre_idx = str(p_idx.get("nombre", "") or "")
+                    dbg_idx = str(p_idx.get("debug_id") or "").strip()
+                    if (
+                        not nombre_ps
+                        or nombre_idx == nombre_ps
+                        or (dbg_ps and dbg_idx and dbg_idx == dbg_ps)
+                        or self._misma_pieza_visual(p_idx, ps)
+                    ):
                         encontrada = p_idx
 
             if encontrada is None:
@@ -5269,12 +5303,19 @@ class MotorNesting:
                         encontrada = p
                         break
 
+            if encontrada is None and dbg_ps:
+                for p in todas_origen:
+                    if id(p) in usados:
+                        continue
+                    if str(p.get("debug_id") or "").strip() == dbg_ps:
+                        encontrada = p
+                        break
+
             if encontrada is None:
-                nombre = str(ps.get("nombre", "") or "")
                 matches = [
                     p
                     for p in todas_origen
-                    if id(p) not in usados and str(p.get("nombre", "") or "") == nombre
+                    if id(p) not in usados and str(p.get("nombre", "") or "") == nombre_ps
                 ]
                 if len(matches) == 1:
                     encontrada = matches[0]
@@ -5286,8 +5327,18 @@ class MotorNesting:
                             if p is target or id(p) == id(target):
                                 encontrada = p
                                 break
+                    if encontrada is None:
+                        for p in matches:
+                            if self._misma_pieza_visual(p, ps):
+                                encontrada = p
+                                break
                 if encontrada is None and matches:
-                    encontrada = matches[0]
+                    for p in matches:
+                        if self._misma_pieza_visual(p, ps):
+                            encontrada = p
+                            break
+                    if encontrada is None:
+                        encontrada = matches[0]
 
             if encontrada is None:
                 for p in todas_origen:

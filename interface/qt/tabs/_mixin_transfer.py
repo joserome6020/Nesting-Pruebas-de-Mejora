@@ -153,24 +153,70 @@ class TransferMixin:
             if isinstance(data, dict):
                 ml[li]["data"] = copy.deepcopy(data)
 
+    def _idx_hoja_en_lista(self, hojas, hoja_ref):
+        """Índice estable de una hoja en una lista (antes o después de deepcopy)."""
+        if not isinstance(hojas, list) or not isinstance(hoja_ref, dict):
+            return None
+        for i, h in enumerate(hojas):
+            if h is hoja_ref:
+                return i
+        uid = str(hoja_ref.get("sheet_uid") or "").strip()
+        if uid:
+            for i, h in enumerate(hojas):
+                if str(h.get("sheet_uid") or "").strip() == uid:
+                    return i
+        pid = str(hoja_ref.get("placa_id", "") or "")
+        seq = hoja_ref.get("sheet_seq")
+        if pid and seq is not None:
+            for i, h in enumerate(hojas):
+                if (
+                    str(h.get("placa_id") or "") == pid
+                    and h.get("sheet_seq") == seq
+                    and bool(h.get("es_retazo")) == bool(hoja_ref.get("es_retazo"))
+                ):
+                    return i
+        nest_idx = hoja_ref.get("_nest_list_idx")
+        if nest_idx is not None:
+            try:
+                ni = int(nest_idx)
+            except (TypeError, ValueError):
+                ni = -1
+            if 0 <= ni < len(hojas):
+                h = hojas[ni]
+                if (
+                    str(h.get("placa_id") or "") == pid
+                    and bool(h.get("es_retazo")) == bool(hoja_ref.get("es_retazo"))
+                ):
+                    return ni
+        # placa_id solo si es única (nunca la primera coincidencia ambigua)
+        if pid:
+            matches = [
+                i
+                for i, h in enumerate(hojas)
+                if str(h.get("placa_id") or "") == pid
+                and bool(h.get("es_retazo")) == bool(hoja_ref.get("es_retazo"))
+            ]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
     def _hoja_en_orden_multilote(self, lote_idx, clave, hoja_idx=None, hoja_ref=None):
         ml = getattr(self.app, "resultados_multilote", None) or []
         li = int(lote_idx)
         if li < 0 or li >= len(ml):
             return None
         hojas = ((ml[li].get("data") or {}).get(clave) or {}).get("hojas") or []
-        if hoja_idx is not None and 0 <= int(hoja_idx) < len(hojas):
-            return hojas[int(hoja_idx)]
+        if hoja_idx is not None:
+            try:
+                hi = int(hoja_idx)
+            except (TypeError, ValueError):
+                hi = -1
+            if 0 <= hi < len(hojas):
+                return hojas[hi]
         if isinstance(hoja_ref, dict):
-            uid = str(hoja_ref.get("sheet_uid") or "").strip()
-            pid = str(hoja_ref.get("placa_id", "") or "")
-            for h in hojas:
-                if h is hoja_ref:
-                    return h
-                if uid and str(h.get("sheet_uid") or "").strip() == uid:
-                    return h
-                if pid and str(h.get("placa_id") or "") == pid and not h.get("es_retazo"):
-                    return h
+            idx = self._idx_hoja_en_lista(hojas, hoja_ref)
+            if idx is not None:
+                return hojas[idx]
         return None
 
     def _desacoplar_multilote_grupo(self, clave):
@@ -194,18 +240,41 @@ class TransferMixin:
                 ml[li]["data"][clave] = copy.deepcopy(canonical)
 
     def _preparar_transferencia_cross_wo(
-        self, clave, lote_origen_idx, lote_dest_idx, hoja_origen, entry_destino
+        self,
+        clave,
+        lote_origen_idx,
+        lote_dest_idx,
+        hoja_origen,
+        entry_destino,
+        hoja_origen_idx=None,
     ):
+        # Resolver índices ANTES del deepcopy: tras clonar, `is` deja de servir.
+        li_o = int(lote_origen_idx)
+        li_d = int(lote_dest_idx)
+        ml = getattr(self.app, "resultados_multilote", None) or []
+        if hoja_origen_idx is None and isinstance(entry_destino, dict):
+            hoja_origen_idx = entry_destino.get("_hoja_origen_idx")
+        if hoja_origen_idx is None:
+            hojas_o_prev = (
+                ((ml[li_o].get("data") or {}).get(clave) or {}).get("hojas") or []
+                if 0 <= li_o < len(ml)
+                else []
+            )
+            if not hojas_o_prev:
+                hojas_o_prev = (
+                    ((self.app.resultados_nesting or {}).get(clave) or {}).get("hojas")
+                    or []
+                )
+            hoja_origen_idx = self._idx_hoja_en_lista(hojas_o_prev, hoja_origen)
+
         self._desacoplar_ordenes_multilote(lote_origen_idx, lote_dest_idx)
         self._desacoplar_multilote_grupo(clave)
         ml = getattr(self.app, "resultados_multilote", None) or []
-        li_o = int(lote_origen_idx)
-        li_d = int(lote_dest_idx)
         if 0 <= li_o < len(ml):
             self.app.resultados_nesting = ml[li_o].get("data") or {}
         resultados_dest = ml[li_d].get("data") if 0 <= li_d < len(ml) else {}
         hoja_o = self._hoja_en_orden_multilote(
-            li_o, clave, hoja_idx=entry_destino.get("_hoja_origen_idx"), hoja_ref=hoja_origen
+            li_o, clave, hoja_idx=hoja_origen_idx, hoja_ref=hoja_origen
         ) or hoja_origen
         hoja_d = self._hoja_en_orden_multilote(
             li_d, clave, hoja_idx=entry_destino.get("hoja_idx"), hoja_ref=entry_destino.get("hoja")
@@ -619,12 +688,19 @@ class TransferMixin:
             self.app.abrir_ventana_carga(msg)
 
         if cross_wo:
+            hojas_o = (
+                ((self.app.resultados_nesting or {}).get(clave) or {}).get("hojas") or []
+            )
+            hoja_origen_idx = self._idx_hoja_en_lista(hojas_o, hoja_origen)
+            entry = dict(entry)
+            entry["_hoja_origen_idx"] = hoja_origen_idx
             hoja_origen, hoja_destino, resultados_dest = self._preparar_transferencia_cross_wo(
                 clave,
                 lote_origen_idx,
                 lote_dest_idx,
                 hoja_origen,
                 entry,
+                hoja_origen_idx=hoja_origen_idx,
             )
         else:
             resultados_dest = self.app.resultados_nesting
@@ -752,14 +828,34 @@ class TransferMixin:
         lote_dest_idx = int(entry["lote_idx"])
         lote_origen_idx = int(getattr(self, "lote_actual_idx", 0) or 0)
         cross_wo = lote_dest_idx != lote_origen_idx
-        piezas_sel = list(self.visor.piezas_seleccionadas)
-        indices_sel = sorted(self.visor.piezas_seleccionadas_indices)
-        if not indices_sel and self.visor.idx_pieza_seleccionada >= 0:
-            indices_sel = [self.visor.idx_pieza_seleccionada]
+        # Alinear índices y piezas (mismo orden) desde el visor.
+        indices_sel = []
+        piezas_sel = []
+        raw_indices = sorted(self.visor.piezas_seleccionadas_indices)
+        if not raw_indices and self.visor.idx_pieza_seleccionada >= 0:
+            raw_indices = [self.visor.idx_pieza_seleccionada]
+        for idx in raw_indices:
+            p = self.visor._pieza_at(idx) if hasattr(self.visor, "_pieza_at") else None
+            if p is None:
+                piezas_hoja = (self.hoja_actual_data or {}).get("piezas") or []
+                p = piezas_hoja[idx] if 0 <= idx < len(piezas_hoja) else None
+            if not p:
+                continue
+            if hasattr(self.visor, "_es_pieza_seleccionable") and not self.visor._es_pieza_seleccionable(
+                p.get("nombre", "")
+            ):
+                continue
+            indices_sel.append(idx)
+            piezas_sel.append(p)
         if not piezas_sel:
             return QMessageBox.warning(self, "Atención", "Debes seleccionar al menos una pieza.")
         if not self.hoja_actual_data:
             return QMessageBox.warning(self, "Atención", "No hay placa activa en el visor.")
+        hojas_origen_lista = (
+            ((self.app.resultados_nesting or {}).get(self.clave_actual) or {}).get("hojas")
+            or []
+        )
+        hoja_origen_idx = self._idx_hoja_en_lista(hojas_origen_lista, self.hoja_actual_data)
         candidatos_prev = self.app.motor_nesting._resolver_candidatos_transferencia(
             self.hoja_actual_data,
             piezas_sel,
@@ -789,13 +885,32 @@ class TransferMixin:
             self.app.abrir_ventana_carga(msg_carga)
 
         if cross_wo:
+            entry = dict(entry)
+            entry["_hoja_origen_idx"] = hoja_origen_idx
             hoja_origen_snap, hoja_destino, resultados_dest = self._preparar_transferencia_cross_wo(
                 self.clave_actual,
                 lote_origen_idx,
                 lote_dest_idx,
                 self.hoja_actual_data,
                 entry,
+                hoja_origen_idx=hoja_origen_idx,
             )
+            # Tras deepcopy, remapea selección a la hoja viva (rompe id()).
+            piezas_sel = self.app.motor_nesting._resolver_candidatos_transferencia(
+                hoja_origen_snap,
+                piezas_sel,
+                indices=indices_sel,
+            )
+            if not piezas_sel:
+                if hasattr(self.app, "cerrar_ventana_carga"):
+                    self.app.cerrar_ventana_carga()
+                return QMessageBox.critical(
+                    self,
+                    "Falló",
+                    "No se pudo identificar la pieza en la placa actual tras "
+                    "separar las Work Orders.\n"
+                    "Vuelve a seleccionarla en el visor e intenta de nuevo.",
+                )
         else:
             hoja_origen_snap = self.hoja_actual_data
             resultados_dest = self.app.resultados_nesting

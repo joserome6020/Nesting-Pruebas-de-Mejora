@@ -32,6 +32,10 @@ REGRESIONES = [
         "2026-08-06d - renest de calibre Galv incompleto recupera piezas desde PARTS",
     ),
     (
+        "test_transfer_cross_wo_identidad.py",
+        "2026-08-07a - mudar pieza WO→WO no pierde identidad tras desacoplar deepcopy",
+    ),
+    (
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),

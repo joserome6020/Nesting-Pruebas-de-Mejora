@@ -46,6 +46,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-07a — Mudar pieza WO→WO: ya no «no se pudo identificar»
+
+- Síntoma: al transferir `Top_Cover_1` a otra Work Order (destino PLC059 óptimo)
+  fallaba con «No se pudo identificar la pieza en la placa actual». El naranja
+  del % en el diálogo es solo color de eficiencia baja, no el fallo.
+- Causa: antes de mover entre WO se hace deepcopy para desacoplar gemelas; se
+  rompía `id()` de hoja/pieza y el lookup de origen usaba la 1.ª `placa_id`
+  ambigua (`_hoja_origen_idx` nunca se pasaba).
+- Fix: capturar índice de hoja origen antes del clone; resolver por
+  idx/uid/seq (sin primera placa_id ambigua); rematch de candidatos por
+  `debug_id`/offset tras el deepcopy.
+- Candado: `tests/native/test_transfer_cross_wo_identidad.py`.
+
 ### 2026-08-06e — Fixtura Amada 2 (28.95\") + elección automática de la más justa
 
 - Catálogo de dos fixturas: `Fixtura 2.DXF` (canal ~28.95\") y la original
