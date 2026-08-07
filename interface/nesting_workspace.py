@@ -1209,11 +1209,11 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
     ml = tab.app.resultados_multilote or []
     if ml and 0 <= lote_idx < len(ml):
         slot = ml[lote_idx].get("data")
-        if ml[lote_idx].get("gemelo_desync") and isinstance(slot, dict):
+        if isinstance(slot, dict):
             tab.app.resultados_nesting = copy.deepcopy(slot)
             ml[lote_idx]["data"] = tab.app.resultados_nesting
         else:
-            tab.app.resultados_nesting = slot or {}
+            tab.app.resultados_nesting = {}
     else:
         tab.app.resultados_nesting = {}
 

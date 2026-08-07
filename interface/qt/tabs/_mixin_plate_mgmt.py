@@ -418,11 +418,11 @@ class PlateManagementMixin:
             return
         slot = ml[li].get("data")
         if slot is rn:
-            return
-        if ml[li].get("gemelo_desync"):
+            # Siempre desacoplar: si compartían referencia, un muda en otra WO
+            # no debe mutar este slot por aliasing.
             ml[li]["data"] = copy.deepcopy(rn)
-        else:
-            ml[li]["data"] = rn
+            return
+        ml[li]["data"] = copy.deepcopy(rn)
 
     def _cargar_resultados_lote_idx(self, idx):
         ml = getattr(self.app, "resultados_multilote", None) or []
@@ -431,11 +431,12 @@ class PlateManagementMixin:
             self.app.resultados_nesting = {}
             return
         slot = ml[li].get("data")
-        if ml[li].get("gemelo_desync") and isinstance(slot, dict):
-            self.app.resultados_nesting = copy.deepcopy(slot)
-            ml[li]["data"] = self.app.resultados_nesting
-        else:
-            self.app.resultados_nesting = slot or {}
+        if not isinstance(slot, dict):
+            self.app.resultados_nesting = {}
+            return
+        # Siempre deepcopy: cada WO en UI es un árbol independiente.
+        self.app.resultados_nesting = copy.deepcopy(slot)
+        ml[li]["data"] = self.app.resultados_nesting
 
     def on_lote_selected(self, val, *, sync_parts: bool = True):
         try:
@@ -1424,41 +1425,14 @@ class PlateManagementMixin:
             )
 
     def _replicar_lote_activo_a_gemelos(self):
-        resultados_ml = getattr(self.app, "resultados_multilote", None)
-        if not isinstance(resultados_ml, list) or not resultados_ml:
-            return
+        """Desactivado: cada Work Order es independiente.
 
-        idx = int(getattr(self, "lote_actual_idx", 0) or 0)
-        if idx < 0 or idx >= len(resultados_ml):
-            return
-
-        if resultados_ml[idx].get("gemelo_desync"):
-            return
-        if self._data_tiene_transferencias_cross_wo(self.app.resultados_nesting):
-            return
-
-        lote_k_ref = resultados_ml[idx].get("lote_k")
-        data_ref = copy.deepcopy(self.app.resultados_nesting)
-        for j, orden in enumerate(resultados_ml):
-            if j == idx:
-                continue
-            if orden.get("lote_k") != lote_k_ref:
-                continue
-            if orden.get("gemelo_desync"):
-                continue
-            if self._data_tiene_transferencias_cross_wo(orden.get("data")):
-                continue
-            self.app.resultados_multilote[j]["data"] = copy.deepcopy(data_ref)
-            if (
-                hasattr(self.app, "editable_inputs_by_lote")
-                and isinstance(self.app.editable_inputs_by_lote, list)
-                and idx < len(self.app.editable_inputs_by_lote)
-            ):
-                while len(self.app.editable_inputs_by_lote) <= j:
-                    self.app.editable_inputs_by_lote.append([])
-                self.app.editable_inputs_by_lote[j] = self._clonar_datos_partes_edicion(
-                    self.app.editable_inputs_by_lote[idx]
-                )
+        Históricamente copiaba `resultados_nesting` a otras WO con el mismo
+        `lote_k` (gemelas). Eso provocaba que un muda/edición en una orden
+        reescribiera placas de la otra. Se deja el gancho por compatibilidad
+        con call-sites, pero no muta nada.
+        """
+        return
 
     def _toggle_ignorar_deduccion_cu_grupo(self, clave, info, ignorar: bool):
         if not isinstance(info, dict):

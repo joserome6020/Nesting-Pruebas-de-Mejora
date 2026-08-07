@@ -36,6 +36,10 @@ REGRESIONES = [
         "2026-08-07a - mudar pieza WO→WO no pierde identidad tras desacoplar deepcopy",
     ),
     (
+        "test_wo_gemelas_sin_replica.py",
+        "2026-08-07b - WOs independientes: sin réplica automática a gemelas / aliasing",
+    ),
+    (
         "test_largos_swo_factor.py",
         "2026-08-05b - largos de una SWO se multiplican por WO (X3+X3+X3+X2), no por lote_k",
     ),

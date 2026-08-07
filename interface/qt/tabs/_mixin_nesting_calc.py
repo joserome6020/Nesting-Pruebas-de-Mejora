@@ -245,7 +245,7 @@ class NestingCalcMixin:
         self.app.resultados_multilote[self.lote_actual_idx]["data"] = nuevo_resultado
         self.app.resultados_nesting = nuevo_resultado
         self.app.lote_editado_dirty = False
-        self.app.resultados_multilote[self.lote_actual_idx].pop("gemelo_desync", None)
+        # No reactivar sync a gemelas: cada WO se renestea sola.
         self._replicar_lote_activo_a_gemelos()
 
         try:

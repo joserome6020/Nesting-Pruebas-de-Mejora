@@ -46,6 +46,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-07b — WOs independientes: se elimina la réplica a gemelas
+
+- Síntoma: tras mudar `Top_Cover_1` WO1→WO2 (éxito), al volver a la WO donante
+  faltaban placas / piezas del calibre (p. ej. 70→66 PZAS, P13/P14 desaparecidas).
+- Causa: `_replicar_lote_activo_a_gemelos` copiaba el nest activo a otras WO del
+  mismo `lote_k`, y además al cambiar de WO se podía **aliasar** el dict `data`
+  (misma referencia en memoria) si no había `gemelo_desync`.
+- Fix: réplica a gemelas desactivada (noop); persistir/cargar WO siempre con
+  `deepcopy`; renesteo de lote ya no limpia `gemelo_desync` para reactivar sync;
+  carga de workspace también desacopla.
+- Se mantiene el muda intencional entre WO (desacoplar + transferir).
+- Candado: `tests/native/test_wo_gemelas_sin_replica.py`.
+
 ### 2026-08-07a — Mudar pieza WO→WO: ya no «no se pudo identificar»
 
 - Síntoma: al transferir `Top_Cover_1` a otra Work Order (destino PLC059 óptimo)

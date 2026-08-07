@@ -221,8 +221,9 @@ class TransferMixin:
 
     def _desacoplar_multilote_grupo(self, clave):
         """
-        WO gemelas pueden compartir el mismo dict de grupo (legacy).
-        Clona el grupo completo por WO antes de transferir cross-WO.
+        WO gemelas legacy pueden compartir el mismo dict de grupo.
+        Clona por referencia compartida SIN imponer el contenido de una WO a otra
+        cuando ya están desacopladas (cada li con su propio dict).
         """
         ml = getattr(self.app, "resultados_multilote", None) or []
         if len(ml) < 2:
@@ -235,9 +236,13 @@ class TransferMixin:
         for locs in refs_grupo.values():
             if len(locs) <= 1:
                 continue
-            canonical = copy.deepcopy(ml[locs[0]]["data"][clave])
+            # Mismo objeto en varias WO: cada una recibe su copia privada.
+            compartido = (ml[locs[0]].get("data") or {}).get(clave)
+            if not isinstance(compartido, dict):
+                continue
             for li in locs:
-                ml[li]["data"][clave] = copy.deepcopy(canonical)
+                data = ml[li].setdefault("data", {})
+                data[clave] = copy.deepcopy(compartido)
 
     def _preparar_transferencia_cross_wo(
         self,
@@ -387,8 +392,8 @@ class TransferMixin:
                     f"Las piezas ya están anidadas en {wo_dest} · {p_dest}."
                 )
             lineas.append(
-                "\nNota: las Work Orders gemelas ya no se sincronizan automáticamente "
-                "tras un movimiento entre órdenes."
+                "\nNota: cada Work Order es independiente; este movimiento "
+                "no se copia a otras órdenes."
             )
             return "\n".join(lineas)
 
