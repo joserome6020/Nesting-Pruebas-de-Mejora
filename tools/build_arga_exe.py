@@ -29,6 +29,17 @@ MACRO = ROOT / "generador_verde.FCMacro"
 CPP_ENGINE_PS1 = ROOT / "modules" / "nesting_engine" / "build_cpp_engine.ps1"
 CPP_ENGINE_PYD = ROOT / "modules" / "nesting_engine" / "algorithm_cpp.pyd"
 CPP_ENGINE_CPP_DIR = ROOT / "modules" / "nesting_engine" / "cpp"
+NEST_CORE_PS1 = ROOT / "native" / "build_arga_nest_core.ps1"
+NEST_CORE_PYD = ROOT / "modules" / "nesting_engine" / "arga_nest_core.pyd"
+NEST_CORE_DIR = ROOT / "native" / "ArgaNestCore"
+NEST_WORKER_EXE = ROOT / "native" / "bin" / "ArgaNestWorker.exe"
+FIXTURA_AMADA_DIR = ROOT / "FIXTURA AMADA"
+FIXTURA_AMADA_DXFS = (
+    FIXTURA_AMADA_DIR / "Fixtura 2.DXF",
+    FIXTURA_AMADA_DIR / "FICSTURA MEJORADA CORTE BUENO .25IN.DXF",
+)
+STEP_EXPORT_CONFIG = ROOT / "_config" / "step_export_folders.json"
+NEST_ENGINE_CONFIG_JSON = ROOT / "configuracion_nesting.json"
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 BRANDING_PNG_PRESERVE = (
     "arga_nesting_logo.png",
@@ -49,16 +60,46 @@ HIDDEN_IMPORTS = (
     "responsive_layout",
     "reporte_pdf_nesting",
     "reporte_pdf_nesteo_largos_piso",
+    "reporte_pdf_lista_largos",
     # Largos + material requerido (NESTEO DE LARGOS / MRL)
     "catalogo_largos",
     "lista_largos_material_requerido",
     "interface.largos_nesting_service",
     "modules.lista_largos_importer",
-    # Qt — ventana principal
+    # Bootstrap / native ANS C++
+    "modules.win_dll_bootstrap",
+    "modules.nesting_engine.arga_nest_core",
+    "modules.nesting_engine.arga_nest_core_bridge",
+    "modules.nesting_engine.arga_nest_worker_client",
+    "modules.nesting_engine.algorithm_cpp",
+    "modules.nesting_engine.compact_lite",
+    "modules.nesting_engine.ai_ranker",
+    "modules.nesting_engine.ai_heuristic",
+    "modules.nesting_engine.ai_telemetry",
+    "modules.nesting_engine.venom_ai",
+    "modules.nesting_engine.nest_cuda",
+    "modules.nesting_engine.step_export_prefs",
+    "modules.nesting_engine.nest_engine_config",
+    "modules.nesting_engine.engine_registry",
+    "modules.nesting_engine.exporter",
+    "modules.dxf_export",
+    "modules.dxf_export.amada_fixture",
+    "modules.dxf_export.cobre",
+    "modules.dxf_export.cobre_nest",
+    "modules.dxf_export.dispatcher",
+    "modules.dxf_export.laser",
+    "modules.dxf_export.plasma",
+    "modules.dxf_mark",
+    "modules.dxf_mark.pipeline",
+    "modules.cobre_step_fuentes",
+    "modules.herinox_catalog_cache",
+    "modules.app_auto_update",
+    # Qt — ventana principal + extras
     "interface.qt.main_window",
     "interface.qt.theme",
     "interface.qt.thread_bridge",
     "interface.qt.progress_dialog",
+    "interface.qt.export_progress_dialog",
     "interface.qt.layout_helpers",
     "interface.qt.ui_mixins",
     "interface.qt.export_paths",
@@ -70,38 +111,49 @@ HIDDEN_IMPORTS = (
     "interface.qt.cad_snap",
     "interface.qt.dxf_part_loader",
     "interface.qt.dxf_part_geometry",
+    "interface.qt.dxf_qt_renderer",
+    "interface.qt.dxf_ezdxf_draw",
     "interface.qt.curve_refine",
     "interface.qt.dxf_hifi_path",
     "interface.qt.mpl_utils",
     "interface.qt.visor_diag",
-    # Qt — tabs
+    # Qt — tabs + mixins
     "interface.qt.tabs.tab_files",
     "interface.qt.tabs.tab_parts",
     "interface.qt.tabs.tab_sheets",
     "interface.qt.tabs.tab_nesting",
     "interface.qt.tabs.tab_nesting_ui",
+    "interface.qt.tabs._mixin_nesting_calc",
+    "interface.qt.tabs._mixin_plate_mgmt",
+    "interface.qt.tabs._mixin_export",
+    "interface.qt.tabs._mixin_lote_edit",
+    "interface.qt.tabs._mixin_transfer",
     # Qt — diálogos y widgets (largos + nesting)
     "interface.qt.dialogs.nesting_modals",
     "interface.qt.dialogs.lote_editor",
     "interface.qt.dialogs.largos_nesting_modal",
+    "interface.qt.dialogs.password_prompt",
+    "interface.qt.dialogs.step_viewer",
+    "interface.qt.dialogs.nest_sim_lab",
+    "interface.qt.dialogs.nest_sim_timeline",
     "interface.qt.widgets.herinox_switch",
     "interface.qt.widgets.largos_tira_canvas",
     "interface.qt.widgets.largos_perfil_draw",
-  # Soporte UI / metadatos
+    "interface.qt.widgets.cad_nav_overlay",
+    "interface.qt.widgets.nesting_ribbon",
+    # Soporte UI / metadatos
     "interface.autodxf_metadata",
     "interface.material_colors",
     # Motor nesting + placas
     "modules.nesting_engine",
     "modules.nesting_engine.manager",
     "modules.nesting_engine.algorithm_bridge",
-    "modules.nesting_engine.algorithm_cpp",
     "modules.nesting_engine.nest_optimization",
     "modules.nesting_engine.cu_largos_nesting",
     "modules.nesting_engine.sheet_integrity",
     "modules.nesting_engine.efficiency_metrics",
     "modules.nesting_engine.rtz_overlays",
     "modules.nesting_engine.geometry_parser",
-    "modules.nesting_engine.exporter",
     "modules.nesting_engine.api_client",
     "modules.consulta_herinox_bridge",
     "modules.sheets_manager",
@@ -113,6 +165,9 @@ HIDDEN_IMPORTS = (
     "modules.herinox_sync",
     "pandas",
     "openpyxl",
+    "reportlab",
+    "ezdxf",
+    "numpy",
 )
 
 COLLECT_SUBMODULES = (
@@ -121,21 +176,37 @@ COLLECT_SUBMODULES = (
     "PySide6.QtWidgets",
     "shapely",
     "matplotlib.backends.backend_qtagg",
+    "modules.nesting_engine",
+    "modules.dxf_export",
+    "modules.dxf_mark",
+    "interface.qt",
 )
 
 # Archivos que deben existir antes de empaquetar (ARGA NESTING SUITE actual).
 CRITICAL_SUITE_FILES = (
     MAIN_PY,
+    ROOT / "config.py",
     ROOT / "catalogo_largos.py",
     ROOT / "lista_largos_material_requerido.py",
     ROOT / "interface" / "largos_nesting_service.py",
+    ROOT / "interface" / "qt" / "main_window.py",
     ROOT / "interface" / "qt" / "dialogs" / "largos_nesting_modal.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_tira_canvas.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_perfil_draw.py",
     ROOT / "interface" / "qt" / "widgets" / "herinox_switch.py",
+    ROOT / "modules" / "win_dll_bootstrap.py",
     ROOT / "modules" / "nesting_engine" / "algorithm_bridge.py",
+    ROOT / "modules" / "nesting_engine" / "arga_nest_core_bridge.py",
+    ROOT / "modules" / "nesting_engine" / "arga_nest_worker_client.py",
     ROOT / "modules" / "nesting_engine" / "nest_optimization.py",
     ROOT / "modules" / "nesting_engine" / "cu_largos_nesting.py",
+    ROOT / "modules" / "nesting_engine" / "compact_lite.py",
+    ROOT / "modules" / "nesting_engine" / "exporter.py",
+    ROOT / "modules" / "dxf_export" / "amada_fixture.py",
+    NEST_CORE_PS1,
+    FIXTURA_AMADA_DXFS[0],
+    FIXTURA_AMADA_DXFS[1],
+    STEP_EXPORT_CONFIG,
 )
 
 SMOKE_IMPORT_MODULES = (
@@ -144,8 +215,12 @@ SMOKE_IMPORT_MODULES = (
     "interface.largos_nesting_service",
     "interface.qt.dialogs.largos_nesting_modal",
     "interface.qt.widgets.largos_perfil_draw",
+    "modules.win_dll_bootstrap",
     "modules.nesting_engine.algorithm_bridge",
+    "modules.nesting_engine.arga_nest_core_bridge",
+    "modules.nesting_engine.arga_nest_worker_client",
     "modules.nesting_engine.manager",
+    "modules.dxf_export.amada_fixture",
 )
 
 
@@ -376,6 +451,46 @@ def _cpp_engine_usable() -> bool:
         return False
 
 
+def _find_nest_core_pyd() -> Path | None:
+    """Localiza arga_nest_core*.pyd junto al paquete nesting_engine."""
+    engine_dir = ROOT / "modules" / "nesting_engine"
+    exact = engine_dir / "arga_nest_core.pyd"
+    if exact.is_file():
+        return exact
+    matches = sorted(engine_dir.glob("arga_nest_core*.pyd"))
+    return matches[0] if matches else None
+
+
+def _find_venom_core_pyds() -> list[Path]:
+    engine_dir = ROOT / "modules" / "nesting_engine"
+    return sorted(engine_dir.glob("venom_core*.pyd"))
+
+
+def _find_worker_exe() -> Path | None:
+    candidates = [
+        NEST_WORKER_EXE,
+        NEST_CORE_DIR / "build" / "Release" / "ArgaNestWorker.exe",
+        NEST_CORE_DIR / "build" / "ArgaNestWorker.exe",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+def _nest_core_usable() -> bool:
+    pyd = _find_nest_core_pyd()
+    if pyd is None or not pyd.is_file():
+        return False
+    _ensure_build_import_path()
+    try:
+        from modules.nesting_engine import arga_nest_core_bridge as bridge
+
+        return bool(bridge.core_available())
+    except Exception:
+        return False
+
+
 def _cpp_sources_newer_than_pyd() -> bool:
     """True si cambió código C++/CMake desde la última compilación local."""
     if not CPP_ENGINE_PYD.is_file():
@@ -385,6 +500,24 @@ def _cpp_sources_newer_than_pyd() -> bool:
         for path in CPP_ENGINE_CPP_DIR.rglob(pattern):
             if path.is_file() and path.stat().st_mtime > pyd_mtime:
                 return True
+    return False
+
+
+def _nest_core_sources_newer_than_pyd() -> bool:
+    pyd = _find_nest_core_pyd()
+    if pyd is None or not pyd.is_file():
+        return True
+    pyd_mtime = pyd.stat().st_mtime
+    search_roots = (NEST_CORE_DIR, ROOT / "native" / "ArgaNestWorker", CPP_ENGINE_CPP_DIR)
+    for base in search_roots:
+        if not base.is_dir():
+            continue
+        for pattern in ("*.cpp", "*.hpp", "*.h", "*.cu", "CMakeLists.txt"):
+            for path in base.rglob(pattern):
+                if "build" in path.parts:
+                    continue
+                if path.is_file() and path.stat().st_mtime > pyd_mtime:
+                    return True
     return False
 
 
@@ -404,6 +537,25 @@ def _needs_cpp_rebuild(*, force_cpp: bool, skip_cpp: bool) -> bool:
     return False
 
 
+def _needs_nest_core_rebuild(*, force_core: bool, skip_core: bool) -> bool:
+    if skip_core:
+        return False
+    if force_core:
+        return True
+    if _find_nest_core_pyd() is None:
+        return True
+    if not _nest_core_usable():
+        print("[INFO] arga_nest_core.pyd no carga con este Python; se recompilará.")
+        return True
+    if _find_worker_exe() is None:
+        print("[INFO] Falta ArgaNestWorker.exe; se recompilará ArgaNestCore.")
+        return True
+    if _nest_core_sources_newer_than_pyd():
+        print("[INFO] Fuentes ArgaNestCore más recientes que el .pyd; se recompilará.")
+        return True
+    return False
+
+
 def validate_suite_manifest():
     """Falla temprano si faltan piezas del ARGA NESTING SUITE actual."""
     missing = [str(p.relative_to(ROOT)) for p in CRITICAL_SUITE_FILES if not p.exists()]
@@ -415,8 +567,8 @@ def validate_suite_manifest():
     print(f"[OK] Manifiesto del suite: {len(CRITICAL_SUITE_FILES)} archivos críticos presentes.")
 
 
-def smoke_test_imports():
-    """Importa módulos clave (largos, Qt, motor) en el intérprete de build."""
+def smoke_test_imports(*, require_core: bool = True):
+    """Importa módulos clave (largos, Qt, motor legacy + ArgaNestCore) en el intérprete de build."""
     _ensure_build_import_path()
     for mod in SMOKE_IMPORT_MODULES:
         importlib.import_module(mod)
@@ -424,11 +576,35 @@ def smoke_test_imports():
     try:
         from modules.nesting_engine.algorithm_bridge import engine_name
 
-        print(f"[OK] motor nesting: {engine_name()}")
+        print(f"[OK] motor nesting legacy: {engine_name()}")
     except Exception as exc:
         raise RuntimeError(
-            "El motor C++ no está disponible. Compila algorithm_cpp.pyd antes de empaquetar."
+            "El motor C++ legacy no está disponible. Compila algorithm_cpp.pyd antes de empaquetar."
         ) from exc
+    try:
+        from modules.nesting_engine import arga_nest_core_bridge as bridge
+
+        st = bridge.core_status()
+        print(
+            f"[OK] ArgaNestCore: active={st.get('active')} version={st.get('version')} "
+            f"worker={((st.get('worker') or {}).get('exe_exists'))}"
+        )
+        if require_core and not bridge.core_available():
+            raise RuntimeError(st.get("load_error") or "arga_nest_core no cargó")
+    except Exception as exc:
+        if require_core:
+            raise RuntimeError(
+                "ArgaNestCore no está disponible. Compila via native/build_arga_nest_core.ps1."
+            ) from exc
+        print(f"[WARN] ArgaNestCore smoke omitido/falló: {exc}")
+    from modules.dxf_export.amada_fixture import _fixture_dir, AMADA_FIXTURE_CATALOG
+
+    fx_dir = _fixture_dir()
+    for spec in AMADA_FIXTURE_CATALOG:
+        path = fx_dir / spec.filename
+        if not path.is_file():
+            raise FileNotFoundError(f"Falta DXF de fixtura Amada: {path}")
+    print(f"[OK] Fixturas Amada ({len(AMADA_FIXTURE_CATALOG)}) en {fx_dir}")
 
 
 def ensure_cpp_engine(
@@ -445,7 +621,7 @@ def ensure_cpp_engine(
         and (skip or not force_cpp)
     ):
         note = " (--force-cpp para recompilar)" if not skip else ""
-        print(f"[OK] Motor C++ existente{note}: {CPP_ENGINE_PYD}")
+        print(f"[OK] Motor C++ legacy existente{note}: {CPP_ENGINE_PYD}")
         return CPP_ENGINE_PYD
 
     if skip:
@@ -495,8 +671,80 @@ def ensure_cpp_engine(
             f"{CPP_ENGINE_PYD.name} se generó pero no carga con {sys.executable}. "
             "Revisa MSVC/Python y reintenta con --force-cpp."
         )
-    print(f"[OK] Motor C++ listo: {CPP_ENGINE_PYD}")
+    print(f"[OK] Motor C++ legacy listo: {CPP_ENGINE_PYD}")
     return CPP_ENGINE_PYD
+
+
+def ensure_arga_nest_core(
+    skip: bool = False,
+    allow_missing: bool = False,
+    force_core: bool = False,
+    enable_cuda: bool = True,
+) -> tuple[Path | None, Path | None]:
+    """Compila arga_nest_core.pyd + ArgaNestWorker.exe (main.py los activa por defecto)."""
+    existing_pyd = _find_nest_core_pyd()
+    existing_worker = _find_worker_exe()
+    if (
+        existing_pyd is not None
+        and _nest_core_usable()
+        and existing_worker is not None
+        and not _nest_core_sources_newer_than_pyd()
+        and (skip or not force_core)
+    ):
+        note = " (--force-core para recompilar)" if not skip else ""
+        print(f"[OK] ArgaNestCore existente{note}: {existing_pyd}")
+        print(f"[OK] ArgaNestWorker existente: {existing_worker}")
+        return existing_pyd, existing_worker
+
+    if skip:
+        msg = "[ERROR] --skip-core y faltan arga_nest_core.pyd y/o ArgaNestWorker.exe."
+        if allow_missing:
+            print(f"[WARN] {msg}")
+            return existing_pyd, existing_worker
+        raise FileNotFoundError(msg)
+
+    if not NEST_CORE_PS1.exists():
+        raise FileNotFoundError(f"No se encontró script de build ArgaNestCore: {NEST_CORE_PS1}")
+
+    ps_cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(NEST_CORE_PS1),
+        "-PythonExe",
+        sys.executable,
+    ]
+    if force_core:
+        ps_cmd.append("-Clean")
+    if enable_cuda:
+        ps_cmd.append("-EnableCuda")
+    else:
+        ps_cmd.append("-DisableCuda")
+
+    try:
+        _run(ps_cmd, cwd=ROOT)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "Falló la compilación de ArgaNestCore / ArgaNestWorker. "
+            "Revisa CMake/MSVC y native/build_arga_nest_core.ps1."
+        ) from exc
+
+    pyd = _find_nest_core_pyd()
+    worker = _find_worker_exe()
+    if pyd is None or not pyd.is_file():
+        raise FileNotFoundError("No se generó arga_nest_core.pyd tras build_arga_nest_core.ps1")
+    if worker is None or not worker.is_file():
+        raise FileNotFoundError("No se generó ArgaNestWorker.exe tras build_arga_nest_core.ps1")
+    if not _nest_core_usable():
+        raise RuntimeError(
+            f"{pyd.name} se generó pero no carga con {sys.executable}. "
+            "Reintenta con --force-core."
+        )
+    print(f"[OK] ArgaNestCore listo: {pyd}")
+    print(f"[OK] ArgaNestWorker listo: {worker}")
+    return pyd, worker
 
 
 def _pyinstaller_collect_args() -> list[str]:
@@ -516,37 +764,97 @@ def _pyinstaller_data_args() -> list[str]:
         (ROOT / "modules", "modules"),
         (ROOT / "interface", "interface"),
         (ROOT / "assets", "assets"),
+        (ROOT / "_config", "_config"),
         (ROOT / "inventario_remanentes.csv", "."),
+        (NEST_ENGINE_CONFIG_JSON, "."),
     ]
     for src, dest in data_pairs:
         if src.exists():
             args += ["--add-data", f"{src};{dest}"]
         elif src.name == "inventario_remanentes.csv":
             print("[WARN] inventario_remanentes.csv no encontrado; se omite del bundle.")
+        elif src.name == "configuracion_nesting.json":
+            print("[WARN] configuracion_nesting.json no encontrado; se omite del bundle.")
+    # Solo los DXF de fixtura productivos (no scripts _sim).
+    for dxf in FIXTURA_AMADA_DXFS:
+        if dxf.is_file():
+            args += ["--add-data", f"{dxf};FIXTURA AMADA"]
+        else:
+            print(f"[WARN] Fixtura Amada ausente: {dxf.name}")
     return args
 
 
-def _pyinstaller_binary_args(cpp_pyd: Path | None) -> list[str]:
-    if cpp_pyd is None or not cpp_pyd.exists():
-        return []
-    return ["--add-binary", f"{cpp_pyd};modules/nesting_engine"]
+def _pyinstaller_binary_args(
+    cpp_pyd: Path | None,
+    nest_core_pyd: Path | None = None,
+    worker_exe: Path | None = None,
+) -> list[str]:
+    args: list[str] = []
+    for pyd in (cpp_pyd, nest_core_pyd, *_find_venom_core_pyds()):
+        if pyd is None or not pyd.is_file():
+            continue
+        # Evitar duplicar el mismo path si core == cpp (no debería).
+        args += ["--add-binary", f"{pyd};modules/nesting_engine"]
+    if worker_exe is not None and worker_exe.is_file():
+        args += ["--add-binary", f"{worker_exe};native/bin"]
+    # Dedup preservando orden
+    seen: set[str] = set()
+    uniq: list[str] = []
+    i = 0
+    while i < len(args):
+        # pairs: --add-binary, value
+        flag, val = args[i], args[i + 1]
+        if val not in seen:
+            seen.add(val)
+            uniq += [flag, val]
+        i += 2
+    return uniq
 
 
-def verify_build_artifacts(exe_path: Path, cpp_pyd: Path | None):
+def verify_build_artifacts(
+    exe_path: Path,
+    cpp_pyd: Path | None,
+    nest_core_pyd: Path | None = None,
+    worker_exe: Path | None = None,
+):
     """Falla si el paquete dist/ no refleja el proyecto actual."""
     if not exe_path.is_file():
         raise FileNotFoundError(f"No se generó el ejecutable: {exe_path}")
     if cpp_pyd is None or not cpp_pyd.is_file():
         raise RuntimeError("Build incompleto: falta algorithm_cpp.pyd en el motor de nesting.")
+    if nest_core_pyd is None or not nest_core_pyd.is_file():
+        raise RuntimeError("Build incompleto: falta arga_nest_core.pyd (main.py lo activa por defecto).")
+    if worker_exe is None or not worker_exe.is_file():
+        raise RuntimeError("Build incompleto: falta ArgaNestWorker.exe.")
+    sidecar_worker = exe_path.parent / "ArgaNestWorker.exe"
+    if not sidecar_worker.is_file():
+        raise RuntimeError(f"Build incompleto: falta sidecar {sidecar_worker.name} junto al .exe.")
+    fx_dir = exe_path.parent / "FIXTURA AMADA"
+    for dxf in FIXTURA_AMADA_DXFS:
+        if not (fx_dir / dxf.name).is_file():
+            raise RuntimeError(f"Build incompleto: falta sidecar FIXTURA AMADA/{dxf.name}")
     manifest = exe_path.parent / "arga_build_manifest.json"
     if manifest.is_file():
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if not data.get("cpp_engine"):
-            raise RuntimeError("Manifiesto de build sin motor C++ empaquetado.")
-    print(f"[OK] Artefactos verificados: {exe_path.name} + motor C++ + sidecars.")
+            raise RuntimeError("Manifiesto de build sin motor C++ legacy empaquetado.")
+        if not data.get("arga_nest_core"):
+            raise RuntimeError("Manifiesto de build sin ArgaNestCore empaquetado.")
+        if not data.get("arga_nest_worker"):
+            raise RuntimeError("Manifiesto de build sin ArgaNestWorker empaquetado.")
+    print(
+        f"[OK] Artefactos verificados: {exe_path.name} + algorithm_cpp + "
+        "arga_nest_core + worker + fixturas + sidecars."
+    )
 
 
-def build_exe(name: str, onefile: bool = True, cpp_pyd: Path | None = None):
+def build_exe(
+    name: str,
+    onefile: bool = True,
+    cpp_pyd: Path | None = None,
+    nest_core_pyd: Path | None = None,
+    worker_exe: Path | None = None,
+):
     if not MAIN_PY.exists():
         raise FileNotFoundError(f"No existe main.py: {MAIN_PY}")
 
@@ -584,7 +892,7 @@ def build_exe(name: str, onefile: bool = True, cpp_pyd: Path | None = None):
     ]
     cmd += _pyinstaller_collect_args()
     cmd += _pyinstaller_data_args()
-    cmd += _pyinstaller_binary_args(cpp_pyd)
+    cmd += _pyinstaller_binary_args(cpp_pyd, nest_core_pyd, worker_exe)
     if app_ico and app_ico.exists():
         cmd += ["--icon", str(app_ico)]
     cmd += [str(MAIN_PY)]
@@ -625,29 +933,61 @@ def align_plates_inventory_after_build(exe_path: Path):
     print("[OK] Inventario de placas: fuente directa PostgreSQL/API Herinox (sin Plates.xlsx).")
 
 
-def seed_persistent_sidecars(exe_path: Path):
+def seed_persistent_sidecars(exe_path: Path, worker_exe: Path | None = None):
     """
-    Deja junto al .exe los archivos editables que otras PCs necesitan en primer arranque.
-    No sobrescribe si el usuario ya los tiene.
+    Deja junto al .exe los archivos editables / nativos que otras PCs necesitan en primer arranque.
+    No sobrescribe JSON/CSV si el usuario ya los tiene.
     """
     dist_root = exe_path.parent
     seeds = (
-        (ROOT / "inventario_remanentes.csv", dist_root / "inventario_remanentes.csv"),
+        (ROOT / "inventario_remanentes.csv", dist_root / "inventario_remanentes.csv", False),
+        (NEST_ENGINE_CONFIG_JSON, dist_root / "configuracion_nesting.json", False),
+        (STEP_EXPORT_CONFIG, dist_root / "_config" / "step_export_folders.json", False),
     )
-    for src, dst in seeds:
+    for src, dst, force in seeds:
         if not src.is_file():
             print(f"[WARN] Sin semilla: {src.name}")
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_file():
+        if dst.is_file() and not force:
             print(f"[OK] Sidecar existente (sin tocar): {dst}")
         else:
             shutil.copy2(src, dst)
             print(f"[OK] Sidecar sembrado: {dst}")
 
+    # Worker: siempre refrescar desde el build (binario de versión del producto).
+    wsrc = worker_exe if worker_exe and worker_exe.is_file() else _find_worker_exe()
+    if wsrc and wsrc.is_file():
+        for dst in (
+            dist_root / "ArgaNestWorker.exe",
+            dist_root / "native" / "bin" / "ArgaNestWorker.exe",
+        ):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(wsrc, dst)
+            print(f"[OK] Worker sembrado: {dst}")
+    else:
+        print("[WARN] Sin ArgaNestWorker.exe para sembrar junto al .exe")
 
-def write_build_manifest(exe_path: Path, cpp_pyd: Path | None) -> Path:
+    # Fixturas Amada: necesarios para export AMADA/FIXTURA en PCs sin el repo.
+    fx_dst = dist_root / "FIXTURA AMADA"
+    fx_dst.mkdir(parents=True, exist_ok=True)
+    for dxf in FIXTURA_AMADA_DXFS:
+        if not dxf.is_file():
+            print(f"[WARN] Sin fixtura: {dxf.name}")
+            continue
+        dst = fx_dst / dxf.name
+        shutil.copy2(dxf, dst)
+        print(f"[OK] Fixtura sembrada: {dst.name}")
+
+
+def write_build_manifest(
+    exe_path: Path,
+    cpp_pyd: Path | None,
+    nest_core_pyd: Path | None = None,
+    worker_exe: Path | None = None,
+) -> Path:
     git_commit = ""
+    git_branch = ""
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -661,31 +1001,75 @@ def write_build_manifest(exe_path: Path, cpp_pyd: Path | None) -> Path:
             git_commit = str(out.stdout or "").strip()
     except Exception:
         pass
+    try:
+        out_b = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if out_b.returncode == 0:
+            git_branch = str(out_b.stdout or "").strip()
+    except Exception:
+        pass
+
+    core_ver = None
+    try:
+        _ensure_build_import_path()
+        from modules.nesting_engine import arga_nest_core_bridge as bridge
+
+        core_ver = (bridge.core_status() or {}).get("version")
+    except Exception:
+        pass
 
     manifest = {
         "app": "ARGA NESTING SUITE",
         "built_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit,
-        "git_branch": "main",
+        "git_branch": git_branch or "main",
         "python": sys.version.split()[0],
         "platform": sys.platform,
         "exe": str(exe_path.resolve()),
         "cpp_engine": bool(cpp_pyd and cpp_pyd.is_file()),
+        "arga_nest_core": bool(nest_core_pyd and nest_core_pyd.is_file()),
+        "arga_nest_core_version": core_ver,
+        "arga_nest_worker": bool(worker_exe and worker_exe.is_file()),
+        "amada_fixtures": [p.name for p in FIXTURA_AMADA_DXFS if p.is_file()],
+        "venom_core_pyds": [p.name for p in _find_venom_core_pyds()],
         "hidden_imports": len(HIDDEN_IMPORTS),
         "collect_submodules": list(COLLECT_SUBMODULES),
         "features": [
             "nesting_placas_cpp",
+            "arga_nest_core",
+            "arga_nest_worker",
             "nesting_largos_mrl",
             "nesteo_largos_switches",
             "export_material_requerido_ldg",
             "herinox_catalogo_largos",
+            "amada_fixtura_catalogo",
+            "compact_lite",
+            "ai_ranker_l1",
+            "step_export_prefs",
         ],
+        "runtime_defaults": {
+            "ARGA_NEST_CORE": "1",
+            "ARGA_NEST_CUDA": "1",
+            "ARGA_NEST_WORKER": "1",
+            "ARGA_NEST_AI": "1",
+            "ARGA_NEST_COMPACT": "1",
+            "ARGA_NEST_VENOM": "0",
+        },
         "deploy_notes": [
-            f"Copiar '{APP_EXE_NAME}.exe' al directorio destino.",
+            f"Copiar '{APP_EXE_NAME}.exe' y sidecars de esta carpeta dist/ al destino.",
+            "Incluir ArgaNestWorker.exe (o native/bin/ArgaNestWorker.exe) junto al exe.",
+            "Incluir carpeta FIXTURA AMADA/ con los 2 DXF de fixtura.",
             "Incluir arga_archivo_nesteo.ico / _cu.ico / _mix.ico junto al exe.",
-            "Opcional: inventario_remanentes.csv junto al exe.",
+            "Opcional: inventario_remanentes.csv, configuracion_nesting.json, _config/.",
             "Requiere red a PostgreSQL nesting (5433) y Herinox (5439) para inventario de placas.",
             "FreeCAD en C:\\Program Files\\FreeCAD 1.0\\ para STEP (si aplica).",
+            "CUDA es opcional: si no hay GPU/Toolkit, el core cae a CPU.",
         ],
     }
     out = exe_path.parent / "arga_build_manifest.json"
@@ -699,6 +1083,12 @@ def print_deploy_checklist(exe_path: Path):
     checks = [
         ("Ejecutable", exe_path.is_file()),
         ("arga_build_manifest.json", (dist / "arga_build_manifest.json").is_file()),
+        ("ArgaNestWorker.exe", (dist / "ArgaNestWorker.exe").is_file()),
+        ("FIXTURA AMADA/Fixtura 2.DXF", (dist / "FIXTURA AMADA" / "Fixtura 2.DXF").is_file()),
+        (
+            "FIXTURA AMADA/FICSTURA…DXF",
+            (dist / "FIXTURA AMADA" / "FICSTURA MEJORADA CORTE BUENO .25IN.DXF").is_file(),
+        ),
         ("arga_archivo_nesteo.ico", (dist / "arga_archivo_nesteo.ico").is_file()),
         ("arga_archivo_nesteo_cu.ico", (dist / "arga_archivo_nesteo_cu.ico").is_file()),
         ("arga_archivo_nesteo_mix.ico", (dist / "arga_archivo_nesteo_mix.ico").is_file()),
@@ -1197,7 +1587,10 @@ def cleanup_previous_builds(name: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Construye ARGA NESTING SUITE (.exe) con nesting de largos, MRL y motor C++."
+        description=(
+            "Construye ARGA NESTING SUITE (.exe) con motor legacy, ArgaNestCore, "
+            "Worker, largos/MRL, fixturas Amada y sidecars de despliegue."
+        )
     )
     parser.add_argument(
         "--name",
@@ -1220,6 +1613,22 @@ def main():
         help="Recompila algorithm_cpp.pyd aunque ya exista.",
     )
     parser.add_argument(
+        "--skip-core",
+        action="store_true",
+        help="No compila arga_nest_core.pyd / ArgaNestWorker (requiere que ya existan).",
+    )
+    parser.add_argument(
+        "--force-core",
+        action="store_true",
+        help="Recompila ArgaNestCore + Worker aunque ya existan.",
+    )
+    parser.add_argument(
+        "--enable-cuda",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Intenta CUDA al compilar ArgaNestCore (CMake cae a CPU si no hay Toolkit; default: sí).",
+    )
+    parser.add_argument(
         "--install-msvc",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -1228,7 +1637,12 @@ def main():
     parser.add_argument(
         "--allow-no-cpp",
         action="store_true",
-        help="Permite terminar sin motor C++ (nesting de placas no funcionará).",
+        help="Permite terminar sin motor C++ legacy (nesting de placas degradado).",
+    )
+    parser.add_argument(
+        "--allow-no-core",
+        action="store_true",
+        help="Permite terminar sin ArgaNestCore/Worker (main.py caerá a legacy si CORE no carga).",
     )
     parser.add_argument(
         "--skip-smoke",
@@ -1280,8 +1694,9 @@ def main():
         ensure_build_dependencies()
 
     needs_cpp = _needs_cpp_rebuild(force_cpp=args.force_cpp, skip_cpp=args.skip_cpp)
+    needs_core = _needs_nest_core_rebuild(force_core=args.force_core, skip_core=args.skip_core)
     install_msvc = args.install_msvc
-    if needs_cpp and not _msvc_available():
+    if (needs_cpp or needs_core) and not _msvc_available():
         if install_msvc:
             print(
                 "[INFO] No se detectó compilador C++ (MSVC). "
@@ -1305,15 +1720,36 @@ def main():
             "Quita --allow-no-cpp o compila el motor C++."
         )
 
+    nest_core_pyd, worker_exe = ensure_arga_nest_core(
+        skip=args.skip_core,
+        allow_missing=args.allow_no_core,
+        force_core=args.force_core,
+        enable_cuda=args.enable_cuda,
+    )
+    if (nest_core_pyd is None or worker_exe is None) and not args.allow_no_core:
+        raise RuntimeError(
+            "No se puede empaquetar sin arga_nest_core.pyd + ArgaNestWorker.exe. "
+            "Quita --allow-no-core o compila native/build_arga_nest_core.ps1."
+        )
+
     if not args.skip_smoke:
-        smoke_test_imports()
+        smoke_test_imports(require_core=not args.allow_no_core)
     sync_repo_plates_from_herinox("pre-build")
-    exe_path = build_exe(args.name, onefile=not args.onedir, cpp_pyd=cpp_pyd)
+    exe_path = build_exe(
+        args.name,
+        onefile=not args.onedir,
+        cpp_pyd=cpp_pyd,
+        nest_core_pyd=nest_core_pyd,
+        worker_exe=worker_exe,
+    )
     sync_repo_plates_from_herinox("post-build")
     align_plates_inventory_after_build(exe_path)
-    seed_persistent_sidecars(exe_path)
-    write_build_manifest(exe_path, cpp_pyd)
-    verify_build_artifacts(exe_path, cpp_pyd)
+    seed_persistent_sidecars(exe_path, worker_exe=worker_exe)
+    write_build_manifest(exe_path, cpp_pyd, nest_core_pyd, worker_exe)
+    if not args.allow_no_core:
+        verify_build_artifacts(exe_path, cpp_pyd, nest_core_pyd, worker_exe)
+    else:
+        print("[WARN] Verificación estricta omitida (--allow-no-core).")
     print_deploy_checklist(exe_path)
     do_associate = args.associate_arganest
     if do_associate is None:

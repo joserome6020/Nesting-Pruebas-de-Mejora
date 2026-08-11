@@ -18,10 +18,15 @@
 9. Antes de reimplementar una regla de negocio (cantidades, factores, WO/SWO,
    costos), busca si ya existe en `api/legacy_core.py` y **reúsala**. Los bugs
    de este tipo han venido de tener dos caminos que calculan lo mismo distinto.
-10. **Tras corregir un bug: commit local + push remoto obligatorio** en
+10. **Paridad del .exe con cada mejora:** al modificar el ANS, valida si
+    [`tools/build_arga_exe.py`](tools/build_arga_exe.py) empaqueta/compila ese
+    cambio (imports, `.pyd`/Worker, assets, `_config`, defaults de `main.py`).
+    Si no, **arregla el build en el mismo cambio** para que no se quede atrás.
+    Ver `.cursor/rules/build-exe-parity.mdc`.
+11. **Tras corregir un bug: commit local + push remoto obligatorio** en
     `New Arga Nesting Suite` (GitHub). No dejes el fix solo en disco: otras PCs
     y builds se actualizan desde el remoto. Incluye el candado, `AGENTS.md` /
     `AGENT_TRACKING.md` si cambiaron, y verifica `git status -sb` que HEAD =
     `origin/<rama>`. `ANS C++` no es repo git: copia los archivos y confirma
     igualdad con `Compare-Object`.
-11. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.
+12. Actualiza el **Changelog** de `AGENT_TRACKING.md` al cerrar la sesión.

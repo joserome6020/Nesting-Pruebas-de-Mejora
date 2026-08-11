@@ -13,7 +13,8 @@ from .nest_engine_context import (
     set_selected_engine_id,
 )
 
-_CONFIG_PATH = os.path.join(config.BASE_DIR, "configuracion_nesting.json")
+# Junto al .exe en builds frozen (BASE_DIR apunta a _MEIPASS y no es escribible).
+_CONFIG_PATH = config.ruta_persistente("configuracion_nesting.json")
 
 
 def _read_config() -> dict:

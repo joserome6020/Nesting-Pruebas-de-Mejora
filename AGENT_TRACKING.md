@@ -46,6 +46,26 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-11b — Regla: paridad permanente de `build_arga_exe.py`
+
+- Cada mejora/modificación del ANS debe validar si
+  `tools/build_arga_exe.py` empaqueta ese cambio y, si no, arreglarlo
+  en el mismo cambio. Documentado en `AGENTS.md` #10 y
+  `.cursor/rules/build-exe-parity.mdc` (`alwaysApply`).
+
+### 2026-08-11 — build_arga_exe empaqueta ArgaNestCore + Worker + fixturas
+
+- Diagnóstico: `tools/build_arga_exe.py` solo compilaba/empaquetaba
+  `algorithm_cpp.pyd` (legacy) mientras `main.py` activa por defecto
+  `ARGA_NEST_CORE=1`, `ARGA_NEST_WORKER=1`, `ARGA_NEST_CUDA=1`. El .exe
+  salía sin núcleo nuevo, sin Worker y sin DXF de fixtura Amada.
+- Build: compila `native/build_arga_nest_core.ps1` (CUDA si hay Toolkit),
+  empaqueta `arga_nest_core.pyd`, `ArgaNestWorker.exe`, fixturas,
+  `_config/`, `configuracion_nesting.json`; checklist/manifiesto ampliados.
+- Frozen paths: `config.app_search_roots()`, worker/fixtura/prefs leen
+  sidecar junto al .exe o `_MEIPASS`; `nest_engine_config` persiste junto
+  al exe.
+
 ### 2026-08-07c — Muda cross-WO: pool 1:1 y conteo no ignora el calibre
 
 - Síntoma: 5/16 tenía 70; al mudar 1 pieza el donante quedaba en 66 (faltaba una

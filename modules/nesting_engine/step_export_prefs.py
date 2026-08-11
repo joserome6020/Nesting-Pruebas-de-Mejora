@@ -36,8 +36,14 @@ _LABEL_TO_KEY.update(
 
 
 def prefs_path() -> Path:
-    root = Path(__file__).resolve().parents[2]
-    return root / "_config" / "step_export_folders.json"
+    """Preferencias persistentes junto al .exe; plantilla desde el bundle si hace falta."""
+    try:
+        import config as app_config
+
+        return Path(app_config.asegurar_archivo_persistente(os.path.join("_config", "step_export_folders.json")))
+    except Exception:
+        root = Path(__file__).resolve().parents[2]
+        return root / "_config" / "step_export_folders.json"
 
 
 def default_step_export_prefs() -> dict[str, bool]:

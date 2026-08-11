@@ -2,23 +2,56 @@ import os
 import shutil
 import sys
 
+
+def _repo_root() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def app_search_roots():
+    """
+    Raíces donde buscar recursos nativos / datos (exe, _MEIPASS, repo).
+    Orden: carpeta del .exe (sidecars) → bundle PyInstaller → raíz del repo.
+    """
+    roots: list[str] = []
+    if getattr(sys, "frozen", False):
+        try:
+            roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+        except Exception:
+            pass
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(str(meipass))
+    roots.append(_repo_root())
+    # Dedup preservando orden
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in roots:
+        key = os.path.normcase(os.path.abspath(r))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def ruta_recurso(ruta_relativa):
     """Para archivos estáticos empaquetados dentro del .exe (imágenes, scripts, macros)"""
     try:
         # PyInstaller guarda los archivos empaquetados en esta ruta temporal
         ruta_base = sys._MEIPASS
     except Exception:
-        ruta_base = os.path.dirname(os.path.abspath(__file__))
+        ruta_base = _repo_root()
     return os.path.join(ruta_base, ruta_relativa)
+
 
 def ruta_persistente(ruta_relativa):
     """Para archivos que el sistema/usuario modifica y deben guardarse junto al .exe (JSON, Excel)"""
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         # Si es un .exe compilado, usa la carpeta donde está guardado el ejecutable
         ruta_base = os.path.dirname(sys.executable)
     else:
         # Entorno de desarrollo normal
-        ruta_base = os.path.dirname(os.path.abspath(__file__))
+        ruta_base = _repo_root()
     return os.path.join(ruta_base, ruta_relativa)
 
 

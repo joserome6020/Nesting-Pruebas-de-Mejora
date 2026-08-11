@@ -98,6 +98,16 @@ SEAT_TOP_IN = 0.0394
 
 
 def _fixture_dir() -> Path:
+    """Carpeta de DXF de fixtura (repo, sidecar junto al .exe o bundle PyInstaller)."""
+    try:
+        import config as app_config
+
+        for root in app_config.app_search_roots():
+            cand = Path(root) / "FIXTURA AMADA"
+            if cand.is_dir():
+                return cand
+    except Exception:
+        pass
     return Path(__file__).resolve().parents[2] / "FIXTURA AMADA"
 
 

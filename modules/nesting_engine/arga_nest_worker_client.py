@@ -22,14 +22,35 @@ def default_worker_exe() -> Path:
     env = (os.environ.get("ARGA_NEST_WORKER_EXE") or "").strip()
     if env:
         return Path(env)
-    candidates = [
-        _ROOT / "native" / "bin" / "ArgaNestWorker.exe",
-        _ROOT / "native" / "ArgaNestCore" / "build" / "Release" / "ArgaNestWorker.exe",
-    ]
+    candidates: list[Path] = []
+    try:
+        import config as app_config
+
+        for root in app_config.app_search_roots():
+            base = Path(root)
+            candidates.append(base / "ArgaNestWorker.exe")
+            candidates.append(base / "native" / "bin" / "ArgaNestWorker.exe")
+            candidates.append(
+                base / "native" / "ArgaNestCore" / "build" / "Release" / "ArgaNestWorker.exe"
+            )
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            _ROOT / "ArgaNestWorker.exe",
+            _ROOT / "native" / "bin" / "ArgaNestWorker.exe",
+            _ROOT / "native" / "ArgaNestCore" / "build" / "Release" / "ArgaNestWorker.exe",
+        ]
+    )
+    seen: set[str] = set()
     for c in candidates:
+        key = str(c.resolve()) if c.exists() else str(c)
+        if key in seen:
+            continue
+        seen.add(key)
         if c.is_file():
             return c
-    return candidates[0]
+    return candidates[0] if candidates else (_ROOT / "native" / "bin" / "ArgaNestWorker.exe")
 
 
 def worker_env_requested() -> bool:

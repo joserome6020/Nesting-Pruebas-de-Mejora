@@ -1,0 +1,30 @@
+---
+description: Cada cambio del ANS debe validar y actualizar tools/build_arga_exe.py para que el .exe no se quede atrás
+alwaysApply: true
+---
+
+# Paridad build .exe (`tools/build_arga_exe.py`)
+
+Con **cada** mejora o modificación del ANS, antes de dar por cerrado el cambio:
+
+1. Pregúntate si el cambio afecta lo que el `.exe` necesita en runtime:
+   - módulo Python nuevo / import dinámico
+   - `.pyd` / `.dll` / `.exe` nativo (core, worker, venom, etc.)
+   - asset / DXF / JSON / CSV / branding / `_config`
+   - default de env en `main.py` (CORE/WORKER/CUDA/AI/…)
+2. Revisa `tools/build_arga_exe.py` y valida que lo compile/empaquete:
+   - `HIDDEN_IMPORTS` / `COLLECT_SUBMODULES`
+   - `CRITICAL_SUITE_FILES` / `SMOKE_IMPORT_MODULES`
+   - build nativo (`ensure_cpp_engine`, `ensure_arga_nest_core`, scripts `.ps1`)
+   - `--add-data` / `--add-binary` / sidecars en `seed_persistent_sidecars`
+   - checklist + `arga_build_manifest.json`
+3. Si falta algo → **arregla el build en el mismo cambio** (no lo dejes para después).
+4. Aplica el arreglo en **ambos** proyectos (`New Arga Nesting Suite` y `ANS C++`) y verifica igualdad.
+5. Si el cambio es solo docs/tests/bench y no entra al `.exe`, anótalo explícitamente y no toques el build.
+
+## Señales típicas de que el build quedó atrás
+
+- `main.py` activa un path que el build no empaqueta
+- Nuevo `interface/qt/**` o `modules/**` con import lazy
+- Nuevo binario bajo `native/` o `modules/nesting_engine/*.pyd`
+- Nuevo recurso leído vía `Path(__file__)` / `ruta_recurso` / sidecar junto al exe

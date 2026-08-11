@@ -5,7 +5,11 @@
 
 param(
     [string]$PythonExe = "",
-    [switch]$Clean
+    [switch]$Clean,
+    # CMake activa CUDA si encuentra nvcc; si no, CPU fallback. Use -DisableCuda para forzar OFF.
+    [switch]$DisableCuda,
+    # Compat con callers antiguos que pasan -EnableCuda
+    [switch]$EnableCuda
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,13 +97,22 @@ function Resolve-CmakeExe {
 $CmakeExe = Resolve-CmakeExe
 Write-Host "CMake: $CmakeExe"
 Write-Host "CMake generator: $Generator"
+$cudaFlag = "ON"
+if ($DisableCuda) {
+    $cudaFlag = "OFF"
+} elseif ($PSBoundParameters.ContainsKey("EnableCuda") -and -not $EnableCuda) {
+    $cudaFlag = "OFF"
+}
+Write-Host "CUDA CMake flag: ARGA_NEST_ENABLE_CUDA=$cudaFlag"
+
 Push-Location $BuildDir
 try {
     $cmakeArgs = @(
         "-G", $Generator
     ) + $ArchArgs + @(
         "-DPython_EXECUTABLE=$PythonExe",
-        "-DARGA_NEST_ENABLE_CUDA=OFF",
+        "-DARGA_NEST_ENABLE_CUDA=$cudaFlag",
+        "-DARGA_NEST_BUILD_WORKER=ON",
         $CoreDir
     )
     & $CmakeExe @cmakeArgs
