@@ -46,6 +46,149 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-13e — NvidiaSpark y STEPS restringidos en Configuración Global
+
+- **NvidiaSpark** queda visible en Configuración Global, apagado por defecto.
+  Activarlo pide `DYT361`; al estar activo prueba el worker remoto y hace
+  fallback automático al motor local si no responde.
+- La versión New incorpora el router remoto compatible con los motores
+  existentes, por lo que el switch ejecuta el mismo motor en Spark o local,
+  no solo cambia la interfaz.
+- Los checks de **STEPS** permanecen visibles y bloqueados hasta pulsar
+  `EDITAR STEPS` y validar `DYT361`.
+- El build incluye módulos dinámicos y la plantilla
+  `_config/nest_runtime.json`; `test_nvidia_spark_prefs.py` protege el
+  arranque local y la activación explícita.
+
+### 2026-08-13d — Tabla oficial de gaps de corte por calibre
+
+- **`modules/nesting_engine/cut_gaps_table.py`** nuevo: concentra las reglas
+  oficiales de separación placa→pieza y pieza→pieza, reconoce calibre y
+  espesores decimales/fraccionarios, persiste cambios en
+  `_config/cut_gaps_table.json` y protege la edición con contraseña.
+- **`manager.py`**, **`sheet_integrity.py`** y
+  **`_mixin_plate_mgmt.py`** usan los gaps guardados por hoja para que el
+  calibre determine el kerf real durante preflight, nesting y renest.
+- **Configuración Global** reemplaza los campos globales de kerf/margen por la
+  tabla visible; su edición se abre con `EDITAR TABLA GAPS`.
+- **`tests/native/test_cut_gaps_table.py`** agregado a
+  `run_regresiones.py` como candado de las reglas, normalización y contraseña.
+
+### 2026-08-13c — PR 3: canal de release (updater sin git ni rebuild) + swap atómico + instalador por-usuario
+
+- **`modules/app_auto_update.py`** reescrito como cliente del canal:
+  - `check_for_updates()` descarga `latest.json` desde
+    `ARGA_NEST_CHANNEL_URL` (default: GitHub Releases del repo). Compara
+    `version` contra `arga_build_manifest.json` de la carpeta del .exe.
+  - `apply_update()` descarga el zip, verifica sha256, extrae a
+    `%LOCALAPPDATA%\ArgaNestingSuite\app\<version>-<commit>\`, escribe
+    sentinel `.ok`, marca `pending_switch` en `install.json` y lanza
+    `tools/arga_apply_switch.ps1` para hacer el swap tras el cierre.
+  - Preserva la API pública (dataclasses `UpdateInfo`, `UpdateResult`;
+    `check_for_updates`, `apply_update`, `dismiss_available_update`,
+    `launch_restart`, `entry_mode`). La UI (`main_window.py`) no cambia.
+  - Elimina toda dependencia de git / MSVC / PyInstaller en el cliente.
+  - Purga versiones viejas dejando la activa + N (default: 2).
+  - Update forzado si `local_version < latest.min_supported_version`.
+  - Dismiss ahora persiste por *versión*, no por commit (canal-first).
+  - En dev (`python main.py`) devuelve `has_update=False` con razón
+    "Modo desarrollo".
+- **`tools/arga_apply_switch.ps1`** nuevo: espera cierre del PID,
+  cambia la junction `app\current` a la versión nueva (mklink /J, sin
+  admin), limpia `pending_switch`, borra el zip de `updates/`, relanza
+  la app. Fallback: si el swap falla, relanza `app\current` anterior
+  (nunca queda estado sucio).
+- **`tools/install_ans.ps1`** nuevo: instalador de primera vez
+  por-usuario. Descarga `latest.json`, verifica sha256, extrae a
+  `app\<version>-<commit>`, crea junction `app\current`, opcionalmente
+  crea shortcuts (Escritorio + Menú Inicio), escribe `install.json`.
+  Sin admin, sin MSI. Idempotente vía `-Force`.
+- **`tools/arga_apply_update.ps1`** eliminado (compilaba en cliente;
+  reemplazado por swap atómico).
+- **`tools/build_arga_exe.py`**: siembra `tools/arga_apply_switch.ps1`
+  junto al .exe y en `<dist>/tools/`. Deploy checklist lo valida.
+- Smoke tests (dev, frozen simulado con canal `file://`, dismiss, skip
+  via env, download_url + sha256 correctamente propagados): PASS.
+- Variables de entorno soportadas:
+  - `ARGA_NEST_CHANNEL_URL` — override del canal (http/https/UNC/local).
+  - `ARGA_NEST_GITHUB_REPO` — repo GitHub para el default.
+  - `ARGA_SKIP_AUTO_UPDATE` — apagar todo el flujo (ya existía).
+  - `ARGA_NEST_DATA_DIR` — override del data_dir (de PR 1).
+  - `GITHUB_TOKEN` / `GH_TOKEN` — auth para GitHub Releases privado.
+
+### 2026-08-13b — PR 2: build onedir por default + `defaults/` en bundle + release artifact (zip + `latest.json`)
+
+- `tools/build_arga_exe.py`:
+  - Default cambia de `--onefile` a **`--onedir`** (release-friendly:
+    swap atómico por carpeta versionada; `--onefile` queda como legacy).
+  - Nuevas banderas: `--release`, `--release-notes`,
+    `--release-min-version`.
+  - `_pyinstaller_data_args` mete las plantillas de mutables en el bundle
+    como `_MEIPASS/defaults/<rel>` (inventario_remanentes.csv,
+    configuracion_nesting.json, `_config/step_export_folders.json`).
+  - `seed_persistent_sidecars(onefile=False)`: en onedir siembra las
+    plantillas en `<dist>/defaults/…` (nunca al lado del .exe). En
+    onefile mantiene el comportamiento legacy para compat.
+  - `verify_build_artifacts` y `print_deploy_checklist` verifican
+    presencia de `defaults/*` en onedir.
+  - `write_build_manifest` incluye `version` (calendario `YYYY.MM.DD`),
+    `layout`, `git_commit_short` y retorna el `Path` del manifest.
+  - Nueva `write_release_artifacts()`: zippa la carpeta onedir a
+    `dist/releases/ArgaNestingSuite-<version>-<commit>.zip`, calcula
+    sha256 y escribe `dist/releases/latest.json` con `url` vacía
+    (la llena `publish_release.py`).
+- `tools/publish_release.py` **nuevo**: sube zip + `latest.json` a
+  GitHub Releases (via `gh`) o a UNC (`\\fileserver\ANS\channel`).
+  Verifica sha256 del zip antes de publicar y escribe `url` +
+  `published_at_utc` en `latest.json`.
+- `config.py`: `bootstrap_data_dir()` ahora, además de migrar el layout
+  legacy, siembra `defaults/inventario_remanentes.csv`,
+  `defaults/configuracion_nesting.json` y
+  `defaults/_config/step_export_folders.json` desde el bundle
+  (`_MEIPASS/defaults/`) al `data_dir` del usuario en primer arranque.
+  Nunca sobreescribe archivos existentes.
+- Smoke tests (dev + frozen simulado con `_MEIPASS/defaults/`, y
+  edición de usuario en segunda corrida): PASS.
+- `build_arga_exe.py --help` parsea todos los flags nuevos.
+- Nota: PR 2 aún **no** conecta el updater al canal; el `.exe` sigue
+  arrancando igual que hoy. PR 3 introduce `ArgaNestingLauncher.exe`,
+  reescribe `modules/app_auto_update.py` para leer `latest.json` y
+  retira `tools/arga_apply_update.ps1`.
+
+### 2026-08-13 — PR 1: rutas persistentes en `%LOCALAPPDATA%\ArgaNestingSuite\data` + migración legacy
+
+- Motivo: preparar el rediseño de despliegue (release por canal + swap
+  atómico de versión) sin tener que rescribir cliente. Primer paso:
+  separar **inmutable** (bundle del .exe) de **mutable** (datos del
+  usuario) para que un update no pueda pisar historial ni configs.
+- Nuevo en `config.py`:
+  - `data_dir()`, `install_root()`, `bootstrap_data_dir()`,
+    `_migrate_legacy_data()`.
+  - Frozen: mutables viven en `%LOCALAPPDATA%\ArgaNestingSuite\data\`.
+  - Dev (`python main.py`): sigue en la raíz del repo (compat).
+  - Override: `ARGA_NEST_DATA_DIR` (pruebas / portable).
+  - `ruta_persistente` ya no devuelve `dirname(sys.executable)`;
+    devuelve `data_dir() / rel`.
+  - `asegurar_archivo_persistente` siembra desde
+    `_MEIPASS/defaults/<rel>` (release nuevo), luego `_MEIPASS/<rel>`,
+    luego `dirname(exe)/defaults/<rel>` y `dirname(exe)/<rel>` (compat).
+- `main.py`: llama `bootstrap_data_dir()` antes del crash log y hace
+  `chdir(data_dir)` en frozen; crash log pasa por `ruta_persistente`.
+- `modules/nesting_engine/ai_telemetry.py` y `dxf_export_log.py`:
+  `_logs/` cae en `data_dir` cuando frozen (antes escribían a
+  `_MEIPASS/_logs/` = temp que se borra al salir → logs perdidos).
+- Migración one-shot en primer arranque de la versión nueva: mueve
+  `historial_jobs.json`, `inventario_remanentes.csv`,
+  `herinox_sync.local.json`, `configuracion_nesting.json`, `Plates.xlsx`,
+  `cache/`, `TEMP_PROCESSED/`, `_logs/`, `_config/` de `dirname(exe)` a
+  `data_dir`. No sobreescribe si ya existen en destino.
+- Smoke test (dev + frozen simulado + migración legacy + 2ª corrida
+  no destructiva): PASS.
+- Compatibilidad build actual: `seed_persistent_sidecars` sigue igual;
+  actúa como fuente de semilla para la migración one-shot. Los cambios
+  del build (`--onedir` por default, `defaults/` en el bundle,
+  publicación por canal) llegan en PR 2 / PR 3.
+
 ### 2026-08-11b — Regla: paridad permanente de `build_arga_exe.py`
 
 - Cada mejora/modificación del ANS debe validar si

@@ -51,12 +51,18 @@ IMPORT_TO_PACKAGE = {
 }
 
 NON_PIP_IMPORTS = {
+    # FreeCAD (proviene de la instalación del programa, no de pip)
     "FreeCAD",
     "FreeCADGui",
     "ImportGui",
     "importDXF",
     "Part",
+    # Módulos nativos del proyecto (compilados a .pyd, no publicados en PyPI)
     "algorithm_cpp",
+    "arga_nest_core",
+    # Paquetes internos del proyecto que no siempre viven bajo repo_root/
+    # (p.ej. `engine` bajo `CAD (OCCT)/engine/`). No están en PyPI.
+    "engine",
 }
 
 # Solo se instala con --include-legacy-tk (UI Tk antigua).
@@ -102,7 +108,23 @@ def _run(cmd: list[str]) -> None:
 
 
 def _discover_local_top_modules() -> set[str]:
+    """
+    Reúne los nombres que Python resolvería como *locales* del repo:
+      - `.py` en cualquier subdirectorio (top-level = primer segmento).
+      - `.pyd` / `.dll` compilados junto a modules/ (ej. arga_nest_core.pyd).
+      - Directorios inmediatos hijo de ROOT (paquetes namespace sin __init__).
+    Sin esto, un `.pyd` compilado localmente aparecía como "faltante" y el
+    instalador trataba de bajarlo de PyPI (fallaba con "No matching distribution").
+    """
     local_modules: set[str] = set()
+
+    def _add_from_rel(rel: Path, stem: str | None = None) -> None:
+        # Registra el nombre "importable" del archivo y de su top-level dir.
+        if stem:
+            local_modules.add(stem)
+        if len(rel.parts) > 1:
+            local_modules.add(rel.parts[0])
+
     for py_file in ROOT.rglob("*.py"):
         if any(part.startswith(".") for part in py_file.parts):
             continue
@@ -113,9 +135,25 @@ def _discover_local_top_modules() -> set[str]:
             if rel.parent.parts:
                 local_modules.add(rel.parent.parts[0])
         else:
-            local_modules.add(rel.stem)
-            if len(rel.parts) > 1:
-                local_modules.add(rel.parts[0])
+            _add_from_rel(rel, stem=rel.stem)
+
+    # Extensiones nativas compiladas (Python las importa como módulos regulares).
+    for pattern in ("*.pyd", "*.pyd.*", "*.dll"):
+        for native in ROOT.rglob(pattern):
+            if any(part.startswith(".") for part in native.parts):
+                continue
+            if ".venv" in native.parts:
+                continue
+            rel = native.relative_to(ROOT)
+            # arga_nest_core.pyd → módulo `arga_nest_core`.
+            # arga_nest_core.cp313-win_amd64.pyd → también `arga_nest_core`.
+            stem = native.name.split(".", 1)[0]
+            _add_from_rel(rel, stem=stem)
+
+    # Directorios inmediatos del repo (paquetes namespace / carpetas de datos).
+    for child in ROOT.iterdir():
+        if child.is_dir() and not child.name.startswith("."):
+            local_modules.add(child.name)
     return local_modules
 
 

@@ -39,6 +39,7 @@ FIXTURA_AMADA_DXFS = (
     FIXTURA_AMADA_DIR / "FICSTURA MEJORADA CORTE BUENO .25IN.DXF",
 )
 STEP_EXPORT_CONFIG = ROOT / "_config" / "step_export_folders.json"
+NEST_RUNTIME_CONFIG = ROOT / "_config" / "nest_runtime.json"
 NEST_ENGINE_CONFIG_JSON = ROOT / "configuracion_nesting.json"
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 BRANDING_PNG_PRESERVE = (
@@ -81,6 +82,11 @@ HIDDEN_IMPORTS = (
     "modules.nesting_engine.step_export_prefs",
     "modules.nesting_engine.nest_engine_config",
     "modules.nesting_engine.engine_registry",
+    "modules.nesting_engine.nest_runtime_contract",
+    "modules.nesting_engine.nest_runtime_prefs",
+    "modules.nesting_engine.nest_remote_client",
+    "modules.nesting_engine.nest_engine_job",
+    "modules.nesting_engine.nest_executor",
     "modules.nesting_engine.exporter",
     "modules.dxf_export",
     "modules.dxf_export.amada_fixture",
@@ -219,6 +225,8 @@ SMOKE_IMPORT_MODULES = (
     "modules.nesting_engine.algorithm_bridge",
     "modules.nesting_engine.arga_nest_core_bridge",
     "modules.nesting_engine.arga_nest_worker_client",
+    "modules.nesting_engine.nest_runtime_prefs",
+    "modules.nesting_engine.nest_executor",
     "modules.nesting_engine.manager",
     "modules.dxf_export.amada_fixture",
 )
@@ -758,6 +766,11 @@ def _pyinstaller_collect_args() -> list[str]:
 
 def _pyinstaller_data_args() -> list[str]:
     args: list[str] = []
+    # Recursos empaquetados del bundle. Los mutables van a `defaults/<rel>`
+    # dentro del bundle (_MEIPASS/defaults/…) — de ahí los siembra
+    # `config.asegurar_archivo_persistente` la primera vez al data_dir del
+    # usuario. Nunca se leen directamente en runtime, siempre pasando por
+    # el data_dir persistente.
     data_pairs = [
         (SPLASH_JPEG, "."),
         (MACRO, "."),
@@ -765,8 +778,11 @@ def _pyinstaller_data_args() -> list[str]:
         (ROOT / "interface", "interface"),
         (ROOT / "assets", "assets"),
         (ROOT / "_config", "_config"),
-        (ROOT / "inventario_remanentes.csv", "."),
-        (NEST_ENGINE_CONFIG_JSON, "."),
+        # Plantillas dentro del bundle (canónicas para bootstrap del data_dir).
+        (ROOT / "inventario_remanentes.csv", "defaults"),
+        (NEST_ENGINE_CONFIG_JSON, "defaults"),
+        (STEP_EXPORT_CONFIG, "defaults/_config"),
+        (NEST_RUNTIME_CONFIG, "defaults/_config"),
     ]
     for src, dest in data_pairs:
         if src.exists():
@@ -775,6 +791,10 @@ def _pyinstaller_data_args() -> list[str]:
             print("[WARN] inventario_remanentes.csv no encontrado; se omite del bundle.")
         elif src.name == "configuracion_nesting.json":
             print("[WARN] configuracion_nesting.json no encontrado; se omite del bundle.")
+        elif src.name == "step_export_folders.json":
+            print("[WARN] _config/step_export_folders.json no encontrado; se omite del bundle.")
+        elif src.name == "nest_runtime.json":
+            print("[WARN] _config/nest_runtime.json no encontrado; se omite del bundle.")
     # Solo los DXF de fixtura productivos (no scripts _sim).
     for dxf in FIXTURA_AMADA_DXFS:
         if dxf.is_file():
@@ -816,6 +836,7 @@ def verify_build_artifacts(
     cpp_pyd: Path | None,
     nest_core_pyd: Path | None = None,
     worker_exe: Path | None = None,
+    onefile: bool = False,
 ):
     """Falla si el paquete dist/ no refleja el proyecto actual."""
     if not exe_path.is_file():
@@ -833,6 +854,21 @@ def verify_build_artifacts(
     for dxf in FIXTURA_AMADA_DXFS:
         if not (fx_dir / dxf.name).is_file():
             raise RuntimeError(f"Build incompleto: falta sidecar FIXTURA AMADA/{dxf.name}")
+    if not onefile:
+        # Onedir: los mutables viven como plantillas en <dist>/defaults/.
+        defaults_root = exe_path.parent / "defaults"
+        for rel in (
+            "inventario_remanentes.csv",
+            "configuracion_nesting.json",
+            "_config/step_export_folders.json",
+            "_config/nest_runtime.json",
+        ):
+            p = defaults_root / rel
+            if not p.is_file():
+                raise RuntimeError(
+                    f"Build incompleto (onedir): falta plantilla defaults/{rel} "
+                    "para bootstrap del data_dir del usuario."
+                )
     manifest = exe_path.parent / "arga_build_manifest.json"
     if manifest.is_file():
         data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -933,27 +969,56 @@ def align_plates_inventory_after_build(exe_path: Path):
     print("[OK] Inventario de placas: fuente directa PostgreSQL/API Herinox (sin Plates.xlsx).")
 
 
-def seed_persistent_sidecars(exe_path: Path, worker_exe: Path | None = None):
+def seed_persistent_sidecars(
+    exe_path: Path,
+    worker_exe: Path | None = None,
+    onefile: bool = False,
+):
     """
-    Deja junto al .exe los archivos editables / nativos que otras PCs necesitan en primer arranque.
-    No sobrescribe JSON/CSV si el usuario ya los tiene.
+    Deja los archivos editables / nativos que la app necesita en primer arranque.
+
+    - Mutables (inventario, configuracion_nesting, _config): son *plantillas*.
+        - onedir → `<dist>/defaults/…`  (fuente canónica del release; nunca los
+          lee el .exe en runtime, sirven de semilla al hacer bootstrap del
+          data_dir en cada PC).
+        - onefile → `<dist>/…` (junto al .exe) para compat con instalaciones
+          legacy que aún esperan sidecars en esa ubicación.
+    - Worker y Fixturas: son *inmutables del release*, siempre junto al .exe
+      (los lee la app en runtime desde el bundle o su carpeta).
     """
     dist_root = exe_path.parent
-    seeds = (
-        (ROOT / "inventario_remanentes.csv", dist_root / "inventario_remanentes.csv", False),
-        (NEST_ENGINE_CONFIG_JSON, dist_root / "configuracion_nesting.json", False),
-        (STEP_EXPORT_CONFIG, dist_root / "_config" / "step_export_folders.json", False),
-    )
-    for src, dst, force in seeds:
+    if onefile:
+        seed_targets = {
+            "inventario_remanentes.csv": dist_root / "inventario_remanentes.csv",
+            "configuracion_nesting.json": dist_root / "configuracion_nesting.json",
+            "_config/step_export_folders.json": dist_root / "_config" / "step_export_folders.json",
+            "_config/nest_runtime.json": dist_root / "_config" / "nest_runtime.json",
+        }
+    else:
+        defaults_root = dist_root / "defaults"
+        seed_targets = {
+            "inventario_remanentes.csv": defaults_root / "inventario_remanentes.csv",
+            "configuracion_nesting.json": defaults_root / "configuracion_nesting.json",
+            "_config/step_export_folders.json": defaults_root / "_config" / "step_export_folders.json",
+            "_config/nest_runtime.json": defaults_root / "_config" / "nest_runtime.json",
+        }
+    sources = {
+        "inventario_remanentes.csv": ROOT / "inventario_remanentes.csv",
+        "configuracion_nesting.json": NEST_ENGINE_CONFIG_JSON,
+        "_config/step_export_folders.json": STEP_EXPORT_CONFIG,
+        "_config/nest_runtime.json": NEST_RUNTIME_CONFIG,
+    }
+    for rel, dst in seed_targets.items():
+        src = sources[rel]
         if not src.is_file():
-            print(f"[WARN] Sin semilla: {src.name}")
+            print(f"[WARN] Sin plantilla: {src.name}")
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_file() and not force:
-            print(f"[OK] Sidecar existente (sin tocar): {dst}")
+        if dst.is_file():
+            print(f"[OK] Plantilla existente (sin tocar): {dst}")
         else:
             shutil.copy2(src, dst)
-            print(f"[OK] Sidecar sembrado: {dst}")
+            print(f"[OK] Plantilla sembrada: {dst}")
 
     # Worker: siempre refrescar desde el build (binario de versión del producto).
     wsrc = worker_exe if worker_exe and worker_exe.is_file() else _find_worker_exe()
@@ -968,6 +1033,21 @@ def seed_persistent_sidecars(exe_path: Path, worker_exe: Path | None = None):
     else:
         print("[WARN] Sin ArgaNestWorker.exe para sembrar junto al .exe")
 
+    # Script de swap del updater: lo ejecuta PowerShell desde disco después de
+    # que el .exe se cierre. Debe existir como archivo real (no dentro de
+    # _MEIPASS) para poder ser invocado con `-File`.
+    apply_switch_ps1 = ROOT / "tools" / "arga_apply_switch.ps1"
+    if apply_switch_ps1.is_file():
+        for dst in (
+            dist_root / "arga_apply_switch.ps1",
+            dist_root / "tools" / "arga_apply_switch.ps1",
+        ):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(apply_switch_ps1, dst)
+        print(f"[OK] arga_apply_switch.ps1 sembrado (tools/ + raíz de dist)")
+    else:
+        print("[WARN] Falta tools/arga_apply_switch.ps1 (updater no podrá hacer swap).")
+
     # Fixturas Amada: necesarios para export AMADA/FIXTURA en PCs sin el repo.
     fx_dst = dist_root / "FIXTURA AMADA"
     fx_dst.mkdir(parents=True, exist_ok=True)
@@ -980,11 +1060,18 @@ def seed_persistent_sidecars(exe_path: Path, worker_exe: Path | None = None):
         print(f"[OK] Fixtura sembrada: {dst.name}")
 
 
+def _calendar_version(now: datetime | None = None) -> str:
+    """Versión calendario YYYY.MM.DD (base para releases sin colisión de tag)."""
+    now = now or datetime.now(timezone.utc)
+    return now.strftime("%Y.%m.%d")
+
+
 def write_build_manifest(
     exe_path: Path,
     cpp_pyd: Path | None,
     nest_core_pyd: Path | None = None,
     worker_exe: Path | None = None,
+    onefile: bool = False,
 ) -> Path:
     git_commit = ""
     git_branch = ""
@@ -1024,10 +1111,14 @@ def write_build_manifest(
     except Exception:
         pass
 
+    now = datetime.now(timezone.utc)
     manifest = {
         "app": "ARGA NESTING SUITE",
-        "built_at_utc": datetime.now(timezone.utc).isoformat(),
+        "version": _calendar_version(now),
+        "layout": "onefile" if onefile else "onedir",
+        "built_at_utc": now.isoformat(),
         "git_commit": git_commit,
+        "git_commit_short": (git_commit or "")[:8],
         "git_branch": git_branch or "main",
         "python": sys.version.split()[0],
         "platform": sys.platform,
@@ -1078,7 +1169,120 @@ def write_build_manifest(
     return out
 
 
-def print_deploy_checklist(exe_path: Path):
+def _sha256_of_file(path: Path, chunk_size: int = 1 << 20) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(chunk_size)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def _zip_directory(src_dir: Path, dst_zip: Path) -> int:
+    """Zippa src_dir/* como raíz del zip (sin incluir src_dir en las paths).
+
+    Retorna el número de entradas escritas. Usa ZIP_DEFLATED nivel 6.
+    """
+    import zipfile
+
+    dst_zip.parent.mkdir(parents=True, exist_ok=True)
+    if dst_zip.exists():
+        dst_zip.unlink()
+    n = 0
+    with zipfile.ZipFile(
+        dst_zip,
+        mode="w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+        allowZip64=True,
+    ) as zf:
+        for root, _dirs, files in os.walk(src_dir):
+            for name in files:
+                p = Path(root) / name
+                arc = p.relative_to(src_dir)
+                zf.write(p, arcname=str(arc))
+                n += 1
+    return n
+
+
+def _release_version_tuple(manifest_data: dict) -> tuple[str, str]:
+    """Devuelve (version, commit_short) leyendo el manifest recién escrito."""
+    ver = str(manifest_data.get("version") or _calendar_version())
+    commit = str(manifest_data.get("git_commit_short") or manifest_data.get("git_commit") or "")
+    commit = commit[:8] or "nogit000"
+    return ver, commit
+
+
+def write_release_artifacts(
+    exe_path: Path,
+    manifest_path: Path,
+    notes: str = "",
+    min_supported_version: str = "",
+) -> tuple[Path, Path]:
+    """
+    Empaqueta el onedir en `dist/releases/ArgaNestingSuite-<ver>-<commit>.zip`
+    y escribe `dist/releases/latest.json`.
+
+    latest.json es lo que el updater consulta:
+      { version, commit, sha256, size_bytes, filename, url,
+        min_supported_version, layout, notes, published_at_utc }
+
+    `url` queda vacía a propósito: `tools/publish_release.py` la escribe al
+    subir el zip al canal (GitHub Releases / UNC). Así el manifest local es
+    reproducible sin conocer el destino final.
+    """
+    dist_dir = exe_path.parent  # dist/<name>/
+    if not dist_dir.is_dir():
+        raise RuntimeError(f"No se encuentra la carpeta onedir: {dist_dir}")
+    if not manifest_path.is_file():
+        raise RuntimeError(f"No se encuentra el manifest: {manifest_path}")
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    version, commit_short = _release_version_tuple(manifest_data)
+
+    releases_dir = ROOT / "dist" / "releases"
+    releases_dir.mkdir(parents=True, exist_ok=True)
+    zip_name = f"ArgaNestingSuite-{version}-{commit_short}.zip"
+    zip_path = releases_dir / zip_name
+
+    print(f"[INFO] Empaquetando release: {zip_path}")
+    started = time.perf_counter()
+    entries = _zip_directory(dist_dir, zip_path)
+    dur = time.perf_counter() - started
+    print(f"[OK] Zip release: {zip_path} ({entries} archivos, {dur:.1f}s)")
+
+    sha = _sha256_of_file(zip_path)
+    size = zip_path.stat().st_size
+    latest = {
+        "app": "ARGA NESTING SUITE",
+        "version": version,
+        "commit": manifest_data.get("git_commit") or "",
+        "commit_short": commit_short,
+        "layout": manifest_data.get("layout") or "onedir",
+        "filename": zip_name,
+        "url": "",
+        "sha256": sha,
+        "size_bytes": int(size),
+        "min_supported_version": str(min_supported_version or "").strip(),
+        "published_at_utc": "",
+        "notes": (notes or "").strip(),
+    }
+    latest_path = releases_dir / "latest.json"
+    latest_path.write_text(json.dumps(latest, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"[OK] latest.json: {latest_path}")
+    print(f"[OK] sha256={sha}  size={size:,} bytes")
+    print(
+        "[NEXT] Publica el zip al canal (GitHub Releases / UNC) con "
+        "`python tools/publish_release.py`; ese script escribe 'url' y "
+        "'published_at_utc' en latest.json."
+    )
+    return zip_path, latest_path
+
+
+def print_deploy_checklist(exe_path: Path, onefile: bool = False):
     dist = exe_path.parent
     checks = [
         ("Ejecutable", exe_path.is_file()),
@@ -1093,8 +1297,30 @@ def print_deploy_checklist(exe_path: Path):
         ("arga_archivo_nesteo_cu.ico", (dist / "arga_archivo_nesteo_cu.ico").is_file()),
         ("arga_archivo_nesteo_mix.ico", (dist / "arga_archivo_nesteo_mix.ico").is_file()),
         ("icon_handler/ArgaIconHandler.dll", (dist / "icon_handler" / "ArgaIconHandler.dll").is_file()),
+        ("tools/arga_apply_switch.ps1", (dist / "tools" / "arga_apply_switch.ps1").is_file()),
     ]
-    print("\n=== CHECKLIST DESPLIEGUE (copiar esta carpeta dist/ a otras PCs) ===")
+    if not onefile:
+        # En onedir, las plantillas viven en defaults/ para bootstrap del data_dir.
+        checks.extend([
+            (
+                "defaults/inventario_remanentes.csv",
+                (dist / "defaults" / "inventario_remanentes.csv").is_file(),
+            ),
+            (
+                "defaults/configuracion_nesting.json",
+                (dist / "defaults" / "configuracion_nesting.json").is_file(),
+            ),
+            (
+                "defaults/_config/step_export_folders.json",
+                (dist / "defaults" / "_config" / "step_export_folders.json").is_file(),
+            ),
+            (
+                "defaults/_config/nest_runtime.json",
+                (dist / "defaults" / "_config" / "nest_runtime.json").is_file(),
+            ),
+        ])
+    layout = "onefile" if onefile else "onedir"
+    print(f"\n=== CHECKLIST DESPLIEGUE ({layout}) ===")
     ok_all = True
     for label, ok in checks:
         print(f"  [{'OK' if ok else 'FALTA'}] {label}")
@@ -1660,9 +1886,40 @@ def main():
         ),
     )
     parser.add_argument(
+        "--onefile",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Empaqueta un único .exe (PyInstaller --onefile). Por defecto se "
+            "genera --onedir: carpeta versionada que sirve de release y update "
+            "atómico. Solo usar --onefile para casos legacy."
+        ),
+    )
+    parser.add_argument(
         "--onedir",
         action="store_true",
-        help="Genera carpeta onedir en lugar de un único .exe (--onefile por defecto).",
+        help="Alias compat: fuerza --onedir (default). Sin efecto si no se pasa --onefile.",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help=(
+            "Además del build, produce dist/releases/ArgaNestingSuite-<version>-<commit>.zip "
+            "y latest.json listos para publicar (requiere --onedir; se ignora en onefile)."
+        ),
+    )
+    parser.add_argument(
+        "--release-notes",
+        default="",
+        help="Notas del release (una línea) que aparecen en latest.json.notes.",
+    )
+    parser.add_argument(
+        "--release-min-version",
+        default="",
+        help=(
+            "Versión mínima soportada que el updater forzará a actualizar. "
+            "Formato YYYY.MM.DD[.N]. Vacío = no forzar."
+        ),
     )
     parser.add_argument(
         "--cleanup-only",
@@ -1735,22 +1992,39 @@ def main():
     if not args.skip_smoke:
         smoke_test_imports(require_core=not args.allow_no_core)
     sync_repo_plates_from_herinox("pre-build")
+    onefile_mode = bool(args.onefile)
+    if args.onedir and onefile_mode:
+        raise SystemExit("No se puede combinar --onefile con --onedir.")
     exe_path = build_exe(
         args.name,
-        onefile=not args.onedir,
+        onefile=onefile_mode,
         cpp_pyd=cpp_pyd,
         nest_core_pyd=nest_core_pyd,
         worker_exe=worker_exe,
     )
     sync_repo_plates_from_herinox("post-build")
     align_plates_inventory_after_build(exe_path)
-    seed_persistent_sidecars(exe_path, worker_exe=worker_exe)
-    write_build_manifest(exe_path, cpp_pyd, nest_core_pyd, worker_exe)
+    seed_persistent_sidecars(exe_path, worker_exe=worker_exe, onefile=onefile_mode)
+    manifest_path = write_build_manifest(
+        exe_path, cpp_pyd, nest_core_pyd, worker_exe, onefile=onefile_mode
+    )
     if not args.allow_no_core:
-        verify_build_artifacts(exe_path, cpp_pyd, nest_core_pyd, worker_exe)
+        verify_build_artifacts(
+            exe_path, cpp_pyd, nest_core_pyd, worker_exe, onefile=onefile_mode
+        )
     else:
         print("[WARN] Verificación estricta omitida (--allow-no-core).")
-    print_deploy_checklist(exe_path)
+    print_deploy_checklist(exe_path, onefile=onefile_mode)
+    if args.release:
+        if onefile_mode:
+            print("[WARN] --release ignorado en modo --onefile (el canal usa onedir).")
+        else:
+            write_release_artifacts(
+                exe_path,
+                manifest_path,
+                notes=args.release_notes,
+                min_supported_version=args.release_min_version,
+            )
     do_associate = args.associate_arganest
     if do_associate is None:
         if native_icon_handler_installed():

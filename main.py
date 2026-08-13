@@ -52,11 +52,23 @@ if __name__ == "__main__":
         )
     except Exception as _exc_core:
         print(f"[ANS-CPP] core status unavailable: {_exc_core}", flush=True)
+    # Prepara data_dir persistente (%LOCALAPPDATA%\ArgaNestingSuite\data en frozen).
+    # Debe correr ANTES del crash log y del chdir para que los mutables (historial,
+    # inventario, _config, _logs) sobrevivan a updates y no vivan dentro del bundle.
+    try:
+        import config as _cfg_boot
+
+        _DATA_DIR = _cfg_boot.bootstrap_data_dir()
+    except Exception:
+        _DATA_DIR = None
     try:
         import faulthandler
         from pathlib import Path
 
-        _crash_log = Path(_ROOT) / "_logs" / "crash.log"
+        if _DATA_DIR:
+            _crash_log = Path(_DATA_DIR) / "_logs" / "crash.log"
+        else:
+            _crash_log = Path(_ROOT) / "_logs" / "crash.log"
         _crash_log.parent.mkdir(parents=True, exist_ok=True)
         _crash_fh = open(_crash_log, "a", encoding="utf-8")
         faulthandler.enable(file=_crash_fh, all_threads=True)
@@ -69,8 +81,18 @@ if __name__ == "__main__":
     except Exception:
         pass
     if getattr(sys, "frozen", False):
-        # CWD estable junto al .exe (otras PCs, accesos directos, doble clic).
-        os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+        # CWD estable en data_dir (mutables sobreviven a updates; rutas relativas
+        # como "_logs/…" o "TEMP_PROCESSED/…" escriben donde deben).
+        try:
+            if _DATA_DIR:
+                os.chdir(_DATA_DIR)
+            else:
+                os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+        except Exception:
+            try:
+                os.chdir(os.path.dirname(os.path.abspath(sys.executable)))
+            except Exception:
+                pass
     # Pre-cargar stdlib de red ANTES de PySide6: en Python 3.14 + Shiboken,
     # importar urllib.request después de Qt puede colgarse en inspect.getsource
     # (parece freeze; Ctrl+C deja el traceback que veías en herinox_sync).

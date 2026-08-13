@@ -1,33 +1,75 @@
-"""Actualización automática: sincroniza con origin/main (pull ff-only) y reinicia la app.
+"""Auto-update por canal de release (sin git ni rebuild en cliente).
 
-- Modo Python (desarrollo): solo git pull; no compila .exe.
-- Modo .exe: pull + compilación vía tools/arga_apply_update.ps1.
-- Solo avisa si origin/main va commits por delante del HEAD local.
-- Si el usuario rechaza, no vuelve a preguntar por el mismo commit remoto.
+Flujo:
+  1) `check_for_updates()` descarga `latest.json` del canal
+     (`ARGA_NEST_CHANNEL_URL` o GitHub Releases del repo por defecto).
+  2) Compara `latest.version` contra el `arga_build_manifest.json` que
+     viaja dentro de la carpeta del .exe.
+  3) `apply_update(info)` descarga el zip, verifica sha256, lo extrae a
+     `%LOCALAPPDATA%\\ArgaNestingSuite\\app\\<version>\\` y marca
+     `pending_switch` en `install.json`.
+  4) Al cerrar la app, lanza `tools/arga_apply_switch.ps1` que espera
+     el cierre del PID, reemplaza la junction `app\\current` por la
+     versión nueva y relanza el .exe.
+
+Compat de API pública (usada por `interface/qt/main_window.py`):
+  - dataclasses: `UpdateInfo`, `UpdateResult`
+  - funciones : `check_for_updates`, `apply_update`,
+                `dismiss_available_update`, `launch_restart`, `entry_mode`
+
+Modo desarrollo (`python main.py`): `check_for_updates()` reporta que no
+hay update (el canal es para .exe). Para simular canal en dev, exportar
+`ARGA_NEST_CHANNEL_URL` a un latest.json local o remoto.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-GITHUB_REPO = "joserome6020/Nesting-Pruebas-de-Mejora"
-GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}.git"
-GITHUB_BRANCH = "main"
-EXE_NAME = "ArgaNestingSuite.exe"
-BUILD_SCRIPT = Path("tools") / "build_arga_exe.py"
-MANIFEST_NAME = "arga_build_manifest.json"
-APPLY_PS1 = Path("tools") / "arga_apply_update.ps1"
+try:
+    import config as _cfg
+except Exception:  # pragma: no cover — solo si el módulo se importa sin repo
+    _cfg = None  # type: ignore[assignment]
 
+
+# --------------------------------------------------------------------- Config
+
+APP_NAME = "ArgaNestingSuite"
+GITHUB_REPO = os.environ.get("ARGA_NEST_GITHUB_REPO") or "joserome6020/Nesting-Pruebas-de-Mejora"
+DEFAULT_CHANNEL_URL = (
+    f"https://github.com/{GITHUB_REPO}/releases/latest/download/latest.json"
+)
+CHANNEL_URL = str(os.environ.get("ARGA_NEST_CHANNEL_URL") or DEFAULT_CHANNEL_URL).strip()
+MANIFEST_NAME = "arga_build_manifest.json"
+INSTALL_JSON = "install.json"
+APPLY_SWITCH_PS1 = Path("tools") / "arga_apply_switch.ps1"
+DOWNLOAD_TIMEOUT_SEC = 300
+LATEST_TIMEOUT_SEC = 25
+KEEP_PREVIOUS_VERSIONS = 2  # además de la activa
+
+
+# --------------------------------------------------------------------- Dataclasses
 
 @dataclass
 class UpdateInfo:
+    """Compat con la API previa. Semántica adaptada al canal-release:
+    - `local_commit`   : versión instalada (`YYYY.MM.DD[.N]`), no commit.
+    - `remote_commit`  : versión del canal (idem).
+    - `remote_commit_full`: commit hash publicado (para dismiss).
+    - `commits_behind` : 1 si hay update, 0 si no (compat con UI).
+    - `repo_root`      : install_root de esta PC.
+    """
     has_update: bool
     local_commit: str
     remote_commit: str
@@ -38,6 +80,12 @@ class UpdateInfo:
     needs_bootstrap: bool = False
     remote_commit_full: str = ""
     commits_behind: int = 0
+    # Campos nuevos, opcionales (no rompen consumers viejos).
+    download_url: str = ""
+    sha256: str = ""
+    size_bytes: int = 0
+    filename: str = ""
+    min_supported_version: str = ""
 
 
 @dataclass
@@ -48,34 +96,50 @@ class UpdateResult:
     restart_exe: str = ""
     restart_cmd: list[str] | None = None
     quit_app: bool = False
+    new_version: str = ""
+    new_version_dir: str = ""
 
+
+# --------------------------------------------------------------------- Helpers
 
 def _skip_auto_update() -> bool:
     return str(os.environ.get("ARGA_SKIP_AUTO_UPDATE", "")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
+        "1", "true", "yes", "si", "on",
     )
 
 
-def _install_dir() -> Path:
-    base = str(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or "").strip()
-    if not base:
-        base = str(Path.home())
-    return Path(base) / "ArgaNestingSuite"
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
 
 
-def _canonical_repo_path() -> Path:
-    return _install_dir() / "repository"
+def _local_appdata_root() -> str:
+    for env in ("LOCALAPPDATA", "APPDATA"):
+        v = str(os.environ.get(env) or "").strip()
+        if v:
+            return v
+    return os.path.expanduser("~")
+
+
+def _install_root() -> Path:
+    """Instalación por-usuario. En dev cae a la raíz del repo (no persiste)."""
+    if _cfg is not None:
+        try:
+            return Path(_cfg.install_root())
+        except Exception:
+            pass
+    if _is_frozen():
+        return Path(_local_appdata_root()) / APP_NAME
+    # Dev: usa la raíz del repo (útil si alguien fuerza canal en dev).
+    return Path(__file__).resolve().parents[1]
 
 
 def _install_state_path() -> Path:
-    return _install_dir() / "install.json"
+    return _install_root() / INSTALL_JSON
 
 
 def _load_install_state() -> dict:
+    p = _install_state_path()
     try:
-        p = _install_state_path()
         if p.is_file():
             return json.loads(p.read_text(encoding="utf-8"))
     except Exception:
@@ -83,545 +147,281 @@ def _load_install_state() -> dict:
     return {}
 
 
-def _save_install_state(*, repo_root: Path, exe_path: str) -> None:
-    _install_dir().mkdir(parents=True, exist_ok=True)
+def _save_install_state(**patch) -> None:
     state = _load_install_state()
-    state["repo_root"] = str(repo_root.resolve())
-    state["active_exe"] = str(exe_path)
-    _install_state_path().write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    state.update({k: v for k, v in patch.items() if v is not None})
+    p = _install_state_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _exe_dir() -> Path:
+    try:
+        return Path(sys.executable).resolve().parent
+    except Exception:
+        return _install_root() / "app" / "current"
+
+
+def _current_app_dir() -> Path:
+    """Directorio de la versión activa. En frozen = dirname(exe)."""
+    if _is_frozen():
+        return _exe_dir()
+    # Dev fallback: `app/current` si existe, si no repo root (solo diagnóstico).
+    guess = _install_root() / "app" / "current"
+    if guess.is_dir():
+        return guess
+    return Path(__file__).resolve().parents[1]
+
+
+def _read_local_manifest() -> dict:
+    m = _current_app_dir() / MANIFEST_NAME
+    try:
+        if m.is_file():
+            return json.loads(m.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+
+def _local_version() -> tuple[str, str]:
+    """(version, commit) del manifest local. Vacío si no hay."""
+    data = _read_local_manifest()
+    return (
+        str(data.get("version") or "").strip(),
+        str(data.get("git_commit") or "").strip(),
     )
 
 
-def _write_install_state(state: dict) -> None:
-    _install_dir().mkdir(parents=True, exist_ok=True)
-    _install_state_path().write_text(
-        json.dumps(state, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+def _version_key(ver: str) -> tuple[int, ...]:
+    """Convierte '2026.08.13[.N]' a tupla comparable. Vacío = (0,)."""
+    parts = [p for p in (ver or "").strip().split(".") if p.isdigit()]
+    return tuple(int(p) for p in parts) if parts else (0,)
 
 
-def _mark_remote_synced(remote_commit: str) -> None:
-    commit = str(remote_commit or "").strip()
-    if not commit:
-        return
-    state = _load_install_state()
-    state["last_synced_remote"] = commit
-    state.pop("last_dismissed_remote", None)
-    _write_install_state(state)
-
-
-def dismiss_available_update(info: UpdateInfo) -> None:
-    """Usuario rechazó: no volver a preguntar por el mismo commit remoto."""
-    commit = str(info.remote_commit_full or "").strip()
-    if not commit:
-        return
-    state = _load_install_state()
-    state["last_dismissed_remote"] = commit
-    _write_install_state(state)
-
-
-def _working_tree_dirty(root: Path) -> bool:
-    if not _repo_has_git(root):
-        return False
-    try:
-        out = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        return bool(str(out.stdout or "").strip())
-    except Exception:
-        return False
-
-
-def _commits_behind_remote(root: Path, branch: str = GITHUB_BRANCH) -> int:
-    if not _repo_has_git(root):
-        return 0
-    try:
-        out = subprocess.run(
-            ["git", "rev-list", "--count", f"HEAD..origin/{branch}"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        if out.returncode != 0:
-            return 0
-        return max(0, int(str(out.stdout or "0").strip() or "0"))
-    except Exception:
-        return 0
-
-
-def _is_frozen() -> bool:
-    return bool(getattr(sys, "frozen", False))
+def _version_gt(a: str, b: str) -> bool:
+    return _version_key(a) > _version_key(b)
 
 
 def entry_mode() -> str:
-    """python | exe_in_repo | exe_standalone"""
+    """Compat: 'python' | 'exe_in_repo' | 'exe_standalone'."""
     if not _is_frozen():
         return "python"
-    if _find_linked_repository_root() is not None:
-        return "exe_in_repo"
+    exe = Path(sys.executable).resolve()
+    for base in (exe.parent, *exe.parent.parents):
+        if (base / "main.py").is_file() and (base / ".git").is_dir():
+            return "exe_in_repo"
     return "exe_standalone"
 
 
-def _find_linked_repository_root() -> Path | None:
-    """Raíz del clone Git vinculado (main.py o .exe dentro del proyecto)."""
-    if _is_frozen():
-        exe_dir = Path(sys.executable).resolve().parent
-        for base in (exe_dir, *exe_dir.parents):
-            if (base / ".git").is_dir() and (base / "main.py").is_file():
-                return base
-            if (base / BUILD_SCRIPT).is_file() and (base / "main.py").is_file():
-                return base
-        return None
+# --------------------------------------------------------------------- Fetch
 
-    root = Path(__file__).resolve().parents[1]
-    if (root / ".git").is_dir() and (root / "main.py").is_file():
-        return root
-    return None
-
-
-def _embedded_project_root() -> Path | None:
-    return _find_linked_repository_root()
-
-
-def _resolve_update_root() -> Path:
-    linked = _find_linked_repository_root()
-    if linked is not None:
-        return linked
-
-    state = _load_install_state()
-    saved = str(state.get("repo_root") or "").strip()
-    if saved:
-        p = Path(saved)
-        if (p / ".git").is_dir():
-            return p
-
-    canonical = _canonical_repo_path()
-    if (canonical / ".git").is_dir():
-        return canonical
-
-    return canonical
-
-
-def _project_root() -> Path:
-    return _resolve_update_root()
-
-
-def _git_available() -> bool:
-    try:
-        out = subprocess.run(
-            ["git", "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        return out.returncode == 0
-    except Exception:
-        return False
-
-
-def _repo_has_git(root: Path) -> bool:
-    return (root / ".git").is_dir()
-
-
-def _read_manifest_commit(path: Path) -> str:
-    try:
-        if path.is_file():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return str(data.get("git_commit") or "").strip()
-    except Exception:
-        pass
-    return ""
-
-
-def _read_local_commit(root: Path) -> str:
-    linked = _find_linked_repository_root()
-    if linked is not None and _repo_has_git(linked):
-        root = linked
-
-    if _repo_has_git(root):
-        try:
-            out = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(root),
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=False,
-            )
-            if out.returncode == 0:
-                return str(out.stdout or "").strip()
-        except Exception:
-            pass
-
-    if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        commit = _read_manifest_commit(exe_dir / MANIFEST_NAME)
-        if commit:
-            return commit
-
-    return _read_manifest_commit(root / "dist" / MANIFEST_NAME)
-
-
-def _fetch_remote_via_ls_remote() -> tuple[str, str, str]:
-    try:
-        out = subprocess.run(
-            [
-                "git",
-                "ls-remote",
-                GITHUB_REPO_URL,
-                f"refs/heads/{GITHUB_BRANCH}",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=90,
-            check=False,
-        )
-        if out.returncode != 0:
-            err = (out.stderr or out.stdout or "").strip()
-            hint = (
-                "Git no pudo leer el remoto (repo privado). "
-                "Autentique Git una vez en esta PC: GitHub Desktop, "
-                "`gh auth login` o Credential Manager."
-            )
-            return "", "", f"{hint}\n{err}" if err else hint
-        line = str(out.stdout or "").strip().split("\n", 1)[0].strip()
-        if not line:
-            return "", "", "Remoto vacío."
-        commit = line.split()[0].strip()
-        return commit, "", ""
-    except Exception as exc:
-        return "", "", str(exc)
-
-
-def _fetch_remote_commit_via_git(root: Path) -> tuple[str, str, str]:
-    if not _repo_has_git(root) or not _git_available():
-        return "", "", ""
-    try:
-        fetch = subprocess.run(
-            ["git", "fetch", "origin", GITHUB_BRANCH],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
-        if fetch.returncode != 0:
-            err = (fetch.stderr or fetch.stdout or "").strip()
-            hint = (
-                "No se pudo contactar origin (repo privado). "
-                "Verifique Git autenticado (Credential Manager, SSH o `gh auth login`)."
-            )
-            return "", "", f"{hint}\n{err}" if err else hint
-        rev = subprocess.run(
-            ["git", "rev-parse", f"origin/{GITHUB_BRANCH}"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        if rev.returncode != 0:
-            return "", "", "No se encontró origin/main tras git fetch."
-        commit = str(rev.stdout or "").strip()
-        summary = ""
-        log = subprocess.run(
-            ["git", "log", "-1", "--pretty=%s", f"origin/{GITHUB_BRANCH}"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        if log.returncode == 0:
-            summary = str(log.stdout or "").strip()
-        return commit, summary, ""
-    except Exception as exc:
-        return "", "", str(exc)
-
-
-def _fetch_remote_commit_api() -> tuple[str, str]:
-    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{GITHUB_BRANCH}"
+def _fetch_json(url: str, timeout: int) -> dict:
     headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "ArgaNestingSuite-Updater",
+        "User-Agent": f"{APP_NAME}-Updater",
+        "Accept": "application/json",
     }
-    if token:
+    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if token and "api.github.com" in url:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-    commit = str(data.get("sha") or "").strip()
-    summary = str((data.get("commit") or {}).get("message") or "").split("\n", 1)[0].strip()
-    return commit, summary
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
-def _migrate_user_files_to_repo(repo_root: Path) -> None:
-    """Copia JSON/CSV persistentes junto al .exe viejo hacia la raíz del repo."""
-    if not getattr(sys, "frozen", False):
-        return
-    src_dir = Path(sys.executable).resolve().parent
-    if src_dir.resolve() == repo_root.resolve():
-        return
-    names = (
-        "historial_jobs.json",
-        "inventario_remanentes.csv",
-        "herinox_sync.local.json",
-    )
-    for name in names:
-        src = src_dir / name
-        dst = repo_root / name
-        try:
-            if src.is_file() and not dst.is_file():
-                dst.write_bytes(src.read_bytes())
-        except Exception:
-            pass
-
-
-def _ensure_repository(
-    progress: Callable[[str, float], None] | None = None,
-) -> tuple[Path, str]:
-    def _prog(msg: str, pct: float) -> None:
-        if progress:
-            try:
-                progress(msg, pct)
-            except Exception:
-                pass
-
-    root = _resolve_update_root()
-    if _repo_has_git(root):
-        return root, ""
-
-    if not _git_available():
-        return root, "Git no está instalado o no está en el PATH."
-
-    _prog("Clonando proyecto (primera actualización automática)…", 0.08)
-    root.parent.mkdir(parents=True, exist_ok=True)
-    if root.exists() and any(root.iterdir()):
-        return root, f"La carpeta {root} existe pero no es un clone Git. Elimínela o reinstale."
-
+def _read_channel_latest(url: str) -> tuple[dict, str]:
+    """Devuelve (latest_dict, error_msg). Soporta http(s) y rutas locales/UNC."""
+    if not url:
+        return {}, "ARGA_NEST_CHANNEL_URL vacío y sin default configurado."
+    parsed = url.lower()
     try:
-        clone = subprocess.run(
-            [
-                "git",
-                "clone",
-                "--branch",
-                GITHUB_BRANCH,
-                "--single-branch",
-                GITHUB_REPO_URL,
-                str(root),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-        if clone.returncode != 0:
-            err = (clone.stderr or clone.stdout or "").strip()
-            return root, f"git clone falló:\n{err}"
+        if parsed.startswith(("http://", "https://")):
+            data = _fetch_json(url, LATEST_TIMEOUT_SEC)
+            return data, ""
+        # UNC / local
+        p = Path(url)
+        if p.is_file():
+            return json.loads(p.read_text(encoding="utf-8")), ""
+        return {}, f"Canal no accesible: {url}"
+    except urllib.error.HTTPError as exc:
+        return {}, f"HTTP {exc.code} al leer canal: {exc.reason}"
+    except urllib.error.URLError as exc:
+        return {}, f"No se pudo contactar canal: {exc.reason}"
     except Exception as exc:
-        return root, f"Error al clonar: {exc}"
+        return {}, f"Error leyendo canal ({url}): {exc}"
 
-    _migrate_user_files_to_repo(root)
-    return root, ""
 
+# --------------------------------------------------------------------- Check
 
 def check_for_updates() -> UpdateInfo:
     if _skip_auto_update():
-        return UpdateInfo(False, "", "", "", "", False, "ARGA_SKIP_AUTO_UPDATE activo")
+        return UpdateInfo(False, "", "", "", str(_install_root()), False,
+                          "ARGA_SKIP_AUTO_UPDATE activo")
 
-    root = _resolve_update_root()
-    local = _read_local_commit(root)
-    needs_bootstrap = not _repo_has_git(root)
+    if not _is_frozen():
+        # En dev (`python main.py`) el update no aplica.
+        local_ver, _ = _local_version()
+        return UpdateInfo(False, local_ver or "dev", "", "", str(_install_root()),
+                          False,
+                          "Modo desarrollo: el canal solo aplica al .exe.")
 
-    remote, summary, git_err = _fetch_remote_commit_via_git(root)
-    if not remote:
-        remote, _, git_err = _fetch_remote_via_ls_remote()
+    latest, err = _read_channel_latest(CHANNEL_URL)
+    local_ver, local_commit = _local_version()
+    if err:
+        return UpdateInfo(False, local_ver, "", "", str(_install_root()),
+                          False, err, needs_bootstrap=(not local_ver))
+    remote_ver = str(latest.get("version") or "").strip()
+    if not remote_ver:
+        return UpdateInfo(False, local_ver, "", "", str(_install_root()),
+                          False, "latest.json sin campo 'version'.",
+                          needs_bootstrap=(not local_ver))
 
-    if not remote:
-        try:
-            remote, summary = _fetch_remote_commit_api()
-            git_err = ""
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404 and not git_err:
-                git_err = (
-                    "Repo privado sin acceso API. Se requiere Git autenticado en esta PC."
-                )
-            elif not git_err:
-                git_err = str(exc)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            if not git_err:
-                git_err = str(exc)
+    dl_url = str(latest.get("url") or "").strip()
+    sha256 = str(latest.get("sha256") or "").strip()
+    size = int(latest.get("size_bytes") or 0)
+    filename = str(latest.get("filename") or "").strip()
+    notes = str(latest.get("notes") or "").strip()
+    remote_commit = str(latest.get("commit") or "").strip()
+    min_supp = str(latest.get("min_supported_version") or "").strip()
 
-    if not remote:
-        return UpdateInfo(
-            False,
-            local[:12] if local else "?",
-            "",
-            "",
-            str(root),
-            False,
-            git_err or "No se pudo leer el commit remoto.",
-            needs_bootstrap=needs_bootstrap,
-        )
+    has_update = _version_gt(remote_ver, local_ver) if local_ver else True
 
-    commits_behind = _commits_behind_remote(root) if _repo_has_git(root) else 0
-    has_update = commits_behind > 0
-    if not _repo_has_git(root):
-        has_update = True
-
+    # Dismiss: si el usuario rechazó este mismo release, no volver a molestar.
     state = _load_install_state()
-    dismissed = str(state.get("last_dismissed_remote") or "").strip()
-    if has_update and dismissed and dismissed == remote:
+    dismissed = str(state.get("last_dismissed_version") or "").strip()
+    if has_update and dismissed and dismissed == remote_ver:
         has_update = False
 
-    can_apply = _git_available()
-    blocked = ""
-    if has_update and not can_apply:
-        blocked = (
-            "Hay una versión nueva, pero falta Git en esta PC. "
-            "Instale Git for Windows y autentíquelo una sola vez."
-        )
-    elif has_update and _repo_has_git(root) and _working_tree_dirty(root):
-        can_apply = False
-        blocked = (
-            "Hay cambios locales sin commit. Guarde su trabajo o haga commit "
-            "antes de actualizar para que el proyecto quede igual al remoto."
-        )
+    # Update forzado si local < min_supported_version.
+    forced = False
+    if min_supp and local_ver and _version_gt(min_supp, local_ver):
+        has_update = True
+        forced = True
+
+    can_apply = True
+    reason = ""
+    if has_update:
+        if not dl_url:
+            can_apply = False
+            reason = "latest.json no tiene 'url' del zip publicado."
+        elif not sha256:
+            can_apply = False
+            reason = "latest.json no tiene 'sha256' — publicación incompleta."
+        elif forced:
+            reason = (
+                f"Versión mínima soportada = {min_supp}. Se requiere actualizar."
+            )
 
     return UpdateInfo(
         has_update=has_update,
-        local_commit=local[:12] if local else "?",
-        remote_commit=remote[:12],
-        remote_summary=summary,
-        repo_root=str(root),
+        local_commit=local_ver or "?",
+        remote_commit=remote_ver,
+        remote_summary=notes,
+        repo_root=str(_install_root()),
         can_apply=can_apply,
-        reason_blocked=blocked,
-        needs_bootstrap=needs_bootstrap,
-        remote_commit_full=remote,
-        commits_behind=commits_behind,
+        reason_blocked=reason,
+        needs_bootstrap=(not local_ver),
+        remote_commit_full=remote_commit,
+        commits_behind=1 if has_update else 0,
+        download_url=dl_url,
+        sha256=sha256,
+        size_bytes=size,
+        filename=filename,
+        min_supported_version=min_supp,
     )
 
 
-def _git_pull(root: Path, progress: Callable[[str, float], None] | None) -> UpdateResult | None:
-    def _prog(msg: str, pct: float) -> None:
-        if progress:
-            try:
-                progress(msg, pct)
-            except Exception:
-                pass
-
-    _prog("Descargando actualización…", 0.25)
-    try:
-        fetch = subprocess.run(
-            ["git", "fetch", "origin", GITHUB_BRANCH],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=180,
-            check=False,
-        )
-        if fetch.returncode != 0:
-            err = (fetch.stderr or fetch.stdout or "").strip()
-            return UpdateResult(False, f"git fetch falló:\n{err}")
-
-        pull = subprocess.run(
-            ["git", "pull", "--ff-only", "origin", GITHUB_BRANCH],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=240,
-            check=False,
-        )
-        if pull.returncode != 0:
-            err = (pull.stderr or pull.stdout or "").strip()
-            return UpdateResult(
-                False,
-                f"git pull falló (¿cambios locales sin commit?):\n{err}",
-            )
-    except Exception as exc:
-        return UpdateResult(False, f"Error al actualizar código: {exc}")
-    return None
+def dismiss_available_update(info: UpdateInfo) -> None:
+    """Guarda que el usuario rechazó esta versión (por versión, no por commit)."""
+    ver = (info.remote_commit or "").strip()
+    if ver:
+        _save_install_state(last_dismissed_version=ver)
 
 
-def _launch_build_and_restart(root: Path, parent_pid: int, progress) -> UpdateResult:
-    def _prog(msg: str, pct: float) -> None:
-        if progress:
-            try:
-                progress(msg, pct)
-            except Exception:
-                pass
+# --------------------------------------------------------------------- Apply
 
-    ps1 = root / APPLY_PS1
-    if not ps1.is_file():
-        return UpdateResult(
-            False,
-            "Código actualizado, pero falta tools/arga_apply_update.ps1 para compilar el .exe.",
-        )
+def _sha256_stream(path: Path, chunk_size: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            block = f.read(chunk_size)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
 
-    new_exe = str((root / "dist" / EXE_NAME).resolve())
-    _save_install_state(repo_root=root, exe_path=new_exe)
 
-    mode = entry_mode()
-    python_exe = ""
-    if mode == "python":
-        python_exe = str(Path(sys.executable).resolve())
+def _download(url: str, dst: Path, progress: Callable[[str, float], None] | None,
+              expected_size: int) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    if tmp.exists():
+        tmp.unlink()
+    headers = {"User-Agent": f"{APP_NAME}-Updater"}
+    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    if token and "github.com" in url.lower():
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SEC) as resp:
+        total = int(resp.headers.get("Content-Length") or expected_size or 0)
+        written = 0
+        last_pct = -1.0
+        with open(tmp, "wb") as f:
+            while True:
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+                if total > 0 and progress:
+                    pct = 0.25 + 0.55 * min(1.0, written / total)
+                    if pct - last_pct > 0.01:
+                        try:
+                            progress(f"Descargando… {written // (1 << 20)} MB", pct)
+                        except Exception:
+                            pass
+                        last_pct = pct
+    tmp.rename(dst)
 
-    cmd = [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(ps1),
-        "-ParentPid",
-        str(int(parent_pid)),
-        "-ProjectRoot",
-        str(root),
-        "-ExePath",
-        new_exe,
-        "-LaunchMode",
-        mode,
-    ]
-    if python_exe:
-        cmd.extend(["-PythonExe", python_exe])
 
-    _prog("Preparando compilación del .exe…", 0.85)
-    try:
-        subprocess.Popen(
-            cmd,
-            cwd=str(root),
-            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-            close_fds=True,
-        )
-    except Exception as exc:
-        return UpdateResult(False, f"No se pudo lanzar el actualizador: {exc}")
+def _extract_zip(zip_path: Path, dst_dir: Path,
+                 progress: Callable[[str, float], None] | None) -> None:
+    if dst_dir.exists():
+        shutil.rmtree(dst_dir, ignore_errors=True)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(zip_path, mode="r") as zf:
+        members = zf.infolist()
+        n = len(members)
+        for i, m in enumerate(members):
+            zf.extract(m, dst_dir)
+            if progress and n:
+                pct = 0.80 + 0.15 * ((i + 1) / n)
+                try:
+                    progress(f"Extrayendo {i+1}/{n}", pct)
+                except Exception:
+                    pass
 
-    _prog("Listo. Cerrando para compilar…", 1.0)
-    if mode == "python":
-        extra = (
-            "\n\nTambién puede volver a abrir con:\n"
-            f'  python "{root / "main.py"}"'
-        )
-    else:
-        extra = ""
-    msg = (
-        "Proyecto actualizado.\n\n"
-        "La aplicación se cerrará, se compilará el .exe nuevo y se abrirá "
-        "automáticamente."
-        f"{extra}"
-    )
-    return UpdateResult(True, msg, needs_restart=True, quit_app=True)
+
+def _prune_old_versions(app_dir: Path, keep: int, active: str) -> None:
+    """Conserva las `keep` versiones más nuevas + la activa; borra el resto."""
+    if not app_dir.is_dir():
+        return
+    versions: list[Path] = []
+    for p in app_dir.iterdir():
+        if p.is_dir() and p.name != "current" and (p / MANIFEST_NAME).is_file():
+            versions.append(p)
+    versions.sort(key=lambda p: _version_key(p.name.split("-", 1)[0]))
+    to_keep = set(v.name for v in versions[-keep:])
+    to_keep.add(active)
+    for v in versions:
+        if v.name in to_keep:
+            continue
+        try:
+            shutil.rmtree(v, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def apply_update(
@@ -630,60 +430,186 @@ def apply_update(
     progress: Callable[[str, float], None] | None = None,
     parent_pid: int | None = None,
 ) -> UpdateResult:
+    if not info.has_update:
+        return UpdateResult(False, "No hay actualización pendiente.")
     if not info.can_apply:
         return UpdateResult(False, info.reason_blocked or "Actualización no disponible.")
-
-    root, err = _ensure_repository(progress)
-    if err:
-        return UpdateResult(False, err)
-
-    if _repo_has_git(root) and _working_tree_dirty(root):
+    if not _is_frozen():
         return UpdateResult(
             False,
-            "No se puede actualizar: hay cambios locales sin commit.\n\n"
-            "Guarde o haga commit de su trabajo e intente de nuevo.",
+            "Este canal es para el .exe. En dev usa `git pull` y `python main.py`.",
+        )
+    if not info.download_url or not info.sha256 or not info.filename:
+        return UpdateResult(False, "latest.json incompleto: falta url/sha256/filename.")
+
+    root = _install_root()
+    updates_dir = root / "updates"
+    app_dir = root / "app"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    app_dir.mkdir(parents=True, exist_ok=True)
+
+    if progress:
+        try:
+            progress("Preparando descarga…", 0.10)
+        except Exception:
+            pass
+
+    zip_path = updates_dir / info.filename
+    try:
+        _download(info.download_url, zip_path, progress, info.size_bytes)
+    except Exception as exc:
+        return UpdateResult(False, f"Error descargando release: {exc}")
+
+    if progress:
+        try:
+            progress("Verificando integridad…", 0.82)
+        except Exception:
+            pass
+    actual_sha = _sha256_stream(zip_path)
+    if actual_sha.lower() != info.sha256.lower():
+        try:
+            zip_path.unlink()
+        except Exception:
+            pass
+        return UpdateResult(
+            False,
+            "sha256 no coincide. La descarga puede estar corrupta o el canal fue alterado.\n"
+            f"esperado: {info.sha256}\nactual  : {actual_sha}",
         )
 
-    fail = _git_pull(root, progress)
-    if fail is not None:
-        return fail
+    # Nombre de la carpeta versionada: 'YYYY.MM.DD-<commit_short>'
+    commit_short = (info.remote_commit_full or "")[:8] or "nogit000"
+    new_dir_name = f"{info.remote_commit}-{commit_short}"
+    new_dir = app_dir / new_dir_name
+    try:
+        _extract_zip(zip_path, new_dir, progress)
+    except Exception as exc:
+        try:
+            shutil.rmtree(new_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return UpdateResult(False, f"Error extrayendo release: {exc}")
 
-    synced = _read_local_commit(root)
-    if synced:
-        _mark_remote_synced(synced)
+    # Sentinel .ok: solo se materializa si la extracción terminó completa.
+    try:
+        (new_dir / ".ok").write_text(
+            json.dumps(
+                {
+                    "version": info.remote_commit,
+                    "commit": info.remote_commit_full,
+                    "extracted_at_utc": datetime.now(timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        return UpdateResult(False, f"No se pudo marcar la versión como lista: {exc}")
 
-    mode = entry_mode()
-    if mode == "python":
-        main_py = (root / "main.py").resolve()
-        py_exe = str(Path(sys.executable).resolve())
-        if progress:
-            try:
-                progress("Actualización descargada.", 1.0)
-            except Exception:
-                pass
+    _save_install_state(
+        pending_switch=new_dir_name,
+        pending_switch_dir=str(new_dir.resolve()),
+        pending_since_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        channel_url=CHANNEL_URL,
+    )
+
+    # Lanzar el ps1 que hace el swap + relanza el .exe.
+    result = _launch_apply_switch(new_dir, parent_pid=parent_pid, progress=progress)
+    # Best-effort: purga versiones viejas (deja la activa + N más recientes).
+    try:
+        _prune_old_versions(app_dir, KEEP_PREVIOUS_VERSIONS, active=new_dir_name)
+    except Exception:
+        pass
+    return result
+
+
+def _launch_apply_switch(
+    new_dir: Path,
+    *,
+    parent_pid: int | None,
+    progress: Callable[[str, float], None] | None,
+) -> UpdateResult:
+    ps1_candidates = [
+        _current_app_dir() / APPLY_SWITCH_PS1,
+        _current_app_dir() / "tools" / "arga_apply_switch.ps1",
+        _current_app_dir() / "arga_apply_switch.ps1",
+    ]
+    ps1 = next((p for p in ps1_candidates if p.is_file()), None)
+    if ps1 is None:
+        # Sin ps1 el swap tiene que hacerlo el launcher; dejamos pending y avisamos.
         return UpdateResult(
             True,
-            "Proyecto actualizado.\n\n"
-            "Cierre la aplicación y vuelva a abrirla para usar la versión nueva.",
+            "Descarga y verificación OK. Cierra la aplicación para aplicar la "
+            "nueva versión en el próximo arranque.",
             needs_restart=True,
-            restart_cmd=[py_exe, str(main_py)],
+            quit_app=True,
+            new_version=str(new_dir.name),
+            new_version_dir=str(new_dir.resolve()),
         )
 
-    pid = int(parent_pid or os.getpid())
-    return _launch_build_and_restart(root, pid, progress)
+    install_root = str(_install_root().resolve())
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(ps1),
+        "-ParentPid",
+        str(int(parent_pid or os.getpid())),
+        "-InstallRoot",
+        install_root,
+        "-NewVersionDir",
+        str(new_dir.resolve()),
+    ]
+    if progress:
+        try:
+            progress("Cerrando para aplicar versión nueva…", 0.98)
+        except Exception:
+            pass
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=install_root,
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            close_fds=True,
+        )
+    except Exception as exc:
+        return UpdateResult(
+            True,
+            "Descarga verificada, pero no se pudo lanzar el swap automático. "
+            f"Reinicia manualmente para aplicar la nueva versión.\n\n{exc}",
+            needs_restart=True,
+            quit_app=True,
+            new_version=str(new_dir.name),
+            new_version_dir=str(new_dir.resolve()),
+        )
+    return UpdateResult(
+        True,
+        "Nueva versión descargada. La aplicación se cerrará, aplicará la "
+        "actualización y volverá a abrirse automáticamente.",
+        needs_restart=True,
+        quit_app=True,
+        new_version=str(new_dir.name),
+        new_version_dir=str(new_dir.resolve()),
+    )
 
 
 def launch_restart(result: UpdateResult) -> None:
+    """Compat: la UI llama esto tras aceptar reinicio. Con canal-release el
+    proceso de swap ya está en marcha (subprocess ps1); aquí sólo aseguramos
+    el relanzamiento manual si no se lanzó el ps1.
+    """
     if result.restart_exe and os.path.isfile(result.restart_exe):
-        subprocess.Popen(
-            [result.restart_exe],
-            cwd=os.path.dirname(result.restart_exe),
-            close_fds=True,
-        )
+        try:
+            subprocess.Popen([result.restart_exe], close_fds=True)
+        except Exception:
+            pass
         return
     if result.restart_cmd:
-        subprocess.Popen(
-            result.restart_cmd,
-            cwd=str(_project_root()),
-            close_fds=True,
-        )
+        try:
+            subprocess.Popen(result.restart_cmd, close_fds=True)
+        except Exception:
+            pass

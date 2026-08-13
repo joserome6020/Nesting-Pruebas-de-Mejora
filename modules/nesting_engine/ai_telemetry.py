@@ -12,13 +12,31 @@ import hashlib
 import json
 import math
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_LOG = _ROOT / "_logs" / "ai_nests.jsonl"
+
+
+def _default_log_path() -> Path:
+    """
+    En frozen (.exe) el _logs debe vivir en data_dir (fuera del bundle temp);
+    en dev, sigue en la raíz del repo para no cambiar el flujo local.
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            import config as _cfg
+
+            return Path(_cfg.ruta_persistente(os.path.join("_logs", "ai_nests.jsonl")))
+    except Exception:
+        pass
+    return _ROOT / "_logs" / "ai_nests.jsonl"
+
+
+_DEFAULT_LOG = _default_log_path()
 
 
 def telemetry_enabled() -> bool:

@@ -55,6 +55,22 @@ REGRESIONES = [
         "test_amada_fixtura_catalogo.py",
         "2026-08-06e - Amada elige Fixtura 2 (28.95) cuando es la más justa",
     ),
+    (
+        "test_auto_setup_dependencies_internal_modules.py",
+        "2026-08-13 - build no trata `arga_nest_core`/`engine` como paquetes pip",
+    ),
+    (
+        "test_ezdxf_thread_lock.py",
+        "2026-08-13 - race audit+render ezdxf crashea .exe en Py3.14; EZDXF_LOCK serializa",
+    ),
+    (
+        "test_cut_gaps_table.py",
+        "2026-08-13d - tabla de gaps por calibre conserva kerf/margen y bloquea calibres sin regla",
+    ),
+    (
+        "test_nvidia_spark_prefs.py",
+        "2026-08-13e - NvidiaSpark inicia Local y persiste Auto solo al activarlo",
+    ),
 ]
 
 

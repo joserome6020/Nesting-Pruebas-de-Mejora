@@ -23,6 +23,8 @@ from interface.qt.dxf_part_geometry import (
     rotar_punto,
 )
 from interface.qt.dxf_qt_renderer import rotate_modelspace
+# Serializa el parseo ezdxf contra el audit thread. Ver modules/dxf_thread_lock.py.
+from modules.dxf_thread_lock import EZDXF_LOCK
 
 
 @dataclass
@@ -59,6 +61,12 @@ def _insunits_factor(doc) -> float:
 
 
 def load_dxf_part(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | None:
+    """Carga y parsea el DXF bajo `EZDXF_LOCK` (evita race con audit thread)."""
+    with EZDXF_LOCK:
+        return _load_dxf_part_impl(ruta_dxf, rotacion_vista_deg)
+
+
+def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | None:
     try:
         doc = ezdxf.readfile(ruta_dxf)
     except Exception:

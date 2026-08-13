@@ -3,30 +3,95 @@ import shutil
 import sys
 
 
+APP_NAME = "ArgaNestingSuite"
+
+
 def _repo_root() -> str:
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _exe_dir() -> str:
+    """Carpeta del .exe (o del intérprete en dev)."""
+    try:
+        return os.path.dirname(os.path.abspath(sys.executable))
+    except Exception:
+        return _repo_root()
+
+
+def _local_appdata_root() -> str:
+    """Raíz del perfil del usuario para instalación por-usuario (sin admin)."""
+    for env in ("LOCALAPPDATA", "APPDATA"):
+        v = str(os.environ.get(env) or "").strip()
+        if v:
+            return v
+    return os.path.expanduser("~")
+
+
+def data_dir() -> str:
+    """
+    Directorio persistente donde viven los mutables de la app
+    (historial_jobs.json, inventario_remanentes.csv, _config, cache, _logs, ...).
+
+    Resolución:
+      1) ARGA_NEST_DATA_DIR  (override manual, útil para pruebas / portable).
+      2) Frozen .exe        →  %LOCALAPPDATA%\\ArgaNestingSuite\\data
+      3) Dev (python main.py) →  raíz del repo (compat).
+
+    En modo frozen deja de escribir al lado del .exe: los updates ya no
+    pueden pisar datos del usuario, y todas las PCs miran al mismo lugar.
+    """
+    override = str(os.environ.get("ARGA_NEST_DATA_DIR") or "").strip()
+    if override:
+        return override
+    if _is_frozen():
+        return os.path.join(_local_appdata_root(), APP_NAME, "data")
+    return _repo_root()
+
+
+def install_root() -> str:
+    """
+    Raíz del "producto instalado" (por-usuario). Contiene:
+      - app\\<version>\\   (inmutable, viene de cada release)
+      - data\\              (persistente, sobrevive updates)
+      - updates\\           (descargas)
+      - logs\\updater.log
+      - install.json
+    En dev retorna la raíz del repo (para no crear basura en LOCALAPPDATA).
+    """
+    if _is_frozen():
+        return os.path.join(_local_appdata_root(), APP_NAME)
+    return _repo_root()
+
+
 def app_search_roots():
     """
-    Raíces donde buscar recursos nativos / datos (exe, _MEIPASS, repo).
-    Orden: carpeta del .exe (sidecars) → bundle PyInstaller → raíz del repo.
+    Raíces donde buscar recursos / datos.
+    Orden:
+      1) data_dir()           (mutables actuales)
+      2) carpeta del .exe     (sidecars legacy y app\\<version>\\ en releases nuevos)
+      3) bundle PyInstaller   (_MEIPASS)
+      4) raíz del repo        (dev)
     """
-    roots: list[str] = []
-    if getattr(sys, "frozen", False):
-        try:
-            roots.append(os.path.dirname(os.path.abspath(sys.executable)))
-        except Exception:
-            pass
+    roots: list[str] = [data_dir()]
+    if _is_frozen():
+        exe_d = _exe_dir()
+        if exe_d:
+            roots.append(exe_d)
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             roots.append(str(meipass))
     roots.append(_repo_root())
-    # Dedup preservando orden
     out: list[str] = []
     seen: set[str] = set()
     for r in roots:
-        key = os.path.normcase(os.path.abspath(r))
+        try:
+            key = os.path.normcase(os.path.abspath(r))
+        except Exception:
+            continue
         if key in seen:
             continue
         seen.add(key)
@@ -35,7 +100,7 @@ def app_search_roots():
 
 
 def ruta_recurso(ruta_relativa):
-    """Para archivos estáticos empaquetados dentro del .exe (imágenes, scripts, macros)"""
+    """Para archivos estáticos empaquetados dentro del .exe (imágenes, scripts, macros)."""
     try:
         # PyInstaller guarda los archivos empaquetados en esta ruta temporal
         ruta_base = sys._MEIPASS
@@ -45,31 +110,144 @@ def ruta_recurso(ruta_relativa):
 
 
 def ruta_persistente(ruta_relativa):
-    """Para archivos que el sistema/usuario modifica y deben guardarse junto al .exe (JSON, Excel)"""
-    if getattr(sys, "frozen", False):
-        # Si es un .exe compilado, usa la carpeta donde está guardado el ejecutable
-        ruta_base = os.path.dirname(sys.executable)
-    else:
-        # Entorno de desarrollo normal
-        ruta_base = _repo_root()
-    return os.path.join(ruta_base, ruta_relativa)
+    """
+    Para archivos que el sistema/usuario modifica.
+
+    Frozen: %LOCALAPPDATA%\\ArgaNestingSuite\\data\\<rel>  (sobrevive updates).
+    Dev:    raíz del repo (compat con `python main.py`).
+    """
+    return os.path.join(data_dir(), ruta_relativa)
+
+
+# Mutables que la app debe conservar entre versiones.
+# Se usan para migrar del layout legacy (junto al .exe) al nuevo data_dir.
+_LEGACY_MUTABLE_ENTRIES: tuple[tuple[str, bool], ...] = (
+    ("historial_jobs.json", False),
+    ("inventario_remanentes.csv", False),
+    ("herinox_sync.local.json", False),
+    ("configuracion_nesting.json", False),
+    ("Plates.xlsx", False),
+    ("cache", True),
+    ("TEMP_PROCESSED", True),
+    ("_logs", True),
+    ("_config", True),
+)
+
+
+def _migrate_legacy_data(dst_dir: str) -> None:
+    """
+    One-shot: si el layout anterior (mutables al lado del .exe) tiene datos,
+    los mueve a data_dir en el primer arranque de la versión nueva.
+
+    - Best-effort: cualquier fallo se ignora para no romper el arranque.
+    - No sobreescribe archivos ya presentes en data_dir.
+    - Solo aplica en frozen; en dev el data_dir coincide con la raíz del repo.
+    """
+    if not _is_frozen():
+        return
+    src_dir = _exe_dir()
+    if not src_dir:
+        return
+    try:
+        same = os.path.normcase(os.path.abspath(src_dir)) == os.path.normcase(
+            os.path.abspath(dst_dir)
+        )
+    except Exception:
+        same = False
+    if same:
+        return
+    for rel, is_dir in _LEGACY_MUTABLE_ENTRIES:
+        src = os.path.join(src_dir, rel)
+        dst = os.path.join(dst_dir, rel)
+        try:
+            if is_dir:
+                if os.path.isdir(src) and not os.path.isdir(dst):
+                    shutil.copytree(src, dst)
+            else:
+                if os.path.isfile(src) and not os.path.isfile(dst):
+                    parent = os.path.dirname(dst)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    shutil.copy2(src, dst)
+        except Exception:
+            continue
+
+
+# Mutables que se siembran desde `defaults/` (bundle o sidecar) al data_dir
+# en primer arranque. Solo archivos (no directorios); los dirs se crean lazy
+# cuando alguien escribe.
+_SEED_FROM_DEFAULTS: tuple[str, ...] = (
+    "inventario_remanentes.csv",
+    "configuracion_nesting.json",
+    os.path.join("_config", "step_export_folders.json"),
+)
+
+
+def _seed_defaults_into_data_dir(dst_dir: str) -> None:
+    """
+    Copia plantillas del release al data_dir en primer arranque.
+    - En frozen: fuentes = `_MEIPASS/defaults/<rel>` y `<exe_dir>/defaults/<rel>`.
+    - En dev: no aplica; el repo ya es el data_dir.
+    Nunca sobreescribe archivos existentes.
+    """
+    if not _is_frozen():
+        return
+    for rel in _SEED_FROM_DEFAULTS:
+        try:
+            asegurar_archivo_persistente(rel)
+        except Exception:
+            continue
+
+
+def bootstrap_data_dir() -> str:
+    """
+    Garantiza que data_dir exista, migra el layout anterior (mutables junto al
+    .exe) y siembra plantillas del release (`defaults/`) que aún no existan.
+    Devuelve el path absoluto de data_dir.
+    """
+    d = data_dir()
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    _migrate_legacy_data(d)
+    _seed_defaults_into_data_dir(d)
+    return d
 
 
 def asegurar_archivo_persistente(ruta_relativa: str) -> str:
     """
-    Ruta persistente junto al .exe; si no existe, copia la plantilla empaquetada (_MEIPASS).
-    Útil para inventario_remanentes.csv, herinox_sync.local.json, etc. en otras PCs.
+    Ruta persistente en data_dir; si no existe, siembra desde (en orden):
+      1) Bundle PyInstaller (_MEIPASS/defaults/<rel>)  — plantilla del release.
+      2) Bundle PyInstaller (_MEIPASS/<rel>)           — plantilla legacy.
+      3) Sidecar junto al .exe (compat con instalaciones actuales).
     """
     destino = ruta_persistente(ruta_relativa)
     if os.path.exists(destino):
         return destino
+    fuentes: list[str] = []
     try:
-        plantilla = ruta_recurso(ruta_relativa)
-        if os.path.isfile(plantilla):
-            os.makedirs(os.path.dirname(destino) or ".", exist_ok=True)
-            shutil.copy2(plantilla, destino)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            fuentes.append(os.path.join(str(meipass), "defaults", ruta_relativa))
+            fuentes.append(os.path.join(str(meipass), ruta_relativa))
     except Exception:
         pass
+    if _is_frozen():
+        exe_d = _exe_dir()
+        if exe_d:
+            fuentes.append(os.path.join(exe_d, "defaults", ruta_relativa))
+            fuentes.append(os.path.join(exe_d, ruta_relativa))
+    for src in fuentes:
+        try:
+            if os.path.isfile(src):
+                parent = os.path.dirname(destino)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                shutil.copy2(src, destino)
+                break
+        except Exception:
+            continue
     return destino
 
 # --- RUTAS ---

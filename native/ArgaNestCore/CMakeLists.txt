@@ -52,6 +52,13 @@ endif()
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 
+# Fuerza a pybind11 a reusar el Python que ya encontramos con find_package(Python).
+# Sin esto, pybind11 dispara find_package(PythonInterp/PythonLibs) legacy y en PCs
+# con multiples Pythons (ej. 3.13 + 3.14) engancha el "equivocado" ignorando el
+# -DPython_EXECUTABLE=... que le pasa build_arga_nest_core.ps1. Regresion: crash
+# 2026-08-13 (audit+render ezdxf en 3.14).
+set(PYBIND11_FINDPYTHON ON CACHE BOOL "" FORCE)
+
 include(FetchContent)
 FetchContent_Declare(
     pybind11

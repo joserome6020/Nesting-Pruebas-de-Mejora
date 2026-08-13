@@ -6,6 +6,12 @@ import math
 from PySide6.QtCore import QRectF
 from PySide6.QtWidgets import QGraphicsScene
 
+# ezdxf NO es thread-safe. Si el UI hilo dibuja mientras un thread de fondo
+# (p.ej. `_thread_auditar_dxfs`) parsea otro DXF, el GC de Python 3.14 puede
+# provocar access violation en `python314.dll`. Serializamos con EZDXF_LOCK.
+# Ver modules/dxf_thread_lock.py y crash 2026-08-13.
+from modules.dxf_thread_lock import EZDXF_LOCK
+
 
 def rotate_modelspace(msp, cx: float, cy: float, rot_deg: int) -> None:
     """Rota entidades del modelspace in-place alrededor de (cx, cy)."""
@@ -19,11 +25,12 @@ def rotate_modelspace(msp, cx: float, cy: float, rot_deg: int) -> None:
         @ Matrix44.z_rotate(math.radians(rot))
         @ Matrix44.translate(-cx, -cy, 0)
     )
-    for entity in list(msp):
-        try:
-            entity.transform(m)
-        except Exception:
-            pass
+    with EZDXF_LOCK:
+        for entity in list(msp):
+            try:
+                entity.transform(m)
+            except Exception:
+                pass
 
 
 def render_modelspace(
@@ -46,8 +53,9 @@ def render_modelspace(
         background_policy=BackgroundPolicy.CUSTOM,
         custom_bg_color=bg_color,
     )
-    ctx = RenderContext(doc)
-    Frontend(ctx, backend, config=cfg).draw_layout(msp, finalize=True)
+    with EZDXF_LOCK:
+        ctx = RenderContext(doc)
+        Frontend(ctx, backend, config=cfg).draw_layout(msp, finalize=True)
     rect = scene.sceneRect()
     if rect.isNull() or (rect.width() < 1e-9 and rect.height() < 1e-9):
         return QRectF()

@@ -7,6 +7,10 @@ from ezdxf import path
 from shapely.geometry import LineString, MultiLineString, Polygon
 from shapely.ops import linemerge, polygonize
 
+# ezdxf NO es thread-safe (regresion 2026-08-13: audit + UI render pisando el
+# mismo pipeline C -> access violation en Python 3.14). Ver modules/dxf_thread_lock.py.
+from modules.dxf_thread_lock import EZDXF_LOCK
+
 # Constantes de configuración de capas
 ESCALA_DXF = 25.4
 # Tolerancia CAD: máx. desviación arco→segmento (~0.05 mm).
@@ -406,7 +410,16 @@ def recuperar_geometria_robusta_detalle(ruta_dxf):
     """
     Igual que recuperar_geometria_robusta pero devuelve (poly, marks, error).
     error es None cuando la geometría es válida.
+
+    Serializado bajo `EZDXF_LOCK`: previene el race audit-thread vs UI-render
+    que crasheaba el .exe en Python 3.14 (crash 2026-08-13). El lock es
+    reentrante; la latencia añadida es despreciable frente al costo del parseo.
     """
+    with EZDXF_LOCK:
+        return _recuperar_geometria_robusta_detalle_impl(ruta_dxf)
+
+
+def _recuperar_geometria_robusta_detalle_impl(ruta_dxf):
     ruta = str(ruta_dxf or "").strip()
     if not ruta:
         return None, None, "Ruta DXF vacía."

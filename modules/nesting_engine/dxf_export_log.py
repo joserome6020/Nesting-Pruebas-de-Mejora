@@ -10,7 +10,24 @@ from datetime import datetime
 from typing import Any
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_LOG_DIR = os.path.join(_ROOT, "_logs")
+
+
+def _resolve_log_dir() -> str:
+    """
+    En frozen usa data_dir (fuera del bundle temp _MEIPASS);
+    en dev, mantiene _ROOT/_logs para no cambiar el layout local.
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            import config as _cfg
+
+            return _cfg.ruta_persistente("_logs")
+    except Exception:
+        pass
+    return os.path.join(_ROOT, "_logs")
+
+
+_LOG_DIR = _resolve_log_dir()
 _LOG_FILE = os.path.join(_LOG_DIR, "dxf_export.log")
 
 
