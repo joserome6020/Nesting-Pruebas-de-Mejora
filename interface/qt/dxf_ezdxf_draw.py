@@ -24,10 +24,12 @@ def rotate_modelspace(msp, cx: float, cy: float, rot_deg: int) -> None:
     rot = int(rot_deg) % 360
     if rot == 0:
         return
-    m = (
-        Matrix44.translate(cx, cy, 0)
-        @ Matrix44.z_rotate(math.radians(rot))
-        @ Matrix44.translate(-cx, -cy, 0)
+    # ezdxf usa vectores fila (v' = v @ M): en `A @ B` se aplica A PRIMERO.
+    # Centro al origen → rotar → devolver. Ver nota en dxf_qt_renderer.
+    m = Matrix44.chain(
+        Matrix44.translate(-cx, -cy, 0),
+        Matrix44.z_rotate(math.radians(rot)),
+        Matrix44.translate(cx, cy, 0),
     )
     for entity in list(msp):
         try:

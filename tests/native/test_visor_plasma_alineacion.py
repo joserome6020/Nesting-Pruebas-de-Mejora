@@ -74,7 +74,16 @@ def _msp_outer_bbox(msp) -> tuple[float, float, float, float]:
             for a in (sa, ea):
                 xs.append(c.x + r * math.cos(a))
                 ys.append(c.y + r * math.sin(a))
-    return min(xs), min(ys), max(xs), max(ys)
+        elif e.dxftype() == "LWPOLYLINE":
+            for x, y, *_ in e.get_points("xy"):
+                xs.append(x)
+                ys.append(y)
+        elif e.dxftype() == "CIRCLE":
+            c = e.dxf.center
+            r = float(e.dxf.radius)
+            xs.extend([c.x - r, c.x + r])
+            ys.extend([c.y - r, c.y + r])
+    return (min(xs), min(ys), max(xs), max(ys)) if xs else None
 
 
 def _ring_bbox(ring) -> tuple[float, float, float, float]:
@@ -83,30 +92,95 @@ def _ring_bbox(ring) -> tuple[float, float, float, float]:
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _crear_dxf_lwpolyline(ruta: Path, W: float, H: float) -> None:
+    """Flat pattern con outer LWPOLYLINE (la otra ruta del loader)."""
+    import ezdxf  # type: ignore
+
+    doc = ezdxf.new("R2018")
+    doc.header["$INSUNITS"] = 1
+    msp = doc.modelspace()
+    for capa, color in (("CUT_OUTER", 1), ("CUT_INNER", 3)):
+        if capa not in doc.layers:
+            doc.layers.new(capa, dxfattribs={"color": color})
+    msp.add_lwpolyline(
+        [(0, 0), (W, 0), (W, H), (0, H)],
+        close=True,
+        dxfattribs={"layer": "CUT_OUTER"},
+    )
+    msp.add_lwpolyline(
+        [(1.0, 1.0), (2.2, 1.0), (2.2, 1.6), (1.0, 1.6)],
+        close=True,
+        dxfattribs={"layer": "CUT_INNER"},
+    )
+    doc.saveas(str(ruta))
+
+
+def _centro(bb) -> tuple[float, float]:
+    return ((bb[0] + bb[2]) * 0.5, (bb[1] + bb[3]) * 0.5)
+
+
 def test_ring_alineado_con_msp_para_todas_las_rotaciones() -> None:
-    """Bug: al rotar el visor el rojo aparecía desplazado (doble rotación)."""
+    """Bug: al rotar, el contorno rojo aparecía separado de la pieza.
+
+    Se cubren las DOS rutas del loader (LINE+ARC de Inventor y LWPOLYLINE),
+    porque el desplazamiento venía de ``rotate_modelspace`` y afectaba a
+    ambas por igual.
+    """
     from interface.qt.dxf_part_loader import load_dxf_part
 
     with tempfile.TemporaryDirectory() as td:
-        ruta = Path(td) / "iv_rot.dxf"
-        _crear_dxf_inventor(ruta)
-        for rot in (0, 90, 180, 270):
-            model = load_dxf_part(str(ruta), rotacion_vista_deg=rot)
-            assert model is not None, f"loader None en rot={rot}"
-            rings = list(model.outer_rings or [])
-            assert rings, f"outer_rings vacío en rot={rot}"
-            rb = _ring_bbox(rings[0])
-            mb = _msp_outer_bbox(model.msp)
-            deltas = [
-                abs(rb[0] - mb[0]),
-                abs(rb[1] - mb[1]),
-                abs(rb[2] - mb[2]),
-                abs(rb[3] - mb[3]),
-            ]
-            assert max(deltas) < 0.02, (
-                f"rot={rot}: ring bbox {rb} != msp bbox {mb} "
-                f"deltas={deltas} (>0.02 in ⇒ doble rotación regresada)"
-            )
+        casos = {}
+        ruta_iv = Path(td) / "iv_rot.dxf"
+        _crear_dxf_inventor(ruta_iv)
+        casos["LINE+ARC"] = ruta_iv
+        ruta_lw = Path(td) / "lw_rot.dxf"
+        _crear_dxf_lwpolyline(ruta_lw, 6.53, 3.57)
+        casos["LWPOLYLINE"] = ruta_lw
+
+        for etiqueta, ruta in casos.items():
+            for rot in (0, 90, 180, 270):
+                model = load_dxf_part(str(ruta), rotacion_vista_deg=rot)
+                assert model is not None, f"{etiqueta} rot={rot}: loader None"
+                rings = list(model.outer_rings or [])
+                assert rings, f"{etiqueta} rot={rot}: outer_rings vacío"
+                rb = _ring_bbox(rings[0])
+                mb = _msp_outer_bbox(model.msp)
+                deltas = [abs(rb[i] - mb[i]) for i in range(4)]
+                assert max(deltas) < 0.02, (
+                    f"{etiqueta} rot={rot}: ring bbox {rb} != msp bbox {mb} "
+                    f"deltas={deltas} — el énfasis rojo saldría separado de la pieza"
+                )
+
+
+def test_rotacion_conserva_el_centro_de_la_pieza() -> None:
+    """Check absoluto: rotar 90/180/270 sobre el centro no puede trasladar.
+
+    Comparar sólo anillo-vs-msp es circular (ambos pueden estar mal igual).
+    ``rotate_modelspace`` componía la matriz al revés — ezdxf usa vectores
+    fila, así que en ``A @ B`` se aplica A primero — y dejaba la msp
+    trasladada. La traslación era invisible porque ``fit_view`` reencuadra,
+    hasta que se superpuso ``outer_rings`` y aparecieron dos contornos.
+    """
+    from interface.qt.dxf_part_loader import load_dxf_part
+
+    with tempfile.TemporaryDirectory() as td:
+        for etiqueta, crear in (
+            ("LINE+ARC", lambda p: _crear_dxf_inventor(p)),
+            ("LWPOLYLINE", lambda p: _crear_dxf_lwpolyline(p, 6.53, 3.57)),
+        ):
+            ruta = Path(td) / f"centro_{etiqueta.replace('+', '_')}.dxf"
+            crear(ruta)
+            base = load_dxf_part(str(ruta), rotacion_vista_deg=0)
+            cx0, cy0 = _centro(_msp_outer_bbox(base.msp))
+            for rot in (90, 180, 270):
+                model = load_dxf_part(str(ruta), rotacion_vista_deg=rot)
+                cx, cy = _centro(_msp_outer_bbox(model.msp))
+                desvio = math.hypot(cx - cx0, cy - cy0)
+                assert desvio < 0.02, (
+                    f"{etiqueta} rot={rot}: la pieza se trasladó {desvio:.3f} in "
+                    f"(centro {cx0:.3f},{cy0:.3f} → {cx:.3f},{cy:.3f}); rotar "
+                    f"sobre el centro debe conservarlo"
+                )
 
 
 def test_label_plasma_usa_flag_cosmetico() -> None:
@@ -164,6 +238,7 @@ def test_set_plasma_overlay_y_emphasize_delegan_al_helper() -> None:
 
 if __name__ == "__main__":
     test_ring_alineado_con_msp_para_todas_las_rotaciones()
+    test_rotacion_conserva_el_centro_de_la_pieza()
     test_label_plasma_usa_flag_cosmetico()
     test_set_plasma_overlay_y_emphasize_delegan_al_helper()
     print("OK visor_plasma_alineacion")

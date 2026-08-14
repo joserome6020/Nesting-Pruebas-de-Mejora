@@ -20,10 +20,15 @@ def rotate_modelspace(msp, cx: float, cy: float, rot_deg: int) -> None:
     rot = int(rot_deg) % 360
     if rot == 0:
         return
-    m = (
-        Matrix44.translate(cx, cy, 0)
-        @ Matrix44.z_rotate(math.radians(rot))
-        @ Matrix44.translate(-cx, -cy, 0)
+    # ezdxf usa vectores fila (v' = v @ M): en `A @ B` se aplica A PRIMERO.
+    # El orden debe ser llevar el centro al origen, rotar y devolverlo; el
+    # orden inverso rota bien pero deja la msp trasladada, y esa traslación
+    # es invisible tras `fit_view` — hasta que se superpone `outer_rings`
+    # (calculado con `rotar_punto`) y aparecen dos contornos separados.
+    m = Matrix44.chain(
+        Matrix44.translate(-cx, -cy, 0),
+        Matrix44.z_rotate(math.radians(rot)),
+        Matrix44.translate(cx, cy, 0),
     )
     with EZDXF_LOCK:
         for entity in list(msp):

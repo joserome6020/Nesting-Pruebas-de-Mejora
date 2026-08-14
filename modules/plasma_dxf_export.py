@@ -22,12 +22,19 @@ from modules.dxf_native_curves import export_ring_native
 
 from modules.nesting_engine.geometry_parser import ESCALA_DXF, _clasificar_capa
 
-# Solo estas capas reciben desfase plasma (como OFFSET de AutoCAD).
-_PLASMA_OFFSET_OUTER_LAYERS = frozenset(
-    {"CUT_OUTER", "OUTER", "CORTE_EXTERNO", "IV_OUTER"}
-)
-_PLASMA_OFFSET_INNER_LAYERS = frozenset(
-    {"CUT_INNER", "INNER", "CORTE_INTERNO", "IV_INTERIOR", "INTERIOR"}
+# Familias de capa que reciben desfase plasma (como OFFSET de AutoCAD).
+# Se comparan por SUBCADENA, igual que `_clasificar_capa` del nest: Inventor
+# exporta `IV_OUTER_PROFILE` / `IV_INTERIOR_PROFILES`, no `IV_OUTER` /
+# `IV_INTERIOR` exactos. Con match exacto ninguna pieza flat-pattern de chapa
+# clasificaba su contorno y el export moría en "plasma sin contorno
+# exportable desde el nest" pese a que el nest sí la reconocía.
+_PLASMA_OFFSET_OUTER_LAYERS = ("CUT_OUTER", "OUTER", "CORTE_EXTERNO", "IV_OUTER")
+_PLASMA_OFFSET_INNER_LAYERS = (
+    "CUT_INNER",
+    "INNER",
+    "CORTE_INTERNO",
+    "IV_INTERIOR",
+    "INTERIOR",
 )
 
 
@@ -36,12 +43,23 @@ def _plasma_desfase_clase(layer_name: str) -> str | None:
     Capas que reciben desfase en export plasma.
     CUT_OUTER -> hacia afuera (+offset); CUT_INNER -> hacia adentro (-offset).
     Cualquier otra capa (MARK, Plate, 0, etc.) no se desfasa aquí.
+
+    La capa por defecto ``"0"`` queda fuera a propósito: el nest la trata como
+    contorno, pero en plasma suele traer marcos y notas que no deben cortarse.
     """
+    from modules.nesting_engine.geometry_parser import LAYER_MARK
+
     u = str(layer_name or "").upper().strip()
-    if u in _PLASMA_OFFSET_OUTER_LAYERS:
-        return "outer"
-    if u in _PLASMA_OFFSET_INNER_LAYERS:
+    if not u:
+        return None
+    if any(m in u for m in LAYER_MARK):
+        return None
+    # Inner primero: "IV_INTERIOR_PROFILES" contiene "INTERIOR"; el guard de
+    # "OUTER" evita que una capa mixta caiga del lado equivocado.
+    if any(x in u for x in _PLASMA_OFFSET_INNER_LAYERS) and "OUTER" not in u:
         return "inner"
+    if any(x in u for x in _PLASMA_OFFSET_OUTER_LAYERS):
+        return "outer"
     return None
 
 from modules.plasma_compensator import _buffer_polygon_points, _entity_points_xy

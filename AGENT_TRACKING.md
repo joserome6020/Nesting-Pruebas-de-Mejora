@@ -46,6 +46,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14r — Buzón: vista previa de capturas
+
+- Debajo de la lista de adjuntos se muestra la imagen seleccionada.
+- Al pegar/capturar se selecciona sola y se ve antes de abrir Outlook.
+
+### 2026-08-14q — Buzón: pegar captura Shift+Win+S
+
+- En la descripción del Buzón, Ctrl+V con imagen del portapapeles la agrega
+  como adjunto (`captura_portapapeles_N.png`). También hay **PEGAR CAPTURA**.
+- Sin Power Automate / canal avanzado.
+
 ### 2026-08-14p — Buzón solo Outlook (sin canal Premium)
 
 - Se quitó **CANAL AVANZADO** / Power Automate del diálogo: no hay licencia.
@@ -74,6 +85,62 @@ código viejo. Un bug sin candado vuelve.
 - Guía de creación del flujo: `docs/BUZON_POWER_AUTOMATE.md`.
 - Build: `support_inbox` está en hidden imports, archivos críticos y smoke
   imports. Paridad confirmada con `ANS C++`; prueba headless del diálogo PASS.
+
+### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
+
+Dos bugs independientes reportados en la misma sesión de planta (job 62177).
+
+**1. Export plasma reventaba en toda pieza de chapa (BLOQUEADOR).**
+`<PIEZA>_PLASMA: plasma: sin contorno exportable desde el nest`.
+`_plasma_desfase_clase` comparaba la capa por **igualdad exacta** contra
+`{"CUT_OUTER","OUTER","CORTE_EXTERNO","IV_OUTER"}`, pero Inventor exporta
+los flat patterns como `IV_OUTER_PROFILE` / `IV_INTERIOR_PROFILES`. Ninguna
+clasificaba → `by_clase["outer"]` vacío → `stats["outer"] == 0` → el export
+abortaba, aunque el nest sí reconocía la pieza porque
+`geometry_parser._clasificar_capa` compara por **subcadena**. Dos caminos
+calculando lo mismo distinto (regla 9 de `AGENTS.md`).
+Fix: `_plasma_desfase_clase` pasa a match por subcadena alineado con el
+nest, con orden mark → inner → outer. Se mantienen fuera a propósito la
+capa por defecto `"0"` (el nest la trata como contorno; en plasma trae
+marcos y notas) y las capas de marcado. El cambio es un superconjunto
+estricto del comportamiento anterior: sólo clasifica capas que antes caían
+en `None`.
+Verificado con el DXF real: `outer=1, inner=7`, salida normalizada a
+`CUT_OUTER`/`CUT_INNER`, crecimiento exterior `0.635 mm` = `2 × 0.3175`
+(y agujeros encogiendo lo mismo).
+Nota: el guard contra doble compensación (`ya_comp → off_export = 0.0` en
+`exporter.py`) sigue intacto; la ruta que fallaba es la que aplica el
+desfase sobre el DXF **original** de Inventor.
+
+**2. `rotate_modelspace` trasladaba la pieza al rotar.**
+ezdxf usa vectores fila (`v' = v @ M`), así que en `A @ B` se aplica **A
+primero**. La matriz estaba compuesta como `translate(+c) @ rotate @
+translate(-c)`, o sea al revés: rotaba bien pero dejaba la msp trasladada.
+La traslación era **invisible** porque `fit_view` reencuadra — hasta que se
+empezó a superponer `outer_rings` (calculado con `rotar_punto`, correcto) y
+aparecieron **dos contornos rojos separados** en el visor. Afectaba a las
+dos rutas del loader (LINE+ARC y LWPOLYLINE) y a ambas copias de la
+función (`dxf_qt_renderer.py` y `dxf_ezdxf_draw.py`).
+Fix: `Matrix44.chain(translate(-c), z_rotate, translate(+c))`.
+Medido: box 6.53×3.57 a 90° pasaba de `(-8.62,1.48,-5.05,8.01)` (mal) a
+`(1.48,-1.48,5.05,5.05)` (bien, = lo que da `rotar_punto`).
+Esto corrige de paso el candado `14n`, que comparaba anillo contra msp y
+por tanto era **circular**: ambos podían estar mal de la misma forma.
+
+Candados:
+- `tests/native/test_plasma_export_capas_inventor.py` (nuevo): clasificación
+  de capas Inventor + históricas; capas que NO deben cortarse (`0`, `IV_BEND`,
+  `IV_TANGENT`, marcado) siguen fuera; repro del export con flat pattern
+  sintético exigiendo `outer>0`, capas normalizadas y magnitud del desfase
+  (`+2·off` afuera, `−2·off` en agujeros).
+- `test_visor_plasma_alineacion.py` reforzado: cubre también LWPOLYLINE y
+  añade un check **absoluto** —rotar sobre el centro debe conservar el
+  centro— en vez de sólo comparar anillo contra msp.
+- Ambos verificados como fallando contra el código viejo antes de fijarlos.
+- Regresiones 24/24 en ambos proyectos.
+
+Build: sin cambios necesarios (no hay módulos, binarios ni assets nuevos;
+sólo ediciones a archivos ya empaquetados y tests, que no entran al `.exe`).
 
 ### 2026-08-14n — énfasis plasma alineado y label cosmético
 

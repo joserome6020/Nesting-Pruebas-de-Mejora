@@ -111,6 +111,10 @@ REGRESIONES = [
         "test_visor_plasma_alineacion.py",
         "2026-08-14n - énfasis plasma alineado con la pieza en toda rotación + label cosmético",
     ),
+    (
+        "test_plasma_export_capas_inventor.py",
+        "2026-08-14o - export plasma reconoce IV_OUTER_PROFILE/IV_INTERIOR_PROFILES (flat pattern chapa)",
+    ),
 ]
 
 
