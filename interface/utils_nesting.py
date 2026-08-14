@@ -37,6 +37,20 @@ def clave_orientacion_cobre_ruta(ruta) -> str:
     return os.path.normcase(os.path.normpath(str(ruta or "")))
 
 
+def clave_orientacion_pieza(ruta, plasma_dxf_por_ruta=None) -> str:
+    """Clave de orientación estable: el DXF compensado comparte la del original.
+
+    El visor renderiza el compensado (`Plasma Compensated/...`), así que sin esto
+    el bloqueo y los grados se guardarían con una clave distinta a la de lectura
+    y se perderían al cambiar de pieza.
+    """
+    clave = clave_orientacion_cobre_ruta(ruta)
+    for clave_origen, compensado in (plasma_dxf_por_ruta or {}).items():
+        if compensado and clave_orientacion_cobre_ruta(compensado) == clave:
+            return str(clave_origen)
+    return clave
+
+
 def _codigo_placa_base(plate_id) -> str:
     """'PLC107 P1' / 'PLC107' → 'PLC107'."""
     return str(plate_id or "").strip().split()[0].strip().upper()

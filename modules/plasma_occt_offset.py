@@ -263,6 +263,71 @@ def ring_is_simple(ring: Sequence[tuple[float, float]]) -> bool:
         return False
 
 
+def _muestra(ring: Sequence[tuple[float, float]], maximo: int = 600) -> list:
+    pts = list(ring or [])
+    if len(pts) <= maximo:
+        return pts
+    paso = max(1, len(pts) // maximo)
+    return pts[::paso]
+
+
+def rings_coinciden(
+    ring_a: Sequence[tuple[float, float]],
+    ring_b: Sequence[tuple[float, float]],
+    tol: float,
+) -> bool:
+    """Compara dos contornos punto a punto (Hausdorff) sin importar el orden."""
+    try:
+        from shapely.geometry import LineString
+
+        a, b = list(ring_a or []), list(ring_b or [])
+        if len(a) < 2 or len(b) < 2:
+            return False
+        la, lb = LineString(a), LineString(b)
+        return max(la.hausdorff_distance(lb), lb.hausdorff_distance(la)) <= tol
+    except Exception:
+        return False
+
+
+def _distancia_offset_valida(
+    src_ring: Sequence[tuple[float, float]],
+    out_ring: Sequence[tuple[float, float]],
+    delta: float,
+) -> str:
+    """Todo punto del resultado debe estar a ``|delta|`` del contorno origen.
+
+    Es la definición de un offset; detecta bultos, picos y arcos convertidos al
+    complementario, que las comprobaciones de bbox/área no ven.
+    """
+    try:
+        from shapely.geometry import LineString, Point
+    except Exception:
+        return "shapely no disponible para validar el offset"
+
+    d = abs(float(delta))
+    tol = max(d * 0.12, 5e-5)
+    src = list(src_ring or [])
+    out = list(out_ring or [])
+    if len(src) < 4 or len(out) < 4:
+        return "contornos insuficientes para validar distancia"
+    if math.dist(src[0], src[-1]) > 1e-9:
+        src = src + [src[0]]
+    if math.dist(out[0], out[-1]) > 1e-9:
+        out = out + [out[0]]
+    src_line, out_line = LineString(src), LineString(out)
+
+    # Solo se comprueba en este sentido: en un vértice reflex el offset corta la
+    # esquina y el origen queda legítimamente a más de |delta| del resultado.
+    for p in _muestra(out):
+        dist = src_line.distance(Point(p))
+        if abs(dist - d) > tol:
+            return (
+                f"el contorno resultante no es un offset de {d:.4f} "
+                f"(punto a {dist:.4f} en {p[0]:.3f},{p[1]:.3f})"
+            )
+    return ""
+
+
 def validate_offset_ring(
     src_ring: Sequence[tuple[float, float]],
     out_ring: Sequence[tuple[float, float]],
@@ -296,7 +361,7 @@ def validate_offset_ring(
         return "el área no creció con offset positivo"
     if d < 0 and m_out["area_abs"] >= m_in["area_abs"]:
         return "el área no disminuyó con offset negativo"
-    return ""
+    return _distancia_offset_valida(src_ring, out_ring, d)
 
 
 # ---------------------------------------------------------------------------
@@ -539,12 +604,18 @@ def _wire_ring_points(wire, *, step_deg: float = _SAMPLE_STEP_DEG) -> list[tuple
         u0, u1 = curve.FirstParameter(), curve.LastParameter()
         n = 2
         try:
-            from OCP.GeomAbs import GeomAbs_Line
+            from OCP.GeomAbs import GeomAbs_Circle, GeomAbs_Line
 
-            if curve.GetType() != GeomAbs_Line:
-                n = max(2, int(math.ceil(360.0 / max(step_deg, 0.25) / 4.0)))
+            tipo = curve.GetType()
+            if tipo == GeomAbs_Circle:
+                # Parámetro de un círculo = radianes: el muestreo sigue el barrido
+                # real (un arco de 340° necesita muchos más puntos que uno de 10°).
+                barrido = abs(math.degrees(float(u1 - u0)))
+                n = max(2, int(math.ceil(barrido / max(step_deg, 0.25))))
+            elif tipo != GeomAbs_Line:
+                n = 64
         except Exception:
-            n = 8
+            n = 64
         pts = []
         for i in range(n + 1):
             p = curve.Value(u0 + (u1 - u0) * (i / n))
@@ -702,7 +773,15 @@ def offset_entities(entities: Iterable, *, delta: float) -> OcctOffsetResult:
                     except Exception as exc:
                         rechazos.append(str(exc))
                         continue
-                    motivo = validate_offset_ring(src_ring, ring_from_specs(specs), d)
+                    ring_specs = ring_from_specs(specs)
+                    # Lo que se escribe al DXF debe ser lo que OCCT calculó: un
+                    # ARC mal convertido describiría el arco complementario.
+                    if not rings_coinciden(
+                        _wire_ring_points(out_wire), ring_specs, max(abs(d) * 0.1, 1e-4)
+                    ):
+                        rechazos.append("la conversión a DXF no coincide con el wire OCCT")
+                        continue
+                    motivo = validate_offset_ring(src_ring, ring_specs, d)
                     if motivo:
                         rechazos.append(motivo)
                         continue

@@ -46,6 +46,29 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14i — Offset verificado como offset + persistencia del bloqueo + tooltip
+
+- **Validación real del offset:** ahora se comprueba que (a) el DXF escrito
+  coincide con el wire que calculó OCCT (Hausdorff) y (b) **todo punto del
+  resultado está a `|delta|` del contorno origen**. Eso es lo único que detecta
+  bultos, picos y arcos convertidos al complementario; bbox/área no los ven.
+  Se exige unión redondeada (offset verdadero); una esquina en punta (mitra,
+  `delta·√2`) se rechaza. El muestreo del wire pasó a ser proporcional al
+  barrido del arco (un arco de 340° ya no se muestreaba grueso).
+- Candado nuevo: barreno con muesca (SWITCH PATCH) → el agujero encoge `|delta|`,
+  la muesca engorda `|delta|` y **no se mueve de ángulo**.
+- **Bloqueo de orientación con plasma:** el visor pinta el DXF compensado, así
+  que el hook guardaba con la ruta de `Plasma Compensated` y la lectura usaba la
+  original → se perdía al cambiar de pieza. Nueva
+  `clave_orientacion_pieza(ruta, plasma_dxf_por_ruta)`: compensado y original
+  comparten clave. Candado con el ciclo guardar-desde-compensado /
+  leer-desde-original.
+- **Tooltip en panel oscuro:** los widgets con stylesheet propio no heredan el
+  `QToolTip` global (fondo claro / letra negra) y quedaban texto oscuro sobre
+  fondo oscuro. `TOOLTIP_OSCURO_QSS` en `theme.py` (fondo `#1E293B`, letra
+  `#F8FAFC`) aplicado al panel del visor y a la casilla. Candado incluido.
+- Nota: la regla de 1" (`>0.75" → 0.250"/lado`) es del exportador legacy; sin cambios.
+
 ### 2026-08-14h — Plasma: polilínea cerrada de vuelta y barrenos de 2 vértices
 
 - `SWITCH PATCH 1` fallaba con *"Polilínea sin aristas suficientes"*: un círculo

@@ -25,6 +25,14 @@ COLOR_BADGE_TEXTO = "#1D4F9B"
 COLOR_EXITO = "#10B981"
 COLOR_ERROR = "#EF4444"
 
+# Tooltip para paneles oscuros: fondo oscuro con letra clara. Los widgets con
+# stylesheet propio no heredan el QToolTip global (fondo claro / letra negra) y
+# quedaban con texto oscuro sobre fondo oscuro.
+TOOLTIP_OSCURO_QSS = (
+    "QToolTip{background-color:#1E293B;color:#F8FAFC;"
+    "border:1px solid #475569;padding:4px 8px;border-radius:4px;}"
+)
+
 ARGB_BTN_1 = "#202A36"
 ARGB_BTN_2 = "#334659"
 ARGB_BTN_3 = "#455E75"

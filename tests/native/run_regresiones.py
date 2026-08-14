@@ -89,11 +89,11 @@ REGRESIONES = [
     ),
     (
         "test_plasma_occt_offset.py",
-        "2026-08-14g/h - OFFSET OCCT validado; polilínea cerrada conserva área neta",
+        "2026-08-14g/i - OFFSET verificado como offset real (distancia |delta|, sin bultos)",
     ),
     (
         "test_orientacion_corte_bloqueada.py",
-        "2026-08-14e - BLOQUEAR ORIENTACIÓN DE CORTE fija vista PARTS (grain_locked=[0])",
+        "2026-08-14e/i - BLOQUEAR ORIENTACIÓN fija vista PARTS y persiste con plasma",
     ),
 ]
 

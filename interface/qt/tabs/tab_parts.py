@@ -1087,20 +1087,25 @@ class TabParts(QWidget, TimerHost):
 
         self.app.cu_especial_por_ruta.pop(clave, None)
 
+    def _clave_orientacion(self, ruta_dxf) -> str:
+        """Misma clave para el DXF original y su versión plasma compensada."""
+        from interface.utils_nesting import clave_orientacion_pieza
+
+        return clave_orientacion_pieza(
+            ruta_dxf, getattr(self.app, "plasma_dxf_por_ruta", None) or {}
+        )
+
     def _orientacion_cobre_guardada(self, ruta_dxf) -> int:
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
         orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
-        return int(orientaciones.get(clave_orientacion_cobre_ruta(ruta_dxf), 0)) % 360
+        return int(orientaciones.get(self._clave_orientacion(ruta_dxf), 0)) % 360
 
     def _orientacion_corte_bloqueada(self, ruta_dxf) -> bool:
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
         bloqueadas = getattr(self.app, "orientacion_corte_bloqueada_por_ruta", None) or {}
-        return bool(bloqueadas.get(clave_orientacion_cobre_ruta(ruta_dxf), False))
+        return bool(bloqueadas.get(self._clave_orientacion(ruta_dxf), False))
 
     def _orientacion_corte_grados(self, ruta_dxf) -> int:
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
         grados = getattr(self.app, "orientacion_corte_por_ruta", None) or {}
-        return int(grados.get(clave_orientacion_cobre_ruta(ruta_dxf), 0)) % 360
+        return int(grados.get(self._clave_orientacion(ruta_dxf), 0)) % 360
 
     def _rotacion_vista_para_ruta(self, ruta_dxf, material=None) -> int:
         if self._es_material_cobre(material):
@@ -1115,10 +1120,9 @@ class TabParts(QWidget, TimerHost):
             return
         if not ruta_dxf:
             return
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
         if not hasattr(self.app, "orientacion_cobre_por_ruta") or self.app.orientacion_cobre_por_ruta is None:
             self.app.orientacion_cobre_por_ruta = {}
-        self.app.orientacion_cobre_por_ruta[clave_orientacion_cobre_ruta(ruta_dxf)] = int(grados) % 360
+        self.app.orientacion_cobre_por_ruta[self._clave_orientacion(ruta_dxf)] = int(grados) % 360
 
     def _persistir_orientacion_vista(self, grados, ruta_dxf):
         """Hook de ROTAR 90°: cobre legacy + grados fijados si el bloqueo está activo."""
@@ -1129,20 +1133,17 @@ class TabParts(QWidget, TimerHost):
             self._persistir_orientacion_cobre(grados_i, ruta_dxf)
         if not self._orientacion_corte_bloqueada(ruta_dxf):
             return
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
         if (
             not hasattr(self.app, "orientacion_corte_por_ruta")
             or self.app.orientacion_corte_por_ruta is None
         ):
             self.app.orientacion_corte_por_ruta = {}
-        self.app.orientacion_corte_por_ruta[clave_orientacion_cobre_ruta(ruta_dxf)] = grados_i
+        self.app.orientacion_corte_por_ruta[self._clave_orientacion(ruta_dxf)] = grados_i
 
     def _persistir_bloqueo_orientacion_corte(self, checked: bool, ruta_dxf=None):
         ruta = ruta_dxf or getattr(self.visor, "_ruta_actual", None)
         if not ruta:
             return
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
-
         if (
             not hasattr(self.app, "orientacion_corte_bloqueada_por_ruta")
             or self.app.orientacion_corte_bloqueada_por_ruta is None
@@ -1154,7 +1155,7 @@ class TabParts(QWidget, TimerHost):
         ):
             self.app.orientacion_corte_por_ruta = {}
 
-        clave = clave_orientacion_cobre_ruta(ruta)
+        clave = self._clave_orientacion(ruta)
         if checked:
             grados = 0
             try:

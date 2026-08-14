@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 
 from interface.qt.cad_graphics_view import CadPartGraphicsView
 from interface.qt.dxf_part_loader import load_dxf_part
-from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK
+from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK, TOOLTIP_OSCURO_QSS
 
 CAD_VIEW_BG = "#0B1220"
 CAD_PIECE_EDGE = "#475569"
@@ -132,8 +132,11 @@ class VisorDXF:
         self._cad.set_material(self._material)
 
     def construir_tabla_3_columnas(self):
+        # El tooltip se declara aquí también: sobre panel oscuro heredaba el texto
+        # oscuro del tema claro y quedaba ilegible.
         self.frame_seccion_3.setStyleSheet(
             "QFrame#VisorInfoPanel{background:#0F172A;border:none;}"
+            + TOOLTIP_OSCURO_QSS
         )
         row = QHBoxLayout(self.frame_seccion_3)
         row.setContentsMargins(14, 10, 14, 10)
@@ -198,6 +201,7 @@ class VisorDXF:
         self.chk_orientacion_corte.setStyleSheet(
             "QCheckBox{color:#E2E8F0;font-size:11px;font-weight:700;background:transparent;}"
             "QCheckBox::indicator{width:14px;height:14px;}"
+            + TOOLTIP_OSCURO_QSS
         )
         self.chk_orientacion_corte.setToolTip(
             "Si está activo, el nesting solo podrá usar la orientación visible "

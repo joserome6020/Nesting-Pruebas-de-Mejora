@@ -304,6 +304,60 @@ def test_polilinea_cerrada_sobrevive_y_area_no_queda_en_cero():
     assert area_despues > area_antes
 
 
+def test_barreno_con_muesca_conserva_la_muesca_en_su_sitio():
+    """SWITCH PATCH 1: barreno con muesca (material que entra al agujero).
+
+    El compensado debe crecer el metal |delta| en todo el contorno: el agujero
+    encoge, la muesca engorda y **no se mueve de su ángulo**.
+    """
+    from modules.plasma_occt_offset import offset_entities, ring_from_specs
+
+    CXY = 2.0
+    R = 0.50
+    RN = 0.07
+    ANG = 265.0
+    d = compute_plasma_offset_mm(0.1875) / 25.4
+
+    px = CXY + R * math.cos(math.radians(ANG))
+    py = CXY + R * math.sin(math.radians(ANG))
+    # Cuerdas de intersección entre el barreno y la circunferencia de la muesca.
+    dd = math.degrees(math.acos(max(-1.0, min(1.0, (2 * R * R - RN * RN) / (2 * R * R)))))
+    a0, a1 = ANG + dd, ANG - dd
+    p0 = (CXY + R * math.cos(math.radians(a0)), CXY + R * math.sin(math.radians(a0)))
+    p1 = (CXY + R * math.cos(math.radians(a1)), CXY + R * math.sin(math.radians(a1)))
+    n0 = math.degrees(math.atan2(p0[1] - py, p0[0] - px)) % 360.0
+    n1 = math.degrees(math.atan2(p1[1] - py, p1[0] - px)) % 360.0
+    # La muesca entra al agujero: su arco pasa por el punto interior (ANG+180 desde P).
+    hacia_dentro = (ANG + 180.0) % 360.0
+    if ((hacia_dentro - n0) % 360.0) <= ((n1 - n0) % 360.0):
+        arc_muesca = (n0, n1)
+    else:
+        arc_muesca = (n1, n0)
+
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 1
+    msp = doc.modelspace()
+    capa = {"layer": "CUT_INNER"}
+    msp.add_arc((CXY, CXY), R, a0, a1, dxfattribs=capa)
+    msp.add_arc((px, py), RN, arc_muesca[0], arc_muesca[1], dxfattribs=capa)
+
+    res = offset_entities(list(msp), delta=-d)
+    assert res.ok, res.error
+
+    radios = {round(float(s["radius"]), 6) for s in res.entities if s["type"] == "ARC"}
+    assert round(R - d, 6) in radios, ("el barreno debe encoger |delta|", radios)
+    assert round(RN + d, 6) in radios, ("la muesca debe engordar |delta|", radios)
+
+    ring = ring_from_specs(res.entities)
+    tip = min(ring, key=lambda p: math.dist(p, (CXY, CXY)))
+    ang_tip = math.degrees(math.atan2(tip[1] - CXY, tip[0] - CXY)) % 360.0
+    assert abs((ang_tip - ANG + 180.0) % 360.0 - 180.0) < 2.0, (
+        "la muesca se movió de ángulo",
+        ang_tip,
+    )
+    assert abs(math.dist(tip, (CXY, CXY)) - (R - RN - d)) < 1e-4
+
+
 def test_offset_deforme_es_rechazado():
     """La compuerta debe tumbar un resultado con lazos/contorno abierto."""
     from modules.plasma_occt_offset import ring_is_simple, validate_offset_ring
@@ -314,14 +368,27 @@ def test_offset_deforme_es_rechazado():
     assert validate_offset_ring(cuadro, lazo, 0.0125)
     abierto = [(-0.0125, -0.0125), (10.0125, -0.0125), (10.0125, 5.0125), (3.0, 5.0125)]
     assert validate_offset_ring(cuadro, abierto, 0.0125)
-    bueno = [
-        (-0.0125, -0.0125),
-        (10.0125, -0.0125),
-        (10.0125, 5.0125),
-        (-0.0125, 5.0125),
-        (-0.0125, -0.0125),
+
+    # Offset real: lados desplazados + arcos de unión de radio delta en esquinas.
+    d = 0.0125
+    bueno: list[tuple[float, float]] = []
+    esquinas = [(10.0, 0.0, 270.0), (10.0, 5.0, 0.0), (0.0, 5.0, 90.0), (0.0, 0.0, 180.0)]
+    for cx, cy, ang0 in esquinas:
+        for k in range(31):
+            ang = math.radians(ang0 + 90.0 * (k / 30))
+            bueno.append((cx + d * math.cos(ang), cy + d * math.sin(ang)))
+    bueno.append(bueno[0])
+    assert validate_offset_ring(cuadro, bueno, d) == "", validate_offset_ring(cuadro, bueno, d)
+
+    # Una esquina en punta (mitra) no es un offset: el vértice queda a d*raiz(2).
+    mitra = [
+        (-d, -d),
+        (10.0 + d, -d),
+        (10.0 + d, 5.0 + d),
+        (-d, 5.0 + d),
+        (-d, -d),
     ]
-    assert validate_offset_ring(cuadro, bueno, 0.0125) == ""
+    assert validate_offset_ring(cuadro, mitra, d)
 
 
 if __name__ == "__main__":
@@ -332,5 +399,6 @@ if __name__ == "__main__":
     test_micro_hueco_de_cad_se_puentea()
     test_contorno_muy_abierto_falla_cerrado()
     test_polilinea_cerrada_sobrevive_y_area_no_queda_en_cero()
+    test_barreno_con_muesca_conserva_la_muesca_en_su_sitio()
     test_offset_deforme_es_rechazado()
     print("SMOKE OK")

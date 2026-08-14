@@ -12,7 +12,7 @@ if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 sys.path.insert(0, str(RAIZ / "interface"))
 
-from interface.utils_nesting import clave_orientacion_cobre_ruta
+from interface.utils_nesting import clave_orientacion_cobre_ruta, clave_orientacion_pieza
 from modules.nesting_engine.algorithm_bridge import (
     _orientation_lock_violated,
     _piece_to_native,
@@ -160,11 +160,57 @@ def test_motor_aplica_bloqueo_metal_antes_del_pack(tmp_path: Path | None = None)
     assert abs((max(ys) - min(ys)) - 100.0) < 1e-6
 
 
+def test_bloqueo_persiste_con_dxf_compensado():
+    """El visor pinta el compensado: debe compartir clave con el DXF original.
+
+    Sin esto, marcar la casilla o girar sobre una pieza plasma guardaba con la
+    ruta de `Plasma Compensated` y al volver a la pieza se perdía todo.
+    """
+    origen = r"C:\JOBS\AutoDXF\Processed Files\SWITCH PATCH 1.dxf"
+    compensado = r"C:\JOBS\AutoDXF\Processed Files\Plasma Compensated\SWITCH PATCH 1.dxf"
+    clave = clave_orientacion_cobre_ruta(origen)
+    mapa_plasma = {clave: compensado}
+
+    assert clave_orientacion_pieza(origen, mapa_plasma) == clave
+    assert clave_orientacion_pieza(compensado, mapa_plasma) == clave
+    # Sin mapa la clave es la del propio archivo (piezas sin plasma).
+    assert clave_orientacion_pieza(origen, {}) == clave
+
+    # Ciclo real: se guarda desde el compensado y se lee desde el original.
+    bloqueadas: dict[str, bool] = {}
+    grados: dict[str, int] = {}
+    bloqueadas[clave_orientacion_pieza(compensado, mapa_plasma)] = True
+    grados[clave_orientacion_pieza(compensado, mapa_plasma)] = 90
+    assert bloqueadas.get(clave_orientacion_pieza(origen, mapa_plasma)) is True
+    assert grados.get(clave_orientacion_pieza(origen, mapa_plasma)) == 90
+
+    # Y una pieza distinta no hereda el bloqueo.
+    otra = r"C:\JOBS\AutoDXF\Processed Files\TOP BOX.dxf"
+    assert bloqueadas.get(clave_orientacion_pieza(otra, mapa_plasma)) is None
+
+
+def test_tooltip_de_panel_oscuro_tiene_contraste():
+    """Sobre panel oscuro el tooltip debe declarar fondo oscuro + letra clara."""
+    from interface.qt.theme import TOOLTIP_OSCURO_QSS
+
+    assert "color:#F8FAFC" in TOOLTIP_OSCURO_QSS.replace(" ", "")
+    assert "background-color:#1E293B" in TOOLTIP_OSCURO_QSS.replace(" ", "")
+
+    src = (RAIZ / "interface" / "qt" / "visualizer.py").read_text(encoding="utf-8")
+    assert src.count("TOOLTIP_OSCURO_QSS") >= 3, (
+        "el panel del visor y la casilla de orientación deben aplicar el tooltip oscuro"
+    )
+    bloque = src.split("self.chk_orientacion_corte.setStyleSheet(")[1].split(")")[0]
+    assert "TOOLTIP_OSCURO_QSS" in bloque
+
+
 def main() -> int:
     test_piece_to_native_propaga_grain_locked_y_solo_0()
     test_bake_90_equivale_a_pack_0_en_orientacion_visual()
     test_reject_locked_orientation_violations_devuelve_a_restos()
     test_motor_aplica_bloqueo_metal_antes_del_pack()
+    test_bloqueo_persiste_con_dxf_compensado()
+    test_tooltip_de_panel_oscuro_tiene_contraste()
     print("OK orientacion_corte_bloqueada")
     return 0
 
