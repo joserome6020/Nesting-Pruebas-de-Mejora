@@ -46,6 +46,32 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14k — TABLA GAPS DE CORTE: todos los motores respetan la foto de planta
+
+- Auditoría: el default `margin_override = 0.15"` estaba filtrado en varios
+  puntos del pipeline (manager `DEFAULT_MARGIN_IN`, `PackSheetRequest`,
+  `engine_registry.empaquetar_una_hoja`, `sim_lab.run_plate_sim`, y
+  `algorithm_bridge.empaquetar_una_hoja_arga_lite`). Si el caller no pasaba
+  `margin_override` explícito (renest de placa, transferencia, sim), el
+  motor colocaba a 0.15" del borde en vez de 0.250" de la tabla.
+- Se importa `PLATE_TO_PIECE_DEFAULT_IN` (0.250") desde `cut_gaps_table` en
+  todos los puntos afectados y se usa como default único. Cada motor
+  individual (`arga_apex`, `arga_lite`, `arga_base`, `arga_force`,
+  `burke_blf`, `libnest2d`, `svgnest_ultra`, `lab_pilot`) toma el margen
+  del `PackSheetRequest`, así que la tabla llega a todos por herencia.
+- `manager._procesar_grupo` sigue siendo la fuente de verdad en runtime:
+  hace `gaps_for_calibre(req_cal)` por grupo (thread-safe, sin caché), así
+  que un cambio en `_config/cut_gaps_table.json` se refleja en la siguiente
+  corrida sin reiniciar.
+- Nuevo candado `test_tabla_gaps_todos_los_motores.py`:
+  - Firma cada default de motor contra `PLATE_TO_PIECE_DEFAULT_IN`.
+  - Escribe un JSON alternativo (0.400" placa, kerf Cal 14 = 0.180") y
+    verifica que `gaps_for_calibre` lo consuma.
+  - End-to-end nativo: coloca 30 piezas con kerf 0.500" y margen 0.500",
+    mide bboxes reales del pack C++ y exige que cada pieza respete margen
+    de placa y kerf entre vecinos con tolerancia 0.5 mm.
+- Regresiones 20/20 en ambos proyectos.
+
 ### 2026-08-14j — Motor de offset dual: OCCT alta fidelidad + Clipper2 bulletproof
 
 - Se instala **pyclipr** (bindings de Clipper2, el mismo motor que usa

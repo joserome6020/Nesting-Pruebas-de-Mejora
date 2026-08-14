@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from typing import Callable, Optional, Type
 
+from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
 from .engines import (
     ArgaApexEngine,
     ArgaForceEngine,
@@ -30,6 +32,42 @@ _ENGINE_CLASSES: dict[str, Type] = {
     ArgaLiteEngine.META.engine_id: ArgaLiteEngine,
     ArgaLabPilotEngine.META.engine_id: ArgaLabPilotEngine,
 }
+
+_BUFFERED_EDGE_ENGINES = frozenset(
+    {
+        ArgaApexEngine.META.engine_id,
+        ArgaForceEngine.META.engine_id,
+        ArgaLiteEngine.META.engine_id,
+        BurkeBlfEngine.META.engine_id,
+        Libnest2dEngine.META.engine_id,
+        SvgnestUltraEngine.META.engine_id,
+    }
+)
+
+
+def _request_con_margen_final_placa(
+    request: PackSheetRequest,
+    engine_id: str,
+) -> PackSheetRequest:
+    """Adapta el margen físico al contrato del packer C++ legacy.
+
+    Los packers legacy expanden cada pieza medio kerf para medir colisiones,
+    incluido el borde de la placa. Sin este ajuste, un margen solicitado de
+    ``0.250"`` y kerf ``0.150"`` se materializa como ``0.325"``.
+
+    En una placa normal el margen de la tabla es la distancia final
+    placa→pieza, por lo que se entrega al packer ``margen - kerf/2``. Los
+    límites irregulares (RTZ/huecos) ya aplican contención con geometría exacta
+    y conservan el margen original.
+    """
+    if engine_id not in _BUFFERED_EDGE_ENGINES or request.limite_poly is not None:
+        return request
+    margin_final = max(0.0, float(request.margin_override or 0.0))
+    kerf = max(0.0, float(request.kerf_override or 0.0))
+    margin_packer = max(0.0, margin_final - (kerf / 2.0))
+    if abs(margin_packer - margin_final) <= 1e-12:
+        return request
+    return replace(request, margin_override=margin_packer)
 
 
 def list_engine_metas(*, include_hidden: bool = False) -> list[NestEngineMeta]:
@@ -76,7 +114,7 @@ def empaquetar_una_hoja(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.15,
+    margin_override=None,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -85,6 +123,10 @@ def empaquetar_una_hoja(
     cancel_checker: Optional[Callable[[], bool]] = None,
 ) -> tuple[dict, list]:
     """API unificada: devuelve (hoja, restos) para manager.py."""
+    # margin_override=None → tabla oficial (0.250"). Cualquier motor que se
+    # invoque sin margen explícito respeta la constante de planta.
+    if margin_override is None:
+        margin_override = PLATE_TO_PIECE_DEFAULT_IN
     request = PackSheetRequest(
         piezas=piezas,
         w_placa=w_placa,
@@ -107,6 +149,24 @@ def empaquetar_una_hoja_detalle(
     request: PackSheetRequest,
     engine_id: str | None = None,
 ) -> PackSheetResult:
+    """API unificada con routing Local | NvidiaSpark para cualquier motor."""
+    eid = normalize_engine_id(engine_id or get_active_engine_id())
+    request = _request_con_margen_final_placa(request, eid)
+    try:
+        from modules.nesting_engine.nest_executor import pack_engine
+
+        return pack_engine(request, engine_id=eid)
+    except Exception as exc:
+        # El switch remoto nunca puede impedir el nesting local de planta.
+        print(f"[NEST-SPARK] executor unavailable → local: {exc}", flush=True)
+        return empaquetar_una_hoja_detalle_local(request, engine_id=eid)
+
+
+def empaquetar_una_hoja_detalle_local(
+    request: PackSheetRequest,
+    engine_id: str | None = None,
+) -> PackSheetResult:
+    """Ejecuta el motor sin routing remoto (fallback local seguro)."""
     cls = resolve_engine_class(engine_id)
     if not cls.is_ready():
         raise NestEngineNotReadyError(

@@ -6,6 +6,7 @@ import os
 import random
 from collections import Counter
 
+from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
 from .nest_engine_context import get_active_engine_id
 
 _ENGINE_NAME = "unknown"
@@ -1304,7 +1305,7 @@ def empaquetar_una_hoja_arga_lite(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.15,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,

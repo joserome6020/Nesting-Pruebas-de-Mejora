@@ -1,4 +1,4 @@
-"""Laboratorio de simulación de nesting en una sola placa (sin inventario multi-hoja)."""
+﻿"""Laboratorio de simulaciÃ³n de nesting en una sola placa (sin inventario multi-hoja)."""
 from __future__ import annotations
 
 import copy
@@ -13,6 +13,7 @@ from typing import Any
 from shapely import affinity
 
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name
+from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
 from .efficiency_metrics import actualizar_eficiencias_hoja
 from .geometry_parser import recuperar_geometria_robusta_detalle
 from .manager import _crear_poly_nesting_seguro, enriquecer_piezas_hoja_con_fuentes
@@ -60,8 +61,8 @@ def mm_to_inches(value: float) -> float:
 def piezas_pack_desde_hoja(hoja: dict) -> list[dict]:
     """Pool de empaque desde piezas colocadas.
 
-    Preferencia: re-leer DXF (geometría completa con barrenos/cavidades).
-    Fallback: poligonos de la hoja (a menudo pierden interiores → huecos vacíos).
+    Preferencia: re-leer DXF (geometrÃ­a completa con barrenos/cavidades).
+    Fallback: poligonos de la hoja (a menudo pierden interiores â†’ huecos vacÃ­os).
     """
     from collections import OrderedDict
 
@@ -111,14 +112,14 @@ def piezas_pack_desde_hoja(hoja: dict) -> list[dict]:
                 out.append(pack)
                 from_poly += 1
 
-    # Anota en la primera pieza metadatos de diagnóstico (consumidos por el LAB log).
+    # Anota en la primera pieza metadatos de diagnÃ³stico (consumidos por el LAB log).
     if out:
         out[0]["_lab_geom_src"] = {"dxf": from_dxf, "poly": from_poly, "total": len(out)}
     return out
 
 
 def piezas_pack_limpias(piezas: list[dict]) -> list[dict]:
-    """Copia el pool sin metadatos de diagnóstico del LAB."""
+    """Copia el pool sin metadatos de diagnÃ³stico del LAB."""
     clean: list[dict] = []
     for p in piezas or []:
         if not isinstance(p, dict):
@@ -138,7 +139,7 @@ def dims_placa_desde_hoja(hoja: dict) -> tuple[float, float]:
 def params_motor_desde_hoja(hoja: dict) -> dict[str, Any]:
     return {
         "kerf_in": float((hoja or {}).get("kerf_usado") or (hoja or {}).get("kerf") or 0.25),
-        "margin_in": float((hoja or {}).get("margin_usado") or (hoja or {}).get("margin") or 0.15),
+        "margin_in": float((hoja or {}).get("margin_usado") or (hoja or {}).get("margin") or PLATE_TO_PIECE_DEFAULT_IN),
         "corner": str((hoja or {}).get("corner_usado") or "INFERIOR IZQUIERDA"),
         "opt": str((hoja or {}).get("opt_usado") or "OPTIMIZAR LARGO Y ANCHO"),
     }
@@ -154,7 +155,7 @@ def listar_placas_desde_resultados(resultados: dict) -> list[dict[str, Any]]:
         if not isinstance(grp, dict):
             continue
         hojas = grp.get("hojas") or []
-        # Índices P1..Pn por placa_id repetida (igual que tab_nesting).
+        # Ãndices P1..Pn por placa_id repetida (igual que tab_nesting).
         for i, hoja in enumerate(hojas):
             if not isinstance(hoja, dict) or hoja.get("es_retazo"):
                 continue
@@ -166,7 +167,7 @@ def listar_placas_desde_resultados(resultados: dict) -> list[dict[str, Any]]:
                 and not h.get("es_retazo")
                 and str(h.get("placa_id") or "") == placa_id
             ]
-            sufijo = f" · P{iguales.index(i) + 1}" if len(iguales) > 1 else ""
+            sufijo = f" Â· P{iguales.index(i) + 1}" if len(iguales) > 1 else ""
             origen = " (PROVEEDOR)" if hoja.get("origen_placa") == "PROVEEDOR" else ""
             efi_txt = formatear_eficiencias_placa(hoja)
             n = sum(
@@ -198,7 +199,7 @@ def piece_from_dxf(
     calibre: str = "SIM",
     material: str = "A36",
 ) -> tuple[list[dict], str | None]:
-    """Convierte un DXF en piezas listas para el motor (misma normalización que producción)."""
+    """Convierte un DXF en piezas listas para el motor (misma normalizaciÃ³n que producciÃ³n)."""
     ruta = os.path.abspath(str(ruta or ""))
     if not os.path.isfile(ruta):
         return [], f"Archivo no encontrado: {ruta}"
@@ -206,7 +207,7 @@ def piece_from_dxf(
     nom_base = str(nombre or os.path.splitext(os.path.basename(ruta))[0]).strip() or "PIEZA"
     poly, marks, err = recuperar_geometria_robusta_detalle(ruta)
     if poly is None:
-        return [], err or "No se pudo leer geometría del DXF"
+        return [], err or "No se pudo leer geometrÃ­a del DXF"
 
     minx, miny, _, _ = poly.bounds
     poly_exact = affinity.translate(poly, -minx, -miny)
@@ -216,7 +217,7 @@ def piece_from_dxf(
         marks_exact = marks
 
     if poly_exact is None or poly_exact.is_empty:
-        return [], "Geometría vacía tras normalizar"
+        return [], "GeometrÃ­a vacÃ­a tras normalizar"
 
     poly_nesting = _crear_poly_nesting_seguro(poly_exact)
     if poly_nesting is None or poly_nesting.is_empty:
@@ -267,18 +268,18 @@ def run_single_sheet_sim(
     w_mm: float,
     h_mm: float,
     kerf_in: float = 0.2,
-    margin_in: float = 0.15,
+    margin_in: float = PLATE_TO_PIECE_DEFAULT_IN,
     corner: str = "INFERIOR IZQUIERDA",
     opt: str = "OPTIMIZAR LARGO Y ANCHO",
     mc_iterations: int | None = None,
     nest_mode: str | None = None,
 ) -> SimRunResult:
-    """Ejecuta empaquetar_una_hoja_mc y enriquece el resultado para visualización."""
+    """Ejecuta empaquetar_una_hoja_mc y enriquece el resultado para visualizaciÃ³n."""
     log: list[str] = []
     w_mm = float(w_mm or 0)
     h_mm = float(h_mm or 0)
     if w_mm <= 0 or h_mm <= 0:
-        return SimRunResult(ok=False, error="Medidas de placa inválidas", log_lines=["ERROR: placa sin dimensiones"])
+        return SimRunResult(ok=False, error="Medidas de placa invÃ¡lidas", log_lines=["ERROR: placa sin dimensiones"])
 
     if not piezas:
         return SimRunResult(ok=False, error="Sin piezas", log_lines=["ERROR: agrega al menos un DXF"])
@@ -296,12 +297,12 @@ def run_single_sheet_sim(
 
     log.append(f"Motor: {engine_name()}")
     log.append(
-        f"Placa: {w_mm:.1f} × {h_mm:.1f} mm "
-        f"({mm_to_inches(w_mm):.2f}\" × {mm_to_inches(h_mm):.2f}\")"
+        f"Placa: {w_mm:.1f} Ã— {h_mm:.1f} mm "
+        f"({mm_to_inches(w_mm):.2f}\" Ã— {mm_to_inches(h_mm):.2f}\")"
     )
     log.append(f"Piezas en pool: {len(piezas)} | kerf={kerf_in}\" | margin={margin_in}\"")
     log.append(f"corner={corner} | opt={opt} | mc_iterations={mc}")
-    log.append("—" * 48)
+    log.append("â€”" * 48)
 
     t0 = time.perf_counter()
     try:
@@ -346,24 +347,24 @@ def run_single_sheet_sim(
     log.append(f"Tiempo: {elapsed:.0f} ms")
     log.append(f"Colocadas: {len(colocados)} / {len(piezas)}")
     log.append(f"Restos: {len(restos)}")
-    log.append(f"Área usada: {float(hoja.get('area_usada', 0) or 0):,.0f} mm²")
+    log.append(f"Ãrea usada: {float(hoja.get('area_usada', 0) or 0):,.0f} mmÂ²")
     log.append(f"Eficiencia: {float(hoja.get('eficiencia_directa') or hoja.get('eficiencia') or 0):.2f}%")
 
     if restos:
-        log.append("— piezas sin colocar —")
+        log.append("â€” piezas sin colocar â€”")
         for p in restos:
             poly = p.get("poly")
             if poly is not None:
                 minx, miny, maxx, maxy = poly.bounds
                 bw, bh = maxx - minx, maxy - miny
                 log.append(
-                    f"  · {p.get('nombre')} | {bw:.1f}×{bh:.1f} mm | área={float(p.get('area', 0) or 0):,.0f}"
+                    f"  Â· {p.get('nombre')} | {bw:.1f}Ã—{bh:.1f} mm | Ã¡rea={float(p.get('area', 0) or 0):,.0f}"
                 )
             else:
-                log.append(f"  · {p.get('nombre')} | sin poly")
+                log.append(f"  Â· {p.get('nombre')} | sin poly")
 
     if colocados:
-        log.append("— piezas colocadas —")
+        log.append("â€” piezas colocadas â€”")
         for i, p in enumerate(colocados, 1):
             pols = p.get("poligonos") or []
             if pols:
@@ -440,7 +441,7 @@ def scenario_from_dict(data: dict) -> tuple[dict, list[SimPieceEntry]]:
         "plate_w_in": float(data.get("plate_w_in") or 96),
         "plate_h_in": float(data.get("plate_h_in") or 240),
         "kerf_in": float(data.get("kerf_in") or 0.2),
-        "margin_in": float(data.get("margin_in") or 0.15),
+        "margin_in": float(data.get("margin_in") or PLATE_TO_PIECE_DEFAULT_IN),
         "corner": str(data.get("corner") or "INFERIOR IZQUIERDA"),
         "opt": str(data.get("opt") or "OPTIMIZAR LARGO Y ANCHO"),
         "nest_mode": str(data.get("nest_mode") or "standard"),
@@ -685,7 +686,7 @@ def _plate_sim_process_entry(payload: dict) -> dict:
         w_mm=float(payload.get("w_mm") or 0),
         h_mm=float(payload.get("h_mm") or 0),
         kerf_in=float(payload.get("kerf_in") or 0.2),
-        margin_in=float(payload.get("margin_in") or 0.15),
+        margin_in=float(payload.get("margin_in") or PLATE_TO_PIECE_DEFAULT_IN),
         corner=str(payload.get("corner") or "INFERIOR IZQUIERDA"),
         opt=str(payload.get("opt") or "OPTIMIZAR LARGO Y ANCHO"),
         mc_iterations=int(payload.get("mc_iterations") or 1),
@@ -737,7 +738,7 @@ def run_plate_sim(
     w_mm: float,
     h_mm: float,
     kerf_in: float = 0.2,
-    margin_in: float = 0.15,
+    margin_in: float = PLATE_TO_PIECE_DEFAULT_IN,
     corner: str = "INFERIOR IZQUIERDA",
     opt: str = "OPTIMIZAR LARGO Y ANCHO",
     mc_iterations: int = 1,
@@ -746,7 +747,7 @@ def run_plate_sim(
     timeout_s: float = 600.0,
     cancel_checker=None,
 ) -> SimTimelineResult:
-    """Empaqueta una placa con el motor elegido; timeline nativa o sintética.
+    """Empaqueta una placa con el motor elegido; timeline nativa o sintÃ©tica.
 
     isolate_process:
       - None (default): proceso aparte solo en motores lentos (burke/libnest/svgnest).
@@ -767,7 +768,7 @@ def run_plate_sim(
         return SimTimelineResult(ok=False, error="Parametros invalidos", engine_id=eid)
 
     if isolate_process is None:
-        # ARGA Base debe ser rápido en-hilo (~s). Proceso aparte solo para NFP/GA.
+        # ARGA Base debe ser rÃ¡pido en-hilo (~s). Proceso aparte solo para NFP/GA.
         # Con cancel_checker (NestFab continuo) SIEMPRE en-hilo.
         if cancel_checker is not None:
             isolate_process = False
@@ -815,7 +816,7 @@ def run_plate_sim(
             if not os.path.isfile(out_path) or os.path.getsize(out_path) <= 0:
                 return SimTimelineResult(
                     ok=False,
-                    error=f"Proceso motor '{eid}' terminó sin resultado.",
+                    error=f"Proceso motor '{eid}' terminÃ³ sin resultado.",
                     engine_id=eid,
                     w_mm=w_mm,
                     h_mm=h_mm,
@@ -840,15 +841,15 @@ def run_plate_sim(
     if not is_engine_ready(eid):
         return SimTimelineResult(
             ok=False,
-            error=f"Motor '{eid}' no está listo / no compilado.",
+            error=f"Motor '{eid}' no estÃ¡ listo / no compilado.",
             engine_id=eid,
             w_mm=w_mm,
             h_mm=h_mm,
         )
 
-    # ARGA Base de producción = empaquetar_una_hoja_base (cavidades/pasillos).
+    # ARGA Base de producciÃ³n = empaquetar_una_hoja_base (cavidades/pasillos).
     # NO usar empaquetar_una_hoja_timeline: es un packer legacy distinto y deja
-    # los huecos de VFM vacíos aunque packer_base ya los rellene.
+    # los huecos de VFM vacÃ­os aunque packer_base ya los rellene.
     token = set_active_engine_id(eid)
     t0 = time.perf_counter()
     try:
@@ -979,7 +980,7 @@ def run_timeline_sim(
     w_mm: float,
     h_mm: float,
     kerf_in: float = 0.2,
-    margin_in: float = 0.15,
+    margin_in: float = PLATE_TO_PIECE_DEFAULT_IN,
     corner: str = "INFERIOR IZQUIERDA",
     opt: str = "OPTIMIZAR LARGO Y ANCHO",
     mc_iterations: int = 1,
@@ -1074,10 +1075,10 @@ def hoja_en_paso_timeline(timeline: SimTimelineResult, paso_idx: int) -> tuple[d
 
 def texto_paso_timeline(paso: dict, *, paso_idx: int, total: int, qty_mismo: int | None = None) -> str:
     nom = str(paso.get("nombre") or "")
-    qty_txt = f" ×{qty_mismo}" if qty_mismo and qty_mismo > 1 else ""
+    qty_txt = f" Ã—{qty_mismo}" if qty_mismo and qty_mismo > 1 else ""
     if not paso.get("colocada"):
         return (
-            f"Paso {paso_idx}/{total}: intento '{nom}'{qty_txt} — NO cabe "
+            f"Paso {paso_idx}/{total}: intento '{nom}'{qty_txt} â€” NO cabe "
             f"({paso.get('variaciones_evaluadas', 0)} rotaciones probadas)"
         )
     px = float(paso.get("px") or 0)
@@ -1085,7 +1086,7 @@ def texto_paso_timeline(paso: dict, *, paso_idx: int, total: int, qty_mismo: int
     return (
         f"Paso {paso_idx}/{total}: COLOCA '{nom}'{qty_txt} | "
         f"cat={paso.get('categoria')} | estrategia={paso.get('estrategia') or 'n/a'} | "
-        f"rot={paso.get('rotacion_grados')}° | "
+        f"rot={paso.get('rotacion_grados')}Â° | "
         f"pos=({px:.1f}, {py:.1f}) mm | score={float(paso.get('score') or 0):.2f} | "
         f"bbox={float(paso.get('bbox_w_mm') or 0):.1f}x{float(paso.get('bbox_h_mm') or 0):.1f} mm"
     )

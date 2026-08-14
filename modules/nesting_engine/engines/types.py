@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from ..cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
+
 
 @dataclass(frozen=True)
 class NestEngineMeta:
@@ -22,7 +24,9 @@ class PackSheetRequest:
     w_placa: float
     h_placa: float
     kerf_override: float = 0.15
-    margin_override: float = 0.15
+    # Placa→pieza es constante de planta (foto TABLA GAPS DE CORTE = 0.250").
+    # El fallback debe respetarla — antes daba 0.15" y bajaba el margen final.
+    margin_override: float = PLATE_TO_PIECE_DEFAULT_IN
     opt_override: str = "OPTIMIZAR LARGO Y ANCHO"
     corner_override: str = "INFERIOR IZQUIERDA"
     limite_poly: Any = None
@@ -37,6 +41,7 @@ class PackSheetResult:
     engine_id: str
     elapsed_s: float = 0.0
     error: Optional[str] = None
+    runtime: Optional[dict] = None
 
 
 @dataclass

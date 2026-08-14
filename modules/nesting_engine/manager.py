@@ -197,7 +197,11 @@ from .rtz_overlays import (
 DEBUG_DIR = r"C:\NEST_EXPORTS"
 DEBUG_LOG_NESTING = os.path.join(DEBUG_DIR, "nesting_debug_geometry.txt")
 DEFAULT_KERF_IN = 0.15
-DEFAULT_MARGIN_IN = 0.15
+# Placa→pieza es una constante de planta (foto TABLA GAPS DE CORTE = 0.250").
+# Todo motor debe usar este valor cuando no se le pase override explícito, para
+# que el fallback no baje el margen a 0.15" (bug histórico previo a la tabla).
+from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN  # noqa: E402
+DEFAULT_MARGIN_IN = PLATE_TO_PIECE_DEFAULT_IN
 # Exacto: mismo calibre / redondeo (0.1046 ↔ 0.105). NO cruza 11↔12.
 THICKNESS_EXACT_ABS_IN = 0.005
 # DESACTIVADO: la tolerancia % provocaba usar cal. 11 por 12 y reclasificar grupos.

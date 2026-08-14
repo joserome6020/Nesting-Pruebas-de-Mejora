@@ -95,6 +95,10 @@ REGRESIONES = [
         "test_orientacion_corte_bloqueada.py",
         "2026-08-14e/i - BLOQUEAR ORIENTACIÓN fija vista PARTS y persiste con plasma",
     ),
+    (
+        "test_tabla_gaps_todos_los_motores.py",
+        "2026-08-14k - TABLA GAPS DE CORTE: todos los motores usan 0.250 placa→pieza y kerf por calibre",
+    ),
 ]
 
 
