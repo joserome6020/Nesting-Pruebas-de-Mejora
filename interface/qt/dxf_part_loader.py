@@ -60,6 +60,59 @@ def _insunits_factor(doc) -> float:
     return 25.4
 
 
+def _agregar_shapes_desde_line_arc(
+    entidades: list,
+    rol: str,
+    shapes_cerrados: list,
+    rot: int,
+    cx: float,
+    cy: float,
+) -> None:
+    """Encadena LINE+ARC de una capa CUT en anillos cerrados y los agrega a shapes_cerrados.
+
+    Este es el puente entre DXF Inventor (cortes hechos de LINE/ARC sueltos) y
+    la clasificación outer/inner que alimenta ``outer_rings`` — sin este puente,
+    el visor no puede pintar el énfasis plasma sobre perfiles Inventor.
+    """
+    if not entidades:
+        return
+    try:
+        from modules.plasma_dxf_export import (
+            _flatten_entity_group_inches,
+            _group_connected_cut_entities,
+        )
+    except Exception:
+        return
+    try:
+        grupos = _group_connected_cut_entities(entidades, tol=0.05)
+    except Exception:
+        grupos = []
+    for grupo in grupos or []:
+        try:
+            pts = _flatten_entity_group_inches(grupo, flat_in=0.01)
+        except Exception:
+            continue
+        if not pts or len(pts) < 3:
+            continue
+        # Solo aceptamos anillos genuinamente cerrados (< 0.05" gap tras densificar).
+        if math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) > 0.05:
+            continue
+        pts_ring = [(float(x), float(y)) for x, y in pts]
+        if rot:
+            pts_ring = [rotar_punto(x, y, cx, cy, rot) for (x, y) in pts_ring]
+        area_abs = abs(poly_area_2d(pts_ring))
+        if area_abs <= 1e-9:
+            continue
+        shapes_cerrados.append(
+            {
+                "kind": "poly",
+                "pts": pts_ring,
+                "area": area_abs,
+                "rol": rol,
+            }
+        )
+
+
 def load_dxf_part(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | None:
     """Carga y parsea el DXF bajo `EZDXF_LOCK` (evita race con audit thread)."""
     with EZDXF_LOCK:
@@ -89,6 +142,12 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
     contornos = []
     all_points_raw = []
     circulos_raw = []
+    # DXF exportados por Inventor (IV_OUTER_PROFILE, IV_INTERIOR_PROFILES) entregan
+    # el contorno como decenas de LINE+ARC sueltos. Guardamos las entidades para
+    # encadenarlas después en anillos cerrados: si no lo hacemos, `outer_rings`
+    # queda vacío y el énfasis plasma (rojo + "+X"") no se pinta.
+    outer_line_arc_raw: list = []
+    inner_line_arc_raw: list = []
     distancia_suavizado = 0.05 * (model.factor_conversion / 25.4)
 
     for entity in entities:
@@ -135,6 +194,28 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
                     u = t0 + sweep * (i / max(1, n))
                     all_points_raw.append((cx + r * math.cos(u), cy + r * math.sin(u)))
                 contornos.append(("ARC", layer, cx, cy, r, sa, ea))
+                if es_outer_layer(layer):
+                    outer_line_arc_raw.append(entity)
+                elif es_inner_layer(layer):
+                    inner_line_arc_raw.append(entity)
+            except Exception:
+                pass
+            continue
+
+        if typ == "LINE" and (es_outer_layer(layer) or es_inner_layer(layer)):
+            try:
+                s = entity.dxf.start
+                e = entity.dxf.end
+                p0 = (float(s.x), float(s.y))
+                p1 = (float(e.x), float(e.y))
+                all_points_raw.extend([p0, p1])
+                if es_cut_layer(layer) or model.render_all_layers:
+                    perimetro_total += math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+                # Guardamos la entidad para encadenar el anillo cerrado después.
+                if es_outer_layer(layer):
+                    outer_line_arc_raw.append(entity)
+                else:
+                    inner_line_arc_raw.append(entity)
             except Exception:
                 pass
             continue
@@ -211,6 +292,17 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
                     "rol": rol_capa_pieza(layer_p),
                 }
             )
+
+    # Piezas exportadas por Inventor traen el contorno como decenas de LINE+ARC
+    # sueltos (sin LWPOLYLINE). Encadenamos aquí cada perfil para que el visor
+    # sepa pintar el énfasis plasma rojo. Sin este stitching, `outer_rings` queda
+    # vacío para brackets tipo GENE-BKT-101 y el usuario no ve la marca "+X"".
+    _agregar_shapes_desde_line_arc(
+        outer_line_arc_raw, "outer", shapes_cerrados, rot, cx, cy
+    )
+    _agregar_shapes_desde_line_arc(
+        inner_line_arc_raw, "inner", shapes_cerrados, rot, cx, cy
+    )
 
     outers, inners = clasificar_contornos_cerrados(shapes_cerrados)
     model.outer_rings = []

@@ -103,6 +103,10 @@ REGRESIONES = [
         "test_visor_plasma_rotacion.py",
         "2026-08-14l - ROTAR 90° de pieza plasma-compensada conserva el énfasis rojo y '+X\"'",
     ),
+    (
+        "test_visor_line_arc_outer.py",
+        "2026-08-14m - visor arma outer_rings desde LINE+ARC (piezas Inventor IV_OUTER_PROFILE)",
+    ),
 ]
 
 

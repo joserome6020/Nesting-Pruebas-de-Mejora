@@ -46,6 +46,58 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14n — Buzón de soporte con capturas y canal corporativo
+
+- La barra superior de ANS incorpora **BUZÓN**: abre un formulario para reportar
+  errores, seleccionar tipo, describir el caso, adjuntar archivos y capturar la
+  ventana actual.
+- El reporte envía categoría, descripción, contexto activo (job/pestaña),
+  plataforma y adjuntos a un webhook HTTPS de Power Automate; el flujo entrega
+  el correo a `jose_rosales@grupoarga.com`.
+- No hay credenciales SMTP ni Microsoft 365 dentro del `.exe`. La URL firmada
+  se guarda solamente en `_config/buzon_support.json` local o se administra con
+  `ARGA_NEST_BUZON_WEBHOOK_URL`.
+- Guía de creación del flujo: `docs/BUZON_POWER_AUTOMATE.md`.
+- Build: `support_inbox` está en hidden imports, archivos críticos y smoke
+  imports. Paridad confirmada con `ANS C++`; prueba headless del diálogo PASS.
+
+### 2026-08-14m — visor pinta el énfasis plasma en piezas Inventor (LINE+ARC)
+
+- Bug reportado por planta con `GENE-BKT-101` (bracket de 3 zonas
+  ~9.42" × 3.16"): tras compensar plasma, el visor mostraba la pieza pero
+  sin el OUTER rojo ni el label `+X"`; el usuario percibía "el offset se
+  perdió". Además el panel decía `AREA NETA 23.00 in²` que era un valor
+  cacheado — al abrir la pieza real, el loader devolvía `0.00 in²`.
+- Causa: DXF exportados desde Autodesk Inventor (capa
+  `IV_OUTER_PROFILE`) traen el perfil como decenas de LINE+ARC sueltos,
+  nunca como LWPOLYLINE cerrado. `load_dxf_part` solo poblaba
+  `outer_rings` con POLY cerrados o CIRCLE, así que para piezas Inventor
+  el listado quedaba vacío y:
+  - `emphasize_plasma_outers` no dibujaba el rojo (no tenía anillos).
+  - `set_plasma_overlay` no podía hacer buffer para el preview.
+  - `area_neta` quedaba en 0 y todo el pipeline de métricas del panel
+    dependía de valores cacheados fuera del loader.
+- Fix en `interface/qt/dxf_part_loader.py`:
+  - Recolectamos las entidades LINE/ARC de `es_outer_layer` y
+    `es_inner_layer` durante el barrido inicial.
+  - Nuevo helper `_agregar_shapes_desde_line_arc` que usa
+    `_group_connected_cut_entities` + `_flatten_entity_group_inches` de
+    `plasma_dxf_export` para estibarlas en anillos cerrados (< 0.05" gap).
+  - Cada anillo se agrega a `shapes_cerrados` como POLY con el rol
+    correcto; el clasificador existente lo mete en outers/inners y de ahí
+    a `outer_rings` sin más cambios.
+- Verificación con el DXF real (GENE-BKT-101):
+  - Antes: `outer_rings=0`, `area_neta=0.00`.
+  - Después: `outer_rings=1` (281 vértices), `area_neta=22.99 in²`
+    coincidiendo con el 23.00 in² del panel.
+- Candado `tests/native/test_visor_line_arc_outer.py`:
+  1. Sintetiza un DXF Inventor con LINE+ARC en `IV_OUTER_PROFILE` +
+     hueco circular en `IV_INTERIOR_PROFILES` y verifica outer_rings,
+     área y bbox.
+  2. Si `_tmp/GENE-BKT-101.dxf` existe (repro real), lo evalúa: bbox
+     ~9.42×3.16, `area_neta > 20 in²`, 1 solo anillo OUTER.
+- Regresiones 22/22 en ambos proyectos.
+
 ### 2026-08-14l — ROTAR 90° de pieza plasma no borra la marca del offset
 
 - Bug reportado por planta: se compensaba una pieza (visor muestra OUTER
