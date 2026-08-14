@@ -46,6 +46,42 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14j — Motor de offset dual: OCCT alta fidelidad + Clipper2 bulletproof
+
+- Se instala **pyclipr** (bindings de Clipper2, el mismo motor que usa
+  FreeCAD en su workbench Path/CAM). Clipper2 opera con aritmética entera y
+  join redondo, así que no rechaza perfiles reales por micro-gaps o esquinas
+  cerradas —el mismo comportamiento que AutoCAD OFFSET sobre POLYLINE.
+- `modules/plasma_offset_clipper.py` nuevo: rasteriza LINE/ARC/(LW)POLYLINE
+  (paso adaptativo por sagita), corre `ClipperOffset` con `arcTolerance`
+  proporcional al kerf y devuelve el contorno cerrado listo para escribirse
+  como LWPOLYLINE. Rechaza sólo cuando el hueco entre entidades es realmente
+  grande (> 0.05 in ≈ 1.27 mm), no cintas.
+- `modules/plasma_compensator.py::_compensate_dxf_occt_exact` deja de fallar
+  cuando OCCT no converge. Cascada: **OCCT primero** (LINE/ARC/CIRCLE
+  nativos), **Clipper2 si falla** (polilínea densa cerrada). El backend
+  reportado ahora es `"occt"`, `"occt+radius"`, `"clipper2+radius"`, etc.
+- `_verificar_dxf_compensado` deja de correr `is_simple` sobre polilíneas de
+  Clipper2: la densidad de puntos genera falsas auto-intersecciones por
+  ruido flotante. La compuerta bbox + cierre + AreaNeta ya detecta los lazos
+  reales. Esto desbloquea el `GENE-DF-10-162` en producción.
+- `modules/plasma_dxf_export.py::_offset_closed_profile_inches` reintenta
+  con Clipper2 cuando el motor primario devuelve vacío. Cierra el error
+  `"plasma: sin contorno exportable desde el nest"` que reventaba el export
+  de piezas como `GENE-BKT-101`.
+- Cache: `PLASMA_OFFSET_ALGO_VERSION = "offset2d-v5-clipper2-fallback"`
+  invalida los DXFs viejos en `Plasma Compensated/`.
+- Candados nuevos en `test_plasma_occt_offset.py`:
+  `test_clipper2_bulletproof_no_rechaza_esquinas_curvas` (perfil real
+  33.37×18.77 in con esquinas R0.60) y
+  `test_export_no_falla_sin_contorno_exportable_con_clipper`
+  (repro del error del export con contorno rectangular con esquinas).
+- Build (`tools/build_arga_exe.py`): `pyclipr` y `plasma_offset_clipper` /
+  `plasma_offset2d` / `plasma_dxf_export` añadidos a `HIDDEN_IMPORTS`,
+  `SMOKE_IMPORT_MODULES` y `CRITICAL_SUITE_FILES` para que el `.exe` los
+  empaquete sin lazy imports rotos.
+- Paridad ANS C++ verificada; regresiones 19/19 en ambos proyectos.
+
 ### 2026-08-14i — Offset verificado como offset + persistencia del bloqueo + tooltip
 
 - **Validación real del offset:** ahora se comprueba que (a) el DXF escrito

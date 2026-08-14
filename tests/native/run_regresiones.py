@@ -89,7 +89,7 @@ REGRESIONES = [
     ),
     (
         "test_plasma_occt_offset.py",
-        "2026-08-14g/i - OFFSET verificado como offset real (distancia |delta|, sin bultos)",
+        "2026-08-14g/i/j - OFFSET con cascada OCCT+Clipper2 (motor FreeCAD Path/CAM)",
     ),
     (
         "test_orientacion_corte_bloqueada.py",

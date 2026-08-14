@@ -836,16 +836,33 @@ def _simplify_ring_inches(
 def _offset_closed_profile_inches(
     points: list[tuple[float, float]], offset_in: float, *, rectilinear: bool = False
 ) -> list[list[tuple[float, float]]]:
-    """Desfase de contorno cerrado en pulgadas (mismo servicio que PARTS)."""
+    """Desfase de contorno cerrado en pulgadas (mismo servicio que PARTS).
+
+    Cascada de motores: FreeCAD/GEOS de :mod:`plasma_offset2d` primero (por
+    compatibilidad histórica); si devuelve vacío se usa Clipper2 —el motor de
+    FreeCAD Path/CAM— que no falla con perfiles reales. Antes esto devolvía
+    ``[]`` y el export terminaba en "plasma sin contorno exportable".
+    """
     from modules.plasma_offset2d import offset_simple_ring
 
     result = offset_simple_ring(list(points or []), delta=float(offset_in))
-    if not result.ok:
+    rings: list[list[tuple[float, float]]] = list(result.rings or []) if result.ok else []
+
+    if not rings:
+        try:
+            from modules.plasma_offset_clipper import clipper_disponible, offset_ring
+
+            if clipper_disponible():
+                fallback = offset_ring(list(points or []), delta=float(offset_in))
+                if fallback.ok:
+                    rings = list(fallback.rings or [])
+        except Exception:
+            pass
+
+    if not rings:
         return []
-    rings = list(result.rings or [])
     tol = abs(float(offset_in)) * (0.15 if rectilinear else 0.2)
     rings = [_simplify_ring_inches(r, tol) for r in rings]
-    # Conservar todos los componentes (no largest-wins); el caller decide.
     return [r for r in rings if len(r) >= 3]
 
 

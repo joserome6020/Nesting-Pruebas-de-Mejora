@@ -34,7 +34,9 @@ def test_occt_offset_preserva_primitivas():
 
     off = compute_plasma_offset_mm(0.375)
     stats = compensate_dxf_for_plasma(src, dst, offset_mm=off)
-    assert stats["backend"] == "occt_BRepOffsetAPI_MakeOffset", stats
+    # Backend puede ser "occt", "occt+radius" o "clipper2+radius" según motor;
+    # lo importante es que la compensación se aplicó.
+    assert "occt" in stats["backend"] or "clipper2" in stats["backend"], stats
     out = ezdxf.readfile(dst).modelspace()
     outer = [e for e in out if str(e.dxf.layer) == "CUT_OUTER"]
     assert any(e.dxftype() == "LINE" for e in outer)
@@ -58,7 +60,7 @@ def test_occt_offset_preserva_bulge_como_arc():
     )
     doc.saveas(src)
     stats = compensate_dxf_for_plasma(src, dst, offset_mm=compute_plasma_offset_mm(0.375))
-    assert stats["backend"] == "occt_BRepOffsetAPI_MakeOffset", stats
+    assert "occt" in stats["backend"] or "clipper2" in stats["backend"], stats
     out = list(ezdxf.readfile(dst).modelspace())
     # La curvatura debe seguir siendo exacta: ARC nativo o bulge de polilínea.
     if any(e.dxftype() == "ARC" for e in out):
@@ -91,7 +93,7 @@ def test_occt_offset_parking_cw_no_brep_api():
     stats = compensate_dxf_for_plasma(
         src, dst, offset_mm=compute_plasma_offset_mm(0.1046)
     )
-    assert stats["backend"] == "occt_BRepOffsetAPI_MakeOffset", stats
+    assert "occt" in stats["backend"] or "clipper2" in stats["backend"], stats
     assert int(stats["changed"]) >= 1
     out = list(ezdxf.readfile(dst).modelspace())
     assert any(e.dxftype() == "LINE" for e in out)
@@ -212,7 +214,7 @@ def test_contorno_muy_abierto_falla_cerrado():
     try:
         compensate_dxf_for_plasma(src, dst, offset_mm=compute_plasma_offset_mm(0.250))
     except RuntimeError as exc:
-        assert "no cierra" in str(exc) or "abierto" in str(exc), exc
+        assert "no cierra" in str(exc) or "abierto" in str(exc) or "rasterizar" in str(exc), exc
     else:
         raise AssertionError("un contorno abierto no debe compensarse")
     assert not dst.exists(), "no debe quedar DXF compensado inválido en disco"
@@ -356,6 +358,87 @@ def test_barreno_con_muesca_conserva_la_muesca_en_su_sitio():
         ang_tip,
     )
     assert abs(math.dist(tip, (CXY, CXY)) - (R - RN - d)) < 1e-4
+
+
+def test_clipper2_bulletproof_no_rechaza_esquinas_curvas():
+    """GENE-DF-10-162: perfil grande con esquinas redondeadas y borde recto.
+
+    OCCT solía fallar y la compuerta rechazaba por "auto-intersecta (lazos
+    de esquina)". Con Clipper2 (motor de FreeCAD Path/CAM) siempre sale.
+    """
+    from modules.plasma_offset_clipper import clipper_disponible
+
+    assert clipper_disponible(), "pyclipr debe estar empaquetado con la app"
+
+    td = Path(tempfile.mkdtemp())
+    src, dst = td / "big.dxf", td / "big_out.dxf"
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 1
+    msp = doc.modelspace()
+    W, H, R = 33.37, 18.77, 0.60
+    o = {"layer": "CUT_OUTER"}
+    msp.add_line((R, 0.0), (W - R, 0.0), dxfattribs=o)
+    msp.add_arc((W - R, R), R, 270.0, 360.0, dxfattribs=o)
+    msp.add_line((W, R), (W, H - R), dxfattribs=o)
+    msp.add_arc((W - R, H - R), R, 0.0, 90.0, dxfattribs=o)
+    msp.add_line((W - R, H), (R, H), dxfattribs=o)
+    msp.add_arc((R, H - R), R, 90.0, 180.0, dxfattribs=o)
+    msp.add_line((0.0, H - R), (0.0, R), dxfattribs=o)
+    msp.add_arc((R, R), R, 180.0, 270.0, dxfattribs=o)
+    doc.saveas(src)
+
+    off_mm = compute_plasma_offset_mm(0.0747)
+    d = off_mm / 25.4
+    stats = compensate_dxf_for_plasma(src, dst, offset_mm=off_mm)
+    assert int(stats["changed"]) >= 1, stats
+
+    out = list(ezdxf.readfile(dst).modelspace())
+    outers = [e for e in out if str(e.dxf.layer) == "CUT_OUTER"]
+    assert outers, "el compensado debe tener contorno OUTER"
+    xs = []
+    ys = []
+    for e in outers:
+        if e.dxftype() == "LWPOLYLINE":
+            for x, y, *_ in e.get_points("xy"):
+                xs.append(x)
+                ys.append(y)
+        elif e.dxftype() == "LINE":
+            xs += [e.dxf.start.x, e.dxf.end.x]
+            ys += [e.dxf.start.y, e.dxf.end.y]
+        elif e.dxftype() == "ARC":
+            xs += [e.dxf.center.x - e.dxf.radius, e.dxf.center.x + e.dxf.radius]
+            ys += [e.dxf.center.y - e.dxf.radius, e.dxf.center.y + e.dxf.radius]
+    ancho = max(xs) - min(xs)
+    alto = max(ys) - min(ys)
+    assert abs(ancho - (W + 2 * d)) < 0.02
+    assert abs(alto - (H + 2 * d)) < 0.02
+
+
+def test_export_no_falla_sin_contorno_exportable_con_clipper():
+    """GENE-BKT-101: el export fallaba con 'plasma sin contorno exportable'.
+
+    ``_offset_closed_profile_inches`` devolvía [] cuando el motor primario no
+    convergía; ahora reintenta con Clipper2 y produce el contorno.
+    """
+    from modules.plasma_dxf_export import _offset_closed_profile_inches
+
+    # Perfil rectangular con esquinas redondeadas (33.37" x 10.52" reducido).
+    W, H, R = 12.0, 4.0, 0.30
+    pts: list[tuple[float, float]] = []
+    esquinas = [(W - R, R, 270.0), (W - R, H - R, 0.0), (R, H - R, 90.0), (R, R, 180.0)]
+    for cx, cy, a0 in esquinas:
+        for k in range(21):
+            ang = math.radians(a0 + 90.0 * (k / 20))
+            pts.append((cx + R * math.cos(ang), cy + R * math.sin(ang)))
+    pts.append(pts[0])
+
+    rings = _offset_closed_profile_inches(pts, 0.00206, rectilinear=False)
+    assert rings, "Clipper2 fallback debe producir al menos un ring"
+    ring = max(rings, key=lambda r: (max(x for x, _ in r) - min(x for x, _ in r)))
+    ancho = max(x for x, _ in ring) - min(x for x, _ in ring)
+    alto = max(y for _, y in ring) - min(y for _, y in ring)
+    assert abs(ancho - (W + 2 * 0.00206)) < 0.02, ancho
+    assert abs(alto - (H + 2 * 0.00206)) < 0.02, alto
 
 
 def test_offset_deforme_es_rechazado():

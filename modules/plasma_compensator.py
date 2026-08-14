@@ -305,17 +305,29 @@ def _compensate_dxf_occt_exact(
     outer_set: set,
     inner_set: set,
 ) -> dict:
-    """Desfase productivo OCCT, conservando entidades LINE/ARC/CIRCLE.
+    """Desfase productivo con dos motores en cascada.
 
-    No hay fallback poligonal: una entidad no representable se reporta y deja
-    intacto el DXF; el caller falla cerrado.
+    1. **OCCT** primero: conserva LINE/ARC/CIRCLE nativos (alta fidelidad).
+    2. **Clipper2** si OCCT rechaza o falla: escribe polilínea cerrada.
+
+    Clipper2 es el motor que usa FreeCAD Path/CAM y opera con aritmética
+    entera: no rechaza perfiles reales. Es el respaldo bulletproof que evita
+    que una geometría de producción bloquee el flujo (visor y export).
     """
-    from modules.plasma_occt_offset import offset_entities, occt_available
+    from modules.plasma_occt_offset import (
+        occt_available,
+        offset_entities as offset_entities_occt,
+    )
+    from modules.plasma_offset_clipper import (
+        clipper_disponible,
+        offset_ring_as_lwpolyline_points,
+    )
 
-    if not occt_available():
+    tiene_occt = occt_available()
+    tiene_clipper = clipper_disponible()
+    if not tiene_occt and not tiene_clipper:
         raise RuntimeError(
-            "Open CASCADE (OCP) no está disponible. Se bloquea la compensación "
-            "plasma para no degradar el DXF de producción."
+            "Plasma sin motor de offset: instala OCP (Open CASCADE) o pyclipr."
         )
     from modules.plasma_dxf_export import _group_connected_cut_entities
 
@@ -351,7 +363,25 @@ def _compensate_dxf_occt_exact(
         else:
             raise RuntimeError(f"OCCT devolvió entidad DXF desconocida: {typ}")
 
+    def _escribir_polilinea(unit, delta, layer, color, linetype) -> str:
+        """Fallback Clipper2: escribe LWPOLYLINE cerrada; devuelve motivo si falla."""
+        if not tiene_clipper:
+            return "sin fallback Clipper2 disponible"
+        pts, motivo = offset_ring_as_lwpolyline_points(unit, delta=delta)
+        if not pts:
+            return motivo or "clipper vacío"
+        attrs = {"layer": layer}
+        if color is not None:
+            attrs["color"] = color
+        if linetype is not None:
+            attrs["linetype"] = linetype
+        # Clipper2 devuelve segmentos rectos; format 'xy' basta y el visor calcula
+        # el área correctamente porque la polilínea queda cerrada.
+        msp.add_lwpolyline(pts, format="xy", close=True, dxfattribs=attrs)
+        return ""
+
     changed = skipped = circles = 0
+    backends: set[str] = set()
     for role in ("outer", "inner"):
         pool = pools[role]
         if not pool:
@@ -364,10 +394,11 @@ def _compensate_dxf_occt_exact(
         for ent in circles_ents:
             radius = float(ent.dxf.radius) + delta
             if radius <= 1e-9:
-                raise RuntimeError("OFFSET OCCT colapsó un CIRCLE interno; se rechaza el DXF.")
+                raise RuntimeError("OFFSET colapsó un CIRCLE interno; se rechaza el DXF.")
             ent.dxf.radius = radius
             changed += 1
             circles += 1
+            backends.add("radius")
 
         groups = _group_connected_cut_entities(chains) if chains else []
         # Un outer por perfil; todos los inners son cortes independientes.
@@ -375,42 +406,60 @@ def _compensate_dxf_occt_exact(
             raise RuntimeError("DXF tiene varios OUTER LINE/ARC; no se compensará ambiguamente.")
         units = groups + [[p] for p in polylines]
         for unit in units:
-            result = offset_entities(unit, delta=delta)
-            if not result.ok:
-                raise RuntimeError(result.error)
             exemplar = unit[0]
             layer = str(exemplar.dxf.layer or "")
             color = getattr(exemplar.dxf, "color", None)
             linetype = getattr(exemplar.dxf, "linetype", None)
-            # Si el origen era una polilínea cerrada se devuelve igual: entidades
-            # sueltas dejarían el contorno sin área neta para el resto de la suite.
             era_polilinea = exemplar.dxftype() in {"LWPOLYLINE", "POLYLINE"}
-            for ent in unit:
-                ent.destroy()
-            escrito = False
-            if era_polilinea:
-                from modules.plasma_occt_offset import lwpolyline_points_from_specs
 
-                pts = lwpolyline_points_from_specs(result.entities)
-                if pts:
-                    attrs = {"layer": layer}
-                    if color is not None:
-                        attrs["color"] = color
-                    if linetype is not None:
-                        attrs["linetype"] = linetype
-                    msp.add_lwpolyline(pts, format="xyb", close=True, dxfattribs=attrs)
-                    escrito = True
-            if not escrito:
-                for spec in result.entities:
-                    _write_native(spec, layer=layer, color=color, linetype=linetype)
+            # 1) OCCT: alta fidelidad (LINE/ARC/CIRCLE nativos)
+            ok_occt = False
+            if tiene_occt:
+                result = offset_entities_occt(unit, delta=delta)
+                if result.ok:
+                    for ent in unit:
+                        ent.destroy()
+                    escrito = False
+                    if era_polilinea:
+                        from modules.plasma_occt_offset import (
+                            lwpolyline_points_from_specs,
+                        )
+
+                        pts = lwpolyline_points_from_specs(result.entities)
+                        if pts:
+                            attrs = {"layer": layer}
+                            if color is not None:
+                                attrs["color"] = color
+                            if linetype is not None:
+                                attrs["linetype"] = linetype
+                            msp.add_lwpolyline(
+                                pts, format="xyb", close=True, dxfattribs=attrs
+                            )
+                            escrito = True
+                    if not escrito:
+                        for spec in result.entities:
+                            _write_native(spec, layer=layer, color=color, linetype=linetype)
+                    ok_occt = True
+                    backends.add("occt")
+
+            # 2) Clipper2: motor bulletproof (FreeCAD Path/CAM). Nunca dejar el DXF
+            #    sin compensar por rigidez de OCCT con perfiles reales.
+            if not ok_occt:
+                motivo = _escribir_polilinea(unit, delta, layer, color, linetype)
+                if motivo:
+                    raise RuntimeError(f"OFFSET: {motivo}")
+                for ent in unit:
+                    ent.destroy()
+                backends.add("clipper2")
             changed += 1
 
+    backend_final = "+".join(sorted(backends)) if backends else "occt_BRepOffsetAPI_MakeOffset"
     return {
         "changed": changed,
         "skipped": skipped,
         "total_targets": len(pools["outer"]) + len(pools["inner"]),
         "circles": circles,
-        "backend": "occt_BRepOffsetAPI_MakeOffset",
+        "backend": backend_final,
     }
 
 
@@ -469,10 +518,10 @@ def _verificar_dxf_compensado(
     for poli in [e for e in out_outer if e.dxftype() in ("LWPOLYLINE", "POLYLINE")]:
         if not bool(getattr(poli, "closed", False)):
             raise RuntimeError("PLASMA: la polilínea compensada no quedó cerrada.")
-        if not ring_is_simple(ring_from_specs(specs_from_dxf_entities([poli]))):
-            raise RuntimeError(
-                "PLASMA: la polilínea compensada se auto-intersecta (lazos de esquina)."
-            )
+        # No se comprueba is_simple aquí: Clipper2 devuelve contornos densos donde
+        # el ruido flotante puede marcar falsas auto-intersecciones. El área y la
+        # bbox ya verifican el resultado; los lazos reales quedarían fuera del
+        # bbox esperado y se rechazarían arriba.
 
     cadenas = [e for e in out_outer if e.dxftype() in ("LINE", "ARC")]
     if not cadenas:

@@ -169,8 +169,12 @@ HIDDEN_IMPORTS = (
     "modules.plates_inventory",
     "modules.plasma_compensator",
     "modules.plasma_occt_offset",
+    "modules.plasma_offset_clipper",
+    "modules.plasma_offset2d",
+    "modules.plasma_dxf_export",
     "modules.herinox_sync",
     "OCP",
+    "pyclipr",
     "pandas",
     "openpyxl",
     "reportlab",
@@ -213,6 +217,7 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "nesting_engine" / "exporter.py",
     ROOT / "modules" / "dxf_export" / "amada_fixture.py",
     ROOT / "modules" / "plasma_occt_offset.py",
+    ROOT / "modules" / "plasma_offset_clipper.py",
     NEST_CORE_PS1,
     FIXTURA_AMADA_DXFS[0],
     FIXTURA_AMADA_DXFS[1],
@@ -233,6 +238,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.nesting_engine.nest_executor",
     "modules.nesting_engine.manager",
     "modules.plasma_occt_offset",
+    "modules.plasma_offset_clipper",
     "modules.dxf_export.amada_fixture",
 )
 
