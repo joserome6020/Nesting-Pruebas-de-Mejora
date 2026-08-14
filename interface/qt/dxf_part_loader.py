@@ -64,15 +64,17 @@ def _agregar_shapes_desde_line_arc(
     entidades: list,
     rol: str,
     shapes_cerrados: list,
-    rot: int,
-    cx: float,
-    cy: float,
 ) -> None:
     """Encadena LINE+ARC de una capa CUT en anillos cerrados y los agrega a shapes_cerrados.
 
-    Este es el puente entre DXF Inventor (cortes hechos de LINE/ARC sueltos) y
-    la clasificación outer/inner que alimenta ``outer_rings`` — sin este puente,
+    Puente entre DXF Inventor (cortes hechos de LINE/ARC sueltos) y la
+    clasificación outer/inner que alimenta ``outer_rings`` — sin este puente,
     el visor no puede pintar el énfasis plasma sobre perfiles Inventor.
+
+    Nota rotación: las entidades se leen DESPUÉS de que ``rotate_modelspace``
+    ya las mutó in-place, por eso NO se aplica ``rotar_punto`` aquí. Aplicarla
+    provoca doble rotación: la pieza (render_modelspace) aparece a 90° y el
+    anillo (emphasize_plasma_outers) a 180° → rojo desplazado / espejado.
     """
     if not entidades:
         return
@@ -98,8 +100,6 @@ def _agregar_shapes_desde_line_arc(
         if math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) > 0.05:
             continue
         pts_ring = [(float(x), float(y)) for x, y in pts]
-        if rot:
-            pts_ring = [rotar_punto(x, y, cx, cy, rot) for (x, y) in pts_ring]
         area_abs = abs(poly_area_2d(pts_ring))
         if area_abs <= 1e-9:
             continue
@@ -297,12 +297,8 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
     # sueltos (sin LWPOLYLINE). Encadenamos aquí cada perfil para que el visor
     # sepa pintar el énfasis plasma rojo. Sin este stitching, `outer_rings` queda
     # vacío para brackets tipo GENE-BKT-101 y el usuario no ve la marca "+X"".
-    _agregar_shapes_desde_line_arc(
-        outer_line_arc_raw, "outer", shapes_cerrados, rot, cx, cy
-    )
-    _agregar_shapes_desde_line_arc(
-        inner_line_arc_raw, "inner", shapes_cerrados, rot, cx, cy
-    )
+    _agregar_shapes_desde_line_arc(outer_line_arc_raw, "outer", shapes_cerrados)
+    _agregar_shapes_desde_line_arc(inner_line_arc_raw, "inner", shapes_cerrados)
 
     outers, inners = clasificar_contornos_cerrados(shapes_cerrados)
     model.outer_rings = []

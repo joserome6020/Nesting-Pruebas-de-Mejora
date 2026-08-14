@@ -46,6 +46,20 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14p — Buzón solo Outlook (sin canal Premium)
+
+- Se quitó **CANAL AVANZADO** / Power Automate del diálogo: no hay licencia.
+- El Buzón solo abre Outlook con destino, texto, contexto y adjuntos.
+
+### 2026-08-14o — Buzón vía Outlook (sin Premium)
+
+- Power Automate HTTP resultó Premium; el envío diario ya no depende de eso.
+- **BUZÓN → ABRIR EN OUTLOOK** crea un borrador con destino
+  `jose_rosales@grupoarga.com`, descripción, contexto técnico y capturas
+  adjuntas (COM Outlook / PowerShell). El usuario solo pulsa Enviar.
+- Adjuntos se materializan en `_tmp/buzon/<timestamp>/` para que no se borren
+  al cerrar el diálogo. Docs actualizadas. Paridad `ANS C++`.
+
 ### 2026-08-14n — Buzón de soporte con capturas y canal corporativo
 
 - La barra superior de ANS incorpora **BUZÓN**: abre un formulario para reportar
@@ -60,6 +74,38 @@ código viejo. Un bug sin candado vuelve.
 - Guía de creación del flujo: `docs/BUZON_POWER_AUTOMATE.md`.
 - Build: `support_inbox` está en hidden imports, archivos críticos y smoke
   imports. Paridad confirmada con `ANS C++`; prueba headless del diálogo PASS.
+
+### 2026-08-14n — énfasis plasma alineado y label cosmético
+
+Dos regresiones destapadas por el fix `14m` (activar `outer_rings` para
+LINE+ARC):
+
+1. **Doble rotación del anillo.** `_agregar_shapes_desde_line_arc`
+   sampleaba las entidades DESPUÉS de que `rotate_modelspace` ya las había
+   rotado en la msp, y luego aplicaba `rotar_punto` otra vez. La pieza se
+   pintaba en la rotación pedida (render_modelspace) y el OUTER rojo en el
+   doble (emphasize) → aparecía desplazado y espejado tras ROTAR 90°.
+   Fix: eliminar el `rotar_punto` — las entidades ya vienen transformadas.
+2. **Label plasma gigantesco.** `set_plasma_overlay` y
+   `emphasize_plasma_outers` construían un `QGraphicsSimpleTextItem` con
+   `font.setPointSize(10)` sin `ItemIgnoresTransformations`. Los 10 pt se
+   interpretaban en unidades de escena (pulgadas), así que la etiqueta
+   "COMPENSADA +0.0125\"" salía de ~10 in de alto, inflaba el sceneRect y
+   `fit_view` hacía zoom-out extremo → la pieza quedaba diminuta.
+   Fix: un helper `_agregar_label_plasma` con el flag cosmético; el texto
+   se pinta siempre a la misma cantidad de píxeles y no altera el fit.
+
+Verificación end-to-end con GENE-BKT-101:
+- Rotación 0/90/180/270 → bbox del anillo == bbox real de la msp (delta 0
+  en las 4 rotaciones).
+- Label no altera `fit_view`; la pieza mantiene su tamaño esperado.
+
+Candado `tests/native/test_visor_plasma_alineacion.py`:
+- DXF sintético Inventor, ejecuta las 4 rotaciones y compara bboxes.
+- AST checks: `_agregar_label_plasma` existe y usa
+  `ItemIgnoresTransformations`; `set_plasma_overlay` y
+  `emphasize_plasma_outers` delegan al helper (fuente de verdad única).
+- Regresiones 23/23 en ambos proyectos.
 
 ### 2026-08-14m — visor pinta el énfasis plasma en piezas Inventor (LINE+ARC)
 

@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QCursor, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
+    QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
@@ -303,21 +304,9 @@ class CadPartGraphicsView(QGraphicsView):
                 continue
 
         if label:
-            txt = QGraphicsSimpleTextItem(str(label))
-            txt.setBrush(QBrush(QColor("#FCA5A5")))
-            f = txt.font()
-            f.setPointSize(10)
-            f.setBold(True)
-            txt.setFont(f)
-            # Escena tiene Y invertida en vista; texto con escala Y=-1 para leerse.
-            txt.setTransform(QTransform.fromScale(1.0, -1.0))
-            cx = (minx + maxx) * 0.5 if minx < maxx else float(self._centro_pieza[0])
-            top = maxy if maxy > miny else float(self._centro_pieza[1])
-            br = txt.boundingRect()
-            txt.setPos(cx - br.width() * 0.5, top + br.height() + off_scene * 2)
-            txt.setZValue(Z_PLASMA + 1)
-            self._scene.addItem(txt)
-            self._plasma_items.append(txt)
+            cx_label = (minx + maxx) * 0.5 if minx < maxx else float(self._centro_pieza[0])
+            top_label = maxy if maxy > miny else float(self._centro_pieza[1])
+            self._agregar_label_plasma(str(label), cx_label, top_label)
 
         if minx >= maxx:
             return None
@@ -367,19 +356,36 @@ class CadPartGraphicsView(QGraphicsView):
             maxy = max(maxy, max(ys))
 
         if label and minx < maxx:
-            txt = QGraphicsSimpleTextItem(str(label))
-            txt.setBrush(QBrush(QColor("#FCA5A5")))
-            f = txt.font()
-            f.setPointSize(10)
-            f.setBold(True)
-            txt.setFont(f)
-            txt.setTransform(QTransform.fromScale(1.0, -1.0))
-            cx = (minx + maxx) * 0.5
-            br = txt.boundingRect()
-            txt.setPos(cx - br.width() * 0.5, maxy + br.height() + 4)
-            txt.setZValue(Z_PLASMA + 1)
-            self._scene.addItem(txt)
-            self._plasma_items.append(txt)
+            self._agregar_label_plasma(str(label), (minx + maxx) * 0.5, maxy)
+
+    def _agregar_label_plasma(self, label: str, cx_scene: float, top_scene: float) -> None:
+        """Coloca el texto '+X"' sobre la pieza con tamaño cosmético.
+
+        Sin ``ItemIgnoresTransformations`` el font-size (10pt) se interpreta en
+        unidades de escena (pulgadas → literalmente 10 pulgadas de alto), lo que
+        obliga a ``fit_view`` a hacer zoom-out extremo: el label ocupa media
+        pantalla y la pieza queda del tamaño de un sello. Con el flag activo el
+        texto se pinta siempre a la misma cantidad de píxeles independientemente
+        del zoom, como cualquier tooltip nativo.
+        """
+        txt = QGraphicsSimpleTextItem(label)
+        txt.setBrush(QBrush(QColor("#FCA5A5")))
+        f = txt.font()
+        f.setPointSize(10)
+        f.setBold(True)
+        txt.setFont(f)
+        # Ignora el scale(1,-1) del view: el texto se pinta erguido y a tamaño
+        # constante en píxeles → no infla el bounding rect de la escena y
+        # ``fit_view`` sigue enmarcando solo la pieza.
+        txt.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True
+        )
+        # Anclamos justo arriba de la pieza en coord de escena; los offsets del
+        # texto respecto al ancla se resuelven internamente en píxeles.
+        txt.setPos(float(cx_scene), float(top_scene))
+        txt.setZValue(Z_PLASMA + 1)
+        self._scene.addItem(txt)
+        self._plasma_items.append(txt)
 
     def fit_view(self) -> None:
         rect = self._content_rect

@@ -107,6 +107,10 @@ REGRESIONES = [
         "test_visor_line_arc_outer.py",
         "2026-08-14m - visor arma outer_rings desde LINE+ARC (piezas Inventor IV_OUTER_PROFILE)",
     ),
+    (
+        "test_visor_plasma_alineacion.py",
+        "2026-08-14n - énfasis plasma alineado con la pieza en toda rotación + label cosmético",
+    ),
 ]
 
 
