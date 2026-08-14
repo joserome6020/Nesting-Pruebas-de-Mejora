@@ -46,6 +46,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14f — Plasma OCCT: robustez ante BRep_API / perfiles CW
+
+- Error en PARTS al marcar plasma (`OCCT OFFSET: BRep_API: command not done`)
+  en perfiles tipo **H.V parking** (muesca circular, a menudo CW).
+- `plasma_occt_offset`: ordena aristas, `ShapeFix_Wire`, fuerza orientación CCW,
+  reintenta join Arc/Intersection y constructores Wire/Face; casteos
+  `TopoDS.Edge/Wire` tras `Reversed()`.
+- Invalida cache compensado (`offset2d-v2-occt-robust`). Candado ampliado en
+  `test_plasma_occt_offset.py` (CW parking). Sin módulos nuevos para el `.exe`.
+
 ### 2026-08-14e — Bloqueo de orientación de corte (PARTS)
 
 - Checkbox **BLOQUEAR ORIENTACIÓN DE CORTE** en el detalle de PARTS (junto a
