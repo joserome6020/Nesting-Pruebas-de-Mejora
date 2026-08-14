@@ -120,8 +120,12 @@ REGRESIONES = [
         "2026-08-14p - perfiles rectilíneos con escalones no inventan ARC ni duplican LINE (OP-1010-211)",
     ),
     (
-        "test_auditoria_cantidades_nesting.py",
-        "2026-08-14p - tabla de placa distingue PLACA / NEST / REQ para no confundir H1 con el lote",
+        "test_plasma_separacion_piezas.py",
+        "2026-08-14q - separación plasma por geometría real; tabla de placa con cantidad y medidas compensadas",
+    ),
+    (
+        "test_cu_force_dxf_step.py",
+        "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
     ),
 ]
 

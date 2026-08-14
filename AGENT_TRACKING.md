@@ -46,6 +46,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14s — Switch cobre: forzar DXF+STEP sin RTZCU
+
+- Configuración Global: switch **Forzar cobre DXF+STEP** (password DyT al
+  activar). Persiste en `_config/nest_runtime.json` (`cu_force_dxf_step`).
+- ON: desactiva sin_gap / RTZCU / Amada vertical en nest; todas las barras
+  cobre van con gap y exportan DXF + STEP. Aplica al nestear/renestear.
+- Env override: `ARGA_CU_FORCE_DXF_STEP=0|1`. Candado
+  `test_cu_force_dxf_step.py`. Paridad ANS C++.
+- Build: sin módulos nuevos; reutiliza `nest_runtime_prefs` ya empaquetado.
+
 ### 2026-08-14r — Buzón: vista previa de capturas
 
 - Debajo de la lista de adjuntos se muestra la imagen seleccionada.
@@ -100,11 +110,40 @@ completo).
 
 **Cantidades (no era pérdida):** PARTS muestra TOTAL QTY del lote
 (X3 → 6); la tabla CAD solo contaba la placa activa (H1 → 2). Las otras
-4 están en otras placas. La columna pasa a `PLACA / NEST / REQ` y se
-pinta en rojo solo si NEST ≠ REQ.
+4 están en otras placas.
 
-Candados: `test_plasma_export_rectilineo_escalones.py`,
-`test_auditoria_cantidades_nesting.py`. Build sin cambios.
+Candados: `test_plasma_export_rectilineo_escalones.py`. Build sin cambios.
+
+### 2026-08-14q — separación pieza-pieza reprobaba nests válidos
+
+Con los ARC/duplicados de `2026-08-14p` ya resueltos, GENE-OP-1010-211
+seguía abortando el export: `separación pieza-pieza 3.8 mm < kerf nest
+7.6 mm` → `plasma: sin contorno exportable desde el nest`. Eran dos
+defectos sumados en `validate_plasma_piece`:
+
+1. La separación se medía entre **bounding boxes** axis-aligned. Ese
+   perfil tiene escalones y el nest entrelaza sus dos instancias, así
+   que las cajas se enciman aunque el metal conserve el kerf completo.
+2. Se comparaba contra el **kerf pelado del nest**. Al compensar, cada
+   contorno crece `off` hacia afuera, así que la separación real entre
+   contornos de corte es `kerf - 2*off` por construcción: exigir `kerf`
+   reprobaba todo nest compensado correcto.
+
+Fix: `piece_clearance_record` guarda bbox **y** el contorno
+discretizado; el bbox queda solo como filtro barato y el veredicto lo da
+la distancia real entre contornos (`_segments_min_distance_mm`, exacta
+porque en segmentos disjuntos el mínimo cae en un extremo). El umbral
+pasa a `kerf - 2*off`.
+
+**UI de la placa:** la columna vuelve a ser `Cant.` con lo colocado en
+esa placa (el desglose `PLACA / NEST / REQ` de `14p` se revierte: no era
+lo pedido). Las columnas `L (in)` / `W (in)` medían el polígono del nest
+(sin compensar) y por eso decían 42.48 donde PARTS decía 42.51; ahora
+suman el desfase por lado y empatan con la pieza tal como se corta.
+
+Candado: `test_plasma_separacion_piezas.py` (reproduce cajas encimadas
+con kerf correcto y afirma que el criterio viejo reprobaba; mantiene el
+rechazo real con 1 mm de aire). Build sin cambios.
 
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 

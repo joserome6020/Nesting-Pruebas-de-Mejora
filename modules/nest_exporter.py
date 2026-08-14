@@ -2075,7 +2075,7 @@ def export_nest_to_dxf(
             log(f"  modo={export_mode}")
 
             from modules.dxf_export.dispatcher import export_piece as dxf_export_piece
-            from modules.dxf_export.validate import _entities_bbox_mm
+            from modules.dxf_export.validate import piece_clearance_record
 
             piece_bounds_cache: list = getattr(
                 export_nest_to_dxf, "_plasma_bounds_cache", []
@@ -2106,9 +2106,9 @@ def export_nest_to_dxf(
                 log_entities_added(part_name, new_entities, mode=export_mode, ok=bool(new_entities))
                 if new_entities:
                     exported_pieces += 1
-                    b = _entities_bbox_mm(new_entities)
-                    if b:
-                        piece_bounds_cache.append(b)
+                    rec = piece_clearance_record(new_entities)
+                    if rec:
+                        piece_bounds_cache.append(rec)
                 continue
 
             if bool(p.get("compensated_plasma_source")) and str(p.get("ruta") or "").strip():

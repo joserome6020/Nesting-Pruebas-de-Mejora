@@ -68,6 +68,146 @@ def _entities_bbox_mm(entities) -> tuple[float, float, float, float] | None:
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _arc_segments_xy(
+    center, radius: float, start_deg: float, end_deg: float
+) -> list[tuple[float, float, float, float]]:
+    """Discretiza un ARC en segmentos con cuerda <= ~0.4 mm."""
+    cx, cy = float(center.x), float(center.y)
+    r = max(float(radius), 0.0)
+    if r <= 1e-9:
+        return []
+    sa = math.radians(float(start_deg))
+    sweep = math.radians((float(end_deg) - float(start_deg)) % 360.0) or (2.0 * math.pi)
+    pasos = max(2, min(256, int(math.ceil(r * sweep / 0.4))))
+    pts = [
+        (cx + r * math.cos(sa + sweep * i / pasos), cy + r * math.sin(sa + sweep * i / pasos))
+        for i in range(pasos + 1)
+    ]
+    return [(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]) for i in range(pasos)]
+
+
+def _clearance_segments(entities) -> list[tuple[float, float, float, float]]:
+    """Contorno de corte como segmentos rectos, en mm.
+
+    Sirve para medir separación real entre piezas: los bounding boxes mienten
+    en cuanto dos perfiles con escalones se entrelazan.
+    """
+    segs: list[tuple[float, float, float, float]] = []
+    for ent in entities or []:
+        try:
+            typ = ent.dxftype()
+            if typ == "LINE":
+                segs.append(
+                    (
+                        float(ent.dxf.start.x),
+                        float(ent.dxf.start.y),
+                        float(ent.dxf.end.x),
+                        float(ent.dxf.end.y),
+                    )
+                )
+            elif typ == "ARC":
+                segs.extend(
+                    _arc_segments_xy(
+                        ent.dxf.center,
+                        float(ent.dxf.radius),
+                        float(ent.dxf.start_angle),
+                        float(ent.dxf.end_angle),
+                    )
+                )
+            elif typ == "CIRCLE":
+                segs.extend(
+                    _arc_segments_xy(ent.dxf.center, float(ent.dxf.radius), 0.0, 360.0)
+                )
+            elif typ == "LWPOLYLINE":
+                pts = [(float(x), float(y)) for x, y, *_ in ent.get_points("xy")]
+                if getattr(ent, "closed", False) and len(pts) >= 3:
+                    pts.append(pts[0])
+                for i in range(len(pts) - 1):
+                    segs.append((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]))
+        except Exception:
+            continue
+    return segs
+
+
+def piece_clearance_record(entities) -> dict[str, Any] | None:
+    """bbox + segmentos del contorno exterior, para validar separación."""
+    outer = [
+        e
+        for e in (entities or [])
+        if str(getattr(e.dxf, "layer", "") or "").upper() in _OUTER_LAYERS
+    ]
+    bbox = _entities_bbox_mm(outer) or _entities_bbox_mm(entities)
+    if bbox is None:
+        return None
+    return {"bbox": bbox, "segs": _clearance_segments(outer or entities)}
+
+
+def _record_bbox(rec) -> tuple[float, float, float, float] | None:
+    if isinstance(rec, dict):
+        b = rec.get("bbox")
+        return tuple(b) if b else None  # type: ignore[return-value]
+    if rec and len(rec) == 4:
+        return tuple(rec)  # type: ignore[return-value]
+    return None
+
+
+def _record_segments(rec) -> list[tuple[float, float, float, float]]:
+    return list(rec.get("segs") or []) if isinstance(rec, dict) else []
+
+
+def _dist_punto_segmento(px: float, py: float, seg) -> float:
+    x0, y0, x1, y1 = seg
+    dx, dy = x1 - x0, y1 - y0
+    largo2 = dx * dx + dy * dy
+    if largo2 <= 1e-18:
+        return math.hypot(px - x0, py - y0)
+    t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / largo2))
+    return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
+
+
+def _segments_min_distance_mm(
+    a: list[tuple[float, float, float, float]],
+    b: list[tuple[float, float, float, float]],
+    *,
+    limit: float,
+) -> float | None:
+    """Distancia mínima real entre dos contornos discretizados.
+
+    En dos segmentos disjuntos el mínimo se alcanza siempre en un extremo de
+    alguno de los dos, así que basta evaluar punto-a-segmento en ambos sentidos.
+    Devuelve ``None`` si falta geometría para decidir (el caller no reprueba).
+    """
+    if not a or not b:
+        return None
+    mejor = float("inf")
+    for sa in a:
+        ax0, ay0, ax1, ay1 = sa
+        amin_x, amax_x = (ax0, ax1) if ax0 <= ax1 else (ax1, ax0)
+        amin_y, amax_y = (ay0, ay1) if ay0 <= ay1 else (ay1, ay0)
+        for sb in b:
+            bx0, by0, bx1, by1 = sb
+            bmin_x, bmax_x = (bx0, bx1) if bx0 <= bx1 else (bx1, bx0)
+            bmin_y, bmax_y = (by0, by1) if by0 <= by1 else (by1, by0)
+            # Poda por caja del par: barato y descarta la mayoría.
+            gx = max(0.0, max(amin_x - bmax_x, bmin_x - amax_x))
+            gy = max(0.0, max(amin_y - bmax_y, bmin_y - amax_y))
+            if math.hypot(gx, gy) >= mejor:
+                continue
+            d = min(
+                _dist_punto_segmento(ax0, ay0, sb),
+                _dist_punto_segmento(ax1, ay1, sb),
+                _dist_punto_segmento(bx0, by0, sa),
+                _dist_punto_segmento(bx1, by1, sa),
+            )
+            if d < mejor:
+                mejor = d
+                if mejor <= 1e-9:
+                    return 0.0
+    if mejor == float("inf"):
+        return None
+    return mejor
+
+
 def _count_duplicate_lines(entities, *, layer_set: frozenset[str]) -> int:
     seen: set[tuple[float, float, float, float]] = set()
     dupes = 0
@@ -98,7 +238,7 @@ def validate_plasma_piece(
     *,
     offset_mm: float,
     sheet: dict | None = None,
-    all_piece_bounds: list[tuple[float, float, float, float]] | None = None,
+    all_piece_bounds: list[Any] | None = None,
 ) -> list[str]:
     """Comprueba medidas, empalmes y separación; devuelve lista de problemas."""
     name = str(p.get("part_name") or p.get("name") or "?")
@@ -170,15 +310,33 @@ def validate_plasma_piece(
                 )
 
         if cut_b and all_piece_bounds:
-            min_gap = kerf_mm
-            cx0, cy0, cx1, cy1 = cut_b
+            # El nest separa los perfiles SIN compensar por `kerf`. Al compensar,
+            # cada contorno crece `off` hacia afuera, así que la separación real
+            # entre los contornos de corte es `kerf - 2*off` por construcción:
+            # exigir `kerf` pelado reprobaba todo nest compensado correcto.
+            min_gap = max(0.0, kerf_mm - 2.0 * off)
+            propio = _clearance_segments(outer_ents)
             for ob in all_piece_bounds:
-                if ob is cut_b:
+                otro_bbox = _record_bbox(ob)
+                if otro_bbox is None or otro_bbox is cut_b:
                     continue
-                gap = _bbox_separation_mm(cut_b, ob)
-                if gap is not None and gap < min_gap - 0.5:
+                # Cajas lejanas no pueden violar el kerf: filtro barato.
+                if (_bbox_separation_mm(cut_b, otro_bbox) or 0.0) >= min_gap:
+                    continue
+                # Cajas cercanas se miden contra la geometría real. Estas piezas
+                # se entrelazan (escalones/notches) y sus bounding boxes se
+                # acercan mucho más que el metal, lo que producía un rechazo
+                # falso con el kerf perfectamente respetado.
+                gap = _segments_min_distance_mm(
+                    propio, _record_segments(ob), limit=min_gap
+                )
+                if gap is None:
+                    continue
+                if gap < min_gap - 0.5:
                     issues.append(
-                        f"separación pieza-pieza {gap:.1f} mm < kerf nest {min_gap:.1f} mm"
+                        f"separación pieza-pieza {gap:.1f} mm < mínimo "
+                        f"{min_gap:.1f} mm (kerf nest {kerf_mm:.1f} - "
+                        f"2x desfase {off:.2f})"
                     )
                     break
 
