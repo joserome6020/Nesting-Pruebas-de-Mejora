@@ -21,7 +21,32 @@ struct PieceIn {
     std::string material;
     std::vector<std::vector<Point2D>> rings;
     std::vector<std::vector<Point2D>> marks;
+    bool grain_locked = false;
+    std::vector<double> allowed_rotations;
 };
+
+inline std::vector<int> resolve_piece_rotations_deg(const PieceIn& piece) {
+    // Vacío = el packer usa su set por defecto (ortogonal / fine / tilt).
+    if (piece.grain_locked) {
+        return {0};
+    }
+    if (!piece.allowed_rotations.empty()) {
+        std::vector<int> out;
+        out.reserve(piece.allowed_rotations.size());
+        for (double r : piece.allowed_rotations) {
+            int a = static_cast<int>(std::lround(r)) % 360;
+            if (a < 0) {
+                a += 360;
+            }
+            if (a == 360) {
+                a = 0;
+            }
+            out.push_back(a);
+        }
+        return out;
+    }
+    return {};
+}
 
 struct PieceOut {
     std::string nombre;

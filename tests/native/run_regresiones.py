@@ -68,8 +68,32 @@ REGRESIONES = [
         "2026-08-13d - tabla de gaps por calibre conserva kerf/margen y bloquea calibres sin regla",
     ),
     (
+        "test_plate_margin_constant.py",
+        "2026-08-13g - placa→pieza es 0.250 in final y no suma medio kerf",
+    ),
+    (
         "test_nvidia_spark_prefs.py",
         "2026-08-13e - NvidiaSpark inicia Local y persiste Auto solo al activarlo",
+    ),
+    (
+        "test_plasma_compensation_persistence.py",
+        "2026-08-13f - mover, cambiar placa o renestear conserva compensación de PARTS",
+    ),
+    (
+        "test_renest_calibre_and_worker_window.py",
+        "2026-08-14 - renest calibre define conteos y worker no abre consola CUI",
+    ),
+    (
+        "test_plasma_offset_autodesk.py",
+        "2026-08-14c - offset plasma tipo Autodesk: no deforma U/keyhole ni usa largest-wins",
+    ),
+    (
+        "test_plasma_occt_offset.py",
+        "2026-08-14d - OFFSET OCCT conserva LINE/ARC/CIRCLE y falla cerrado",
+    ),
+    (
+        "test_orientacion_corte_bloqueada.py",
+        "2026-08-14e - BLOQUEAR ORIENTACIÓN DE CORTE fija vista PARTS (grain_locked=[0])",
     ),
 ]
 

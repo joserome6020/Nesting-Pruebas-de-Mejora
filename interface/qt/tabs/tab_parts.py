@@ -263,7 +263,8 @@ class TabParts(QWidget, TimerHost):
         fbl.setSpacing(0)
         self.visor = VisorDXF(self.frame_black_visor)
         self._material_fila_actual = None
-        self.visor.set_persist_rotation_hook(self._persistir_orientacion_cobre)
+        self.visor.set_persist_rotation_hook(self._persistir_orientacion_vista)
+        self.visor.set_orientation_lock_hook(self._persistir_bloqueo_orientacion_corte)
         vis_lay.addWidget(self.frame_black_visor, 1)
         splitter.addWidget(frame_visor_bg)
         splitter.setStretchFactor(0, 2)
@@ -1091,7 +1092,25 @@ class TabParts(QWidget, TimerHost):
         orientaciones = getattr(self.app, "orientacion_cobre_por_ruta", None) or {}
         return int(orientaciones.get(clave_orientacion_cobre_ruta(ruta_dxf), 0)) % 360
 
+    def _orientacion_corte_bloqueada(self, ruta_dxf) -> bool:
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        bloqueadas = getattr(self.app, "orientacion_corte_bloqueada_por_ruta", None) or {}
+        return bool(bloqueadas.get(clave_orientacion_cobre_ruta(ruta_dxf), False))
+
+    def _orientacion_corte_grados(self, ruta_dxf) -> int:
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        grados = getattr(self.app, "orientacion_corte_por_ruta", None) or {}
+        return int(grados.get(clave_orientacion_cobre_ruta(ruta_dxf), 0)) % 360
+
+    def _rotacion_vista_para_ruta(self, ruta_dxf, material=None) -> int:
+        if self._es_material_cobre(material):
+            return self._orientacion_cobre_guardada(ruta_dxf)
+        if self._orientacion_corte_bloqueada(ruta_dxf):
+            return self._orientacion_corte_grados(ruta_dxf)
+        return 0
+
     def _persistir_orientacion_cobre(self, grados, ruta_dxf):
+        """Compat: cobre siempre persiste rotación de vista (legacy)."""
         if not self._es_material_cobre(self._material_fila_actual):
             return
         if not ruta_dxf:
@@ -1100,6 +1119,56 @@ class TabParts(QWidget, TimerHost):
         if not hasattr(self.app, "orientacion_cobre_por_ruta") or self.app.orientacion_cobre_por_ruta is None:
             self.app.orientacion_cobre_por_ruta = {}
         self.app.orientacion_cobre_por_ruta[clave_orientacion_cobre_ruta(ruta_dxf)] = int(grados) % 360
+
+    def _persistir_orientacion_vista(self, grados, ruta_dxf):
+        """Hook de ROTAR 90°: cobre legacy + grados fijados si el bloqueo está activo."""
+        if not ruta_dxf:
+            return
+        grados_i = int(grados) % 360
+        if self._es_material_cobre(self._material_fila_actual):
+            self._persistir_orientacion_cobre(grados_i, ruta_dxf)
+        if not self._orientacion_corte_bloqueada(ruta_dxf):
+            return
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        if (
+            not hasattr(self.app, "orientacion_corte_por_ruta")
+            or self.app.orientacion_corte_por_ruta is None
+        ):
+            self.app.orientacion_corte_por_ruta = {}
+        self.app.orientacion_corte_por_ruta[clave_orientacion_cobre_ruta(ruta_dxf)] = grados_i
+
+    def _persistir_bloqueo_orientacion_corte(self, checked: bool, ruta_dxf=None):
+        ruta = ruta_dxf or getattr(self.visor, "_ruta_actual", None)
+        if not ruta:
+            return
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+        if (
+            not hasattr(self.app, "orientacion_corte_bloqueada_por_ruta")
+            or self.app.orientacion_corte_bloqueada_por_ruta is None
+        ):
+            self.app.orientacion_corte_bloqueada_por_ruta = {}
+        if (
+            not hasattr(self.app, "orientacion_corte_por_ruta")
+            or self.app.orientacion_corte_por_ruta is None
+        ):
+            self.app.orientacion_corte_por_ruta = {}
+
+        clave = clave_orientacion_cobre_ruta(ruta)
+        if checked:
+            grados = 0
+            try:
+                grados = int(self.visor.rotacion_vista_deg())
+            except Exception:
+                grados = self._rotacion_vista_para_ruta(ruta, self._material_fila_actual)
+            self.app.orientacion_corte_bloqueada_por_ruta[clave] = True
+            self.app.orientacion_corte_por_ruta[clave] = int(grados) % 360
+            # Cobre: mantener mapa legacy alineado con la orientación fijada.
+            if self._es_material_cobre(self._material_fila_actual):
+                self._persistir_orientacion_cobre(grados, ruta)
+        else:
+            self.app.orientacion_corte_bloqueada_por_ruta.pop(clave, None)
+            self.app.orientacion_corte_por_ruta.pop(clave, None)
 
     def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
         inner = self.lista_scroll.widget()
@@ -1115,7 +1184,10 @@ class TabParts(QWidget, TimerHost):
         if os.path.exists(ruta_dxf):
             self._material_fila_actual = material
             self.visor.set_material(material)
-            rot_vista = self._orientacion_cobre_guardada(ruta_dxf) if self._es_material_cobre(material) else 0
+            self.visor.set_orientation_lock_checked(
+                self._orientacion_corte_bloqueada(ruta_dxf)
+            )
+            rot_vista = self._rotacion_vista_para_ruta(ruta_dxf, material)
             vista_dxf = ruta_dxf
             if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):
                 from interface.utils_nesting import clave_orientacion_cobre_ruta

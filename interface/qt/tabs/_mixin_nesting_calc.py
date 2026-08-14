@@ -376,6 +376,14 @@ class NestingCalcMixin:
         self.app.motor_nesting.plasma_dxf_por_ruta = {
             str(k): str(v) for k, v in dict(plasma_dxf).items() if v
         }
+        orient_corte = getattr(self.app, "orientacion_corte_por_ruta", None) or {}
+        self.app.motor_nesting.orientacion_corte_por_ruta = {
+            str(k): int(v) % 360 for k, v in dict(orient_corte).items()
+        }
+        bloqueo = getattr(self.app, "orientacion_corte_bloqueada_por_ruta", None) or {}
+        self.app.motor_nesting.orientacion_corte_bloqueada_por_ruta = {
+            str(k): bool(v) for k, v in dict(bloqueo).items() if v
+        }
 
     def ejecutar_nesting(self):
         if not self.app.datos_partes_actuales:
@@ -1482,6 +1490,105 @@ class NestingCalcMixin:
         )
         return fuente
 
+    def _pieza_pack_desde_fuente(
+        self,
+        src,
+        *,
+        forzar_compensacion_plasma: bool = False,
+        offset_mm_forzado=None,
+    ):
+        """Reconstruye una pieza y conserva su compensación seleccionada en PARTS.
+
+        El estado de PARTS es la fuente de verdad. Así cualquier operación que
+        reconstruya geometría (renest, cambio de placa o calibre) vuelve a usar
+        el DXF compensado en lugar de degradar silenciosamente al DXF base.
+        """
+        from interface.utils_nesting import clave_orientacion_cobre_ruta, es_material_cobre
+        from modules.plasma_compensator import (
+            asegurar_dxf_plasma_compensado,
+            compute_plasma_offset_mm,
+        )
+
+        ruta = str(src.get("ruta") or "").strip()
+        material = src.get("material", "")
+        calibre = src.get("calibre", "")
+        clave_ruta = clave_orientacion_cobre_ruta(ruta) if ruta else ""
+        plasma_parts = bool(
+            ruta
+            and not es_material_cobre(material)
+            and (getattr(self.app, "plasma_compensada_por_ruta", None) or {}).get(
+                clave_ruta, False
+            )
+        )
+        compensar = plasma_parts or bool(forzar_compensacion_plasma)
+        poly = copy.deepcopy(src["poly_base"])
+        marks = copy.deepcopy(src["marks_base"])
+        offset_mm = 0.0
+        ruta_plasma = ""
+
+        if plasma_parts:
+            thk = self.app.motor_nesting._parse_thickness_value(calibre)
+            if thk is None:
+                thk = float(self.app.motor_nesting._extraer_numero(calibre) or 0.0)
+            offset_mm = float(compute_plasma_offset_mm(float(thk or 0.0)))
+            if offset_mm <= 0:
+                raise RuntimeError(
+                    f"No se pudo calcular la compensación plasma de {src.get('nombre')!r}."
+                )
+            mapa_dxf = getattr(self.app, "plasma_dxf_por_ruta", None) or {}
+            ruta_plasma = str(mapa_dxf.get(clave_ruta) or "").strip()
+            if not ruta_plasma or not os.path.isfile(ruta_plasma):
+                ruta_plasma, error = asegurar_dxf_plasma_compensado(ruta, offset_mm)
+                if not ruta_plasma:
+                    raise RuntimeError(
+                        f"No se pudo restaurar compensación plasma de "
+                        f"{src.get('nombre')!r}: {error or 'DXF compensado no disponible.'}"
+                    )
+                if not hasattr(self.app, "plasma_dxf_por_ruta") or self.app.plasma_dxf_por_ruta is None:
+                    self.app.plasma_dxf_por_ruta = {}
+                self.app.plasma_dxf_por_ruta[clave_ruta] = ruta_plasma
+            poly_p, marks_p = self.app.motor_nesting.recuperar_geometria_robusta(ruta_plasma)
+            if poly_p is None or poly_p.is_empty:
+                raise RuntimeError(
+                    f"El DXF compensado de {src.get('nombre')!r} no contiene geometría usable."
+                )
+            poly = poly_p
+            if marks_p is not None:
+                marks = marks_p
+        elif compensar:
+            offset_mm = float(
+                offset_mm_forzado
+                if offset_mm_forzado is not None
+                else (self._offset_compensacion_mm_desde_clave(calibre) or 0.0)
+            )
+            comp = self._aplicar_compensacion_poligono(poly, offset_mm)
+            if comp is None or comp.is_empty:
+                raise RuntimeError(
+                    f"No se pudo aplicar compensación plasma a {src.get('nombre')!r}."
+                )
+            from shapely import affinity
+
+            mx, my, _, _ = comp.bounds
+            poly = affinity.translate(comp, -mx, -my)
+
+        item = {
+            "nombre": src["nombre"],
+            "poly": copy.deepcopy(poly),
+            "poly_exact": copy.deepcopy(poly),
+            "marks": copy.deepcopy(marks),
+            "area": float(getattr(poly, "area", 0) or src.get("area_base", 0)),
+            "calibre": calibre,
+            "material": material,
+            "ruta": ruta,
+        }
+        if compensar:
+            item["plasma_compensada_manual"] = True
+            item["plasma_offset_mm_manual"] = float(offset_mm)
+            item["plasma_fuente_ya_compensada"] = bool(plasma_parts)
+            if ruta_plasma:
+                item["ruta_plasma"] = ruta_plasma
+        return item
+
     def _build_piezas_para_renest_compensado(self, clave, cupos_compensar_por_nombre, offset_mm):
         """
         Construye lista completa de piezas del calibre con compensación parcial/global.
@@ -1490,7 +1597,9 @@ class NestingCalcMixin:
         conteo_total = self._contar_piezas_reales_grupo(clave)
         if not conteo_total:
             return [], {}
-        fuente = self._construir_fuente_geometria_por_nombre(clave)
+        # PARTS conserva la ruta original necesaria para recuperar el DXF plasma;
+        # el nest previo puede venir de una transferencia antigua sin esa ruta.
+        fuente = self._construir_fuente_geometria_por_nombre(clave, prefer_dxf=True)
         if not fuente:
             return [], {}
 
@@ -1750,98 +1859,41 @@ class NestingCalcMixin:
         )
 
     def _build_piezas_para_renest_calibre(self, clave):
+        # Conservar ambos conteos para informar el origen del renesteo. La
+        # demanda efectiva puede restaurar piezas faltantes con max(job,nido).
+        conteo_job = self._conteo_piezas_job_grupo(clave)
+        conteo_nido = self._contar_piezas_reales_grupo(clave)
         conteo_total = self._conteo_para_renest_calibre(clave)
         if not conteo_total:
             self._renest_calibre_build_info = {}
             return []
-        fuente = self._construir_fuente_geometria_por_nombre(clave)
+        fuente = self._construir_fuente_geometria_por_nombre(clave, prefer_dxf=True)
         if not fuente:
             self._renest_calibre_build_info = {"error": "sin_fuente"}
             return []
         piezas_out = []
         faltantes_geom = []
-        from interface.utils_nesting import clave_orientacion_cobre_ruta, es_material_cobre
-        from modules.plasma_compensator import compute_plasma_offset_mm
-
-        plasma_map = getattr(self.app, "plasma_compensada_por_ruta", None) or {}
-        plasma_dxf_map = getattr(self.app, "plasma_dxf_por_ruta", None) or {}
         for nom, total in conteo_total.items():
             src = fuente.get(nom)
             if not src:
                 faltantes_geom.append((nom, int(total)))
                 continue
-            ruta = src.get("ruta")
-            mat = src.get("material")
-            cal = src.get("calibre")
-            clave_r = clave_orientacion_cobre_ruta(ruta) if ruta else ""
-            es_plasma = bool(
-                ruta
-                and not es_material_cobre(mat)
-                and plasma_map.get(clave_r, False)
-            )
-            poly_use = src["poly_base"]
-            area_use = src["area_base"]
-            marks_use = src["marks_base"]
-            plasma_off = 0.0
-            ruta_plasma = ""
-            if es_plasma:
-                try:
-                    thk = self.app.motor_nesting._parse_thickness_value(cal)
-                    if thk is None:
-                        thk = float(self.app.motor_nesting._extraer_numero(cal) or 0.0)
-                    plasma_off = float(compute_plasma_offset_mm(float(thk or 0.0)))
-                    prec = str(plasma_dxf_map.get(clave_r) or "").strip()
-                    if not prec or not os.path.isfile(prec):
-                        from modules.plasma_compensator import asegurar_dxf_plasma_compensado
-
-                        prec, _err = asegurar_dxf_plasma_compensado(ruta, plasma_off)
-                        if prec:
-                            if (
-                                not hasattr(self.app, "plasma_dxf_por_ruta")
-                                or self.app.plasma_dxf_por_ruta is None
-                            ):
-                                self.app.plasma_dxf_por_ruta = {}
-                            self.app.plasma_dxf_por_ruta[clave_r] = prec
-                    if prec and os.path.isfile(prec):
-                        poly_p, marks_p = self.app.motor_nesting.recuperar_geometria_robusta(
-                            prec
-                        )
-                        if poly_p is not None and not poly_p.is_empty:
-                            poly_use = poly_p
-                            area_use = float(poly_p.area)
-                            if marks_p is not None:
-                                marks_use = marks_p
-                            ruta_plasma = prec
-                        else:
-                            es_plasma = False
-                    else:
-                        es_plasma = False
-                except Exception:
-                    es_plasma = False
             for _ in range(int(total)):
-                item = {
-                    "nombre": src["nombre"],
-                    "poly": copy.deepcopy(poly_use),
-                    "marks": copy.deepcopy(marks_use),
-                    "area": area_use,
-                    "calibre": src["calibre"],
-                    "material": src["material"],
-                    "ruta": src["ruta"],
-                }
-                if es_plasma:
-                    item["plasma_compensada_manual"] = True
-                    item["plasma_offset_mm_manual"] = float(plasma_off)
-                    item["plasma_fuente_ya_compensada"] = True
-                    if ruta_plasma:
-                        item["ruta_plasma"] = ruta_plasma
-                piezas_out.append(item)
+                try:
+                    piezas_out.append(self._pieza_pack_desde_fuente(src))
+                except RuntimeError:
+                    faltantes_geom.append((nom, 1))
         self._renest_calibre_build_info = {
             "conteo_job": conteo_job,
             "conteo_nido": conteo_nido,
             "faltantes_geom": faltantes_geom,
             "total_esperado": sum(int(v) for v in conteo_total.values()),
             "total_generado": len(piezas_out),
-            "fuente_conteo": "nido" if conteo_nido else "job",
+            "fuente_conteo": (
+                "max(job,nido)"
+                if conteo_total not in (conteo_job, conteo_nido)
+                else ("nido" if conteo_nido else "job")
+            ),
         }
         return piezas_out
 
@@ -2232,11 +2284,13 @@ class NestingCalcMixin:
         """
         if not piezas:
             return True
-        clearance = float(k or 0.2) * 25.4 + float(m or 0.0)
-        margin = clearance * 2.0
+        # El margen de la tabla es la distancia final placa→pieza, no un
+        # clearance al que se sume el kerf. El motor valida el kerf entre
+        # piezas durante el empaque exacto.
+        edge_margin_mm = max(0.0, float(m or 0.0)) * 25.4
         for ww, hh in ((w_mm, h_mm), (h_mm, w_mm)):
-            usable_w = ww - margin
-            usable_h = hh - margin
+            usable_w = ww - (2.0 * edge_margin_mm)
+            usable_h = hh - (2.0 * edge_margin_mm)
             if usable_w <= 0 or usable_h <= 0:
                 continue
             total_area = 0.0
@@ -2248,10 +2302,8 @@ class NestingCalcMixin:
                     break
                 b = poly.bounds
                 pw, ph = b[2] - b[0], b[3] - b[1]
-                fits = (
-                    pw + clearance <= usable_w and ph + clearance <= usable_h
-                ) or (
-                    ph + clearance <= usable_w and pw + clearance <= usable_h
+                fits = (pw <= usable_w and ph <= usable_h) or (
+                    ph <= usable_w and pw <= usable_h
                 )
                 if not fits:
                     ok = False
@@ -2420,7 +2472,14 @@ class NestingCalcMixin:
 
         piezas = piezas_pendientes
         if piezas is None:
-            piezas = self._piezas_pack_madre_para_empaque(clave, hoja)
+            try:
+                piezas = self._piezas_pack_madre_para_empaque(clave, hoja)
+            except RuntimeError as exc:
+                return QMessageBox.warning(
+                    self,
+                    "Cambiar de placa",
+                    f"No se pudo conservar la compensación de PARTS.\n\n{exc}",
+                )
         if not piezas:
             return QMessageBox.warning(
                 self,
@@ -2609,6 +2668,14 @@ class NestingCalcMixin:
             )
             return
 
+        # El motor entrega posiciones; reinyectamos metadatos de la fuente para
+        # que la marca plasma sobreviva también al cambio de placa.
+        from modules.nesting_engine.manager import enriquecer_piezas_hoja_con_fuentes
+
+        enriquecer_piezas_hoja_con_fuentes(
+            nh,
+            getattr(self, "_cambio_placa_ultimo_pack", []) or [],
+        )
         nh = self._hidratar_hoja_desde_candidata(nh, candidata, hoja_ref, k, m, opt, corner)
         aplicada = self._aplicar_hoja_en_sesion_cambio_placa(clave, nh, nueva_hoja=nueva_hoja)
         if aplicada is None:

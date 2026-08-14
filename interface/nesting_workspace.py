@@ -612,6 +612,17 @@ def construir_payload_workspace_lote_export(
             for k, v in (getattr(tab.app, "plasma_dxf_por_ruta", {}) or {}).items()
             if v
         },
+        "orientacion_corte_por_ruta": {
+            str(k): int(v) % 360
+            for k, v in (getattr(tab.app, "orientacion_corte_por_ruta", {}) or {}).items()
+        },
+        "orientacion_corte_bloqueada_por_ruta": {
+            str(k): bool(v)
+            for k, v in (
+                getattr(tab.app, "orientacion_corte_bloqueada_por_ruta", {}) or {}
+            ).items()
+            if v
+        },
         "wo_reales_por_lote": {0: str(n_wo)},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
         "dxf_export_cache": dxf_export_cache,
@@ -702,6 +713,17 @@ def construir_payload_workspace(tab):
         "plasma_dxf_por_ruta": {
             str(k): str(v)
             for k, v in (getattr(tab.app, "plasma_dxf_por_ruta", {}) or {}).items()
+            if v
+        },
+        "orientacion_corte_por_ruta": {
+            str(k): int(v) % 360
+            for k, v in (getattr(tab.app, "orientacion_corte_por_ruta", {}) or {}).items()
+        },
+        "orientacion_corte_bloqueada_por_ruta": {
+            str(k): bool(v)
+            for k, v in (
+                getattr(tab.app, "orientacion_corte_bloqueada_por_ruta", {}) or {}
+            ).items()
             if v
         },
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
@@ -1117,6 +1139,21 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         }
     except Exception:
         tab.app.plasma_dxf_por_ruta = {}
+    try:
+        tab.app.orientacion_corte_por_ruta = {
+            str(k): int(v) % 360
+            for k, v in (payload.get("orientacion_corte_por_ruta") or {}).items()
+        }
+    except Exception:
+        tab.app.orientacion_corte_por_ruta = {}
+    try:
+        tab.app.orientacion_corte_bloqueada_por_ruta = {
+            str(k): bool(v)
+            for k, v in (payload.get("orientacion_corte_bloqueada_por_ruta") or {}).items()
+            if v
+        }
+    except Exception:
+        tab.app.orientacion_corte_bloqueada_por_ruta = {}
     tab.app.job_activo = payload.get("job_activo", "NESTING")
     tab.app.ultimos_escenarios = payload.get("ultimos_escenarios", []) or []
 

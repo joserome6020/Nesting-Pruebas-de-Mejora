@@ -925,16 +925,22 @@ std::vector<Variation> build_variaciones_fine(
     double h_placa,
     double margin_px,
     double kerf_radio,
-    double rotation_step_deg) {
+    double rotation_step_deg,
+    const std::vector<int>& rotations_override = {}) {
     std::vector<Variation> variaciones;
     if (poly_src.empty()) {
         return variaciones;
     }
 
     const Point2D centroid = polygon_centroid(poly_src.front());
-    const double eff_step = effective_rotation_step_for_piece(rotation_step_deg, poly_src);
-    const double tilt = resolve_tilt_deg();
-    const auto angles = build_rotation_angles_with_tilt(eff_step, tilt);
+    std::vector<int> angles;
+    if (!rotations_override.empty()) {
+        angles = rotations_override;
+    } else {
+        const double eff_step = effective_rotation_step_for_piece(rotation_step_deg, poly_src);
+        const double tilt = resolve_tilt_deg();
+        angles = build_rotation_angles_with_tilt(eff_step, tilt);
+    }
 
     for (const int angulo : angles) {
         auto poly_rot = poly_src;
@@ -1176,7 +1182,14 @@ bool colocar_pieza_nfp(
     double rotation_step_deg,
     NfpPairCache* nfp_cache) {
     const auto variaciones = build_variaciones_fine(
-        p_data.rings, p_data.marks, w_placa, h_placa, margin_px, kerf_radio, rotation_step_deg);
+        p_data.rings,
+        p_data.marks,
+        w_placa,
+        h_placa,
+        margin_px,
+        kerf_radio,
+        rotation_step_deg,
+        resolve_piece_rotations_deg(p_data));
     if (variaciones.empty()) {
         return false;
     }

@@ -66,6 +66,16 @@ arga::PieceIn parse_piece(const py::dict& d) {
     if (d.contains("marks")) {
         piece.marks = parse_marks(d["marks"]);
     }
+    if (d.contains("grain_locked")) {
+        piece.grain_locked = py::cast<bool>(d["grain_locked"]);
+    }
+    if (d.contains("allowed_rotations")) {
+        const py::list rots = py::cast<py::list>(d["allowed_rotations"]);
+        piece.allowed_rotations.reserve(rots.size());
+        for (const auto& item : rots) {
+            piece.allowed_rotations.push_back(py::cast<double>(item));
+        }
+    }
     return piece;
 }
 
@@ -116,6 +126,16 @@ py::dict piece_in_to_py(const arga::PieceIn& p) {
     d["material"] = p.material;
     d["rings"] = rings_to_py(p.rings);
     d["marks"] = rings_to_py(p.marks);
+    if (p.grain_locked) {
+        d["grain_locked"] = true;
+    }
+    if (!p.allowed_rotations.empty()) {
+        py::list rots;
+        for (double r : p.allowed_rotations) {
+            rots.append(r);
+        }
+        d["allowed_rotations"] = rots;
+    }
     return d;
 }
 

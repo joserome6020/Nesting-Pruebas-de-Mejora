@@ -435,11 +435,13 @@ std::vector<Variation> build_variaciones(
     double w_placa,
     double h_placa,
     double margin_px,
-    double kerf_radio) {
+    double kerf_radio,
+    const std::vector<int>& rotations_in = {}) {
     // Solo ortogonal (0/90/180/270). 45° infla el AABB y en producción
     // suele empeorar el nest (y el corte) frente a rotaciones cardinales.
-    const int rotations[] = {0, 90, 180, 270};
-    const int n_rot = 4;
+    const std::vector<int> rotations_default = {0, 90, 180, 270};
+    const std::vector<int>& rotations =
+        rotations_in.empty() ? rotations_default : rotations_in;
 
     std::vector<Variation> variaciones;
     if (poly_src.empty()) {
@@ -448,8 +450,7 @@ std::vector<Variation> build_variaciones(
 
     const Point2D centroid = polygon_centroid(poly_src.front());
 
-    for (int ri = 0; ri < n_rot; ++ri) {
-        const int angulo = rotations[ri];
+    for (const int angulo : rotations) {
         auto poly_rot = poly_src;
         auto marks_rot = marks_src;
         if (angulo != 0) {
@@ -698,7 +699,13 @@ bool colocar_pieza(
     const bool es_estructural_grande = area_pieza >= kAreaEstructuralUmbralMm2;
 
     const auto variaciones = build_variaciones(
-        p_data.rings, p_data.marks, w_placa, h_placa, margin_px, kerf_radio);
+        p_data.rings,
+        p_data.marks,
+        w_placa,
+        h_placa,
+        margin_px,
+        kerf_radio,
+        resolve_piece_rotations_deg(p_data));
     if (variaciones.empty()) {
         return false;
     }

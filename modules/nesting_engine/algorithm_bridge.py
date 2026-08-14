@@ -89,9 +89,85 @@ def _piece_to_native(piece):
     }
     if piece.get("grain_locked"):
         out["grain_locked"] = True
+        if piece.get("allowed_rotations") is None:
+            out["allowed_rotations"] = [0]
     if piece.get("allowed_rotations") is not None:
         out["allowed_rotations"] = piece.get("allowed_rotations")
     return out
+
+
+def _aabb_wh_from_rings(rings) -> tuple[float, float] | None:
+    pts = []
+    for ring in rings or []:
+        for pt in ring or []:
+            try:
+                pts.append((float(pt[0]), float(pt[1])))
+            except Exception:
+                continue
+    if len(pts) < 2:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return (float(max(xs) - min(xs)), float(max(ys) - min(ys)))
+
+
+def _orientation_lock_violated(piece_in: dict, piece_out: dict, *, tol: float = 1.0) -> bool:
+    """True si una pieza grain_locked salió con largo/ancho intercambiados."""
+    if not piece_in.get("grain_locked"):
+        return False
+    rin = piece_in.get("rings") or []
+    rout = piece_out.get("poligonos") or piece_out.get("rings") or []
+    din = _aabb_wh_from_rings(rin)
+    dout = _aabb_wh_from_rings(rout)
+    if din is None or dout is None:
+        return False
+    wi, hi = din
+    wo, ho = dout
+    if min(wi, hi, wo, ho) <= 0:
+        return False
+    if abs(wi - hi) <= tol and abs(wo - ho) <= tol:
+        return False
+    same = abs(wi - wo) <= tol and abs(hi - ho) <= tol
+    swapped = abs(wi - ho) <= tol and abs(hi - wo) <= tol
+    return bool(swapped and not same)
+
+
+def reject_locked_orientation_violations(hoja, restos, piezas_in):
+    """Saca de la hoja piezas bloqueadas cuya orientación cambió; las devuelve a restos."""
+    placed = list((hoja or {}).get("piezas") or [])
+    if not placed:
+        return hoja, restos
+
+    # Lookup por nombre contra el contrato nativo (rings + grain_locked).
+    lookup: dict[str, list] = {}
+    for p in piezas_in or []:
+        native = _piece_to_native(p) if "rings" not in p else p
+        key = str(native.get("nombre") or "")
+        lookup.setdefault(key, []).append((p, native))
+
+    kept = []
+    extra_restos = list(restos or [])
+    rejected = 0
+    for pout in placed:
+        key = str(pout.get("nombre") or "")
+        bucket = lookup.get(key)
+        pair = bucket.pop(0) if bucket else None
+        if pair is not None:
+            pin_orig, pin_native = pair
+            if _orientation_lock_violated(pin_native, pout):
+                rejected += 1
+                extra_restos.append(copy.deepcopy(pin_orig))
+                continue
+        kept.append(pout)
+
+    if rejected:
+        print(
+            f"[ORIENT-LOCK] rechazadas={rejected} piezas con rotación no permitida",
+            flush=True,
+        )
+    out_hoja = dict(hoja or {})
+    out_hoja["piezas"] = kept
+    return out_hoja, extra_restos
 
 
 def _build_piece_lookup_lists(piezas):
@@ -324,6 +400,7 @@ def _assemble_pack_result(hoja_native, restos_native, piezas):
             else:
                 restos.append(copy.deepcopy(p))
 
+    hoja, restos = reject_locked_orientation_violations(hoja, restos, piezas)
     return hoja, restos
 
 

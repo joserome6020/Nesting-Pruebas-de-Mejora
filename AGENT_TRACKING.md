@@ -46,6 +46,93 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14e — Bloqueo de orientación de corte (PARTS)
+
+- Checkbox **BLOQUEAR ORIENTACIÓN DE CORTE** en el detalle de PARTS (junto a
+  PLASMA): fija la orientación visible del visor como única permitida al nestear.
+  `ROTAR 90°` actualiza los grados fijados si la casilla está activa; al
+  desmarcar vuelven las rotaciones normales del motor.
+- Persistencia por ruta DXF en `.arganest`: `orientacion_corte_por_ruta` +
+  `orientacion_corte_bloqueada_por_ruta`. El hook de rotación ya no queda
+  limitado a cobre.
+- Manager: metal bloqueado → bake de grados en poly/marks + `grain_locked=True`
+  + `allowed_rotations=[0]`. Bridge propaga el contrato y rechaza resultados
+  que intercambien largo/ancho de una pieza bloqueada.
+- Packers C++ (`algorithm_cpp`) leen `grain_locked` / `allowed_rotations` y
+  restringen variaciones de rotación. Recompilar `algorithm_cpp` para que el
+  nativo aplique el filtro; sin rebuild el rechazo Python sigue activo.
+- Candado: `tests/native/test_orientacion_corte_bloqueada.py`. Regresiones
+  `19/19` en ambos proyectos. Build `.exe`: sin módulos/assets nuevos; UI ya
+  empaquetada (`interface.qt.visualizer` / `tab_parts`).
+
+### 2026-08-14d — Plasma OFFSET OCCT exacto y fail-closed
+
+- PARTS → ESP. ahora compensa con `BRepOffsetAPI_MakeOffset` de Open CASCADE
+  (OCP) dentro del ANS: conserva `LINE`, `ARC` y `CIRCLE` nativos, sin iniciar
+  FreeCAD ni convertir perfiles a una polilínea facetada.
+- Si OCP falta, el wire es ambiguo o OCCT crea una curva no representable como
+  DXF nativo, se rechaza la compensación: no se entrega un DXF degradado a
+  producción. Los bulges de LWPOLYLINE se reconstruyen como ARC exactos.
+- Se invalida el cache anterior de `Plasma Compensated` por versión de
+  algoritmo. El empaquetador ahora recoge OCP y el módulo de offset.
+- Candado: `tests/native/test_plasma_occt_offset.py`.
+
+### 2026-08-14b — Tabla gaps: valores exactos de planta
+
+- Corregidos los defaults de `CUT_GAP_RULES` para coincidir con la foto
+  oficial: delgados (Cal 16..0.188) `0.150"`, medios (0.250..0.375) `0.200"`,
+  0.500..0.750 `0.250"`, 1.000..1.250 `0.313"`, 1.500..2.000 `0.375"`.
+  Placa→pieza sigue en `0.250"` fija. Cal 18 (no aparece en la foto) queda
+  en `0.150"` como el grupo delgado de Herinox.
+- Candado actualizado: `tests/native/test_cut_gaps_table.py`. Sin cambio de
+  build: mismo módulo ya empaquetado.
+
+### 2026-08-14 — Renesteo de calibre y worker sin ventana CUI
+
+- Corregido el `NameError: name 'conteo_job' is not defined` al renestear un
+  calibre. El registro de diagnóstico referenciaba los conteos de job/nido sin
+  inicializarlos; el fallo ocurría antes de tratar geometría plasma, por lo que
+  también afectaba piezas convencionales.
+- `ArgaNestWorker.exe` ahora inicia con `CREATE_NO_WINDOW` en Windows: no
+  vuelve a crear la consola breve durante carga, compensación o nesting.
+- Candado nuevo: `tests/native/test_renest_calibre_and_worker_window.py`.
+  Regresiones: `16/16` en ambos proyectos. Sin cambio para
+  `tools/build_arga_exe.py`: el módulo ya estaba declarado como crítico e
+  importado en el smoke del empaquetado; no se añadieron assets ni binarios.
+
+### 2026-08-13g — Margen placa→pieza final de 0.250"
+
+- Se confirmó el defecto con la medida CAD: `8.26 mm` (`0.325"`) era
+  exactamente `0.250" + ½ kerf de 0.150"`. Los motores C++ usan ese medio
+  kerf para colisiones pieza↔pieza, pero también lo estaban aplicando al
+  borde de placa.
+- `engine_registry.py` adapta solo las placas rectangulares de los motores
+  productivos: el packer recibe `margen - kerf/2`, de modo que la separación
+  física final placa→pieza queda en el `0.250"` de la tabla para cualquier
+  calibre. RTZ y huecos irregulares conservan su margen exacto.
+- Los filtros de cambio de placa usan ahora únicamente el margen físico de
+  borde; ya no suman kerf al decidir si una placa cabe.
+- Candado nuevo: `tests/native/test_plate_margin_constant.py`. Prueba real
+  Cal `0.313"`/kerf `0.150"`: `6.343437 mm` (`0.249742"`). Regresiones:
+  `15/15` en ambos proyectos. No requiere cambios en `build_arga_exe.py`:
+  no hay imports dinámicos, binarios ni assets nuevos.
+
+### 2026-08-13f — Compensación plasma persistente al reacomodar
+
+- El cambio de placa reconstruía las piezas desde el DXF base y las
+  transferencias descartaban ruta y metadatos plasma; por eso una pieza marcada
+  en **PARTS → ESP.** perdía su compensación al mudar, cambiar placa o renestear.
+- La reconstrucción de piezas ahora toma PARTS como fuente de verdad y vuelve a
+  cargar el DXF compensado. Transferencias y cambio de placa conservan
+  `plasma_compensada_manual`, offset, ruta compensada, ruta original e identidad.
+- El refresco de display y la renovación en pose ahora usan `ruta_plasma` para
+  piezas ya compensadas; si ese archivo falta, conservan el polígono nestado en
+  vez de degradarlo al DXF base.
+- Candado nuevo: `tests/native/test_plasma_compensation_persistence.py`, incluido
+  en `run_regresiones.py`, cubre transferencia/reempaque y reconstrucción desde
+  DXF compensado. No se requieren cambios en `build_arga_exe.py`: no hay módulos,
+  binarios ni assets nuevos para empaquetar.
+
 ### 2026-08-13e — NvidiaSpark y STEPS restringidos en Configuración Global
 
 - **NvidiaSpark** queda visible en Configuración Global, apagado por defecto.

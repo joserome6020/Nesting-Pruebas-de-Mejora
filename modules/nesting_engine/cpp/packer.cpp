@@ -298,8 +298,11 @@ std::vector<Variation> build_variaciones(
     double w_placa,
     double h_placa,
     double margin_px,
-    double kerf_radio) {
-    static const int rotations[] = {0, 90, 180, 270};
+    double kerf_radio,
+    const std::vector<int>& rotations_in = {}) {
+    const std::vector<int> rotations_default = {0, 90, 180, 270};
+    const std::vector<int>& rotations =
+        rotations_in.empty() ? rotations_default : rotations_in;
     std::vector<Variation> variaciones;
     if (poly_src.empty()) {
         return variaciones;
@@ -484,7 +487,13 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
         const bool es_rectangular = (!es_estructural_grande) && rectangularidad_val >= 0.57;
 
         const auto variaciones = build_variaciones(
-            p_data.rings, p_data.marks, w_placa, h_placa, margin_px, kerf_radio);
+            p_data.rings,
+            p_data.marks,
+            w_placa,
+            h_placa,
+            margin_px,
+            kerf_radio,
+            resolve_piece_rotations_deg(p_data));
         if (variaciones.empty()) {
             pendientes_sig.push_back(p_data);
             continue;

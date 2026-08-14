@@ -102,6 +102,8 @@ class SistemaNestingPro(QMainWindow):
         self.cu_especial_por_ruta = {}
         self.plasma_compensada_por_ruta = {}
         self.plasma_dxf_por_ruta = {}
+        self.orientacion_corte_por_ruta = {}
+        self.orientacion_corte_bloqueada_por_ruta = {}
         self._parts_ui_pendiente = None
         self.resultados_nesting = {}
         self.resultados_multilote = []

@@ -44,6 +44,7 @@ from .geometry_parser import (
 )
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .engine_registry import list_engine_metas, is_engine_ready
+from .cut_gaps_table import CutGapTableError, gaps_for_calibre
 from .nest_engine_context import (
     ENGINE_ARGA_FORCE,
     ENGINE_ARGA_LITE,
@@ -2108,6 +2109,8 @@ class MotorNesting:
         self.cu_especial_por_ruta = {}
         self.plasma_compensada_por_ruta = {}
         self.plasma_dxf_por_ruta = {}
+        self.orientacion_corte_por_ruta = {}
+        self.orientacion_corte_bloqueada_por_ruta = {}
         self.active_engine_id = get_active_engine_id()
         self._ultima_comparacion_motores = None
         self._remnant_ids_consumidos: set[str] = set()
@@ -2935,6 +2938,39 @@ class MotorNesting:
                         _dbg_nesting(
                             f"[COBRE-ROT-FAIL] clave={clave} | pieza={pieza} | ruta={ruta} | err={exc}"
                         )
+            else:
+                # Metal: orientación bloqueada en PARTS (visor) → bake + grain_locked.
+                clave_ruta = clave_orientacion_cobre_ruta(ruta)
+                bloqueada = bool(
+                    (getattr(self, "orientacion_corte_bloqueada_por_ruta", {}) or {}).get(
+                        clave_ruta, False
+                    )
+                )
+                if bloqueada:
+                    rot_deg = int(
+                        (getattr(self, "orientacion_corte_por_ruta", {}) or {}).get(
+                            clave_ruta, 0
+                        )
+                    ) % 360
+                    if rot_deg:
+                        try:
+                            cx, cy = poly.centroid.x, poly.centroid.y
+                            poly = affinity.rotate(
+                                poly, rot_deg, origin=(cx, cy), use_radians=False
+                            )
+                            if marks is not None and not marks.is_empty:
+                                marks = affinity.rotate(
+                                    marks, rot_deg, origin=(cx, cy), use_radians=False
+                                )
+                            _dbg_nesting(
+                                f"[ORIENT-LOCK-ROT] clave={clave} | pieza={pieza} | "
+                                f"ruta={ruta} | rot={rot_deg}°"
+                            )
+                        except Exception as exc:
+                            _dbg_nesting(
+                                f"[ORIENT-LOCK-ROT-FAIL] clave={clave} | pieza={pieza} | "
+                                f"ruta={ruta} | err={exc}"
+                            )
 
             if poly is None:
                 motivo = err_geom or "recuperar_geometria_robusta devolvió None"
@@ -3052,6 +3088,21 @@ class MotorNesting:
                     "cu_especial_vertical": especial_cu,
                     "debug_id": f"{clave}::{pieza}::rep{idx_qty + 1}",
                 }
+                clave_ruta_lock = clave_orientacion_cobre_ruta(ruta)
+                if bool(
+                    (getattr(self, "orientacion_corte_bloqueada_por_ruta", {}) or {}).get(
+                        clave_ruta_lock, False
+                    )
+                ):
+                    # Orientación de PARTS ya horneada en poly: el packer no puede girar más.
+                    item_pz["grain_locked"] = True
+                    item_pz["allowed_rotations"] = [0]
+                    item_pz["orientacion_corte_bloqueada"] = True
+                    item_pz["orientacion_corte_deg"] = int(
+                        (getattr(self, "orientacion_corte_por_ruta", {}) or {}).get(
+                            clave_ruta_lock, 0
+                        )
+                    ) % 360
                 if plasma_flag:
                     item_pz["plasma_compensada_manual"] = True
                     item_pz["plasma_offset_mm_manual"] = float(plasma_off)
@@ -3443,6 +3494,12 @@ class MotorNesting:
                 self.plasma_compensada_por_ruta or {}
             )
             child.plasma_dxf_por_ruta = dict(self.plasma_dxf_por_ruta or {})
+            child.orientacion_corte_por_ruta = dict(
+                self.orientacion_corte_por_ruta or {}
+            )
+            child.orientacion_corte_bloqueada_por_ruta = dict(
+                self.orientacion_corte_bloqueada_por_ruta or {}
+            )
             return child
 
         bundle = ejecutar_comparacion_motores(
@@ -3522,6 +3579,11 @@ class MotorNesting:
                         f"{clave}: sin barras CU 144\"×1.75–6\" para largos."
                     )
                 continue
+            try:
+                group_kerf, group_margin, _rule_gap = gaps_for_calibre(req_cal)
+            except CutGapTableError as exc:
+                fallas.append(f"{clave}: {exc}")
+                continue
 
             # Pieza más exigente por bounding box
             target = max(
@@ -3583,8 +3645,8 @@ class MotorNesting:
                 [copy.deepcopy(target)],
                 placa_smoke["w"],
                 placa_smoke["h"],
-                config_kerf,
-                config_margin,
+                group_kerf,
+                group_margin,
                 config_opt,
                 config_corner,
                 debug_tag=f"preflight|{clave}|{target.get('nombre')}",
@@ -3698,10 +3760,18 @@ class MotorNesting:
         partes_clave = clave.split('_', 1) 
         req_cal = partes_clave[0]
         req_mat = partes_clave[1] if len(partes_clave) > 1 else ""
+        es_cobre_grupo = str(req_mat).strip().upper() == "CU" or es_material_cobre(req_mat)
+        regla_gap = None
+        if not es_cobre_grupo:
+            try:
+                config_kerf, config_margin, regla_gap = gaps_for_calibre(req_cal)
+            except CutGapTableError as exc:
+                return clave, {"error": str(exc)}
 
         _dbg_nesting(
             f"[GRUPO-START] clave={clave} | piezas={len(piezas)} | "
             f"kerf={config_kerf} | margin={config_margin} | "
+            f"gap_regla={regla_gap.get('label') if regla_gap else 'CU'} | "
             f"opt={config_opt} | corner={config_corner} | wo={wo_name}"
         )
         for pz in piezas:
@@ -3751,7 +3821,7 @@ class MotorNesting:
                 _dbg_nesting(f"[PREFLIGHT-GRUPO-FAIL] clave={clave} | {msg_pf}")
                 return clave, {"error": msg_pf}
 
-        if str(req_mat).strip().upper() == "CU" or es_material_cobre(req_mat):
+        if es_cobre_grupo:
             # Cobre largos: canal propio. Ignora motor de acero, kerf, margin, opt y corner.
             placas_largos = inventario_barras_largos_cu(placas_ok)
             _dbg_nesting(
@@ -5133,14 +5203,28 @@ class MotorNesting:
             marks_geom = LineString()
 
         minx, miny, _, _ = poly.bounds
-        return {
+        pieza_pack = {
             "nombre": str(p.get("nombre", "")),
             "poly": affinity.translate(poly, -minx, -miny),
             "marks": affinity.translate(marks_geom, -minx, -miny) if not marks_geom.is_empty else marks_geom,
             "area": float(p.get("area", poly.area) or poly.area),
             "calibre": p.get("calibre", ""),
             "material": p.get("material", ""),
+            "ruta": p.get("ruta", ""),
         }
+        # Una transferencia vuelve a empacar origen/destino. Conservar estos
+        # campos evita que una pieza compensada pierda su geometría/estado al
+        # pasar por el pack visual.
+        for campo in (
+            "debug_id",
+            "plasma_compensada_manual",
+            "plasma_offset_mm_manual",
+            "plasma_fuente_ya_compensada",
+            "ruta_plasma",
+        ):
+            if p.get(campo) is not None:
+                pieza_pack[campo] = p.get(campo)
+        return pieza_pack
 
     def _piezas_reales_en_hoja(self, hoja):
         piezas = []

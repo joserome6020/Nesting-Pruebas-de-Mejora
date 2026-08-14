@@ -16,6 +16,7 @@ from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -52,7 +53,7 @@ class VisorDXF:
 
         self.frame_seccion_3 = QFrame()
         self.frame_seccion_3.setObjectName("VisorInfoPanel")
-        self.frame_seccion_3.setFixedHeight(76)
+        self.frame_seccion_3.setFixedHeight(84)
         master_lay.addWidget(self.frame_seccion_3)
 
         sec2_lay = QVBoxLayout(self.frame_seccion_2)
@@ -97,6 +98,7 @@ class VisorDXF:
         self._ruta_actual = None
         self._rotacion_vista_deg = 0
         self._persist_rotation_hook = None
+        self._orientation_lock_hook = None
         self._material = ""
         self._plasma_offset_mm = 0.0
         self._plasma_base_metrics = None
@@ -106,6 +108,24 @@ class VisorDXF:
 
     def set_persist_rotation_hook(self, hook):
         self._persist_rotation_hook = hook
+
+    def set_orientation_lock_hook(self, hook):
+        self._orientation_lock_hook = hook
+
+    def set_orientation_lock_checked(self, checked: bool):
+        if not hasattr(self, "chk_orientacion_corte"):
+            return
+        self.chk_orientacion_corte.blockSignals(True)
+        self.chk_orientacion_corte.setChecked(bool(checked))
+        self.chk_orientacion_corte.blockSignals(False)
+
+    def orientation_lock_checked(self) -> bool:
+        if not hasattr(self, "chk_orientacion_corte"):
+            return False
+        return bool(self.chk_orientacion_corte.isChecked())
+
+    def rotacion_vista_deg(self) -> int:
+        return int(getattr(self, "_rotacion_vista_deg", 0) or 0) % 360
 
     def set_material(self, material: str | None = None):
         self._material = str(material or "").strip()
@@ -163,7 +183,38 @@ class VisorDXF:
         pl.addWidget(self.lbl_plasma_cap)
         pl.addWidget(self.lbl_plasma)
         row.addWidget(plasma_wrap, 0)
+
+        lock_wrap = QWidget()
+        lock_wrap.setStyleSheet("background:transparent;")
+        lock_wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        ll = QVBoxLayout(lock_wrap)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(1)
+        self.lbl_orientacion_cap = QLabel("ORIENTACIÓN")
+        self.lbl_orientacion_cap.setStyleSheet(
+            "color:#64748B;font-size:10px;font-weight:700;background:transparent;"
+        )
+        self.chk_orientacion_corte = QCheckBox("BLOQUEAR ORIENTACIÓN DE CORTE")
+        self.chk_orientacion_corte.setStyleSheet(
+            "QCheckBox{color:#E2E8F0;font-size:11px;font-weight:700;background:transparent;}"
+            "QCheckBox::indicator{width:14px;height:14px;}"
+        )
+        self.chk_orientacion_corte.setToolTip(
+            "Si está activo, el nesting solo podrá usar la orientación visible "
+            "(incluida la de ROTAR 90°). Al desmarcar, vuelven las rotaciones normales."
+        )
+        self.chk_orientacion_corte.toggled.connect(self._on_orientation_lock_toggled)
+        ll.addWidget(self.lbl_orientacion_cap)
+        ll.addWidget(self.chk_orientacion_corte)
+        row.addWidget(lock_wrap, 0)
         row.addStretch(1)
+
+    def _on_orientation_lock_toggled(self, checked: bool):
+        if callable(self._orientation_lock_hook):
+            try:
+                self._orientation_lock_hook(bool(checked), self._ruta_actual)
+            except Exception:
+                pass
 
     def actualizar_datos(self, min_x, max_x, min_y, max_y, perimetro, valido, area=None, referencia=""):
         if not valido:
