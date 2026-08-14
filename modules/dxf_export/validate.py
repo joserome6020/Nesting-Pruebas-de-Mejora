@@ -9,6 +9,31 @@ from modules.nesting_engine.dxf_export_log import log, _poly_bounds_mm
 _OUTER_LAYERS = frozenset({"CUT_OUTER", "OUTER", "CORTE_EXTERNO", "IV_OUTER"})
 
 
+def _arc_extent_xy(center, radius: float, start_deg: float, end_deg: float) -> list[tuple[float, float]]:
+    """Extremos reales de un ARC (no el círculo completo).
+
+    Tratar el ARC como ``center ± r`` inflaba el bbox de joins redondos y
+    disparaba falsos positivos de 'medidas vs nest' / 'min-corner' en plasma.
+    """
+    cx, cy = float(center.x), float(center.y)
+    r = float(radius)
+    sa = float(start_deg) % 360.0
+    ea = float(end_deg) % 360.0
+    pts = [
+        (cx + r * math.cos(math.radians(sa)), cy + r * math.sin(math.radians(sa))),
+        (cx + r * math.cos(math.radians(ea)), cy + r * math.sin(math.radians(ea))),
+    ]
+    sweep = (ea - sa) % 360.0
+    if sweep < 1e-9:
+        sweep = 360.0
+    for card in (0.0, 90.0, 180.0, 270.0):
+        # ¿el cardinal cae dentro del barrido CCW desde sa?
+        delta = (card - sa) % 360.0
+        if delta <= sweep + 1e-9:
+            pts.append((cx + r * math.cos(math.radians(card)), cy + r * math.sin(math.radians(card))))
+    return pts
+
+
 def _entities_bbox_mm(entities) -> tuple[float, float, float, float] | None:
     xs: list[float] = []
     ys: list[float] = []
@@ -19,15 +44,23 @@ def _entities_bbox_mm(entities) -> tuple[float, float, float, float] | None:
                 xs.extend([float(ent.dxf.start.x), float(ent.dxf.end.x)])
                 ys.extend([float(ent.dxf.start.y), float(ent.dxf.end.y)])
             elif typ == "ARC":
-                r = float(ent.dxf.radius)
-                c = ent.dxf.center
-                xs.extend([float(c.x) - r, float(c.x) + r])
-                ys.extend([float(c.y) - r, float(c.y) + r])
+                for x, y in _arc_extent_xy(
+                    ent.dxf.center,
+                    float(ent.dxf.radius),
+                    float(ent.dxf.start_angle),
+                    float(ent.dxf.end_angle),
+                ):
+                    xs.append(x)
+                    ys.append(y)
             elif typ == "CIRCLE":
                 r = float(ent.dxf.radius)
                 c = ent.dxf.center
                 xs.extend([float(c.x) - r, float(c.x) + r])
                 ys.extend([float(c.y) - r, float(c.y) + r])
+            elif typ == "LWPOLYLINE":
+                for x, y, *_ in ent.get_points("xy"):
+                    xs.append(float(x))
+                    ys.append(float(y))
         except Exception:
             continue
     if not xs:

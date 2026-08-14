@@ -1,6 +1,7 @@
 """Motor gráfico Qt (QGraphicsView) para visor de nesting — geometría 1:1 en mm."""
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QPointF, Qt, QRectF
@@ -709,7 +710,65 @@ def _add_dimension(scene, x1, y1, x2, y2, label, ox=0.0, oy=0.0, dim_labels=None
         )
 
 
-def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
+def _auditoria_cantidades_grupo(app, clave: str) -> dict[str, dict[str, int]]:
+    """Devuelve colocadas/requeridas de TODO el grupo, por nombre exacto.
+
+    La tabla CAD describe una sola placa, pero PARTS enseña la demanda total
+    del lote. Sin este desglose una fila ``Cant.=2`` en H1 parece contradecir
+    ``TOTAL QTY=6`` en PARTS aunque las otras cuatro instancias estén en H2-Hn.
+    La comparación reutiliza la misma semántica de
+    ``sheet_integrity.validar_colocacion_completa``: nombre exacto y excluir
+    hojas RTZ virtuales, que son una vista duplicada de la placa madre.
+    """
+    resultado: dict[str, dict[str, int]] = {}
+    if app is None:
+        return resultado
+    try:
+        grupo = (getattr(app, "resultados_nesting", None) or {}).get(clave) or {}
+    except Exception:
+        grupo = {}
+    if not isinstance(grupo, dict):
+        return resultado
+
+    requeridas = Counter(
+        str(p.get("nombre") or "").strip()
+        for p in (grupo.get("piezas_pool") or [])
+        if isinstance(p, dict) and str(p.get("nombre") or "").strip()
+    )
+    colocadas: Counter[str] = Counter()
+    for h in grupo.get("hojas") or []:
+        if not isinstance(h, dict) or h.get("cu_rtz_virtual"):
+            continue
+        for p in h.get("piezas") or []:
+            if not isinstance(p, dict):
+                continue
+            nom = str(p.get("nombre") or "").strip()
+            if not nom or nom.startswith(
+                ("REMANENTE__", "REF__", "RETAZO_GUILLOTINA__", "CU_CORTE__", "TATUAJE__")
+            ):
+                continue
+            colocadas[nom] += 1
+
+    for nom in set(requeridas) | set(colocadas):
+        resultado[nom] = {
+            "nest": int(colocadas.get(nom, 0)),
+            # Si no hay pool serializado, no inventar una demanda: el UI
+            # muestra "—" y la integridad del grupo conserva la decisión.
+            "req": int(requeridas[nom]) if nom in requeridas else -1,
+        }
+    return resultado
+
+
+def _add_table_impl(
+    scene,
+    hoja,
+    resumen,
+    dims_nom,
+    w_mm,
+    h_mm,
+    job_cell: str,
+    auditoria_cantidades: dict[str, dict[str, int]] | None = None,
+):
     rows = []
     for nom, data in sorted(resumen.items(), key=lambda kv: kv[1]["id"]):
         dim = dims_nom.get(nom, {"L": 0.0, "W": 0.0, "plasma": False})
@@ -721,7 +780,25 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
         job_val = str(data.get("job") or job_cell or "-").strip()
         if len(job_val) > 30:
             job_val = job_val[:27] + "…"
-        rows.append((data["id"], job_val, item, f"{L_in:.2f}", f"{W_in:.2f}", int(data["qty"])))
+        audit = (auditoria_cantidades or {}).get(nom) or {}
+        placed_group = int(audit.get("nest", data["qty"]) or 0)
+        required = int(audit.get("req", -1) or -1)
+        qty_label = (
+            f'{int(data["qty"])} / {placed_group} / {required}'
+            if required >= 0
+            else f'{int(data["qty"])} / {placed_group} / —'
+        )
+        rows.append(
+            (
+                data["id"],
+                job_val,
+                item,
+                f"{L_in:.2f}",
+                f"{W_in:.2f}",
+                qty_label,
+                required >= 0 and placed_group != required,
+            )
+        )
 
     nrows = len(rows)
     gap_mm = max(28.0, min(48.0, h_mm * 0.035))
@@ -743,7 +820,7 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
     tbl_h = row_h * (nrows + 1)
     y_tbl_bottom = y_tbl_top - tbl_h
 
-    col_labels = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
+    col_labels = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "PLACA / NEST / REQ"]
     col_fracs = [0.07, 0.19, 0.34, 0.12, 0.12, 0.16]
     col_w = [tbl_w * f for f in col_fracs]
 
@@ -772,7 +849,7 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
     for ri, row in enumerate(rows):
         r = nrows - 1 - ri  # ID 1 arriba, mayor ID abajo
         bg = COLOR_TABLE_ROW_A if r % 2 else COLOR_TABLE_ROW_B
-        for c, val in enumerate(row):
+        for c, val in enumerate(row[:-1]):
             x, y, cw, rh = cell_rect(c, r)
             rect = QGraphicsRectItem(x, y, cw, rh)
             rect.setBrush(QBrush(bg))
@@ -781,7 +858,10 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
             scene.addItem(rect)
             txt = TableCellTextItem(str(val))
             txt.set_font_for_row(rh)
-            txt.setBrush(QBrush(COLOR_TABLE_TEXT))
+            qty_no_empata = bool(row[-1])
+            txt.setBrush(
+                QBrush(QColor("#FCA5A5") if c == 5 and qty_no_empata else COLOR_TABLE_TEXT)
+            )
             _place_text_centered_in_cell(txt, x, y, cw, rh)
             txt.setZValue(Z_TABLE + 1)
             scene.addItem(txt)
@@ -1034,7 +1114,19 @@ def populate_nesting_scene(
         job_raw = job_raw or "-"
         if len(job_raw) > 30:
             job_raw = job_raw[:27] + "…"
-        tbl_meta = _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_raw)
+        auditoria_cantidades = _auditoria_cantidades_grupo(
+            getattr(params, "app", None), str(getattr(params, "clave", "") or "")
+        )
+        tbl_meta = _add_table_impl(
+            scene,
+            hoja,
+            resumen,
+            dims_nom,
+            w_mm,
+            h_mm,
+            job_raw,
+            auditoria_cantidades,
+        )
         meta["tbl_x0"], meta["tbl_w"], meta["y_tbl_bottom"] = tbl_meta
 
     disable_scene_mouse_picking(scene)

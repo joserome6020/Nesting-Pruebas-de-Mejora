@@ -1035,27 +1035,40 @@ def _compensate_entity(entity, offset_mm: float, *, outward: bool):
 
 
 def _ring_is_rectilinear(pts, tol: float = 0.55) -> bool:
-    """True si todos los vértices caen en el borde del bbox (rectángulo sin curvas)."""
-    if len(pts) < 4:
-        return True
-    xs = [float(p[0]) for p in pts]
-    ys = [float(p[1]) for p in pts]
-    xmin, xmax = min(xs), max(xs)
-    ymin, ymax = min(ys), max(ys)
-    for x, y in zip(xs, ys):
-        on_v = abs(x - xmin) <= tol or abs(x - xmax) <= tol
-        on_h = abs(y - ymin) <= tol or abs(y - ymax) <= tol
-        if not (on_v or on_h):
+    """True si cada segmento no degenerado es horizontal o vertical.
+
+    No equivale a "todos los vértices están sobre el borde del bounding box":
+    un perfil de chapa con escalones/notches internos sigue siendo 100 %
+    rectilíneo aunque sus vértices vivan dentro del bbox. El predicado viejo
+    rechazaba esos perfiles y enviaba su offset (con joins redondos) al
+    detector de curvas nativas, que inventaba ARC enormes y duplicaba el
+    contorno al escribirlo.
+
+    ``tol`` está en las mismas unidades que los puntos (pulgadas antes del
+    placement) y absorbe ruido de DXF sin convertir una diagonal real en un
+    segmento ortogonal.
+    """
+    ring = [(float(p[0]), float(p[1])) for p in (pts or []) if len(p) >= 2]
+    if len(ring) >= 2 and _points_near(ring[0], ring[-1], tol=tol * 0.01):
+        ring = ring[:-1]
+    if len(ring) < 3:
+        return False
+    non_degenerate = 0
+    for i, (x0, y0) in enumerate(ring):
+        x1, y1 = ring[(i + 1) % len(ring)]
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        if dx <= tol * 0.01 and dy <= tol * 0.01:
+            continue
+        non_degenerate += 1
+        if dx > tol and dy > tol:
             return False
-    return True
+    return non_degenerate >= 3
 
 
 def _outer_export_line_exact(ring) -> bool:
-    """Rectángulos sin curvas: LINE; perfiles curvos: inferir ARC/CIRCLE."""
-    pts = list(ring or [])
-    if len(pts) <= 8:
-        return _ring_is_rectilinear(pts)
-    return False
+    """Perfiles rectilíneos (sin diagonales): LINE exactas; curvos: ARC/CIRCLE."""
+    return _ring_is_rectilinear(list(ring or []))
 
 
 def _bbox_aspect_ratio_plasma(pts) -> float:

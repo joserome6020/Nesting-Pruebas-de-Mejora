@@ -115,6 +115,14 @@ REGRESIONES = [
         "test_plasma_export_capas_inventor.py",
         "2026-08-14o - export plasma reconoce IV_OUTER_PROFILE/IV_INTERIOR_PROFILES (flat pattern chapa)",
     ),
+    (
+        "test_plasma_export_rectilineo_escalones.py",
+        "2026-08-14p - perfiles rectilíneos con escalones no inventan ARC ni duplican LINE (OP-1010-211)",
+    ),
+    (
+        "test_auditoria_cantidades_nesting.py",
+        "2026-08-14p - tabla de placa distingue PLACA / NEST / REQ para no confundir H1 con el lote",
+    ),
 ]
 
 

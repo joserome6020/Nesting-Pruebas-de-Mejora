@@ -86,6 +86,26 @@ código viejo. Un bug sin candado vuelve.
 - Build: `support_inbox` está en hidden imports, archivos críticos y smoke
   imports. Paridad confirmada con `ANS C++`; prueba headless del diálogo PASS.
 
+### 2026-08-14p — export rectilíneo con escalones + cantidades PLACA/NEST/REQ
+
+**Export (bloqueador, GENE-OP-1010-211):** el log decía `outer=1 → OK` y
+luego fallaba la validación con 48 LINE duplicados y delta 8.13 mm vs
+0.64 esperado. El perfil es un LWPOLYLINE 100 % ortogonal con notches;
+`_ring_is_rectilinear` exigía "vértices en el borde del bbox" y lo
+rechazaba. El export caía a `export_ring_native`, inventaba ARC de
+~26 mm y escribía el contorno ~8 veces. Fix: rectilinear = segmentos
+horizontales/verticales; `_outer_export_line_exact` sin tope de 8
+vértices; bbox de ARC en la validación usa el sweep real (no el círculo
+completo).
+
+**Cantidades (no era pérdida):** PARTS muestra TOTAL QTY del lote
+(X3 → 6); la tabla CAD solo contaba la placa activa (H1 → 2). Las otras
+4 están en otras placas. La columna pasa a `PLACA / NEST / REQ` y se
+pinta en rojo solo si NEST ≠ REQ.
+
+Candados: `test_plasma_export_rectilineo_escalones.py`,
+`test_auditoria_cantidades_nesting.py`. Build sin cambios.
+
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 
 Dos bugs independientes reportados en la misma sesión de planta (job 62177).
