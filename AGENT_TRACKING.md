@@ -141,9 +141,38 @@ lo pedido). Las columnas `L (in)` / `W (in)` medían el polígono del nest
 (sin compensar) y por eso decían 42.48 donde PARTS decía 42.51; ahora
 suman el desfase por lado y empatan con la pieza tal como se corta.
 
-Candado: `test_plasma_separacion_piezas.py` (reproduce cajas encimadas
-con kerf correcto y afirma que el criterio viejo reprobaba; mantiene el
-rechazo real con 1 mm de aire). Build sin cambios.
+Candado: `test_plasma_separacion_piezas.py`. Build sin cambios.
+
+### 2026-08-14r — el validador de plasma inventaba kerf y margen (CAUSA RAÍZ)
+
+Tras `14q` el export de H1 (W.O. 44 X3) **seguía** abortando:
+`separación pieza-pieza 3.8 mm < mínimo 7.0 mm`. El nest estaba bien; el
+que estaba mal era el juez.
+
+`sheet_info` (el dict que `exporter.py` pasa a `validate_plasma_piece`)
+llevaba `length`/`width`/`material`/`thickness` pero **no** `kerf_usado`
+ni `margin_usado`. El validador caía a defaults hardcodeados:
+
+- kerf → `or 0.3` (0.30"). La TABLA GAPS DE CORTE fija para cal 14
+  (0.0747") kerf **0.150"**. Exigía el doble y reprobaba nests válidos.
+- margen → `or 0.15`. La tabla fija **0.250"**. Este default era *laxo*,
+  así que además habría dejado pasar violaciones reales de margen.
+
+Números del caso, verificados contra el log: cal 0.0747 → kerf 0.150"
+= 3.81 mm; mínimo entre contornos compensados = 3.81 − 2(0.318) =
+**3.17 mm**; separación real medida = **3.80 mm** → pasa. Con el 0.30"
+inventado el mínimo salía 6.98 mm → reprobaba.
+
+Fixes: `sheet_info` propaga `kerf_usado`/`margin_usado` de la hoja; el
+validador ya **no inventa** ninguno de los dos (si falta el dato, omite
+el chequeo en vez de fabricar un umbral); el margen a placa se compara
+contra `margen − off`, porque el contorno compensado se acerca al borde
+por construcción igual que se acerca a su vecino. La línea `HOJA` del log
+ahora imprime `kerf=` y `margen=` para diagnosticar esto de inmediato.
+
+Candado: `test_plasma_separacion_piezas.py` (incluye los números exactos
+de H1 y afirma que el default viejo reprobaba, más que sin kerf real no
+se inventa umbral). Build sin cambios.
 
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 

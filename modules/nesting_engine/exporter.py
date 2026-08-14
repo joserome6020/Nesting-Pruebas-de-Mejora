@@ -90,6 +90,13 @@ def _hoja_cobre_es_especial(hoja: dict | None) -> bool:
     """Barra con pieza especial PARTS → AMADA/VERTICAL (+ FIXTURA por pieza)."""
     if not isinstance(hoja, dict):
         return False
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return False
+    except Exception:
+        pass
     if bool(hoja.get("cu_barra_especial")):
         return True
     for p in hoja.get("piezas") or []:
@@ -291,6 +298,13 @@ def _hoja_cobre_export_3d(hoja: dict) -> str:
     """
     if not isinstance(hoja, dict) or not hoja.get("modo_largos_cu"):
         return "step"
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return "step"
+    except Exception:
+        pass
     # RTZCU: misma lógica STEP que con_gap (nunca CyPTube vertical / solo divisorias).
     if hoja.get("cu_rtz_virtual"):
         return "step"
@@ -1424,6 +1438,11 @@ def exportar_resultados_a_dxf(
                 "width": float(h_mm),
                 "material": clave.split("_", 1)[1] if "_" in clave else clave,
                 "thickness": thickness_name or "",
+                # La validación de corte necesita el kerf/margen REALES con que
+                # se nesteó esta hoja. Sin ellos caía a defaults inventados y
+                # reprobaba nests válidos (cal 14 usa kerf 0.150", no 0.30").
+                "kerf_usado": float(hoja.get("kerf_usado") or 0.0),
+                "margin_usado": float(hoja.get("margin_usado") or 0.0),
                 "arga_code": hoja["sheet_display_name"],
                 "modo_largos_cu": bool(hoja.get("modo_largos_cu")),
                 "export_3d_format": str(hoja.get("export_3d_format") or "step"),
@@ -2008,3 +2027,5 @@ def exportar_resultados_a_dxf(
         log(f"  * {pth}")
     return exportados_principales
     return exportados_principales
+
+

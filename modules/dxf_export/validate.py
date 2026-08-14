@@ -285,31 +285,40 @@ def validate_plasma_piece(
     if sheet and cut_b:
         from modules.nesting_engine.geometry_parser import ESCALA_DXF
 
-        margin_mm = float(sheet.get("margin_usado") or 0.15) * ESCALA_DXF
-        kerf_mm = float(sheet.get("kerf_usado") or 0.3) * ESCALA_DXF
+        # Nunca inventar kerf/margen: la tabla oficial los fija por calibre y un
+        # default equivocado hace daño en los dos sentidos. Suponer kerf 0.30"
+        # reprobaba un cal 14 (tabla: 0.150") y bloqueaba el export de un nest
+        # correcto; suponer margen 0.15" dejaba pasar violaciones de los 0.250"
+        # reales. Si la hoja no trae el dato, no se juzga.
+        margin_in = float(sheet.get("margin_usado") or 0.0)
+        kerf_in = float(sheet.get("kerf_usado") or 0.0)
+        margin_mm = margin_in * ESCALA_DXF
+        kerf_mm = kerf_in * ESCALA_DXF
         sl = float(sheet.get("length") or 0.0)
         sw = float(sheet.get("width") or 0.0)
-        if sl > 0 and sw > 0:
-            if float(cut_b[0]) < margin_mm - 0.5:
+        if margin_in > 0 and sl > 0 and sw > 0:
+            # El contorno compensado se acerca `off` al borde por construcción.
+            margen_min = max(0.0, margin_mm - off)
+            if float(cut_b[0]) < margen_min - 0.5:
                 issues.append(
-                    f"margen placa X: corte minX={cut_b[0]:.1f} mm < margen {margin_mm:.1f} mm"
+                    f"margen placa X: corte minX={cut_b[0]:.1f} mm < margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[1]) < margin_mm - 0.5:
+            if float(cut_b[1]) < margen_min - 0.5:
                 issues.append(
-                    f"margen placa Y: corte minY={cut_b[1]:.1f} mm < margen {margin_mm:.1f} mm"
+                    f"margen placa Y: corte minY={cut_b[1]:.1f} mm < margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[2]) > sl - margin_mm + 0.5:
+            if float(cut_b[2]) > sl - margen_min + 0.5:
                 issues.append(
                     f"margen placa X max: corte maxX={cut_b[2]:.1f} > "
-                    f"placa {sl:.1f} - margen {margin_mm:.1f} mm"
+                    f"placa {sl:.1f} - margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[3]) > sw - margin_mm + 0.5:
+            if float(cut_b[3]) > sw - margen_min + 0.5:
                 issues.append(
                     f"margen placa Y max: corte maxY={cut_b[3]:.1f} > "
-                    f"placa {sw:.1f} - margen {margin_mm:.1f} mm"
+                    f"placa {sw:.1f} - margen {margen_min:.1f} mm"
                 )
 
-        if cut_b and all_piece_bounds:
+        if kerf_in > 0 and cut_b and all_piece_bounds:
             # El nest separa los perfiles SIN compensar por `kerf`. Al compensar,
             # cada contorno crece `off` hacia afuera, así que la separación real
             # entre los contornos de corte es `kerf - 2*off` por construcción:

@@ -121,7 +121,7 @@ REGRESIONES = [
     ),
     (
         "test_plasma_separacion_piezas.py",
-        "2026-08-14q - separación plasma por geometría real; tabla de placa con cantidad y medidas compensadas",
+        "2026-08-14q/r - kerf/margen reales de la hoja al validar plasma; separación por geometría real",
     ),
     (
         "test_cu_force_dxf_step.py",
