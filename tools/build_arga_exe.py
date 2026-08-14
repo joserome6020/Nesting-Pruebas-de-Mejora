@@ -168,7 +168,9 @@ HIDDEN_IMPORTS = (
     "modules.nest_exporter",
     "modules.plates_inventory",
     "modules.plasma_compensator",
+    "modules.plasma_occt_offset",
     "modules.herinox_sync",
+    "OCP",
     "pandas",
     "openpyxl",
     "reportlab",
@@ -181,6 +183,7 @@ COLLECT_SUBMODULES = (
     "PySide6.QtGui",
     "PySide6.QtWidgets",
     "shapely",
+    "OCP",
     "matplotlib.backends.backend_qtagg",
     "modules.nesting_engine",
     "modules.dxf_export",
@@ -209,6 +212,7 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "nesting_engine" / "compact_lite.py",
     ROOT / "modules" / "nesting_engine" / "exporter.py",
     ROOT / "modules" / "dxf_export" / "amada_fixture.py",
+    ROOT / "modules" / "plasma_occt_offset.py",
     NEST_CORE_PS1,
     FIXTURA_AMADA_DXFS[0],
     FIXTURA_AMADA_DXFS[1],
@@ -228,6 +232,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.nesting_engine.nest_runtime_prefs",
     "modules.nesting_engine.nest_executor",
     "modules.nesting_engine.manager",
+    "modules.plasma_occt_offset",
     "modules.dxf_export.amada_fixture",
 )
 

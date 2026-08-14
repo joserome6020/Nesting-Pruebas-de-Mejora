@@ -53,22 +53,43 @@ def compute_plasma_offset_mm(thickness_in: float) -> float:
 
 
 def aplicar_compensacion_poligono(poly, offset_mm: float):
-    """Buffer exterior (join redondo) para geometría nesting/export. None si falla."""
+    """Offset exterior para geometría nesting (mm). None si falla."""
     try:
+        from modules.plasma_offset2d import offset_simple_ring
+
         off = float(offset_mm or 0.0)
         if poly is None or getattr(poly, "is_empty", True) or off <= 0:
             return None
         p = poly.buffer(0)
         if p is None or p.is_empty:
             return None
-        c = p.buffer(off, join_style=1, quad_segs=24)
-        if c is None or c.is_empty:
+        geoms = list(p.geoms) if isinstance(p, MultiPolygon) else [p]
+        parts = []
+        for g in geoms:
+            coords = list(g.exterior.coords)
+            res = offset_simple_ring(coords, delta=off)
+            if not res.ok or not res.rings:
+                continue
+            for ring in res.rings:
+                try:
+                    parts.append(Polygon(ring))
+                except Exception:
+                    continue
+        if not parts:
             return None
-        if isinstance(c, MultiPolygon):
-            c = max(c.geoms, key=lambda g: float(g.area))
-        return c.buffer(0)
+        out = parts[0]
+        for q in parts[1:]:
+            try:
+                out = out.union(q)
+            except Exception:
+                pass
+        return out.buffer(0) if out is not None and not out.is_empty else None
     except Exception:
         return None
+
+
+def _normalize_layers(values: Iterable[str]) -> set:
+    return {str(v).strip().upper() for v in values if str(v).strip()}
 
 
 def _rol_capa_plasma(layer: str) -> str | None:
@@ -121,6 +142,12 @@ def asegurar_dxf_plasma_compensado(
     Genera DXF compensado (OUTER+, INNER−) desde el Processed original.
     Returns (ruta_salida, error).
     """
+    from modules.plasma_offset2d import (
+        PLASMA_OFFSET_ALGO_VERSION,
+        compensated_dxf_is_current,
+        write_version_sidecar,
+    )
+
     src = Path(str(ruta_origen or ""))
     if not src.is_file():
         return None, f"No existe el DXF origen:\n{src}"
@@ -129,19 +156,16 @@ def asegurar_dxf_plasma_compensado(
         return None, "Offset plasma inválido."
     dst = ruta_dxf_plasma_compensado(src)
     try:
-        if (
-            not forzar
-            and dst.is_file()
-            and dst.stat().st_mtime >= src.stat().st_mtime
-            and dst.stat().st_size > 0
-        ):
+        if not forzar and compensated_dxf_is_current(src, dst):
             return str(dst), ""
         stats = compensate_dxf_for_plasma(src, dst, offset_mm=off)
         if int(stats.get("changed") or 0) <= 0:
             return None, (
                 "No se pudo compensar el DXF (sin contornos CUT_OUTER/CUT_INNER cerrados). "
-                f"targets={stats.get('total_targets')} skipped={stats.get('skipped')}"
+                f"targets={stats.get('total_targets')} skipped={stats.get('skipped')} "
+                f"algo={PLASMA_OFFSET_ALGO_VERSION} backend={stats.get('backend')}"
             )
+        write_version_sidecar(dst, backend=str(stats.get("backend") or ""))
         return str(dst), ""
     except Exception as exc:
         return None, f"Error al compensar DXF:\n{exc}"
@@ -264,36 +288,113 @@ def _buffer_polygon_points(
     *,
     join_style: int = 1,
 ) -> Optional[List[List[Tuple[float, float]]]]:
-    try:
-        poly = Polygon(points)
-        if poly.is_empty:
-            return None
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-            if poly.is_empty:
-                return None
+    """Offset de anillo cerrado vía plasma_offset2d (FreeCAD → Clipper semantics)."""
+    from modules.plasma_offset2d import offset_simple_ring
 
-        # join_style=1 redondo (curvas); 2 mitre (rectángulos sin filletes espurios).
-        buff = poly.buffer(offset_mm, join_style=int(join_style), quad_segs=24)
-        if buff.is_empty:
-            return None
-
-        polys = list(buff.geoms) if isinstance(buff, MultiPolygon) else [buff]
-        rings: List[List[Tuple[float, float]]] = []
-        for pg in polys:
-            coords = list(pg.exterior.coords)
-            if len(coords) < 4:
-                continue
-            if coords[0] == coords[-1]:
-                coords = coords[:-1]
-            rings.append([(float(x), float(y)) for x, y in coords])
-        return rings or None
-    except Exception:
+    # offset_mm aquí es en unidades DXF (ya convertido por el caller).
+    result = offset_simple_ring(list(points or []), delta=float(offset_mm))
+    if not result.ok:
         return None
+    return result.rings or None
 
 
-def _normalize_layers(values: Iterable[str]) -> set:
-    return {str(v).strip().upper() for v in values if str(v).strip()}
+def _compensate_dxf_occt_exact(
+    doc,
+    *,
+    off_dxf: float,
+    outer_set: set,
+    inner_set: set,
+) -> dict:
+    """Desfase productivo OCCT, conservando entidades LINE/ARC/CIRCLE.
+
+    No hay fallback poligonal: una entidad no representable se reporta y deja
+    intacto el DXF; el caller falla cerrado.
+    """
+    from modules.plasma_occt_offset import offset_entities, occt_available
+
+    if not occt_available():
+        raise RuntimeError(
+            "Open CASCADE (OCP) no está disponible. Se bloquea la compensación "
+            "plasma para no degradar el DXF de producción."
+        )
+    from modules.plasma_dxf_export import _group_connected_cut_entities
+
+    msp = doc.modelspace()
+    pools: dict[str, list] = {"outer": [], "inner": []}
+    for ent in list(msp):
+        layer = str(ent.dxf.layer or "").upper()
+        role = _rol_capa_plasma(layer)
+        if role is None:
+            role = "outer" if layer in outer_set else ("inner" if layer in inner_set else None)
+        if role and ent.dxftype() in {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE"}:
+            pools[role].append(ent)
+
+    def _write_native(spec: dict, *, layer: str, color, linetype) -> None:
+        attrs = {"layer": layer}
+        if color is not None:
+            attrs["color"] = color
+        if linetype is not None:
+            attrs["linetype"] = linetype
+        typ = spec["type"]
+        if typ == "LINE":
+            msp.add_line(spec["start"], spec["end"], dxfattribs=attrs)
+        elif typ == "ARC":
+            msp.add_arc(
+                spec["center"],
+                spec["radius"],
+                spec["start_angle"],
+                spec["end_angle"],
+                dxfattribs=attrs,
+            )
+        elif typ == "CIRCLE":
+            msp.add_circle(spec["center"], spec["radius"], dxfattribs=attrs)
+        else:
+            raise RuntimeError(f"OCCT devolvió entidad DXF desconocida: {typ}")
+
+    changed = skipped = circles = 0
+    for role in ("outer", "inner"):
+        pool = pools[role]
+        if not pool:
+            continue
+        delta = off_dxf if role == "outer" else -off_dxf
+        circles_ents = [e for e in pool if e.dxftype() == "CIRCLE"]
+        chains = [e for e in pool if e.dxftype() in {"LINE", "ARC"}]
+        polylines = [e for e in pool if e.dxftype() in {"LWPOLYLINE", "POLYLINE"}]
+
+        for ent in circles_ents:
+            radius = float(ent.dxf.radius) + delta
+            if radius <= 1e-9:
+                raise RuntimeError("OFFSET OCCT colapsó un CIRCLE interno; se rechaza el DXF.")
+            ent.dxf.radius = radius
+            changed += 1
+            circles += 1
+
+        groups = _group_connected_cut_entities(chains) if chains else []
+        # Un outer por perfil; todos los inners son cortes independientes.
+        if role == "outer" and len(groups) > 1:
+            raise RuntimeError("DXF tiene varios OUTER LINE/ARC; no se compensará ambiguamente.")
+        units = groups + [[p] for p in polylines]
+        for unit in units:
+            result = offset_entities(unit, delta=delta)
+            if not result.ok:
+                raise RuntimeError(result.error)
+            exemplar = unit[0]
+            layer = str(exemplar.dxf.layer or "")
+            color = getattr(exemplar.dxf, "color", None)
+            linetype = getattr(exemplar.dxf, "linetype", None)
+            for ent in unit:
+                ent.destroy()
+            for spec in result.entities:
+                _write_native(spec, layer=layer, color=color, linetype=linetype)
+            changed += 1
+
+    return {
+        "changed": changed,
+        "skipped": skipped,
+        "total_targets": len(pools["outer"]) + len(pools["inner"]),
+        "circles": circles,
+        "backend": "occt_BRepOffsetAPI_MakeOffset",
+    }
 
 
 def compensate_dxf_for_plasma(
@@ -304,98 +405,51 @@ def compensate_dxf_for_plasma(
     outer_layers: Sequence[str] = OUTER_LAYERS_DEFAULT,
     inner_layers: Sequence[str] = INNER_LAYERS_DEFAULT,
 ) -> dict:
+    """Compensa DXF plasma con OFFSET OCCT exacto; falla cerrado sin degradar."""
+    from modules.plasma_offset2d import PLASMA_OFFSET_ALGO_VERSION
+
     doc = ezdxf.readfile(str(input_dxf))
     msp = doc.modelspace()
 
     outer_set = _normalize_layers(outer_layers)
     inner_set = _normalize_layers(inner_layers)
 
-    # offset_mm → unidades del DXF (INSUNITS). Antes se aplicaba mm crudo sobre
-    # coords en pulgadas y el OUTER crecía ~0.32" en vez de 0.0125".
     insunits = int(doc.header.get("$INSUNITS", 0) or 0)
-    if insunits == 4:  # mm
+    if insunits == 4:
         unit_to_mm = 1.0
-    elif insunits == 5:  # cm
+    elif insunits == 5:
         unit_to_mm = 10.0
-    elif insunits == 1:  # inches
+    elif insunits == 1:
         unit_to_mm = 25.4
     else:
-        # ANS Processed suele venir en pulgadas sin INSUNITS fiable.
         unit_to_mm = 25.4
     off_dxf = float(offset_mm) / unit_to_mm
 
-    changed = 0
-    skipped = 0
-    circles = 0
-
-    targets = []
-    for e in list(msp):
-        layer = str(e.dxf.layer or "").upper()
-        rol = _rol_capa_plasma(layer)
-        if rol is None and layer not in outer_set and layer not in inner_set:
-            continue
-        if e.dxftype() in {"LWPOLYLINE", "POLYLINE", "CIRCLE"}:
-            targets.append(e)
-
-    for e in targets:
-        layer = str(e.dxf.layer or "").upper()
-        rol = _rol_capa_plasma(layer)
-        if rol is None:
-            if layer in outer_set:
-                rol = "outer"
-            elif layer in inner_set:
-                rol = "inner"
-            else:
-                skipped += 1
-                continue
-
-        # OUTER: agranda path; INNER/barreno: reduce (kerf abre el hueco).
-        dist = off_dxf if rol == "outer" else -off_dxf
-
-        if e.dxftype() == "CIRCLE":
-            try:
-                r0 = float(e.dxf.radius)
-                r_new = r0 + dist
-                if r_new <= 1e-9:
-                    skipped += 1
-                    continue
-                e.dxf.radius = r_new
-                changed += 1
-                circles += 1
-            except Exception:
-                skipped += 1
-            continue
-
-        pts = _entity_points_xy(e)
-        if not pts:
-            skipped += 1
-            continue
-
-        new_rings = _buffer_polygon_points(pts, dist)
-        if not new_rings:
-            skipped += 1
-            continue
-
-        attribs = {"layer": e.dxf.layer, "closed": True}
-        if hasattr(e.dxf, "color"):
-            attribs["color"] = e.dxf.color
-        if hasattr(e.dxf, "linetype"):
-            attribs["linetype"] = e.dxf.linetype
-
-        e.destroy()
-        for ring in new_rings:
-            msp.add_lwpolyline(ring, dxfattribs=attribs)
-        changed += 1
+    exact = _compensate_dxf_occt_exact(
+        doc,
+        off_dxf=off_dxf,
+        outer_set=outer_set,
+        inner_set=inner_set,
+    )
+    changed = int(exact["changed"])
+    skipped = int(exact["skipped"])
+    circles = int(exact["circles"])
+    backend = str(exact["backend"])
+    total_targets = int(exact["total_targets"])
+    if changed <= 0:
+        raise RuntimeError("OCCT OFFSET no encontró un contorno plasma compensable.")
 
     output_dxf.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_dxf))
     return {
         "changed": changed,
         "skipped": skipped,
-        "total_targets": len(targets),
+        "total_targets": total_targets,
         "circles": circles,
         "offset_dxf": off_dxf,
         "unit_to_mm": unit_to_mm,
+        "backend": backend,
+        "algo": PLASMA_OFFSET_ALGO_VERSION,
     }
 
 

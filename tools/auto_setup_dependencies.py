@@ -21,6 +21,8 @@ BASE_PACKAGES = [
     "matplotlib",
     "numpy",
     "shapely",
+    # OFFSET plasma productivo: Open CASCADE embebido (sin FreeCAD externo).
+    "cadquery-ocp",
     "pandas",
     "openpyxl",
     "xlrd",
@@ -48,6 +50,7 @@ IMPORT_TO_PACKAGE = {
     "dotenv": "python-dotenv",
     "sklearn": "scikit-learn",
     "OpenGL": "PyOpenGL",
+    "OCP": "cadquery-ocp",
 }
 
 NON_PIP_IMPORTS = {

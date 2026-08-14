@@ -126,6 +126,8 @@ def build_plasma_profile_from_nested(pols: list, *, offset_mm: float = 0.0, alre
 
     """Perfil plasma desde poligonos del nest (mm de placa)."""
 
+    from modules.plasma_offset2d import offset_closed_profile
+
     outer_raw, holes_raw = _rings_from_poligonos(pols)
 
     if already_compensated:
@@ -142,51 +144,23 @@ def build_plasma_profile_from_nested(pols: list, *, offset_mm: float = 0.0, alre
 
             return sanitize_plasma_profile(outer_raw, holes_raw)
 
-        outer_poly = Polygon(outer_raw, holes_raw if holes_raw else None)
-
-        if outer_poly.is_empty:
-
+        result = offset_closed_profile(
+            outer_raw,
+            delta=float(offset_mm),
+            holes=holes_raw if holes_raw else None,
+        )
+        if not result.ok or not result.rings:
             return sanitize_plasma_profile(outer_raw, holes_raw)
 
-        outer_buf = outer_poly.buffer(float(offset_mm), join_style=2)
-
-        if outer_buf.is_empty:
-
-            return sanitize_plasma_profile(outer_raw, holes_raw)
-
-        if isinstance(outer_buf, MultiPolygon):
-
-            outer_buf = max(outer_buf.geoms, key=lambda g: float(g.area))
-
-        plasma_outer = list(outer_buf.exterior.coords)
-
-        plasma_holes = []
-
-        for h in holes_raw:
-
-            try:
-
-                hp = Polygon(h)
-
-                if hp.is_empty:
-
-                    continue
-
-                hc = hp.buffer(-float(offset_mm), join_style=2)
-
-                if hc.is_empty:
-
-                    continue
-
-                if isinstance(hc, MultiPolygon):
-
-                    hc = max(hc.geoms, key=lambda g: float(g.area))
-
-                plasma_holes.append(list(hc.exterior.coords))
-
-            except Exception:
-
-                continue
+        # Primer anillo = outer; siguientes con área menor típica = holes.
+        plasma_outer = result.rings[0]
+        plasma_holes = result.rings[1:] if len(result.rings) > 1 else []
+        # Si el servicio devolvió solo exteriores (FreeCAD wires), contraer huecos aparte.
+        if holes_raw and not plasma_holes:
+            for h in holes_raw:
+                hr = offset_closed_profile(h, delta=-float(offset_mm))
+                if hr.ok and hr.rings:
+                    plasma_holes.extend(hr.rings)
 
         return sanitize_plasma_profile(plasma_outer, plasma_holes)
 
@@ -862,18 +836,17 @@ def _simplify_ring_inches(
 def _offset_closed_profile_inches(
     points: list[tuple[float, float]], offset_in: float, *, rectilinear: bool = False
 ) -> list[list[tuple[float, float]]]:
-    """Desfase de contorno cerrado en pulgadas."""
-    join = 2 if rectilinear else 1
-    rings = _buffer_polygon_points(
-        list(points or []), float(offset_in), join_style=join
-    )
-    if not rings:
+    """Desfase de contorno cerrado en pulgadas (mismo servicio que PARTS)."""
+    from modules.plasma_offset2d import offset_simple_ring
+
+    result = offset_simple_ring(list(points or []), delta=float(offset_in))
+    if not result.ok:
         return []
+    rings = list(result.rings or [])
     tol = abs(float(offset_in)) * (0.15 if rectilinear else 0.2)
     rings = [_simplify_ring_inches(r, tol) for r in rings]
-    if len(rings) > 1:
-        rings = [max(rings, key=lambda r: abs(_signed_ring_area(r)))]
-    return rings
+    # Conservar todos los componentes (no largest-wins); el caller decide.
+    return [r for r in rings if len(r) >= 3]
 
 
 def _export_offset_contour_to_msp(
