@@ -99,6 +99,10 @@ REGRESIONES = [
         "test_tabla_gaps_todos_los_motores.py",
         "2026-08-14k - TABLA GAPS DE CORTE: todos los motores usan 0.250 placa→pieza y kerf por calibre",
     ),
+    (
+        "test_visor_plasma_rotacion.py",
+        "2026-08-14l - ROTAR 90° de pieza plasma-compensada conserva el énfasis rojo y '+X\"'",
+    ),
 ]
 
 

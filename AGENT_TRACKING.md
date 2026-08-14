@@ -46,6 +46,29 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14l — ROTAR 90° de pieza plasma no borra la marca del offset
+
+- Bug reportado por planta: se compensaba una pieza (visor muestra OUTER
+  rojo + `+0.0074"` en el panel PLASMA) y al rotar 90° "se le quitaba el
+  offset". El DXF compensado seguía intacto en disco — lo que se perdía
+  era la marca visual: rojo desaparecía y el label volvía a `—`.
+- Causa: `renderizar_dxf` es llamado por `rotar_vista_90` para recargar
+  el modelo con la nueva orientación; limpiaba la escena y no reaplicaba
+  `emphasize_plasma_outers` ni la etiqueta.
+- Fix en `interface/qt/visualizer.py`:
+  - Nuevos flags `_plasma_emphasis_on` y `_plasma_emphasis_offset_in`.
+  - `set_plasma_contour_emphasis` los persiste.
+  - `renderizar_dxf` los reaplica al final del render si están activos.
+  - Cambio de ruta (nueva pieza) resetea los flags para no arrastrar
+    énfasis del anterior.
+- Candado `test_visor_plasma_rotacion.py`:
+  1. AST checks: firma los invariantes en el código fuente.
+  2. Simulación end-to-end sin Qt: instancia dobles de `_cad` y
+     `lbl_plasma`, ejecuta emphasis+render+rotar+render y exige que la
+     última operación sobre `_cad` sea `emphasize_plasma_outers` y el
+     label siga con `+X"`.
+- Regresiones 21/21 en ambos proyectos.
+
 ### 2026-08-14k — TABLA GAPS DE CORTE: todos los motores respetan la foto de planta
 
 - Auditoría: el default `margin_override = 0.15"` estaba filtrado en varios

@@ -102,6 +102,11 @@ class VisorDXF:
         self._material = ""
         self._plasma_offset_mm = 0.0
         self._plasma_base_metrics = None
+        # Recuerdo del énfasis plasma (DXF ya compensado): el ROTAR limpia la
+        # escena y reinstancia el modelo — sin estos, el highlight rojo del OUTER
+        # y la etiqueta "+X"" desaparecían y parecía que se perdía el offset.
+        self._plasma_emphasis_on = False
+        self._plasma_emphasis_offset_in: float | None = None
 
         self.construir_tabla_3_columnas()
         self.mostrar_patron_prueba()
@@ -289,8 +294,17 @@ class VisorDXF:
             )
 
     def set_plasma_contour_emphasis(self, activo: bool, *, offset_in: float | None = None):
-        """Resalta OUTER en rojo (pieza plasma). No altera la geometría del DXF."""
+        """Resalta OUTER en rojo (pieza plasma). No altera la geometría del DXF.
+
+        Se persiste el estado para que ``renderizar_dxf`` (llamado desde
+        ROTAR 90°) lo reaplique tras recargar el modelo. Antes se perdía y
+        parecía que el offset se había ido: la geometría seguía compensada
+        en disco pero visualmente ya no había marca roja ni ``+X"`` en el
+        panel inferior.
+        """
         if not activo:
+            self._plasma_emphasis_on = False
+            self._plasma_emphasis_offset_in = None
             self._cad.clear_plasma_overlay()
             if hasattr(self, "lbl_plasma"):
                 self.lbl_plasma.setText("—")
@@ -306,6 +320,10 @@ class VisorDXF:
                 self.lbl_plasma.setStyleSheet(
                     "color:#FCA5A5;font-size:13px;font-weight:700;background:transparent;"
                 )
+        self._plasma_emphasis_on = True
+        self._plasma_emphasis_offset_in = (
+            float(offset_in) if offset_in is not None and float(offset_in) > 0 else None
+        )
         self._cad.emphasize_plasma_outers(label=label)
 
     def set_plasma_offset_mm(self, offset_mm: float | None):
@@ -381,6 +399,11 @@ class VisorDXF:
                     self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
                 else:
                     self._rotacion_vista_deg = 0
+                # Al cambiar de pieza el énfasis del anterior no aplica; el
+                # caller (seleccionar_fila) volverá a llamar a
+                # set_plasma_contour_emphasis según corresponda.
+                self._plasma_emphasis_on = False
+                self._plasma_emphasis_offset_in = None
             elif rotacion_vista_deg is not None:
                 self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
             self._ruta_actual = ruta_dxf
@@ -395,6 +418,12 @@ class VisorDXF:
             # load_model dispara metrics_callback → aplica overlay si hay offset.
             if self._plasma_offset_mm > 0:
                 self._reaplicar_overlay_plasma()
+            elif self._plasma_emphasis_on:
+                # DXF ya compensado: el énfasis rojo del OUTER y la etiqueta
+                # "+X"" deben sobrevivir a un ROTAR 90° o a un re-render.
+                self.set_plasma_contour_emphasis(
+                    True, offset_in=self._plasma_emphasis_offset_in
+                )
             else:
                 self._cad.clear_plasma_overlay()
                 if hasattr(self, "lbl_plasma"):
