@@ -174,6 +174,14 @@ Candado: `test_plasma_separacion_piezas.py` (incluye los números exactos
 de H1 y afirma que el default viejo reprobaba, más que sin kerf real no
 se inventa umbral). Build sin cambios.
 
+**Dimensiones de la tabla:** la pieza llega a la escena marcada
+`plasma_compensada_manual` pero **sin** `plasma_offset_mm_manual` (se
+pierde en el empaquetado; el dump de keys del export lo confirma). Por
+eso el arreglo de `14q` no movía el L/W: `off_pieza` quedaba en 0. Ahora
+si la pieza está marcada y el mm falta, se recalcula con
+`compute_plasma_offset_mm(calibre)` — la misma regla del export — y la
+tabla vuelve a empatar con PARTS (42.51 × 40.83).
+
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 
 Dos bugs independientes reportados en la misma sesión de planta (job 62177).

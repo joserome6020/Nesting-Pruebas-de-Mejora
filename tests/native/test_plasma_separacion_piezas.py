@@ -238,6 +238,10 @@ def test_dimensiones_de_tabla_incluyen_la_compensacion():
     assert "2.0 * off_pieza" in txt, (
         "las dimensiones de la tabla deben sumar el desfase por lado"
     )
+    assert "compute_plasma_offset_mm" in txt, (
+        "si la pieza llega marcada sin mm de desfase, la tabla debe "
+        "recalcularlo con la misma regla del export"
+    )
 
 
 if __name__ == "__main__":

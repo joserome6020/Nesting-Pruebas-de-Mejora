@@ -878,6 +878,22 @@ def populate_nesting_scene(
                 off_pieza = float(
                     p.get("plasma_offset_mm_manual") or offset_comp or 0.0
                 )
+                if compensada and off_pieza <= 0.0:
+                    # La pieza llega marcada como compensada pero sin el mm
+                    # del desfase (se pierde en el empaquetado). Misma regla
+                    # que usa el export: compute_plasma_offset_mm(calibre).
+                    try:
+                        from modules.plasma_compensator import compute_plasma_offset_mm
+
+                        cal = (
+                            p.get("calibre")
+                            or hoja.get("placa_cal")
+                            or hoja.get("thickness")
+                            or 0.25
+                        )
+                        off_pieza = float(compute_plasma_offset_mm(float(cal)))
+                    except Exception:
+                        off_pieza = 0.0125 * 25.4
                 if compensada and off_pieza > 0.0:
                     dx_mm += 2.0 * off_pieza
                     dy_mm += 2.0 * off_pieza
