@@ -1,14 +1,20 @@
 """OFFSET plasma exacto con Open CASCADE, sin proceso FreeCAD.
 
-Este módulo acepta solo primitivas DXF que puede conservar exactamente:
-LINE, ARC, CIRCLE y LWPOLYLINE/POLYLINE (con o sin bulges). Si OCCT produce
-una curva no representable en DXF nativo, falla cerrado en vez de facetizarla.
+Reglas de producción:
+  * Solo primitivas que el DXF conserva exactamente: LINE, ARC, CIRCLE
+    (LWPOLYLINE/POLYLINE se leen, incluidos bulges, y salen como LINE/ARC).
+  * El resultado se **valida geométricamente** antes de devolverse: contorno
+    cerrado, sin auto-intersecciones y con crecimiento real de ``|delta|`` por
+    lado. Si no cumple, se falla cerrado: nunca se entrega un perfil deforme.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
+
+# Muestreo para validación (no se escribe al DXF: las curvas siguen nativas).
+_SAMPLE_STEP_DEG = 3.0
 
 
 @dataclass
@@ -29,6 +35,236 @@ def occt_available() -> bool:
     return True
 
 
+# ---------------------------------------------------------------------------
+# Geometría auxiliar (muestreo / métricas) — usada para validar, no para escribir
+# ---------------------------------------------------------------------------
+def _angle_in_ccw_sweep(a0: float, a1: float, a: float) -> bool:
+    sweep = (a1 - a0) % 360.0
+    if sweep <= 1e-9:
+        sweep = 360.0
+    t = (a - a0) % 360.0
+    return t <= sweep + 1e-9
+
+
+def _arc_sample(
+    center: tuple[float, float],
+    radius: float,
+    start_angle: float,
+    end_angle: float,
+    *,
+    step_deg: float = _SAMPLE_STEP_DEG,
+) -> list[tuple[float, float]]:
+    cx, cy = float(center[0]), float(center[1])
+    sweep = (float(end_angle) - float(start_angle)) % 360.0
+    if sweep <= 1e-9:
+        sweep = 360.0
+    n = max(2, int(math.ceil(sweep / max(step_deg, 0.25))))
+    pts = []
+    for i in range(n + 1):
+        ang = math.radians(float(start_angle) + sweep * (i / n))
+        pts.append((cx + radius * math.cos(ang), cy + radius * math.sin(ang)))
+    return pts
+
+
+def ring_from_specs(
+    specs: Sequence[dict[str, Any]], *, step_deg: float = _SAMPLE_STEP_DEG
+) -> list[tuple[float, float]]:
+    """Muestrea las entidades nativas resultantes tal como las leerá un CAD.
+
+    LINE y ARC de DXF no llevan dirección de recorrido, así que cada tramo se
+    encadena por el extremo más cercano al punto anterior.
+    """
+    segs: list[tuple[str, list[tuple[float, float]]]] = []
+    for spec in specs or []:
+        typ = str(spec.get("type") or "")
+        if typ == "LINE":
+            s, e = spec["start"], spec["end"]
+            segs.append((typ, [(float(s[0]), float(s[1])), (float(e[0]), float(e[1]))]))
+        elif typ == "ARC":
+            segs.append(
+                (
+                    typ,
+                    _arc_sample(
+                        (spec["center"][0], spec["center"][1]),
+                        float(spec["radius"]),
+                        float(spec["start_angle"]),
+                        float(spec["end_angle"]),
+                        step_deg=step_deg,
+                    ),
+                )
+            )
+        elif typ == "CIRCLE":
+            segs.append(
+                (
+                    typ,
+                    _arc_sample(
+                        (spec["center"][0], spec["center"][1]),
+                        float(spec["radius"]),
+                        0.0,
+                        360.0,
+                        step_deg=step_deg,
+                    ),
+                )
+            )
+
+    # El primer tramo no tiene punto previo: se orienta contra el siguiente.
+    if len(segs) >= 2 and segs[0][0] != "CIRCLE" and segs[1][0] != "CIRCLE":
+        primero, siguiente = segs[0][1], segs[1][1]
+        d_directo = min(
+            math.dist(primero[-1], siguiente[0]), math.dist(primero[-1], siguiente[-1])
+        )
+        d_invertido = min(
+            math.dist(primero[0], siguiente[0]), math.dist(primero[0], siguiente[-1])
+        )
+        if d_invertido < d_directo:
+            segs[0] = (segs[0][0], list(reversed(primero)))
+
+    ring: list[tuple[float, float]] = []
+    for typ, pts in segs:
+        if typ != "CIRCLE" and ring and math.dist(ring[-1], pts[0]) > math.dist(
+            ring[-1], pts[-1]
+        ):
+            pts = list(reversed(pts))
+        for p in pts:
+            if ring and math.dist(ring[-1], p) <= 1e-12:
+                continue
+            ring.append((float(p[0]), float(p[1])))
+    return ring
+
+
+def specs_from_dxf_entities(entities: Iterable) -> list[dict[str, Any]]:
+    """Normaliza entidades ezdxf a specs LINE/ARC/CIRCLE para medir/validar.
+
+    Las polilíneas se explotan con ``virtual_entities()`` para no duplicar la
+    matemática de bulges.
+    """
+    out: list[dict[str, Any]] = []
+    for ent in entities or []:
+        typ = ent.dxftype()
+        if typ in ("LWPOLYLINE", "POLYLINE"):
+            try:
+                out.extend(specs_from_dxf_entities(list(ent.virtual_entities())))
+            except Exception:
+                continue
+        elif typ == "LINE":
+            s, e = ent.dxf.start, ent.dxf.end
+            out.append(
+                {
+                    "type": "LINE",
+                    "start": (float(s.x), float(s.y), 0.0),
+                    "end": (float(e.x), float(e.y), 0.0),
+                }
+            )
+        elif typ == "ARC":
+            c = ent.dxf.center
+            out.append(
+                {
+                    "type": "ARC",
+                    "center": (float(c.x), float(c.y), 0.0),
+                    "radius": float(ent.dxf.radius),
+                    "start_angle": float(ent.dxf.start_angle),
+                    "end_angle": float(ent.dxf.end_angle),
+                }
+            )
+        elif typ == "CIRCLE":
+            c = ent.dxf.center
+            out.append(
+                {
+                    "type": "CIRCLE",
+                    "center": (float(c.x), float(c.y), 0.0),
+                    "radius": float(ent.dxf.radius),
+                }
+            )
+    return out
+
+
+def specs_bbox(specs: Sequence[dict[str, Any]]) -> tuple[float, float] | None:
+    """Ancho/alto del conjunto; no requiere orden de recorrido."""
+    xs: list[float] = []
+    ys: list[float] = []
+    for spec in specs or []:
+        for p in ring_from_specs([spec]):
+            xs.append(p[0])
+            ys.append(p[1])
+    if not xs:
+        return None
+    return (max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _ring_metrics(ring: Sequence[tuple[float, float]]) -> dict[str, float] | None:
+    pts = [(float(p[0]), float(p[1])) for p in ring or []]
+    if len(pts) < 4:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    area = 0.0
+    for i in range(len(pts)):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % len(pts)]
+        area += x0 * y1 - x1 * y0
+    return {
+        "w": max(xs) - min(xs),
+        "h": max(ys) - min(ys),
+        "area_abs": abs(area * 0.5),
+        "gap": math.dist(pts[0], pts[-1]),
+    }
+
+
+def ring_is_simple(ring: Sequence[tuple[float, float]]) -> bool:
+    """Sin auto-intersecciones: detecta los lazos de esquina de un offset mal hecho."""
+    try:
+        from shapely.geometry import LinearRing
+
+        pts = [(float(p[0]), float(p[1])) for p in ring or []]
+        if len(pts) < 4:
+            return False
+        if math.dist(pts[0], pts[-1]) > 1e-9:
+            pts.append(pts[0])
+        return bool(LinearRing(pts).is_simple)
+    except Exception:
+        # Sin shapely no se puede certificar: para producción es un rechazo.
+        return False
+
+
+def validate_offset_ring(
+    src_ring: Sequence[tuple[float, float]],
+    out_ring: Sequence[tuple[float, float]],
+    delta: float,
+) -> str:
+    """Devuelve "" si el offset es válido; si no, el motivo del rechazo."""
+    m_in = _ring_metrics(src_ring)
+    m_out = _ring_metrics(out_ring)
+    if m_in is None:
+        return "contorno origen insuficiente"
+    if m_out is None:
+        return "contorno resultante insuficiente"
+
+    d = float(delta)
+    tol = max(abs(d) * 0.25, 1e-6)
+
+    if m_out["gap"] > max(abs(d) * 0.5, 1e-3):
+        return f"contorno resultante abierto (gap={m_out['gap']:.5f})"
+    if not ring_is_simple(out_ring):
+        return "contorno resultante se auto-intersecta (lazos de esquina)"
+
+    esperado_w = m_in["w"] + 2.0 * d
+    esperado_h = m_in["h"] + 2.0 * d
+    if abs(m_out["w"] - esperado_w) > tol or abs(m_out["h"] - esperado_h) > tol:
+        return (
+            "dimensiones no cuadran: "
+            f"esperado {esperado_w:.4f}x{esperado_h:.4f}, "
+            f"obtenido {m_out['w']:.4f}x{m_out['h']:.4f}"
+        )
+    if d > 0 and m_out["area_abs"] <= m_in["area_abs"]:
+        return "el área no creció con offset positivo"
+    if d < 0 and m_out["area_abs"] >= m_in["area_abs"]:
+        return "el área no disminuyó con offset negativo"
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Construcción de wire OCCT desde entidades DXF
+# ---------------------------------------------------------------------------
 def _safe_edge(maker):
     if not maker.IsDone():
         raise ValueError("BRepBuilderAPI_MakeEdge no pudo crear arista")
@@ -47,8 +283,8 @@ def _edge_from_entity(entity):
             raise ValueError("LINE degenerada (longitud cero)")
         return _safe_edge(
             BRepBuilderAPI_MakeEdge(
-                gp_Pnt(float(s.x), float(s.y), float(getattr(s, "z", 0.0))),
-                gp_Pnt(float(e.x), float(e.y), float(getattr(e, "z", 0.0))),
+                gp_Pnt(float(s.x), float(s.y), 0.0),
+                gp_Pnt(float(e.x), float(e.y), 0.0),
             )
         )
     if typ == "ARC":
@@ -60,23 +296,12 @@ def _edge_from_entity(entity):
         a1 = math.radians(float(entity.dxf.end_angle))
         while a1 <= a0 + 1e-15:
             a1 += math.tau
-        # Arco casi completo: partir en dos para evitar degeneración.
         if (a1 - a0) >= math.tau - 1e-9:
             a1 = a0 + math.pi
-            mid = a0 + math.pi * 0.5
-            z = float(getattr(c, "z", 0.0))
-            p0 = gp_Pnt(float(c.x) + r * math.cos(a0), float(c.y) + r * math.sin(a0), z)
-            pm = gp_Pnt(float(c.x) + r * math.cos(mid), float(c.y) + r * math.sin(mid), z)
-            p1 = gp_Pnt(float(c.x) + r * math.cos(a1), float(c.y) + r * math.sin(a1), z)
-            arc = GC_MakeArcOfCircle(p0, pm, p1)
-            if not arc.IsDone():
-                raise ValueError("ARC DXF inválido")
-            return _safe_edge(BRepBuilderAPI_MakeEdge(arc.Value()))
         mid = (a0 + a1) * 0.5
-        z = float(getattr(c, "z", 0.0))
-        p0 = gp_Pnt(float(c.x) + r * math.cos(a0), float(c.y) + r * math.sin(a0), z)
-        pm = gp_Pnt(float(c.x) + r * math.cos(mid), float(c.y) + r * math.sin(mid), z)
-        p1 = gp_Pnt(float(c.x) + r * math.cos(a1), float(c.y) + r * math.sin(a1), z)
+        p0 = gp_Pnt(float(c.x) + r * math.cos(a0), float(c.y) + r * math.sin(a0), 0.0)
+        pm = gp_Pnt(float(c.x) + r * math.cos(mid), float(c.y) + r * math.sin(mid), 0.0)
+        p1 = gp_Pnt(float(c.x) + r * math.cos(a1), float(c.y) + r * math.sin(a1), 0.0)
         arc = GC_MakeArcOfCircle(p0, pm, p1)
         if not arc.IsDone():
             raise ValueError("ARC DXF inválido")
@@ -91,8 +316,10 @@ def _polyline_edges(entity) -> list:
     if not bool(getattr(entity, "closed", False)):
         raise ValueError("La polilínea plasma debe ser cerrada")
     if typ == "LWPOLYLINE":
-        verts = list(entity.get_points("xyb"))
-        points = [(float(v[0]), float(v[1]), float(v[2] or 0.0)) for v in verts]
+        points = [
+            (float(v[0]), float(v[1]), float(v[2] or 0.0))
+            for v in entity.get_points("xyb")
+        ]
     else:
         points = [
             (
@@ -104,16 +331,15 @@ def _polyline_edges(entity) -> list:
         ]
     if len(points) < 3:
         raise ValueError("Polilínea con menos de tres vértices")
+
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
     from OCP.GC import GC_MakeArcOfCircle
     from OCP.gp import gp_Pnt
 
     edges = []
-    for i, (x0, y0, _) in enumerate(points):
-        x1, y1, _b = points[(i + 1) % len(points)]
-        bulge = points[i][2]
-        p0 = gp_Pnt(x0, y0, 0.0)
-        p1 = gp_Pnt(x1, y1, 0.0)
+    for i, (x0, y0, bulge) in enumerate(points):
+        x1, y1, _ = points[(i + 1) % len(points)]
+        p0, p1 = gp_Pnt(x0, y0, 0.0), gp_Pnt(x1, y1, 0.0)
         if abs(bulge) <= 1e-12:
             if math.hypot(x1 - x0, y1 - y0) <= 1e-12:
                 continue
@@ -132,8 +358,11 @@ def _polyline_edges(entity) -> list:
         sign = 1.0 if bulge > 0 else -1.0
         cx, cy = mx + sign * h * nx, my + sign * h * ny
         a0 = math.atan2(y0 - cy, x0 - cx)
-        amid = a0 + theta / 2.0
-        pm = gp_Pnt(cx + radius * math.cos(amid), cy + radius * math.sin(amid), 0.0)
+        pm = gp_Pnt(
+            cx + radius * math.cos(a0 + theta / 2.0),
+            cy + radius * math.sin(a0 + theta / 2.0),
+            0.0,
+        )
         arc = GC_MakeArcOfCircle(p0, pm, p1)
         if not arc.IsDone():
             raise ValueError("No se pudo construir ARC desde bulge")
@@ -144,7 +373,7 @@ def _polyline_edges(entity) -> list:
 
 
 def _collect_edges(entities: Iterable) -> list:
-    """Ordena LINE/ARC del grupo para que MakeWire conecte extremos cercanos."""
+    """Ordena LINE/ARC del grupo para que MakeWire conecte extremos contiguos."""
     from OCP.TopoDS import TopoDS
 
     ents = list(entities or [])
@@ -153,8 +382,8 @@ def _collect_edges(entities: Iterable) -> list:
     try:
         from modules.plasma_dxf_export import _order_connected_entities
 
-        ordered = _order_connected_entities(ents, tol=1e-3)
         line_arc = [e for e in ents if e.dxftype() in ("LINE", "ARC")]
+        ordered = _order_connected_entities(ents, tol=_GAP_PUENTE_MAX)
         if ordered and len(ordered) == len(line_arc):
             edges = []
             for ent, rev in ordered:
@@ -173,18 +402,49 @@ def _collect_edges(entities: Iterable) -> list:
     return edges
 
 
+# Hueco máximo que se puentea entre entidades del DXF (unidades del dibujo).
+# Los exports de CAD dejan micro-gaps; más allá de esto el perfil está roto y
+# se rechaza en vez de ofsetear una cadena abierta (casquetes redondos).
+_GAP_PUENTE_MAX = 0.02
+
+
+def _cerrar_edges(edges: list) -> list:
+    """Puentea el hueco final con una LINE si el perfil casi cierra."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.TopExp import TopExp
+    from OCP.gp import gp_Pnt
+
+    if len(edges) < 2:
+        return edges
+    inicio = BRep_Tool.Pnt_s(TopExp.FirstVertex_s(edges[0], True))
+    fin = BRep_Tool.Pnt_s(TopExp.LastVertex_s(edges[-1], True))
+    p0 = (float(inicio.X()), float(inicio.Y()))
+    p1 = (float(fin.X()), float(fin.Y()))
+    hueco = math.dist(p0, p1)
+    if hueco <= 1e-9:
+        return edges
+    if hueco > _GAP_PUENTE_MAX:
+        raise ValueError(
+            f"el contorno plasma está abierto (hueco={hueco:.4f} en unidades DXF)"
+        )
+    puente = BRepBuilderAPI_MakeEdge(gp_Pnt(p1[0], p1[1], 0.0), gp_Pnt(p0[0], p0[1], 0.0))
+    if puente.IsDone():
+        edges = list(edges) + [puente.Edge()]
+    return edges
+
+
 def _wire_from_entities(entities: Iterable) -> Any:
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
     from OCP.ShapeFix import ShapeFix_Wire
 
-    edges = _collect_edges(entities)
-    if len(edges) < 1:
+    edges = _cerrar_edges(_collect_edges(entities))
+    if not edges:
         raise ValueError("No hay aristas para wire OCCT")
     mk = BRepBuilderAPI_MakeWire()
     for edge in edges:
         mk.Add(edge)
     if not mk.IsDone():
-        # Reintento: unir aristas con MakeWire incremental tolerante.
         mk = BRepBuilderAPI_MakeWire(edges[0])
         for edge in edges[1:]:
             mk.Add(edge)
@@ -195,10 +455,13 @@ def _wire_from_entities(entities: Iterable) -> Any:
         fixer = ShapeFix_Wire()
         fixer.Load(wire)
         fixer.SetPrecision(1e-4)
-        fixer.SetMaxTolerance(1e-2)
+        fixer.SetMaxTolerance(_GAP_PUENTE_MAX * 2.0)
         fixer.ClosedWireMode = True
         fixer.FixReorder()
-        fixer.FixConnected()
+        try:
+            fixer.FixConnected(_GAP_PUENTE_MAX)
+        except Exception:
+            fixer.FixConnected()
         fixer.FixDegenerated()
         fixer.FixClosed()
         fixed = fixer.Wire()
@@ -207,46 +470,6 @@ def _wire_from_entities(entities: Iterable) -> Any:
     except Exception:
         pass
     return wire
-
-
-def _wire_signed_area(wire) -> float:
-    """Área con signo 2D (CCW > 0) muestreando extremos de aristas."""
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepTools import BRepTools_WireExplorer
-    from OCP.TopExp import TopExp
-
-    pts: list[tuple[float, float]] = []
-    exp = BRepTools_WireExplorer(wire)
-    while exp.More():
-        edge = exp.Current()
-        v0 = TopExp.FirstVertex_s(edge)
-        p0 = BRep_Tool.Pnt_s(v0)
-        pts.append((float(p0.X()), float(p0.Y())))
-        exp.Next()
-    if len(pts) < 3:
-        return 0.0
-    area = 0.0
-    for i in range(len(pts)):
-        x0, y0 = pts[i]
-        x1, y1 = pts[(i + 1) % len(pts)]
-        area += x0 * y1 - x1 * y0
-    return area * 0.5
-
-
-def _oriented_wire(wire, *, want_ccw: bool):
-    from OCP.TopoDS import TopoDS
-
-    area = _wire_signed_area(wire)
-    is_ccw = area > 0.0
-    if want_ccw == is_ccw:
-        return wire
-    return TopoDS.Wire_s(wire.Reversed())
-
-
-def _as_wire(shape):
-    from OCP.TopoDS import TopoDS
-
-    return TopoDS.Wire_s(shape)
 
 
 def _wires(shape) -> list[Any]:
@@ -262,7 +485,51 @@ def _wires(shape) -> list[Any]:
     return out
 
 
+def _wire_ring_points(wire, *, step_deg: float = _SAMPLE_STEP_DEG) -> list[tuple[float, float]]:
+    """Puntos del wire en orden de recorrido (respetando orientación de arista)."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.BRepTools import BRepTools_WireExplorer
+    from OCP.TopExp import TopExp
+
+    ring: list[tuple[float, float]] = []
+    exp = BRepTools_WireExplorer(wire)
+    while exp.More():
+        edge = exp.Current()
+        curve = BRepAdaptor_Curve(edge)
+        u0, u1 = curve.FirstParameter(), curve.LastParameter()
+        n = 2
+        try:
+            from OCP.GeomAbs import GeomAbs_Line
+
+            if curve.GetType() != GeomAbs_Line:
+                n = max(2, int(math.ceil(360.0 / max(step_deg, 0.25) / 4.0)))
+        except Exception:
+            n = 8
+        pts = []
+        for i in range(n + 1):
+            p = curve.Value(u0 + (u1 - u0) * (i / n))
+            pts.append((float(p.X()), float(p.Y())))
+        head = BRep_Tool.Pnt_s(TopExp.FirstVertex_s(edge, True))
+        if math.dist(pts[0], (float(head.X()), float(head.Y()))) > math.dist(
+            pts[-1], (float(head.X()), float(head.Y()))
+        ):
+            pts.reverse()
+        for p in pts:
+            if ring and math.dist(ring[-1], p) <= 1e-12:
+                continue
+            ring.append(p)
+        exp.Next()
+    return ring
+
+
 def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
+    """Convierte el wire a LINE/ARC/CIRCLE de DXF respetando el arco real.
+
+    DXF dibuja el ARC siempre CCW de ``start_angle`` a ``end_angle``. Si el
+    recorrido del wire va CW hay que invertir los ángulos: si no, el DXF
+    describe el arco complementario y el perfil sale deforme.
+    """
     from OCP.BRep import BRep_Tool
     from OCP.BRepAdaptor import BRepAdaptor_Curve
     from OCP.BRepTools import BRepTools_WireExplorer
@@ -275,36 +542,35 @@ def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
         edge = exp.Current()
         curve = BRepAdaptor_Curve(edge)
         kind = curve.GetType()
-        v0, v1 = TopExp.FirstVertex_s(edge), TopExp.LastVertex_s(edge)
-        p0, p1 = BRep_Tool.Pnt_s(v0), BRep_Tool.Pnt_s(v1)
+        p0 = BRep_Tool.Pnt_s(TopExp.FirstVertex_s(edge, True))
+        p1 = BRep_Tool.Pnt_s(TopExp.LastVertex_s(edge, True))
         if kind == GeomAbs_Line:
             out.append(
                 {
                     "type": "LINE",
-                    "start": (float(p0.X()), float(p0.Y()), float(p0.Z())),
-                    "end": (float(p1.X()), float(p1.Y()), float(p1.Z())),
+                    "start": (float(p0.X()), float(p0.Y()), 0.0),
+                    "end": (float(p1.X()), float(p1.Y()), 0.0),
                 }
             )
         elif kind == GeomAbs_Circle:
             circ = curve.Circle()
             center = circ.Location()
+            cx, cy = float(center.X()), float(center.Y())
             r = float(circ.Radius())
-            a0 = math.degrees(math.atan2(p0.Y() - center.Y(), p0.X() - center.X())) % 360.0
-            a1 = math.degrees(math.atan2(p1.Y() - center.Y(), p1.X() - center.X())) % 360.0
-            # OCCT usa círculo para arcos de join; si start/end coinciden es CIRCLE.
             if math.dist((p0.X(), p0.Y()), (p1.X(), p1.Y())) <= 1e-7:
-                out.append(
-                    {
-                        "type": "CIRCLE",
-                        "center": (float(center.X()), float(center.Y()), float(center.Z())),
-                        "radius": r,
-                    }
-                )
+                out.append({"type": "CIRCLE", "center": (cx, cy, 0.0), "radius": r})
             else:
+                a0 = math.degrees(math.atan2(float(p0.Y()) - cy, float(p0.X()) - cx)) % 360.0
+                a1 = math.degrees(math.atan2(float(p1.Y()) - cy, float(p1.X()) - cx)) % 360.0
+                u0, u1 = curve.FirstParameter(), curve.LastParameter()
+                pm = curve.Value((u0 + u1) * 0.5)
+                am = math.degrees(math.atan2(float(pm.Y()) - cy, float(pm.X()) - cx)) % 360.0
+                if not _angle_in_ccw_sweep(a0, a1, am):
+                    a0, a1 = a1, a0
                 out.append(
                     {
                         "type": "ARC",
-                        "center": (float(center.X()), float(center.Y()), float(center.Z())),
+                        "center": (cx, cy, 0.0),
                         "radius": r,
                         "start_angle": a0,
                         "end_angle": a1,
@@ -317,35 +583,12 @@ def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
 
 
 def _perform_offset(wire, delta: float, join) -> Any:
-    """Ejecuta MakeOffset con varios constructores; no deja que Perform tumbe sin mensaje."""
+    """MakeOffset con los constructores disponibles; devuelve shape o lanza."""
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
     from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
 
     errors: list[str] = []
-
-    # 1) Wire directo (preferido para 2D).
-    try:
-        offset = BRepOffsetAPI_MakeOffset(wire, join, False)
-        offset.Perform(float(delta))
-        if offset.IsDone() and not offset.Shape().IsNull():
-            return offset.Shape()
-        errors.append("wire+join IsDone=false")
-    except Exception as exc:
-        errors.append(f"wire+join: {exc}")
-
-    # 2) Init/AddWire.
-    try:
-        offset = BRepOffsetAPI_MakeOffset()
-        offset.Init(join, False)
-        offset.AddWire(wire)
-        offset.Perform(float(delta))
-        if offset.IsDone() and not offset.Shape().IsNull():
-            return offset.Shape()
-        errors.append("Init/AddWire IsDone=false")
-    except Exception as exc:
-        errors.append(f"Init/AddWire: {exc}")
-
-    # 3) Face plana.
+    # Cara plana primero: es el spine que devuelve contorno cerrado en 2D.
     try:
         face_mk = BRepBuilderAPI_MakeFace(wire, True)
         if face_mk.IsDone():
@@ -359,41 +602,73 @@ def _perform_offset(wire, delta: float, join) -> Any:
     except Exception as exc:
         errors.append(f"face: {exc}")
 
+    try:
+        offset = BRepOffsetAPI_MakeOffset(wire, join, False)
+        offset.Perform(float(delta))
+        if offset.IsDone() and not offset.Shape().IsNull():
+            return offset.Shape()
+        errors.append("wire IsDone=false")
+    except Exception as exc:
+        errors.append(f"wire: {exc}")
+
     raise RuntimeError("; ".join(errors) or "OCCT OFFSET falló")
 
 
 def offset_entities(entities: Iterable, *, delta: float) -> OcctOffsetResult:
-    """OFFSET de un wire cerrado manteniendo LINE/ARC/CIRCLE exactos."""
+    """OFFSET de un contorno cerrado, validado, con LINE/ARC/CIRCLE exactos.
+
+    ``delta`` > 0 crece el contorno; < 0 lo encoge. El resultado solo se
+    devuelve si cumple cierre, simplicidad y crecimiento de ``|delta|`` por lado.
+    """
     try:
         from OCP.GeomAbs import GeomAbs_Arc, GeomAbs_Intersection
 
-        raw = _wire_from_entities(entities)
-        # OUTER (+delta) exige CCW; INNER (−delta) también se orienta CCW y
-        # el signo del delta define crecimiento/contracción del metal.
-        wire = _oriented_wire(raw, want_ccw=True)
-        last_err = ""
+        wire = _wire_from_entities(entities)
+        src_ring = _wire_ring_points(wire)
+        m_src = _ring_metrics(src_ring)
+        if m_src is None:
+            return OcctOffsetResult(error="OCCT OFFSET: contorno origen inválido")
+        # Un contorno abierto se ofsetearía como cinta con casquetes redondos.
+        if m_src["gap"] > _GAP_PUENTE_MAX:
+            return OcctOffsetResult(
+                error=(
+                    "OCCT OFFSET: el contorno de corte no cierra "
+                    f"(hueco={m_src['gap']:.4f} unidades DXF); revisa el perfil."
+                )
+            )
+
+        d = float(delta)
+        rechazos: list[str] = []
+        # La dirección del offset depende de la orientación del wire; se prueban
+        # ambos signos y se acepta solo el que valide contra la geometría origen.
         for join in (GeomAbs_Arc, GeomAbs_Intersection):
-            candidates = (wire, _as_wire(wire.Reversed()))
-            for oriented in candidates:
+            for signo in (1.0, -1.0):
                 try:
-                    shape = _perform_offset(oriented, float(delta), join)
-                    wires = _wires(shape)
-                    if not wires:
-                        last_err = "OCCT OFFSET no devolvió wire"
-                        continue
-                    # Preferir el wire de mayor área absoluta (contorno principal).
-                    wires_sorted = sorted(
-                        wires, key=lambda w: abs(_wire_signed_area(w)), reverse=True
-                    )
-                    result: list[dict[str, Any]] = []
-                    for out_wire in wires_sorted[:1]:
-                        result.extend(_native_entities_from_wire(out_wire))
-                    if result:
-                        return OcctOffsetResult(entities=result)
-                    last_err = "OCCT OFFSET sin entidades nativas"
+                    shape = _perform_offset(wire, d * signo, join)
                 except Exception as exc:
-                    last_err = str(exc)
+                    rechazos.append(str(exc))
                     continue
-        return OcctOffsetResult(error=f"OCCT OFFSET: {last_err or 'falló'}")
+                candidatos = _wires(shape)
+                if not candidatos:
+                    rechazos.append("sin wire de salida")
+                    continue
+                validos: list[list[dict[str, Any]]] = []
+                for out_wire in candidatos:
+                    try:
+                        specs = _native_entities_from_wire(out_wire)
+                    except Exception as exc:
+                        rechazos.append(str(exc))
+                        continue
+                    motivo = validate_offset_ring(src_ring, ring_from_specs(specs), d)
+                    if motivo:
+                        rechazos.append(motivo)
+                        continue
+                    validos.append(specs)
+                if len(validos) == 1:
+                    return OcctOffsetResult(entities=validos[0])
+                if len(validos) > 1:
+                    rechazos.append("offset ambiguo: varios contornos válidos")
+        detalle = "; ".join(dict.fromkeys(rechazos)) or "falló"
+        return OcctOffsetResult(error=f"OCCT OFFSET: {detalle}")
     except Exception as exc:
         return OcctOffsetResult(error=f"OCCT OFFSET: {exc}")

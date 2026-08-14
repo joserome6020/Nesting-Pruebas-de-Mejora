@@ -89,7 +89,7 @@ REGRESIONES = [
     ),
     (
         "test_plasma_occt_offset.py",
-        "2026-08-14d/e - OFFSET OCCT conserva LINE/ARC/CIRCLE; CW parking no BRep_API",
+        "2026-08-14g - OFFSET OCCT validado: CumOri, micro-gap, fail-closed sin lazos",
     ),
     (
         "test_orientacion_corte_bloqueada.py",

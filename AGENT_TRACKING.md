@@ -46,6 +46,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14g — Plasma OFFSET: no más perfiles deforme (AREA 0 / lazos)
+
+- Bug de producción en PARTS: tras ESP. el visor mostraba contorno con
+  **casquetes redondos** en esquinas, **AREA NETA 0.00** y perímetro inflado
+  (GENE-DF-10-124 y similares). Causa: se ofseteaba una cadena **abierta**
+  (micro-huecos de CAD / aristas leídas sin `CumOri`) y se escribía el DXF
+  sin validar.
+- `plasma_occt_offset`: lee vértices con orientación acumulada; puentea
+  micro-gaps ≤ 0.02"; rechaza huecos mayores; convierte ARC al arco real
+  (no el complementario); valida cierre / simplicidad / crecimiento de
+  `|delta|` por lado antes de devolver.
+- `plasma_compensator`: compuerta fail-closed que **relee el DXF escrito**,
+  comprueba bbox + cadena cerrada + no auto-intersección; borra el archivo
+  si no cumple.
+- Cache invalidado (`offset2d-v3-occt-validated`). Candados: filetes+slot,
+  micro-hueco, contorno abierto. Sin módulos nuevos para el `.exe`.
+
 ### 2026-08-14f — Plasma OCCT: robustez ante BRep_API / perfiles CW
 
 - Error en PARTS al marcar plasma (`OCCT OFFSET: BRep_API: command not done`)

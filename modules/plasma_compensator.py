@@ -397,6 +397,78 @@ def _compensate_dxf_occt_exact(
     }
 
 
+def _pools_por_rol(doc, *, outer_set: set, inner_set: set) -> dict[str, list]:
+    pools: dict[str, list] = {"outer": [], "inner": []}
+    for ent in list(doc.modelspace()):
+        layer = str(ent.dxf.layer or "").upper()
+        role = _rol_capa_plasma(layer)
+        if role is None:
+            role = "outer" if layer in outer_set else ("inner" if layer in inner_set else None)
+        if role and ent.dxftype() in {"LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE"}:
+            pools[role].append(ent)
+    return pools
+
+
+def _verificar_dxf_compensado(
+    doc_src,
+    doc_out,
+    *,
+    off_dxf: float,
+    outer_set: set,
+    inner_set: set,
+) -> None:
+    """Compuerta fail-closed: el DXF escrito debe medir y cerrar como se espera.
+
+    Releer el resultado es lo único que detecta un perfil deforme (contorno
+    abierto, lazos de esquina o tamaño que no creció ``off_dxf`` por lado).
+    """
+    from modules.plasma_dxf_export import _group_connected_cut_entities, _order_connected_entities
+    from modules.plasma_occt_offset import (
+        ring_from_specs,
+        ring_is_simple,
+        specs_bbox,
+        specs_from_dxf_entities,
+    )
+
+    src_outer = _pools_por_rol(doc_src, outer_set=outer_set, inner_set=inner_set)["outer"]
+    out_outer = _pools_por_rol(doc_out, outer_set=outer_set, inner_set=inner_set)["outer"]
+    if not src_outer or not out_outer:
+        return
+
+    bbox_src = specs_bbox(specs_from_dxf_entities(src_outer))
+    bbox_out = specs_bbox(specs_from_dxf_entities(out_outer))
+    if bbox_src is None or bbox_out is None:
+        raise RuntimeError("PLASMA: no se pudo medir el contorno exterior compensado.")
+
+    tol = max(abs(off_dxf) * 0.25, 1e-6)
+    esperado = (bbox_src[0] + 2.0 * off_dxf, bbox_src[1] + 2.0 * off_dxf)
+    if abs(bbox_out[0] - esperado[0]) > tol or abs(bbox_out[1] - esperado[1]) > tol:
+        raise RuntimeError(
+            "PLASMA: el contorno compensado no mide lo esperado "
+            f"({esperado[0]:.4f}x{esperado[1]:.4f} vs {bbox_out[0]:.4f}x{bbox_out[1]:.4f}); "
+            "se rechaza el DXF."
+        )
+
+    cadenas = [e for e in out_outer if e.dxftype() in ("LINE", "ARC")]
+    if not cadenas:
+        return
+    grupos = _group_connected_cut_entities(cadenas)
+    if len(grupos) != 1:
+        raise RuntimeError(
+            f"PLASMA: el contorno compensado quedó partido en {len(grupos)} tramos."
+        )
+    ordenadas = _order_connected_entities(grupos[0], tol=max(abs(off_dxf) * 0.5, 1e-3))
+    if not ordenadas or len(ordenadas) != len(grupos[0]):
+        raise RuntimeError("PLASMA: el contorno compensado no forma una cadena cerrada.")
+    ring = ring_from_specs(specs_from_dxf_entities([ent for ent, _rev in ordenadas]))
+    if len(ring) < 4 or math.dist(ring[0], ring[-1]) > max(abs(off_dxf) * 0.5, 1e-3):
+        raise RuntimeError("PLASMA: el contorno compensado quedó abierto.")
+    if not ring_is_simple(ring):
+        raise RuntimeError(
+            "PLASMA: el contorno compensado se auto-intersecta (lazos de esquina)."
+        )
+
+
 def compensate_dxf_for_plasma(
     input_dxf: Path,
     output_dxf: Path,
@@ -441,6 +513,20 @@ def compensate_dxf_for_plasma(
 
     output_dxf.parent.mkdir(parents=True, exist_ok=True)
     doc.saveas(str(output_dxf))
+    try:
+        _verificar_dxf_compensado(
+            ezdxf.readfile(str(input_dxf)),
+            ezdxf.readfile(str(output_dxf)),
+            off_dxf=off_dxf,
+            outer_set=outer_set,
+            inner_set=inner_set,
+        )
+    except Exception:
+        try:
+            output_dxf.unlink()
+        except OSError:
+            pass
+        raise
     return {
         "changed": changed,
         "skipped": skipped,
