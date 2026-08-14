@@ -1,6 +1,7 @@
 """Candado OCCT: OFFSET plasma conserva LINE/ARC/CIRCLE nativos."""
 from __future__ import annotations
 
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -58,8 +59,15 @@ def test_occt_offset_preserva_bulge_como_arc():
     doc.saveas(src)
     stats = compensate_dxf_for_plasma(src, dst, offset_mm=compute_plasma_offset_mm(0.375))
     assert stats["backend"] == "occt_BRepOffsetAPI_MakeOffset", stats
-    out = ezdxf.readfile(dst).modelspace()
-    assert any(e.dxftype() == "ARC" for e in out), "el bulge debe salir como ARC nativo"
+    out = list(ezdxf.readfile(dst).modelspace())
+    # La curvatura debe seguir siendo exacta: ARC nativo o bulge de polilínea.
+    if any(e.dxftype() == "ARC" for e in out):
+        return
+    polis = [e for e in out if e.dxftype() == "LWPOLYLINE"]
+    assert polis, "el resultado debe conservar curvas nativas"
+    assert any(
+        abs(float(v[4])) > 1e-9 for p in polis for v in p.get_points("xyseb")
+    ), "el bulge no debe poligonizarse"
 
 
 def test_occt_offset_parking_cw_no_brep_api():
@@ -210,6 +218,92 @@ def test_contorno_muy_abierto_falla_cerrado():
     assert not dst.exists(), "no debe quedar DXF compensado inválido en disco"
 
 
+def _area_neta_estilo_visor(msp) -> float:
+    """Replica el cálculo del visor: solo contornos cerrados aportan área."""
+    from ezdxf import path
+
+    from modules.plasma_occt_offset import _ring_metrics
+
+    area = 0.0
+    for ent in msp:
+        capa = str(ent.dxf.layer).upper()
+        signo = 1.0 if "OUTER" in capa else (-1.0 if "INNER" in capa else 0.0)
+        if signo == 0.0:
+            continue
+        if ent.dxftype() == "CIRCLE":
+            area += signo * math.pi * float(ent.dxf.radius) ** 2
+            continue
+        try:
+            p = path.make_path(ent)
+        except Exception:
+            continue
+        if not p.is_closed:
+            continue
+        pts = [(v[0], v[1]) for v in p.flattening(distance=0.01)]
+        m = _ring_metrics(pts)
+        if m:
+            area += signo * m["area_abs"]
+    return area
+
+
+def test_polilinea_cerrada_sobrevive_y_area_no_queda_en_cero():
+    """SWITCH PATCH 1: círculo interno = polilínea de 2 vértices con bulges.
+
+    Candado doble: no debe fallar por "aristas suficientes" y el compensado
+    debe seguir siendo polilínea cerrada (si no, AREA NETA sale 0.00).
+    """
+    td = Path(tempfile.mkdtemp())
+    src, dst = td / "patch.dxf", td / "patch_out.dxf"
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 1
+    msp = doc.modelspace()
+    # Placa 4x4 con esquinas redondeadas (bulges) como polilínea cerrada.
+    r = 0.50
+    b = math.tan(math.radians(90.0) / 4.0)
+    msp.add_lwpolyline(
+        [
+            (r, 0.0, 0.0),
+            (4.0 - r, 0.0, b),
+            (4.0, r, 0.0),
+            (4.0, 4.0 - r, b),
+            (4.0 - r, 4.0, 0.0),
+            (r, 4.0, b),
+            (0.0, 4.0 - r, 0.0),
+            (0.0, r, b),
+        ],
+        format="xyb",
+        close=True,
+        dxfattribs={"layer": "CUT_OUTER"},
+    )
+    # Barreno como polilínea cerrada de dos vértices (dos semicírculos).
+    msp.add_lwpolyline(
+        [(1.5, 2.0, 1.0), (2.5, 2.0, 1.0)],
+        format="xyb",
+        close=True,
+        dxfattribs={"layer": "CUT_INNER"},
+    )
+    doc.saveas(src)
+
+    off_mm = compute_plasma_offset_mm(0.1875)
+    d = off_mm / 25.4
+    area_antes = _area_neta_estilo_visor(ezdxf.readfile(src).modelspace())
+    compensate_dxf_for_plasma(src, dst, offset_mm=off_mm)
+    msp_out = ezdxf.readfile(dst).modelspace()
+
+    polis = [e for e in msp_out if e.dxftype() == "LWPOLYLINE"]
+    assert len(polis) == 2, "el compensado debe seguir siendo polilíneas cerradas"
+    assert all(bool(p.closed) for p in polis)
+
+    x0, y0, x1, y1 = _bbox_capa(msp_out, "CUT_OUTER")
+    assert abs((x1 - x0) - (4.0 + 2 * d)) < 1e-6
+    assert abs((y1 - y0) - (4.0 + 2 * d)) < 1e-6
+
+    area_despues = _area_neta_estilo_visor(msp_out)
+    assert area_antes > 0 and area_despues > 0, (area_antes, area_despues)
+    # Crece el exterior y encoge el barreno: el área neta sube.
+    assert area_despues > area_antes
+
+
 def test_offset_deforme_es_rechazado():
     """La compuerta debe tumbar un resultado con lazos/contorno abierto."""
     from modules.plasma_occt_offset import ring_is_simple, validate_offset_ring
@@ -237,5 +331,6 @@ if __name__ == "__main__":
     test_occt_offset_placa_con_filetes_y_slot_crece_exacto()
     test_micro_hueco_de_cad_se_puentea()
     test_contorno_muy_abierto_falla_cerrado()
+    test_polilinea_cerrada_sobrevive_y_area_no_queda_en_cero()
     test_offset_deforme_es_rechazado()
     print("SMOKE OK")

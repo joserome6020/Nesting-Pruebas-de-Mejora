@@ -178,6 +178,43 @@ def specs_from_dxf_entities(entities: Iterable) -> list[dict[str, Any]]:
     return out
 
 
+def lwpolyline_points_from_specs(
+    specs: Sequence[dict[str, Any]],
+) -> list[tuple[float, float, float]] | None:
+    """Convierte una cadena LINE/ARC ordenada a vértices ``xyb`` de polilínea.
+
+    Devolver una polilínea cerrada (no entidades sueltas) mantiene el DXF con la
+    misma topología que el original: el área neta y el resto de la suite siguen
+    reconociendo el contorno. Un arco se representa exacto con su bulge.
+    """
+    if not specs or any(str(s.get("type")) not in ("LINE", "ARC") for s in specs):
+        return None
+
+    pts: list[tuple[float, float, float]] = []
+    for spec in specs:
+        if spec["type"] == "LINE":
+            s = spec["start"]
+            pts.append((float(s[0]), float(s[1]), 0.0))
+            continue
+        cx, cy = float(spec["center"][0]), float(spec["center"][1])
+        r = float(spec["radius"])
+        a0, a1 = float(spec["start_angle"]), float(spec["end_angle"])
+        sweep = (a1 - a0) % 360.0
+        if sweep <= 1e-9:
+            sweep = 360.0
+        ccw = bool(spec.get("ccw", True))
+        ang_ini = a0 if ccw else a1
+        bulge = math.tan(math.radians(sweep) / 4.0) * (1.0 if ccw else -1.0)
+        pts.append(
+            (
+                cx + r * math.cos(math.radians(ang_ini)),
+                cy + r * math.sin(math.radians(ang_ini)),
+                bulge,
+            )
+        )
+    return pts if len(pts) >= 2 else None
+
+
 def specs_bbox(specs: Sequence[dict[str, Any]]) -> tuple[float, float] | None:
     """Ancho/alto del conjunto; no requiere orden de recorrido."""
     xs: list[float] = []
@@ -329,8 +366,10 @@ def _polyline_edges(entity) -> list:
             )
             for v in entity.vertices
         ]
-    if len(points) < 3:
-        raise ValueError("Polilínea con menos de tres vértices")
+    # Un círculo/obround se dibuja como polilínea cerrada de 2 vértices con
+    # bulges: dos arcos ya cierran el contorno.
+    if len(points) < 2:
+        raise ValueError("Polilínea con menos de dos vértices")
 
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
     from OCP.GC import GC_MakeArcOfCircle
@@ -367,7 +406,7 @@ def _polyline_edges(entity) -> list:
         if not arc.IsDone():
             raise ValueError("No se pudo construir ARC desde bulge")
         edges.append(_safe_edge(BRepBuilderAPI_MakeEdge(arc.Value())))
-    if len(edges) < 3:
+    if len(edges) < 2:
         raise ValueError("Polilínea sin aristas suficientes tras limpiar degeneradas")
     return edges
 
@@ -565,7 +604,8 @@ def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
                 u0, u1 = curve.FirstParameter(), curve.LastParameter()
                 pm = curve.Value((u0 + u1) * 0.5)
                 am = math.degrees(math.atan2(float(pm.Y()) - cy, float(pm.X()) - cx)) % 360.0
-                if not _angle_in_ccw_sweep(a0, a1, am):
+                ccw = _angle_in_ccw_sweep(a0, a1, am)
+                if not ccw:
                     a0, a1 = a1, a0
                 out.append(
                     {
@@ -574,6 +614,9 @@ def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
                         "radius": r,
                         "start_angle": a0,
                         "end_angle": a1,
+                        # Sentido del recorrido del wire; el ARC de DXF ya quedó
+                        # normalizado CCW, pero el bulge de polilínea lo necesita.
+                        "ccw": bool(ccw),
                     }
                 )
         else:

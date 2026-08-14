@@ -46,6 +46,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-14h — Plasma: polilínea cerrada de vuelta y barrenos de 2 vértices
+
+- `SWITCH PATCH 1` fallaba con *"Polilínea sin aristas suficientes"*: un círculo
+  dibujado como polilínea cerrada de **2 vértices con bulges** (dos semicírculos)
+  es válido; el mínimo de 3 aristas era incorrecto.
+- **AREA NETA 0.00** tras compensar: el resultado se escribía como `LINE`/`ARC`
+  sueltos y el visor solo suma contornos cerrados (`CIRCLE` o polilínea). Ahora
+  si el origen era polilínea cerrada se devuelve polilínea cerrada con bulges
+  (curvas exactas, misma topología); la compuerta valida `closed` + simplicidad.
+- Cache invalidado (`offset2d-v4-polilinea-cerrada`): los compensados previos
+  con entidades sueltas se regeneran.
+- Candado: `test_polilinea_cerrada_sobrevive_y_area_no_queda_en_cero` (área
+  estilo visor antes/después). Nota: la regla de 1" (`>0.75" → 0.250"/lado`)
+  viene del exportador legacy, no se cambió.
+
 ### 2026-08-14g — Plasma OFFSET: no más perfiles deforme (AREA 0 / lazos)
 
 - Bug de producción en PARTS: tras ESP. el visor mostraba contorno con

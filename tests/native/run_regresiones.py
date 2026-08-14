@@ -89,7 +89,7 @@ REGRESIONES = [
     ),
     (
         "test_plasma_occt_offset.py",
-        "2026-08-14g - OFFSET OCCT validado: CumOri, micro-gap, fail-closed sin lazos",
+        "2026-08-14g/h - OFFSET OCCT validado; polilínea cerrada conserva área neta",
     ),
     (
         "test_orientacion_corte_bloqueada.py",

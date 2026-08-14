@@ -382,10 +382,27 @@ def _compensate_dxf_occt_exact(
             layer = str(exemplar.dxf.layer or "")
             color = getattr(exemplar.dxf, "color", None)
             linetype = getattr(exemplar.dxf, "linetype", None)
+            # Si el origen era una polilínea cerrada se devuelve igual: entidades
+            # sueltas dejarían el contorno sin área neta para el resto de la suite.
+            era_polilinea = exemplar.dxftype() in {"LWPOLYLINE", "POLYLINE"}
             for ent in unit:
                 ent.destroy()
-            for spec in result.entities:
-                _write_native(spec, layer=layer, color=color, linetype=linetype)
+            escrito = False
+            if era_polilinea:
+                from modules.plasma_occt_offset import lwpolyline_points_from_specs
+
+                pts = lwpolyline_points_from_specs(result.entities)
+                if pts:
+                    attrs = {"layer": layer}
+                    if color is not None:
+                        attrs["color"] = color
+                    if linetype is not None:
+                        attrs["linetype"] = linetype
+                    msp.add_lwpolyline(pts, format="xyb", close=True, dxfattribs=attrs)
+                    escrito = True
+            if not escrito:
+                for spec in result.entities:
+                    _write_native(spec, layer=layer, color=color, linetype=linetype)
             changed += 1
 
     return {
@@ -448,6 +465,14 @@ def _verificar_dxf_compensado(
             f"({esperado[0]:.4f}x{esperado[1]:.4f} vs {bbox_out[0]:.4f}x{bbox_out[1]:.4f}); "
             "se rechaza el DXF."
         )
+
+    for poli in [e for e in out_outer if e.dxftype() in ("LWPOLYLINE", "POLYLINE")]:
+        if not bool(getattr(poli, "closed", False)):
+            raise RuntimeError("PLASMA: la polilínea compensada no quedó cerrada.")
+        if not ring_is_simple(ring_from_specs(specs_from_dxf_entities([poli]))):
+            raise RuntimeError(
+                "PLASMA: la polilínea compensada se auto-intersecta (lazos de esquina)."
+            )
 
     cadenas = [e for e in out_outer if e.dxftype() in ("LINE", "ARC")]
     if not cadenas:
