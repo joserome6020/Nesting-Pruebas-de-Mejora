@@ -124,6 +124,10 @@ REGRESIONES = [
         "2026-08-14q/r - kerf/margen reales de la hoja al validar plasma; separación por geometría real",
     ),
     (
+        "test_plasma_inyecta_compensado_y_esquinas_vivas.py",
+        "2026-08-17c - el nest inyecta Plasma Compensated 1:1 (arcos nativos) y el offset conserva puntas vivas",
+    ),
+    (
         "test_cu_force_dxf_step.py",
         "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
     ),

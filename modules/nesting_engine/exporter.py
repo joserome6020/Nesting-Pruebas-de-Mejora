@@ -1611,7 +1611,10 @@ def exportar_resultados_a_dxf(
                 # Desfase geométrico SOLO si la hoja/pieza se compensó manualmente.
                 # Sin compensación: mismo nest 1:1 (no empujar corte fuera de placa).
                 if generar_plasma_hoja and not nom.startswith("RETAZO_GUILLOTINA") and not nom.startswith("CU_CORTE__") and not es_cu_hoja:
-                    from modules.plasma_dxf_export import sanitize_plasma_profile
+                    from modules.plasma_dxf_export import (
+                        resolver_fuente_plasma,
+                        sanitize_plasma_profile,
+                    )
 
                     off_piece = float(
                         pz.get("plasma_offset_mm_manual")
@@ -1620,7 +1623,6 @@ def exportar_resultados_a_dxf(
                         or plasma_offset_job
                         or 0.0
                     )
-                    off_export = off_piece if compensada_pieza else 0.0
                     if compensada_pieza:
                         plasma_outer, plasma_holes = sanitize_plasma_profile(
                             pols[0],
@@ -1629,22 +1631,12 @@ def exportar_resultados_a_dxf(
                     else:
                         plasma_outer, plasma_holes = outer_main, holes_main
 
-                    ruta_src = str(pz.get("ruta") or "").strip()
-                    ruta_plasma_src = str(pz.get("ruta_plasma") or "").strip()
-                    ya_comp = bool(pz.get("plasma_fuente_ya_compensada"))
-                    # Si PARTS ya generó DXF compensado, exportar 1:1 desde ese archivo
-                    # (no volver a aplicar offset).
-                    if ya_comp and ruta_plasma_src and os.path.isfile(ruta_plasma_src):
-                        plasma_ruta = ruta_plasma_src
-                        off_export = 0.0
-                        use_plasma_source = True
-                    else:
-                        plasma_ruta = (
-                            ruta_src
-                            if ruta_src and os.path.isfile(ruta_src) and not es_linea_corte
-                            else ""
-                        )
-                        use_plasma_source = bool(plasma_ruta) and off_export > 0
+                    fuente_plasma = resolver_fuente_plasma(
+                        pz,
+                        compensada=compensada_pieza,
+                        offset_mm=off_piece,
+                        es_linea_corte=bool(es_linea_corte),
+                    )
 
                     placements_plasma.append({
                         "part_name": nom + "_PLASMA",
@@ -1652,12 +1644,10 @@ def exportar_resultados_a_dxf(
                         "holes": plasma_holes,
                         "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
                         "marks": pz.get("marcas", []),
-                        "ruta": plasma_ruta,
                         "prefer_source_dxf": False,
                         "compensated": compensada_pieza,
                         "plasma_export": True,
-                        "compensated_plasma_source": use_plasma_source,
-                        "plasma_offset_mm": off_export,
+                        **fuente_plasma,
                         "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),
@@ -1783,7 +1773,10 @@ def exportar_resultados_a_dxf(
             lista_plasma = placements_plasma
             if solo_plasma and not lista_plasma:
                 # RTZC: nunca reutilizar principales (outer láser limpiado agresivamente)
-                from modules.plasma_dxf_export import sanitize_plasma_profile
+                from modules.plasma_dxf_export import (
+                    resolver_fuente_plasma,
+                    sanitize_plasma_profile,
+                )
 
                 lista_plasma = []
                 comp_hoja = bool(hoja.get("plasma_compensado_manual"))
@@ -1800,7 +1793,7 @@ def exportar_resultados_a_dxf(
                     if not pols:
                         continue
                     comp_pz = comp_hoja or bool(pz.get("plasma_compensada_manual"))
-                    off_export = off_hoja if comp_pz else 0.0
+                    off_pz = float(pz.get("plasma_offset_mm_manual") or off_hoja or 0.0)
                     if comp_pz:
                         po, ph = sanitize_plasma_profile(
                             pols[0],
@@ -1811,11 +1804,8 @@ def exportar_resultados_a_dxf(
                             pols[0],
                             pols[1:] if len(pols) > 1 else [],
                         )
-                    ruta_rtzc = str(pz.get("ruta") or "").strip()
-                    plasma_ruta_rtzc = (
-                        ruta_rtzc
-                        if ruta_rtzc and os.path.isfile(ruta_rtzc)
-                        else ""
+                    fuente_plasma_rtzc = resolver_fuente_plasma(
+                        pz, compensada=comp_pz, offset_mm=off_pz
                     )
                     lista_plasma.append({
                         "part_name": nom + "_PLASMA",
@@ -1823,11 +1813,9 @@ def exportar_resultados_a_dxf(
                         "holes": ph,
                         "nested_poligonos": [list(pols[0])] + [list(h) for h in (pols[1:] if len(pols) > 1 else [])],
                         "marks": pz.get("marcas", []),
-                        "ruta": plasma_ruta_rtzc,
                         "compensated": comp_pz,
                         "plasma_export": True,
-                        "compensated_plasma_source": bool(plasma_ruta_rtzc) and off_export > 0,
-                        "plasma_offset_mm": off_export,
+                        **fuente_plasma_rtzc,
                         "use_native_curves": True,
                         "orig_minx": pz.get("orig_minx", 0.0),
                         "orig_miny": pz.get("orig_miny", 0.0),

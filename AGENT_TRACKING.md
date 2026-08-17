@@ -217,6 +217,39 @@ duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
 persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
 assets ni imports dinámicos nuevos.
 
+### 2026-08-17c — el nest ya inyecta Plasma Compensated y el offset conserva puntas
+
+`2026-08-17b` corrigió la mitad del problema: la rama que clona `Plasma
+Compensated` 1:1 existía, pero **nunca corría en la app**.
+
+- `nesting_engine/exporter.py` armaba el placement plasma sólo con `ruta` y
+  `compensated_plasma_source`, y `export_plasma_placement` exige
+  `plasma_fuente_ya_compensada` + `ruta_plasma`. Un `.arganest` reabierto llega
+  sin esas llaves, así que el export recalculaba el offset y escribía el anillo
+  muestreado: por eso un `ARC` del compensado aparecía como docenas de LINE en
+  el DXF de corte. El test previo pasaba porque fijaba las llaves a mano.
+- Nuevo puente `plasma_dxf_export.resolver_fuente_plasma()`: resuelve (y
+  regenera si el sidecar quedó viejo) el DXF de `Plasma Compensated` desde
+  `ruta` + offset, y devuelve las llaves del placement con
+  `plasma_offset_mm=0`. Lo usan los dos armadores de placas (chapa y retazo
+  cobre), que antes decidían la fuente por separado.
+- `BRepOffsetAPI_MakeOffset` **ignora** `GeomAbs_Intersection`: seguía
+  redondeando cada esquina convexa con radio = offset. Se agregó inglete
+  analítico en `plasma_occt_offset`: se detecta el filete por radio |delta| y
+  centro sobre un vértice vivo del origen, y se recorta contra los tramos
+  vecinos (recta∩recta, recta∩círculo, círculo∩círculo) con límite de inglete
+  8×offset. La validación de distancia admite la punta hasta
+  `delta / cos(giro/2)` sólo en esos vértices, así que sigue rechazando bultos.
+- `offset2d-v7-inglete-analitico` invalida los compensados con esquinas
+  redondeadas.
+
+Candado `test_plasma_inyecta_compensado_y_esquinas_vivas.py`: una pieza sin
+`ruta_plasma` debe resolver el compensado, el DXF final debe traer el `ARC`
+nativo (≤5 LINE), sólo la curva del origen conserva bulge, las tres esquinas
+rectas caen en su punta a inglete, y ningún armador de placas puede volver a
+decidir la fuente por su cuenta. Regresiones 28/28. Build sin cambios: sólo
+módulos ya empaquetados.
+
 ### 2026-08-17b — geometría de Plasma Compensated es la fuente final
 
 Corrección de semántica solicitada por planta:

@@ -38,6 +38,60 @@ _PLASMA_OFFSET_INNER_LAYERS = (
 )
 
 
+def resolver_fuente_plasma(
+    pz: dict,
+    *,
+    compensada: bool,
+    offset_mm: float,
+    es_linea_corte: bool = False,
+) -> dict:
+    """
+    Decide con qué DXF se corta una pieza plasma y devuelve las llaves del placement.
+
+    Cuando la pieza se anidó compensada, la geometría certificada de corte ya
+    existe en `Plasma Compensated` (con sus ARC/bulges reales). Resolver esa ruta
+    aquí — en vez de confiar en que la pieza cargada traiga `ruta_plasma` — es lo
+    que habilita la inyección 1:1 de `export_plasma_placement`. Sin esto un
+    `.arganest` reabierto llegaba sin la llave, el export recalculaba el offset
+    sobre el original y escribía el contorno muestreado: los arcos salían como
+    decenas de segmentos rectos.
+    """
+    ruta_src = str(pz.get("ruta") or "").strip()
+    if es_linea_corte or not ruta_src or not os.path.isfile(ruta_src):
+        ruta_src = ""
+    ruta_plasma = str(pz.get("ruta_plasma") or "").strip()
+    if ruta_plasma and not os.path.isfile(ruta_plasma):
+        ruta_plasma = ""
+    off = float(offset_mm or 0.0)
+
+    if compensada and off > 0.0 and ruta_src and not ruta_plasma:
+        try:
+            from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+            ruta_ok, _err = asegurar_dxf_plasma_compensado(ruta_src, off)
+            if ruta_ok and os.path.isfile(str(ruta_ok)):
+                ruta_plasma = str(ruta_ok)
+        except Exception:
+            ruta_plasma = ""
+
+    if compensada and off > 0.0 and ruta_plasma:
+        return {
+            "ruta": ruta_plasma,
+            "ruta_plasma": ruta_plasma,
+            "plasma_fuente_ya_compensada": True,
+            "compensated_plasma_source": True,
+            # El fuente ya trae el desfase: aplicarlo otra vez duplicaría el crecimiento.
+            "plasma_offset_mm": 0.0,
+        }
+    return {
+        "ruta": ruta_src,
+        "ruta_plasma": "",
+        "plasma_fuente_ya_compensada": False,
+        "compensated_plasma_source": bool(ruta_src) and compensada and off > 0.0,
+        "plasma_offset_mm": off if compensada else 0.0,
+    }
+
+
 def _plasma_desfase_clase(layer_name: str) -> str | None:
     """
     Capas que reciben desfase en export plasma.
