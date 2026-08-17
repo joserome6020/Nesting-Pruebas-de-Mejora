@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -188,6 +189,182 @@ def preguntar_barras_cobre_renest(
     return selected or None
 
 
+def _celda_tabla_gaps(texto: str, *, encabezado: bool = False) -> QLabel:
+    celda = QLabel(str(texto), alignment=Qt.AlignmentFlag.AlignCenter)
+    if encabezado:
+        celda.setStyleSheet(
+            "background:#E2E8F0;border:1px solid #94A3B8;"
+            "font-weight:700;color:#0F172A;padding:4px;"
+        )
+    else:
+        celda.setStyleSheet(
+            "background:#FFFFFF;border:1px solid #CBD5E1;"
+            "color:#0F172A;padding:3px;"
+        )
+    return celda
+
+
+def _crear_tabla_gaps_corte(settings=None):
+    from modules.nesting_engine.cut_gaps_table import (
+        cut_gap_display_rows,
+        load_cut_gap_settings,
+    )
+
+    frame = QFrame()
+    frame.setStyleSheet("QFrame { border: 1px solid #64748B; background: #FFFFFF; }")
+    grid = QGridLayout(frame)
+    grid.setContentsMargins(0, 0, 0, 0)
+    grid.setSpacing(0)
+    grid.setColumnStretch(0, 3)
+    grid.setColumnStretch(1, 3)
+    grid.setColumnStretch(2, 3)
+    grid.addWidget(_celda_tabla_gaps("ESPESOR", encabezado=True), 0, 0)
+    grid.addWidget(_celda_tabla_gaps("PLACA A PIEZA", encabezado=True), 0, 1)
+    grid.addWidget(_celda_tabla_gaps("ENTRE PIEZAS", encabezado=True), 0, 2)
+
+    rows = cut_gap_display_rows(settings)
+    margen = _celda_tabla_gaps("")
+    margen.setStyleSheet(
+        "background:#FFFFFF;border:1px solid #CBD5E1;color:#0F172A;"
+        "font-weight:700;padding:3px;"
+    )
+    grid.addWidget(margen, 1, 1, len(rows), 1)
+    kerf_cells: dict[str, QLabel] = {}
+    for idx, row in enumerate(rows, start=1):
+        grid.addWidget(_celda_tabla_gaps(row["label"]), idx, 0)
+        kerf_cell = _celda_tabla_gaps("")
+        kerf_cells[str(row["key"])] = kerf_cell
+        grid.addWidget(kerf_cell, idx, 2)
+
+    def refrescar(nuevos_settings=None):
+        current = nuevos_settings if nuevos_settings is not None else load_cut_gap_settings()
+        margen.setText(f'{float(current["plate_to_piece_in"]):.3f}"')
+        for row in cut_gap_display_rows(current):
+            kerf_cells[str(row["key"])].setText(f'{float(row["kerf_in"]):.3f}"')
+
+    refrescar(settings)
+    return frame, refrescar
+
+
+def _autorizar_edicion_dyt(parent, *, titulo: str, mensaje: str) -> bool:
+    """Autoriza cambios operativos restringidos con la clave de Dirección."""
+    from interface.qt.dialogs.password_prompt import solicitar_contrasena
+    from modules.nesting_engine.cut_gaps_table import verify_cut_gap_edit_password
+
+    clave = solicitar_contrasena(parent, titulo=titulo, mensaje=mensaje)
+    if clave is None:
+        return False
+    if not verify_cut_gap_edit_password(clave):
+        QMessageBox.warning(parent, "Acceso denegado", "Contraseña incorrecta.")
+        return False
+    return True
+
+
+def _editar_tabla_gaps_corte(parent) -> bool:
+    from modules.nesting_engine.cut_gaps_table import (
+        CutGapTableError,
+        cut_gap_display_rows,
+        default_cut_gap_settings,
+        load_cut_gap_settings,
+        save_cut_gap_settings,
+    )
+
+    if not _autorizar_edicion_dyt(
+        parent,
+        titulo="Editar tabla de gaps de corte",
+        mensaje="Ingrese la contraseña para modificar la tabla oficial de gaps.",
+    ):
+        return False
+
+    settings = load_cut_gap_settings()
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Editar tabla de gaps de corte")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(460)
+    dlg.resize(480, 740)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+    lay = QVBoxLayout(dlg)
+
+    titulo = QLabel("EDITAR TABLA GAPS DE CORTE", alignment=Qt.AlignmentFlag.AlignCenter)
+    titulo.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(titulo)
+    aviso = QLabel(
+        "Los cambios aplican a nests nuevos y renesteos. "
+        "Las hojas ya guardadas conservan sus valores hasta renestearse."
+    )
+    aviso.setWordWrap(True)
+    aviso.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(aviso)
+
+    row_margin = QHBoxLayout()
+    row_margin.addWidget(QLabel("Placa a pieza (in):"))
+    spin_margin = QDoubleSpinBox()
+    spin_margin.setRange(0.001, 5.0)
+    spin_margin.setDecimals(3)
+    spin_margin.setSingleStep(0.025)
+    spin_margin.setValue(float(settings["plate_to_piece_in"]))
+    row_margin.addWidget(spin_margin)
+    row_margin.addStretch(1)
+    lay.addLayout(row_margin)
+
+    encabezado = QFrame()
+    encabezado_lay = QHBoxLayout(encabezado)
+    encabezado_lay.setContentsMargins(0, 0, 0, 0)
+    encabezado_lay.addWidget(_celda_tabla_gaps("ESPESOR", encabezado=True), 2)
+    encabezado_lay.addWidget(_celda_tabla_gaps("ENTRE PIEZAS (in)", encabezado=True), 1)
+    lay.addWidget(encabezado)
+
+    spins: dict[str, QDoubleSpinBox] = {}
+    for row in cut_gap_display_rows(settings):
+        fila = QHBoxLayout()
+        fila.addWidget(_celda_tabla_gaps(row["label"]), 2)
+        spin = QDoubleSpinBox()
+        spin.setRange(0.001, 5.0)
+        spin.setDecimals(3)
+        spin.setSingleStep(0.025)
+        spin.setValue(float(row["kerf_in"]))
+        spins[str(row["key"])] = spin
+        fila.addWidget(spin, 1)
+        lay.addLayout(fila)
+
+    botones = QHBoxLayout()
+    btn_default = QPushButton("RESTAURAR ESTÁNDAR")
+    btn_cancelar = QPushButton("CANCELAR")
+    btn_guardar = QPushButton("GUARDAR TABLA")
+    apply_push_button(btn_default, "#FFFFFF", font_size=10)
+    apply_push_button(btn_cancelar, "#FFFFFF", font_size=10)
+    apply_push_button(btn_guardar, COLOR_GRIS_DARK, font_size=11)
+    botones.addWidget(btn_default)
+    botones.addStretch(1)
+    botones.addWidget(btn_cancelar)
+    botones.addWidget(btn_guardar)
+    lay.addLayout(botones)
+
+    def restaurar_estandar():
+        defaults = default_cut_gap_settings()
+        spin_margin.setValue(float(defaults["plate_to_piece_in"]))
+        for key, spin in spins.items():
+            spin.setValue(float(defaults["kerf_by_rule"][key]))
+
+    def guardar():
+        payload = {
+            "plate_to_piece_in": float(spin_margin.value()),
+            "kerf_by_rule": {key: float(spin.value()) for key, spin in spins.items()},
+        }
+        try:
+            save_cut_gap_settings(payload)
+        except CutGapTableError as exc:
+            QMessageBox.critical(dlg, "Tabla inválida", str(exc))
+            return
+        dlg.accept()
+
+    btn_default.clicked.connect(restaurar_estandar)
+    btn_cancelar.clicked.connect(dlg.reject)
+    btn_guardar.clicked.connect(guardar)
+    _centrar_dialogo(dlg, parent)
+    return dlg.exec() == QDialog.DialogCode.Accepted
+
+
 def abrir_modal_configuracion(parent):
     from modules.nesting_engine.step_export_prefs import (
         STEP_FOLDER_SPECS,
@@ -198,36 +375,184 @@ def abrir_modal_configuracion(parent):
     dlg = QDialog(parent)
     dlg.setWindowTitle("Configuración Global")
     dlg.setModal(True)
-    dlg.setMinimumWidth(420)
-    dlg.resize(440, 520)
+    dlg.setMinimumWidth(480)
+    dlg.resize(520, 760)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
-    lay = QVBoxLayout(dlg)
+    root = QVBoxLayout(dlg)
+    root.setContentsMargins(0, 0, 0, 0)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    content = QWidget()
+    lay = QVBoxLayout(content)
     tit = QLabel("CONFIGURACIÓN GLOBAL", alignment=Qt.AlignmentFlag.AlignCenter)
     tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
 
-    kerf_actual = str(getattr(parent, "_kerf_efectivo", lambda: getattr(parent, "global_kerf_val", 0.15))())
-    try:
-        kf = float(kerf_actual)
-        if kf <= 0:
-            kerf_actual = "0.15"
-    except Exception:
-        kerf_actual = str(getattr(parent, "global_kerf_val", 0.15) or 0.15)
+    gaps_tit = QLabel("TABLA GAPS DE CORTE", alignment=Qt.AlignmentFlag.AlignCenter)
+    gaps_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(gaps_tit)
+    gaps_hint = QLabel(
+        "Se aplica automáticamente por calibre al nestear. "
+        "La edición está restringida a personal autorizado."
+    )
+    gaps_hint.setWordWrap(True)
+    gaps_hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(gaps_hint)
+    tabla_gaps, refrescar_tabla_gaps = _crear_tabla_gaps_corte()
+    lay.addWidget(tabla_gaps)
+    btn_editar_gaps = QPushButton("EDITAR TABLA GAPS")
+    apply_push_button(btn_editar_gaps, COLOR_GRIS_DARK, font_size=10)
+    btn_editar_gaps.clicked.connect(
+        lambda: refrescar_tabla_gaps() if _editar_tabla_gaps_corte(dlg) else None
+    )
+    lay.addWidget(btn_editar_gaps)
 
-    row_k = QHBoxLayout()
-    row_k.addWidget(QLabel("Kerf (in):"))
-    ent_kerf = QLineEdit(kerf_actual)
-    ent_kerf.setFixedWidth(90)
-    row_k.addWidget(ent_kerf)
-    lay.addLayout(row_k)
+    sep_spark = QFrame()
+    sep_spark.setFrameShape(QFrame.Shape.HLine)
+    sep_spark.setStyleSheet("color:#CBD5E1;")
+    lay.addWidget(sep_spark)
 
-    row_m = QHBoxLayout()
-    row_m.addWidget(QLabel("Margen de borde (in):"))
-    ent_margin = QLineEdit(str(parent.global_margin_val))
-    ent_margin.setFixedWidth(90)
-    row_m.addWidget(ent_margin)
-    lay.addLayout(row_m)
+    from interface.qt.widgets.herinox_switch import HerinoxSwitch
+    from modules.nesting_engine.nest_runtime_prefs import (
+        load_nest_runtime_prefs,
+        save_nest_runtime_prefs,
+    )
+
+    runtime_prefs = load_nest_runtime_prefs()
+    spark_prefs = dict(runtime_prefs.get("spark") or {})
+    spark_enabled = [
+        str(runtime_prefs.get("prefer") or "local").strip().lower() in ("spark", "auto")
+    ]
+    spark_tit = QLabel("NVIDIA SPARK — motores de nesting")
+    spark_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(spark_tit)
+    spark_hint = QLabel(
+        "OFF usa este PC. ON intenta NvidiaSpark y, si no responde, continúa local."
+    )
+    spark_hint.setWordWrap(True)
+    spark_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(spark_hint)
+
+    spark_row = QHBoxLayout()
+    spark_row.addWidget(QLabel("Activar NvidiaSpark:"))
+    switch_spark = HerinoxSwitch(
+        label_on="NVIDIA SPARK ACTIVADO",
+        label_off="NESTEAR EN ESTE PC",
+        checked=spark_enabled[0],
+    )
+    spark_row.addWidget(switch_spark)
+    spark_row.addStretch(1)
+    lay.addLayout(spark_row)
+
+    row_host = QHBoxLayout()
+    row_host.addWidget(QLabel("Spark host:"))
+    ent_spark_host = QLineEdit(str(spark_prefs.get("host") or "192.168.2.35"))
+    row_host.addWidget(ent_spark_host, 1)
+    lay.addLayout(row_host)
+
+    row_port = QHBoxLayout()
+    row_port.addWidget(QLabel("Puerto worker:"))
+    ent_spark_port = QLineEdit(str(int(spark_prefs.get("port") or 8765)))
+    ent_spark_port.setFixedWidth(90)
+    row_port.addWidget(ent_spark_port)
+    btn_probar_spark = QPushButton("PROBAR")
+    apply_push_button(btn_probar_spark, COLOR_GRIS_DARK, font_size=10)
+    row_port.addWidget(btn_probar_spark)
+    row_port.addStretch(1)
+    lay.addLayout(row_port)
+    lbl_spark = QLabel("")
+    lbl_spark.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(lbl_spark)
+
+    def _toggle_spark(activo: bool):
+        if activo and not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Activar NvidiaSpark",
+            mensaje="Ingrese la contraseña para activar los motores NvidiaSpark.",
+        ):
+            switch_spark.setChecked(False)
+            return
+        spark_enabled[0] = bool(activo)
+        lbl_spark.setText(
+            "NvidiaSpark se usará si está disponible; si no, el nest seguirá local."
+            if activo
+            else "NvidiaSpark desactivado: los nests se ejecutarán en este PC."
+        )
+
+    def _probar_spark():
+        try:
+            from modules.nesting_engine.nest_remote_client import remote_status
+
+            host = ent_spark_host.text().strip() or "192.168.2.35"
+            port = int(ent_spark_port.text().strip() or "8765")
+            status = remote_status(host=host, port=port, connect_timeout_s=3.0)
+            if status.get("reachable"):
+                lbl_spark.setStyleSheet(f"color:{COLOR_EXITO};font-size:11px;")
+                lbl_spark.setText(f"OK — {host}:{port} · ver={status.get('version') or '?'}")
+            else:
+                lbl_spark.setStyleSheet("color:#DC2626;font-size:11px;")
+                lbl_spark.setText(f"Sin respuesta en {host}:{port}; al activar usará Local.")
+        except Exception as exc:
+            lbl_spark.setStyleSheet("color:#DC2626;font-size:11px;")
+            lbl_spark.setText(f"Error al probar NvidiaSpark: {exc}")
+
+    switch_spark.toggled.connect(_toggle_spark)
+    btn_probar_spark.clicked.connect(_probar_spark)
+
+    sep_cu = QFrame()
+    sep_cu.setFrameShape(QFrame.Shape.HLine)
+    sep_cu.setStyleSheet("color:#CBD5E1;")
+    lay.addWidget(sep_cu)
+
+    cu_force_enabled = [bool(runtime_prefs.get("cu_force_dxf_step"))]
+    cu_tit = QLabel("COBRE — forzar DXF + STEPS")
+    cu_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(cu_tit)
+    cu_hint = QLabel(
+        "ON desactiva la lógica especial de cobre (sin_gap, RTZCU y Amada vertical). "
+        "Todas las piezas se nestean con gap, se separan y salen a DXF + STEPS. "
+        "Aplica al nestear / renestear de nuevo."
+    )
+    cu_hint.setWordWrap(True)
+    cu_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(cu_hint)
+    cu_row = QHBoxLayout()
+    cu_row.addWidget(QLabel("Forzar cobre DXF+STEP:"))
+    switch_cu = HerinoxSwitch(
+        label_on="COBRE SOLO DXF+STEP",
+        label_off="COBRE NORMAL (RTZCU)",
+        checked=cu_force_enabled[0],
+    )
+    cu_row.addWidget(switch_cu)
+    cu_row.addStretch(1)
+    lay.addLayout(cu_row)
+    lbl_cu = QLabel(
+        "Modo forzado activo: gap + DXF/STEP, sin RTZCU."
+        if cu_force_enabled[0]
+        else "Modo normal: sin_gap / RTZCU / Amada según geometría."
+    )
+    lbl_cu.setWordWrap(True)
+    lbl_cu.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(lbl_cu)
+
+    def _toggle_cu(activo: bool):
+        if activo and not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Forzar cobre DXF+STEP",
+            mensaje="Ingrese la contraseña para desactivar la lógica especial de cobre.",
+        ):
+            switch_cu.setChecked(False)
+            return
+        cu_force_enabled[0] = bool(activo)
+        lbl_cu.setText(
+            "Modo forzado activo: gap + DXF/STEP, sin RTZCU."
+            if activo
+            else "Modo normal: sin_gap / RTZCU / Amada según geometría."
+        )
+
+    switch_cu.toggled.connect(_toggle_cu)
 
     sep = QFrame()
     sep.setFrameShape(QFrame.Shape.HLine)
@@ -249,55 +574,64 @@ def abrir_modal_configuracion(parent):
     for key, label in STEP_FOLDER_SPECS:
         cb = QCheckBox(label)
         cb.setChecked(bool(prefs0.get(key, True)))
+        cb.setEnabled(False)
         step_checks[key] = cb
         lay.addWidget(cb)
 
+    btn_editar_steps = QPushButton("EDITAR STEPS")
+    apply_push_button(btn_editar_steps, COLOR_GRIS_DARK, font_size=10)
+
+    def _editar_steps():
+        if not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Editar exportación STEP",
+            mensaje="Ingrese la contraseña para cambiar las carpetas de exportación STEP.",
+        ):
+            return
+        for checkbox in step_checks.values():
+            checkbox.setEnabled(True)
+        btn_editar_steps.setText("STEPS DESBLOQUEADOS")
+
+    btn_editar_steps.clicked.connect(_editar_steps)
+    lay.addWidget(btn_editar_steps)
+
     def guardar_y_aplicar():
         try:
-            from modules.nesting_engine.nest_poka_yoke import (
-                validar_kerf_in,
-                validar_margin_in,
-            )
-
-            kerf_val, err_k = validar_kerf_in(ent_kerf.text())
-            margin_val, err_m = validar_margin_in(ent_margin.text())
-            if err_k or err_m:
-                QMessageBox.critical(
-                    dlg,
-                    "Configuración inválida (poka-yoke)",
-                    "\n".join(x for x in (err_k, err_m) if x),
-                )
-                return
-
-            old_k = float(getattr(parent, "global_kerf_val", 0.15) or 0.15)
-            old_m = float(getattr(parent, "global_margin_val", 0.15) or 0.15)
-
-            parent.global_margin_val = margin_val
-            parent.global_kerf_val = kerf_val
-            if hasattr(parent, "_sync_kerf_widget"):
-                parent._sync_kerf_widget()
-            else:
-                try:
-                    parent.ent_kerf.setText(str(kerf_val))
-                except Exception:
-                    pass
-
             new_prefs = {k: cb.isChecked() for k, cb in step_checks.items()}
             save_step_export_prefs(new_prefs)
             parent.step_export_prefs = dict(new_prefs)
+            try:
+                spark_port = int(ent_spark_port.text().strip() or "8765")
+            except ValueError:
+                QMessageBox.critical(dlg, "Configuración inválida", "Puerto NvidiaSpark inválido.")
+                return
+            save_nest_runtime_prefs(
+                {
+                    "prefer": "auto" if spark_enabled[0] else "local",
+                    "cu_force_dxf_step": bool(cu_force_enabled[0]),
+                    "spark": {
+                        "host": ent_spark_host.text().strip() or "192.168.2.35",
+                        "port": spark_port,
+                        "timeout_s": float(spark_prefs.get("timeout_s") or 600.0),
+                        "connect_timeout_s": float(
+                            spark_prefs.get("connect_timeout_s") or 3.0
+                        ),
+                        "label": str(spark_prefs.get("label") or "NvidiaSpark"),
+                    },
+                }
+            )
 
             dlg.accept()
-            # Re-nest solo si cambió kerf/margen (STEPS no afecta el nest).
-            if abs(old_k - kerf_val) > 1e-9 or abs(old_m - margin_val) > 1e-9:
-                parent.ejecutar_nesting()
         except Exception:
-            QMessageBox.critical(dlg, "Error", "Kerf y Margen deben ser valores numéricos.")
+            QMessageBox.critical(dlg, "Error", "No se pudo guardar la configuración.")
 
     btn = QPushButton("GUARDAR Y APLICAR")
     apply_push_button(btn, COLOR_GRIS_DARK, font_size=12)
     btn.clicked.connect(guardar_y_aplicar)
     lay.addWidget(btn)
 
+    scroll.setWidget(content)
+    root.addWidget(scroll)
     _centrar_dialogo(dlg, parent)
     dlg.exec()
 

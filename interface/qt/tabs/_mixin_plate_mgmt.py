@@ -1227,7 +1227,7 @@ class PlateManagementMixin:
         return seleccion["cand"]
 
     def _piezas_pack_madre_para_empaque(self, clave, hoja):
-        """Solo piezas de la placa madre (no mini-nests), listas para el motor de empaque."""
+        """Piezas de la placa madre, respetando la compensación marcada en PARTS."""
         if not hoja or hoja.get("es_retazo", False):
             return []
 
@@ -1235,62 +1235,17 @@ class PlateManagementMixin:
         resumen = bloque.get("resumen_base") or {}
         if not resumen:
             return []
-
-        material_hoja = clave.split("_")[1] if "_" in clave else clave
-        calibre_hoja = clave.split("_")[0] if "_" in clave else ""
-        mat_clave = str(material_hoja or "").strip().upper()
-
-        piezas_fuente = {}
-        filas = list(getattr(self.app, "datos_partes_actuales", []) or [])
-
-        def _cargar_pass(*, exacto: bool):
-            for p_nom, mat, qty, cal, st, ruta in filas:
-                if not self.app.motor_nesting._coinciden(calibre_hoja, cal):
-                    continue
-                mat_u = str(mat or "").strip().upper()
-                if exacto:
-                    if mat_u != mat_clave:
-                        continue
-                else:
-                    if mat_u == mat_clave:
-                        continue
-                    if not self.app.motor_nesting._coinciden(material_hoja, mat):
-                        continue
-                if p_nom in piezas_fuente:
-                    continue
-                poly, marks = self.app.motor_nesting.recuperar_geometria_robusta(ruta)
-                if not poly:
-                    continue
-                from shapely import affinity
-
-                mx, my, _, _ = poly.bounds
-                piezas_fuente[p_nom] = {
-                    "nombre": p_nom,
-                    "poly": affinity.translate(poly, -mx, -my),
-                    "marks": affinity.translate(marks, -mx, -my) if not marks.is_empty else marks,
-                    "area": poly.area,
-                    "calibre": cal,
-                    # Mantener etiqueta del grupo nest para no “pasar” a A 36.
-                    "material": material_hoja or mat,
-                    "ruta": ruta,
-                }
-
-        _cargar_pass(exacto=True)
-        _cargar_pass(exacto=False)
-
-        out = []
-        for nom, cnt in resumen.items():
-            src = piezas_fuente.get(nom)
-            if not src:
-                continue
-            for _ in range(int(cnt)):
-                out.append(copy.deepcopy(src))
-        return out
+        return self._piezas_pack_para_resumen_compensado(
+            clave,
+            resumen,
+            prefer_dxf=True,
+        )
 
     def _piezas_sin_espacio_en_placa(self, piezas, w_mm, h_mm, k, m) -> list[dict]:
         """Piezas cuyo bbox no cabe en la placa (ninguna orientación), con kerf/margen."""
-        clearance = float(k or DEFAULT_KERF_IN) * 25.4 + float(m or 0.0)
-        margin = clearance * 2.0
+        # "PLACA A PIEZA" es el borde físico final. El kerf se reserva entre
+        # piezas en el packer, nunca se añade al margen de la placa.
+        edge_margin_mm = max(0.0, float(m or 0.0)) * 25.4
         rechazadas: list[dict] = []
         for p in piezas or []:
             poly = p.get("poly")
@@ -1302,13 +1257,11 @@ class PlateManagementMixin:
             pw, ph = float(b[2] - b[0]), float(b[3] - b[1])
             cabe = False
             for ww, hh in ((w_mm, h_mm), (h_mm, w_mm)):
-                usable_w = float(ww) - margin
-                usable_h = float(hh) - margin
+                usable_w = float(ww) - (2.0 * edge_margin_mm)
+                usable_h = float(hh) - (2.0 * edge_margin_mm)
                 if usable_w <= 0 or usable_h <= 0:
                     continue
-                if (pw + clearance <= usable_w and ph + clearance <= usable_h) or (
-                    ph + clearance <= usable_w and pw + clearance <= usable_h
-                ):
+                if (pw <= usable_w and ph <= usable_h) or (ph <= usable_w and pw <= usable_h):
                     cabe = True
                     break
             if not cabe:
@@ -1359,19 +1312,22 @@ class PlateManagementMixin:
         raw = self._obtener_candidatas_placa(clave, hoja)
         piezas = self._piezas_pack_madre_para_empaque(clave, hoja)
 
-        # Nota: estos valores son inputs de UI; mantener la función preparada
-        # para que su cálculo pesado pueda moverse a thread sin tocar widgets.
+        # La hoja conserva los gaps con que fue nestada. Los controles globales
+        # ya no mandan sobre la tabla oficial por calibre.
         k = getattr(self, "_cached_k_for_submenu", None)
         m = getattr(self, "_cached_m_for_submenu", None)
         opt = getattr(self, "_cached_opt_for_submenu", None)
         corner = getattr(self, "_cached_corner_for_submenu", None)
         if k is None:
             try:
-                k = self._kerf_efectivo()
+                k = float(hoja.get("kerf_usado") or DEFAULT_KERF_IN)
             except Exception:
                 k = DEFAULT_KERF_IN
         if m is None:
-            m = self.global_margin_val
+            try:
+                m = float(hoja.get("margin_usado") or DEFAULT_MARGIN_IN)
+            except Exception:
+                m = DEFAULT_MARGIN_IN
         if opt is None:
             opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
         if corner is None:
@@ -1804,40 +1760,18 @@ class PlateManagementMixin:
         if not fuente:
             return []
 
-        off = 0.0
-        if compensar_plasma:
-            off = float(
-                offset_mm_forzado
-                if offset_mm_forzado is not None
-                else (self._offset_compensacion_mm_desde_clave(clave) or 0.0)
-            )
-
         out = []
         for nom, cnt in resumen_canon.items():
             src = fuente.get(nom)
             if not src:
                 continue
             for _ in range(int(cnt)):
-                poly = copy.deepcopy(src["poly_base"])
-                marks = copy.deepcopy(src["marks_base"])
-                if compensar_plasma and off > 0:
-                    from shapely import affinity
-
-                    comp = self._aplicar_compensacion_poligono(poly, off)
-                    if comp is not None and not comp.is_empty:
-                        mx, my, _, _ = comp.bounds
-                        poly = affinity.translate(comp, -mx, -my)
                 out.append(
-                    {
-                        "nombre": src["nombre"],
-                        "poly": poly,
-                        "poly_exact": copy.deepcopy(poly),
-                        "marks": copy.deepcopy(marks),
-                        "area": float(getattr(poly, "area", 0) or src.get("area_base", 0)),
-                        "calibre": src.get("calibre", ""),
-                        "material": src.get("material", ""),
-                        "ruta": src.get("ruta", ""),
-                    }
+                    self._pieza_pack_desde_fuente(
+                        src,
+                        forzar_compensacion_plasma=bool(compensar_plasma),
+                        offset_mm_forzado=offset_mm_forzado,
+                    )
                 )
         return out
 
@@ -1945,7 +1879,8 @@ class PlateManagementMixin:
         if not self.hoja_actual_data:
             return
         try:
-            k, m = self._kerf_efectivo(), self.global_margin_val
+            k = float(self.hoja_actual_data.get("kerf_usado") or DEFAULT_KERF_IN)
+            m = float(self.hoja_actual_data.get("margin_usado") or DEFAULT_MARGIN_IN)
         except Exception:
             return QMessageBox.critical(self, "Error", "Valores no válidos.")
 

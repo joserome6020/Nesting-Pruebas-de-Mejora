@@ -729,7 +729,16 @@ def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
     True si la pieza fuerza sin_gap y queda excluida de RTZCU:
     - perfiles con relieve/escalón/Z (auto), o
     - piezas marcadas especiales en PARTS (cu_especial_vertical).
+
+    Con cu_force_dxf_step (Config Global) nunca fuerza sin_gap.
     """
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return False
+    except Exception:
+        pass
     if _pieza_cu_es_especial_vertical(item):
         return True
     exterior = _exterior_item_cu(item)
@@ -743,6 +752,24 @@ def _pieza_cu_forzar_sin_gap(item: dict) -> bool:
 def _marcar_forzar_sin_gap(item: dict) -> dict:
     """Fija cu_forzar_sin_gap, cu_perfil_relieve y conserva cu_especial_vertical."""
     out = dict(item)
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            especial = _pieza_cu_es_especial_vertical(item)
+            exterior = _exterior_item_cu(item)
+            relieve = (
+                _pieza_cu_es_relieve_z(item)
+                if exterior
+                else bool(item.get("cu_perfil_relieve"))
+            )
+            out["cu_especial_vertical"] = bool(especial)
+            out["cu_perfil_relieve"] = bool(relieve)
+            out["cu_forzar_sin_gap"] = False
+            out["cu_force_dxf_step"] = True
+            return out
+    except Exception:
+        pass
     especial = _pieza_cu_es_especial_vertical(item)
     exterior = _exterior_item_cu(item)
     relieve = _pieza_cu_es_relieve_z(item) if exterior else bool(item.get("cu_perfil_relieve"))
@@ -757,7 +784,15 @@ def _familia_corte_cu(item: dict) -> str:
     """Familias de corte: Amada (PARTS), relieve/Z, o guillotina rectangular.
 
     Amada y Z NUNCA comparten barra: la fixtura Amada es solo rectangular.
+    Con cu_force_dxf_step todas van a guillotina (gap + STEP).
     """
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return "guillotina"
+    except Exception:
+        pass
     if _pieza_cu_es_especial_vertical(item):
         return "amada"
     if _pieza_cu_es_relieve_z(item) or (
@@ -840,8 +875,17 @@ def _modo_separacion_barra(
     Gap siempre (con_gap) salvo que la barra tenga relieve/Z o pieza especial PARTS
     → sin_gap en madre (≤114\") y compañeros ortogonales a RTZCU con gap.
     El parámetro largo_sin_separacion_in se ignora (API legacy).
+
+    Con cu_force_dxf_step (Config Global) siempre con_gap.
     """
     _ = largo_sin_separacion_in
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return "con_gap"
+    except Exception:
+        pass
     if not items:
         return "con_gap"
     if any(_pieza_cu_forzar_sin_gap(it) for it in items):
@@ -1736,6 +1780,12 @@ def procesar_grupo_largos_cu(
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[str, dict]:
     _log = dbg_fn or (lambda _msg: None)
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        _cu_force = bool(is_cu_force_dxf_step_enabled())
+    except Exception:
+        _cu_force = False
     sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
     largo_umbral = max(
         0.0,
@@ -1748,6 +1798,7 @@ def procesar_grupo_largos_cu(
     _log(
         f"[CU-LARGOS] clave={clave} | piezas={len(piezas)} | wo={wo_name} | "
         f"separacion={sep_in:.4f}in | largo_sin_gap={largo_umbral:.2f}in"
+        f"{' | FORCE_DXF_STEP=1' if _cu_force else ''}"
     )
 
     if not placas_ok:

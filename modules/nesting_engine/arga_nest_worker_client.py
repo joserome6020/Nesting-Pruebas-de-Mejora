@@ -92,6 +92,12 @@ def _ensure_proc() -> subprocess.Popen[str]:
         exe = default_worker_exe()
         if not exe.is_file():
             raise FileNotFoundError(f"ArgaNestWorker no encontrado: {exe}")
+        popen_kwargs: dict[str, Any] = {}
+        if os.name == "nt":
+            # ArgaNestWorker es IPC por stdin/stdout; nunca debe mostrar su
+            # consola. Sin esto Windows crea un flash por cada reinicio del
+            # worker durante carga, compensación plasma o nesting.
+            popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         _PROC = subprocess.Popen(
             [str(exe)],
             stdin=subprocess.PIPE,
@@ -100,6 +106,7 @@ def _ensure_proc() -> subprocess.Popen[str]:
             text=True,
             bufsize=1,
             cwd=str(_ROOT),
+            **popen_kwargs,
         )
         _LAST_ERROR = None
         return _PROC

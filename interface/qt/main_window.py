@@ -11,7 +11,7 @@ import time
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QMainWindow, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
 import config
 from modules.nesting_engine import MotorNesting
@@ -172,6 +172,15 @@ class SistemaNestingPro(QMainWindow):
         )
         nav_lay.addWidget(title_lbl)
         nav_lay.addStretch()
+        self.buzon_button = QPushButton("✉  BUZÓN")
+        self.buzon_button.setToolTip("Reportar un error, adjuntar capturas y enviarlo a soporte.")
+        self.buzon_button.setStyleSheet(
+            "QPushButton{background:#E3EBFC;color:#174493;border:1px solid #90A8D6;"
+            "border-radius:8px;padding:9px 14px;font-weight:800;}"
+            "QPushButton:hover{background:#D4E2FF;border-color:#2F6DEA;}"
+        )
+        self.buzon_button.clicked.connect(self.abrir_buzon_soporte)
+        nav_lay.addWidget(self.buzon_button)
         root.addWidget(navbar)
         root.addSpacing(4)
 
@@ -228,6 +237,18 @@ class SistemaNestingPro(QMainWindow):
 
     def _on_toggle_exportar_servidor(self, activo: bool):
         self.exportar_a_servidor = bool(activo)
+
+    def abrir_buzon_soporte(self):
+        """Abre el canal de soporte sin interrumpir el trabajo de nesting."""
+        from interface.qt.dialogs.support_inbox import SupportInboxDialog
+
+        SupportInboxDialog(
+            self,
+            app_context={
+                "active_job": str(getattr(self, "job_activo", "") or ""),
+                "active_tab": str(self.tabview.tabText(self.tabview.currentIndex()) or ""),
+            },
+        ).exec()
 
     def ir_a_tab(self, nombre: str):
         tabs = {"FILES": 0, "PARTS": 1, "SHEETS": 2, "NESTING": 3}

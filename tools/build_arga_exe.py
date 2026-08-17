@@ -40,6 +40,7 @@ FIXTURA_AMADA_DXFS = (
 )
 STEP_EXPORT_CONFIG = ROOT / "_config" / "step_export_folders.json"
 NEST_RUNTIME_CONFIG = ROOT / "_config" / "nest_runtime.json"
+CUT_GAPS_CONFIG = ROOT / "_config" / "cut_gaps_table.json"
 NEST_ENGINE_CONFIG_JSON = ROOT / "configuracion_nesting.json"
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 BRANDING_PNG_PRESERVE = (
@@ -87,6 +88,7 @@ HIDDEN_IMPORTS = (
     "modules.nesting_engine.nest_remote_client",
     "modules.nesting_engine.nest_engine_job",
     "modules.nesting_engine.nest_executor",
+    "modules.nesting_engine.cut_gaps_table",
     "modules.nesting_engine.exporter",
     "modules.dxf_export",
     "modules.dxf_export.amada_fixture",
@@ -142,6 +144,7 @@ HIDDEN_IMPORTS = (
     "interface.qt.dialogs.step_viewer",
     "interface.qt.dialogs.nest_sim_lab",
     "interface.qt.dialogs.nest_sim_timeline",
+    "interface.qt.dialogs.support_inbox",
     "interface.qt.widgets.herinox_switch",
     "interface.qt.widgets.largos_tira_canvas",
     "interface.qt.widgets.largos_perfil_draw",
@@ -204,6 +207,7 @@ CRITICAL_SUITE_FILES = (
     ROOT / "interface" / "largos_nesting_service.py",
     ROOT / "interface" / "qt" / "main_window.py",
     ROOT / "interface" / "qt" / "dialogs" / "largos_nesting_modal.py",
+    ROOT / "interface" / "qt" / "dialogs" / "support_inbox.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_tira_canvas.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_perfil_draw.py",
     ROOT / "interface" / "qt" / "widgets" / "herinox_switch.py",
@@ -215,6 +219,7 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "nesting_engine" / "cu_largos_nesting.py",
     ROOT / "modules" / "nesting_engine" / "compact_lite.py",
     ROOT / "modules" / "nesting_engine" / "exporter.py",
+    ROOT / "modules" / "nesting_engine" / "cut_gaps_table.py",
     ROOT / "modules" / "dxf_export" / "amada_fixture.py",
     ROOT / "modules" / "plasma_occt_offset.py",
     ROOT / "modules" / "plasma_offset_clipper.py",
@@ -222,6 +227,8 @@ CRITICAL_SUITE_FILES = (
     FIXTURA_AMADA_DXFS[0],
     FIXTURA_AMADA_DXFS[1],
     STEP_EXPORT_CONFIG,
+    NEST_RUNTIME_CONFIG,
+    CUT_GAPS_CONFIG,
 )
 
 SMOKE_IMPORT_MODULES = (
@@ -229,6 +236,7 @@ SMOKE_IMPORT_MODULES = (
     "lista_largos_material_requerido",
     "interface.largos_nesting_service",
     "interface.qt.dialogs.largos_nesting_modal",
+    "interface.qt.dialogs.support_inbox",
     "interface.qt.widgets.largos_perfil_draw",
     "modules.win_dll_bootstrap",
     "modules.nesting_engine.algorithm_bridge",
@@ -236,6 +244,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.nesting_engine.arga_nest_worker_client",
     "modules.nesting_engine.nest_runtime_prefs",
     "modules.nesting_engine.nest_executor",
+    "modules.nesting_engine.cut_gaps_table",
     "modules.nesting_engine.manager",
     "modules.plasma_occt_offset",
     "modules.plasma_offset_clipper",
@@ -794,6 +803,7 @@ def _pyinstaller_data_args() -> list[str]:
         (NEST_ENGINE_CONFIG_JSON, "defaults"),
         (STEP_EXPORT_CONFIG, "defaults/_config"),
         (NEST_RUNTIME_CONFIG, "defaults/_config"),
+        (CUT_GAPS_CONFIG, "defaults/_config"),
     ]
     for src, dest in data_pairs:
         if src.exists():
@@ -806,6 +816,8 @@ def _pyinstaller_data_args() -> list[str]:
             print("[WARN] _config/step_export_folders.json no encontrado; se omite del bundle.")
         elif src.name == "nest_runtime.json":
             print("[WARN] _config/nest_runtime.json no encontrado; se omite del bundle.")
+        elif src.name == "cut_gaps_table.json":
+            print("[WARN] _config/cut_gaps_table.json no encontrado; se omite del bundle.")
     # Solo los DXF de fixtura productivos (no scripts _sim).
     for dxf in FIXTURA_AMADA_DXFS:
         if dxf.is_file():
@@ -873,6 +885,7 @@ def verify_build_artifacts(
             "configuracion_nesting.json",
             "_config/step_export_folders.json",
             "_config/nest_runtime.json",
+            "_config/cut_gaps_table.json",
         ):
             p = defaults_root / rel
             if not p.is_file():
@@ -1004,6 +1017,7 @@ def seed_persistent_sidecars(
             "configuracion_nesting.json": dist_root / "configuracion_nesting.json",
             "_config/step_export_folders.json": dist_root / "_config" / "step_export_folders.json",
             "_config/nest_runtime.json": dist_root / "_config" / "nest_runtime.json",
+            "_config/cut_gaps_table.json": dist_root / "_config" / "cut_gaps_table.json",
         }
     else:
         defaults_root = dist_root / "defaults"
@@ -1012,12 +1026,14 @@ def seed_persistent_sidecars(
             "configuracion_nesting.json": defaults_root / "configuracion_nesting.json",
             "_config/step_export_folders.json": defaults_root / "_config" / "step_export_folders.json",
             "_config/nest_runtime.json": defaults_root / "_config" / "nest_runtime.json",
+            "_config/cut_gaps_table.json": defaults_root / "_config" / "cut_gaps_table.json",
         }
     sources = {
         "inventario_remanentes.csv": ROOT / "inventario_remanentes.csv",
         "configuracion_nesting.json": NEST_ENGINE_CONFIG_JSON,
         "_config/step_export_folders.json": STEP_EXPORT_CONFIG,
         "_config/nest_runtime.json": NEST_RUNTIME_CONFIG,
+        "_config/cut_gaps_table.json": CUT_GAPS_CONFIG,
     }
     for rel, dst in seed_targets.items():
         src = sources[rel]
@@ -1328,6 +1344,10 @@ def print_deploy_checklist(exe_path: Path, onefile: bool = False):
             (
                 "defaults/_config/nest_runtime.json",
                 (dist / "defaults" / "_config" / "nest_runtime.json").is_file(),
+            ),
+            (
+                "defaults/_config/cut_gaps_table.json",
+                (dist / "defaults" / "_config" / "cut_gaps_table.json").is_file(),
             ),
         ])
     layout = "onefile" if onefile else "onedir"

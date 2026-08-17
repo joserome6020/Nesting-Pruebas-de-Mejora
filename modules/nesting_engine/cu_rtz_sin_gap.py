@@ -64,6 +64,13 @@ def rtz_zona_fin_mm(largo_barra_mm: float | None = None) -> float:
 
 
 def aplica_rtz_sin_gap(modo_barra: str) -> bool:
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return False
+    except Exception:
+        pass
     return str(modo_barra or "").strip().lower() == "sin_gap"
 
 
@@ -941,6 +948,41 @@ def sincronizar_overlays_rtz_cu_madre(madre: dict, virtual: dict) -> None:
 
 def asignar_rtz_cu_sin_gap_ids(resultados) -> int:
     """Asigna RTZCU{n}-H{m}, actualiza overlays e inserta hojas virtuales RTZ."""
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            # Limpia RTZ heredados de nests previos al reexportar/renumerar.
+            from .sheet_numbering import iterar_grupos_nesting_ordenados
+
+            for _clave, grupo in iterar_grupos_nesting_ordenados(resultados):
+                if not isinstance(grupo, dict):
+                    continue
+                hojas = grupo.get("hojas")
+                if not isinstance(hojas, list):
+                    continue
+                limpias = []
+                for h in hojas:
+                    if not isinstance(h, dict):
+                        limpias.append(h)
+                        continue
+                    if h.get("cu_rtz_virtual"):
+                        continue
+                    h["cu_rtz_activo"] = False
+                    h.pop("cu_rtz_id", None)
+                    h.pop("cu_rtz_seq", None)
+                    h.pop("cu_rtz_inicio_mm", None)
+                    h.pop("cu_rtz_piezas_hoja", None)
+                    h.pop("cu_rtz_largo_mm", None)
+                    h.pop("cu_rtz_overlay_largo_mm", None)
+                    if str(h.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap":
+                        h["cu_modo_separacion_barra"] = "con_gap"
+                    h["export_3d_format"] = "step"
+                    limpias.append(h)
+                hojas[:] = limpias
+            return 0
+    except Exception:
+        pass
     from .sheet_numbering import iterar_grupos_nesting_ordenados
 
     seq = 0

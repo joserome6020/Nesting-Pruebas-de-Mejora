@@ -180,6 +180,8 @@ _SEED_FROM_DEFAULTS: tuple[str, ...] = (
     "inventario_remanentes.csv",
     "configuracion_nesting.json",
     os.path.join("_config", "step_export_folders.json"),
+    os.path.join("_config", "nest_runtime.json"),
+    os.path.join("_config", "cut_gaps_table.json"),
 )
 
 

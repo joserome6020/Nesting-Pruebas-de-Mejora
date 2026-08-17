@@ -217,6 +217,16 @@ duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
 persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
 assets ni imports dinámicos nuevos.
 
+### 2026-08-17d — release zip: buzón, gaps, runtime y paridad build
+
+- Versiona en git el lote pendiente del ANS: buzón de soporte, tabla de
+  gaps (`cut_gaps_table`), nest runtime / NvidiaSpark, switch cobre
+  DXF+STEP, candados asociados y ajustes de cobre/fixtura en UI.
+- `tools/build_arga_exe.py` + `config.py`: `cut_gaps_table.json` entra a
+  `HIDDEN_IMPORTS`/`CRITICAL`/`defaults/_config` y al seed del data_dir,
+  junto a `nest_runtime.json`, para que el .exe de release arranque con
+  la tabla oficial de kerf/margen.
+
 ### 2026-08-17c — el nest ya inyecta Plasma Compensated y el offset conserva puntas
 
 `2026-08-17b` corrigió la mitad del problema: la rama que clona `Plasma

@@ -104,6 +104,18 @@ def _preparar_sheet_cobre(
 ) -> dict[str, Any]:
     s = dict(sheet or {})
     s.setdefault("modo_largos_cu", True)
+    try:
+        from modules.nesting_engine.nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            s["cu_modo_separacion_barra"] = "con_gap"
+            s["export_3d_format"] = "step"
+            s.pop("cu_export_vertical", None)
+            s.pop("cu_export_amada", None)
+            s["cu_rtz_activo"] = False
+            return s
+    except Exception:
+        pass
     if force_horizontal or s.get("cu_export_amada"):
         # AMADA: barra horizontal pieza completa (incluye RTZCU con gap).
         s["cu_modo_separacion_barra"] = "con_gap"

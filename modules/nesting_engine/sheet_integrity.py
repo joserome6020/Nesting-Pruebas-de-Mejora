@@ -49,25 +49,25 @@ def _es_grupo_cu(clave: str = "", hoja=None) -> bool:
 
 
 def kerf_efectivo_hoja(hoja, clave: str = "", kerf_global: float = DEFAULT_KERF_IN) -> float:
-    """Cobre/largos CU: kerf 0. Acero: kerf_global (default 0.15 in).
+    """Cobre/largos CU: kerf 0; placa: el kerf persistido de su propia hoja.
 
-    El kerf de Configuración Global manda: ya no se clava un piso 0.3 in que
-    ignoraba valores más bajos de la UI.
+    ``kerf_global`` queda solo como fallback de hojas legacy sin valor. No puede
+    sobrescribir una regla por calibre de la tabla oficial de gaps.
     """
     if _es_grupo_cu(clave, hoja):
         return 0.0
-    try:
-        g = float(kerf_global)
-    except Exception:
-        g = 0.0
-    if g > 0:
-        return g
     try:
         k = float((hoja or {}).get("kerf_usado") or 0.0)
     except Exception:
         k = 0.0
     if k > 0:
         return k
+    try:
+        g = float(kerf_global)
+    except Exception:
+        g = 0.0
+    if g > 0:
+        return g
     return float(DEFAULT_KERF_IN)
 
 

@@ -185,12 +185,25 @@ def _transform_desde_pieza(pieza: dict) -> dict | None:
     return None
 
 
+def _ruta_dxf_efectiva(pieza: dict) -> str:
+    """Devuelve la fuente CAD que corresponde a la geometría ya nestada.
+
+    Una pieza de plasma marcada en PARTS se acomoda con ``ruta_plasma``. Si
+    ésta ya no existe, no se permite degradarla al DXF base durante un refresh:
+    se conserva el polígono nestado hasta poder regenerar el compensado.
+    """
+    if pieza.get("plasma_fuente_ya_compensada"):
+        ruta_plasma = str(pieza.get("ruta_plasma") or "").strip()
+        return ruta_plasma if ruta_plasma and os.path.isfile(ruta_plasma) else ""
+    return str(pieza.get("ruta") or "").strip()
+
+
 def poligonos_display_desde_dxf(pieza: dict) -> list | None:
     """
     Reconstruye anillos de la pieza colocada usando el DXF fuente (tolerancia CAD)
     y el acomodo actual (polígonos del nest). No altera pieza.
     """
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     if not ruta or not os.path.isfile(ruta):
         return None
 
@@ -248,7 +261,7 @@ def _pieza_tiene_campos_transform(pieza: dict) -> bool:
 
 
 def _ruta_dxf_vigente(pieza: dict) -> bool:
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     return bool(ruta and os.path.isfile(ruta))
 
 
@@ -287,7 +300,7 @@ def pieza_necesita_transform_export(pieza: dict) -> bool:
         return False
     if normalizar_sello_transform_export(pieza):
         return False
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     if not ruta or not os.path.isfile(ruta):
         return False
     nested = pieza.get("poligonos") or []
@@ -300,7 +313,7 @@ def pieza_necesita_geom_dxf(pieza: dict) -> bool:
         return False
     if pieza.get("_geom_dxf_ok"):
         return False
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     if not ruta or not os.path.isfile(ruta):
         return False
     nested = pieza.get("poligonos") or []
@@ -318,7 +331,7 @@ def completar_transform_export_pieza(pieza: dict) -> bool:
     if pieza.get("_transform_export_ok") or pieza.get("_geom_dxf_ok"):
         return True
 
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     if not ruta or not os.path.isfile(ruta):
         return False
 
@@ -421,7 +434,7 @@ def renovar_pieza_desde_dxf_en_pose(pieza: dict) -> bool:
     """
     if not isinstance(pieza, dict) or _es_pieza_virtual_nombre(pieza.get("nombre")):
         return False
-    ruta = str(pieza.get("ruta") or "").strip()
+    ruta = _ruta_dxf_efectiva(pieza)
     if not ruta or not os.path.isfile(ruta):
         return False
     nested = pieza.get("poligonos") or []
