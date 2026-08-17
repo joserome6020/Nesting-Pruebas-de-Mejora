@@ -297,8 +297,12 @@ def validate_plasma_piece(
         sl = float(sheet.get("length") or 0.0)
         sw = float(sheet.get("width") or 0.0)
         if margin_in > 0 and sl > 0 and sw > 0:
-            # El contorno compensado se acerca `off` al borde por construcción.
-            margen_min = max(0.0, margin_mm - off)
+            # `margin_usado` es la distancia final PLACA→PIEZA configurada por
+            # planta. El packer recibe el perfil ya compensado, por lo que el
+            # DXF CUT_OUTER debe respetarla completa: restar `off` aquí
+            # validaría un nest nominal y permitiría que la compensación
+            # invada el margen real.
+            margen_min = margin_mm
             if float(cut_b[0]) < margen_min - 0.5:
                 issues.append(
                     f"margen placa X: corte minX={cut_b[0]:.1f} mm < margen {margen_min:.1f} mm"
@@ -319,11 +323,12 @@ def validate_plasma_piece(
                 )
 
         if kerf_in > 0 and cut_b and all_piece_bounds:
-            # El nest separa los perfiles SIN compensar por `kerf`. Al compensar,
-            # cada contorno crece `off` hacia afuera, así que la separación real
-            # entre los contornos de corte es `kerf - 2*off` por construcción:
-            # exigir `kerf` pelado reprobaba todo nest compensado correcto.
-            min_gap = max(0.0, kerf_mm - 2.0 * off)
+            # `kerf_usado` es la separación final ENTRE PIEZAS configurada por
+            # calibre. Los perfiles que entran al packer ya contienen el
+            # desfase plasma, por tanto los CUT_OUTER exportados deben
+            # conservar el kerf completo. Restar 2*off admitía contornos de
+            # corte más cercanos que la tabla oficial.
+            min_gap = kerf_mm
             propio = _clearance_segments(outer_ents)
             for ob in all_piece_bounds:
                 otro_bbox = _record_bbox(ob)
@@ -345,7 +350,7 @@ def validate_plasma_piece(
                     issues.append(
                         f"separación pieza-pieza {gap:.1f} mm < mínimo "
                         f"{min_gap:.1f} mm (kerf nest {kerf_mm:.1f} - "
-                        f"2x desfase {off:.2f})"
+                        f"configurado de tabla)"
                     )
                     break
 

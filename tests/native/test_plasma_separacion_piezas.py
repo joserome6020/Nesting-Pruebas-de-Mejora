@@ -1,4 +1,4 @@
-"""Candado 2026-08-14q/r - validación de separación en plasma.
+"""Candado 2026-08-14q/r/17 - validación de separación en plasma.
 
 Bug real (GENE-OP-1010-211, W.O. 44 X3 / H1, cal 0.0747): el export abortaba
 con ``separación pieza-pieza 3.8 mm < kerf nest 7.6 mm`` → ``plasma: sin
@@ -10,12 +10,13 @@ contorno exportable desde el nest``, con un nest CORRECTO. Tres defectos:
    GAPS DE CORTE fija para cal 14 kerf **0.150"** y margen **0.250"**. Suponer
    0.30" reprobaba un nest válido; suponer margen 0.15" habría dejado pasar
    violaciones reales de los 0.250".
-2. Se comparaba contra el kerf pelado, ignorando que la compensación hace
-   crecer cada contorno ``off`` hacia afuera: entre contornos compensados la
-   separación real es ``kerf - 2*off`` por construcción (y el margen a placa
-   es ``margen - off``).
+2. La geometría compensada debe entrar al packer y conservar el **kerf y
+   margen completos** de la tabla en el CUT_OUTER final. Restar ``2*off`` del
+   kerf o ``off`` del margen valida una pieza base, no el corte real.
 3. La separación se medía entre bounding boxes axis-aligned, que mienten en
    cuanto dos perfiles con escalones se entrelazan.
+4. Al persistir el resultado, el metadata de compensación se perdía y la
+   heurística de bbox confundía una pieza base rotada 90° con una compensada.
 
 Además la tabla de la placa debe mostrar SOLO las piezas colocadas en esa placa
 y las dimensiones de la pieza tal como se corta (compensada).
@@ -36,13 +37,14 @@ from modules.dxf_export.validate import (
     validate_plasma_piece,
 )
 
-KERF_IN = 0.30
+KERF_IN = 0.150
 OFF_MM = 0.3175  # 0.0125 in por lado
 ESCALA = 25.4
 
 
-KERF_MM = KERF_IN * ESCALA  # 7.62 mm
-GAP_REAL = KERF_MM - 2.0 * OFF_MM  # separación real esperada tras compensar
+KERF_MM = KERF_IN * ESCALA  # 3.81 mm (Cal 14)
+# Estos son CUT_OUTER finales: el profile ya entró compensado al packer.
+GAP_REAL = KERF_MM
 
 SHEET = {
     "length": 3048.0,
@@ -107,8 +109,8 @@ def test_piezas_entrelazadas_con_kerf_respetado_no_reprueban():
     assert rec_a and rec_b, "el record de clearance debe traer bbox + segmentos"
     assert rec_a["segs"], "sin segmentos no se puede medir separación real"
 
-    # Premisa del bug: las CAJAS se enciman pese a que el kerf es correcto, así
-    # que el chequeo viejo (bbox contra kerf pelado) reprobaba este nest válido.
+    # Premisa del bug de bbox: las CAJAS se enciman pese a que el kerf final
+    # correcto se conserva entre los contornos.
     caja_a, caja_b = rec_a["bbox"], rec_b["bbox"]
     assert caja_b[0] < caja_a[2], (
         "el caso debe tener bounding boxes encimados en X para reproducir el bug"
@@ -210,8 +212,8 @@ def test_hoja_sin_kerf_no_reprueba_por_separacion():
     )
 
 
-def test_caso_h1_de_produccion_pasa_con_el_kerf_de_tabla():
-    """Números exactos del log de H1: cal 0.0747 → kerf 0.150 in, gap real 3.8 mm."""
+def test_h1_legacy_base_mas_offset_se_rechaza_y_obliga_renestear():
+    """El H1 guardado era base+OFFSET: ya no debe pasar con margen/kerf finales."""
     from modules.nesting_engine.cut_gaps_table import gaps_for_calibre
 
     kerf_in, margin_in, regla = gaps_for_calibre(0.0747)
@@ -219,15 +221,33 @@ def test_caso_h1_de_produccion_pasa_con_el_kerf_de_tabla():
     assert abs(margin_in - 0.250) < 1e-9, margin_in
 
     off = 0.318  # plasma_offset_mm del log
-    minimo = kerf_in * ESCALA - 2.0 * off
+    minimo = kerf_in * ESCALA
     gap_real_h1 = 3.80  # (1047.3-0.3) - 1043.2, bboxes exportados del log
-    assert gap_real_h1 >= minimo - 0.5, (
-        f"H1 debe pasar: real {gap_real_h1} vs mínimo {minimo:.2f}"
+    assert gap_real_h1 < minimo - 0.005, (
+        f"H1 legacy debe rechazarse: real {gap_real_h1} vs kerf final {minimo:.2f}"
     )
-    # Y con el default inventado viejo tenía que reprobar (esto es el bug).
-    minimo_viejo = 0.30 * ESCALA - 2.0 * off
-    assert gap_real_h1 < minimo_viejo - 0.5, (
-        "si el default viejo no reprobaba, este candado no cubre el bug"
+    # Además su CUT_OUTER quedaba 0.318 mm dentro del margen de la tabla:
+    # base min=6.335, final=6.017, exigido=6.350.
+    margin_final_h1 = 6.335 - off
+    assert margin_final_h1 < margin_in * ESCALA - 0.005, (
+        "la pieza base más OFFSET debe reprobar margen y pedir renesteo"
+    )
+
+
+def test_renest_compensado_persiste_metadata_explicito():
+    """No volver a inferir compensación desde bbox después de rotar la pieza."""
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "interface"
+        / "qt"
+        / "tabs"
+        / "_mixin_nesting_calc.py"
+    )
+    txt = src.read_text(encoding="utf-8", errors="ignore")
+    assert 'item["plasma_offset_mm_manual"] = float(offset_mm)' in txt
+    assert 'p["plasma_offset_mm_manual"] = float(offset_mm or 0.0)' in txt
+    assert "w_fin, h_fin = sorted((w_fin, h_fin))" in txt, (
+        "la heurística legacy debe ser invariante ante rotación de 90°"
     )
 
 
@@ -255,6 +275,7 @@ if __name__ == "__main__":
     test_exporter_pasa_kerf_y_margen_reales_de_la_hoja()
     test_validador_no_inventa_kerf_ni_margen()
     test_hoja_sin_kerf_no_reprueba_por_separacion()
-    test_caso_h1_de_produccion_pasa_con_el_kerf_de_tabla()
+    test_h1_legacy_base_mas_offset_se_rechaza_y_obliga_renestear()
+    test_renest_compensado_persiste_metadata_explicito()
     test_dimensiones_de_tabla_incluyen_la_compensacion()
     print("    OK plasma_separacion_piezas")

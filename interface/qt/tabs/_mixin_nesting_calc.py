@@ -1625,17 +1625,24 @@ class NestingCalcMixin:
                         area_use = float(comp.area)
                         compensados_reales[nom] = compensados_reales.get(nom, 0) + 1
 
-                piezas_out.append(
-                    {
-                        "nombre": src["nombre"],
-                        "poly": copy.deepcopy(poly_use),
-                        "marks": copy.deepcopy(src["marks_base"]),
-                        "area": area_use,
-                        "calibre": src["calibre"],
-                        "material": src["material"],
-                        "ruta": src["ruta"],
-                    }
-                )
+                item = {
+                    "nombre": src["nombre"],
+                    "poly": copy.deepcopy(poly_use),
+                    "marks": copy.deepcopy(src["marks_base"]),
+                    "area": area_use,
+                    "calibre": src["calibre"],
+                    "material": src["material"],
+                    "ruta": src["ruta"],
+                }
+                if aplicar_comp:
+                    # Este metadata es contrato de seguridad: el polygon que
+                    # entra al packer YA es el contorno final de corte. Si se
+                    # pierde, al reabrir un .arganest sólo queda una heurística
+                    # de bbox que confundía una rotación de 90° con un offset.
+                    item["plasma_compensada_manual"] = True
+                    item["plasma_offset_mm_manual"] = float(offset_mm)
+                    item["plasma_fuente_ya_compensada"] = True
+                piezas_out.append(item)
         return piezas_out, compensados_reales
 
     def _meta_geometria_base_por_nombre(self, clave):
@@ -1677,6 +1684,12 @@ class NestingCalcMixin:
             w_fin, h_fin = float(poly.bounds[2] - poly.bounds[0]), float(poly.bounds[3] - poly.bounds[1])
             w_base = float(base.get("w", 0.0) or 0.0)
             h_base = float(base.get("h", 0.0) or 0.0)
+            # Un placement puede girar 90°; comparar ancho contra ancho sin
+            # normalizar hizo que OP-1010-211 base se marcara "compensada"
+            # sólo por tener W/H intercambiados. El desfase agranda ambas
+            # dimensiones, no las intercambia.
+            w_fin, h_fin = sorted((w_fin, h_fin))
+            w_base, h_base = sorted((w_base, h_base))
             tol = max(0.35, float(offset_mm or 0.0) * 0.35)
             return (w_fin - w_base) > tol or (h_fin - h_base) > tol
         except Exception:
@@ -1702,11 +1715,20 @@ class NestingCalcMixin:
             piezas_comp_hoja = 0
             for p in (h.get("piezas") or []):
                 nom = str(p.get("nombre", "")).strip()
-                p.pop("plasma_compensada_manual", None)
                 if self._es_pieza_virtual(nom):
                     continue
-                if self._pieza_parece_compensada_plasma(p, base_meta, offset_mm):
+                # El packer preserva los campos explícitos desde
+                # `_build_piezas_para_renest_compensado`. La heurística queda
+                # sólo para resultados legacy; no debe pisar evidencia cierta.
+                compensada = bool(p.get("plasma_compensada_manual"))
+                if not compensada:
+                    compensada = self._pieza_parece_compensada_plasma(
+                        p, base_meta, offset_mm
+                    )
+                if compensada:
                     p["plasma_compensada_manual"] = True
+                    p["plasma_offset_mm_manual"] = float(offset_mm or 0.0)
+                    p["plasma_fuente_ya_compensada"] = True
                     piezas_comp_hoja += 1
 
             if piezas_comp_hoja > 0:

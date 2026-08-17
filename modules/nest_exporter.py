@@ -2099,7 +2099,13 @@ def export_nest_to_dxf(
             if plasma_export:
                 if not ok_channel:
                     if strict:
-                        _fail_export(part_name, "plasma: sin contorno exportable desde el nest")
+                        _fail_export(
+                            part_name,
+                            str(
+                                p.pop("_plasma_validation_error", "")
+                                or "plasma: sin contorno exportable desde el nest"
+                            ),
+                        )
                     else:
                         continue
                 new_entities = _msp_snapshot(msp)[count_before:]

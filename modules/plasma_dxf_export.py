@@ -884,6 +884,72 @@ def _offset_closed_profile_inches(
     return [r for r in rings if len(r) >= 3]
 
 
+def _export_rectilinear_offset_with_arcs(
+    msp,
+    ring_mm: list[tuple[float, float]],
+    layer: str,
+    *,
+    corner_radius_mm: float,
+) -> bool:
+    """Escribe el OFFSET redondo de un perfil ortogonal como LINE + ARC.
+
+    Clipper/GEOS devuelve los radios del join como tres puntos pequeños. El
+    export genérico de curvas intenta agrupar tramos lejanos y, en perfiles
+    con escalones, puede inferir un ARC grande y repetir el ciclo entero. Aquí
+    sólo se convierte un triplete consecutivo cuyo radio coincide con el
+    desfase pedido; el resto conserva LINE exactas. Es deliberadamente
+    específico para el OFFSET de esquinas rectilíneas, no un detector CAD
+    generalista.
+    """
+    from modules.dxf_native_curves import circle_from_three_points, normalize_ring
+
+    pts = normalize_ring(ring_mm, closed=True)
+    if len(pts) < 3:
+        return False
+    target = abs(float(corner_radius_mm))
+    if target <= 1e-6:
+        return False
+
+    n = len(pts)
+    i = 0
+    pasos = 0
+    added = 0
+    # Consume una arista por LINE o dos por el triplete que forma el ARC.
+    while pasos < n:
+        p0 = pts[i]
+        p1 = pts[(i + 1) % n]
+        p2 = pts[(i + 2) % n]
+        circ = circle_from_three_points(p0, p1, p2)
+        use_arc = False
+        if circ:
+            cx, cy, radius = circ
+            cross = (
+                (p1[0] - p0[0]) * (p2[1] - p1[1])
+                - (p1[1] - p0[1]) * (p2[0] - p1[0])
+            )
+            # 15 % + 0.03 mm permite la discretización, no los ARC gigantes
+            # que antes aparecían en OP-1010-211 (R≈26 mm vs offset 0.318).
+            tol_r = max(0.03, target * 0.15)
+            use_arc = abs(float(radius) - target) <= tol_r and abs(cross) > 1e-9
+        if use_arc:
+            start = math.degrees(math.atan2(p0[1] - cy, p0[0] - cx))
+            end = math.degrees(math.atan2(p2[1] - cy, p2[0] - cx))
+            if cross < 0.0:
+                start, end = end, start
+            while end < start - 1e-9:
+                end += 360.0
+            msp.add_arc((cx, cy), radius, start, end, dxfattribs={"layer": layer})
+            i = (i + 2) % n
+            pasos += 2
+        else:
+            if math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 1e-6:
+                msp.add_line(p0, p1, dxfattribs={"layer": layer})
+            i = (i + 1) % n
+            pasos += 1
+        added += 1
+    return added > 0
+
+
 def _export_offset_contour_to_msp(
     msp,
     m,
@@ -916,7 +982,16 @@ def _export_offset_contour_to_msp(
         if not ring_mm:
             continue
         wrote = False
-        if rectilinear or _outer_export_line_exact(ring_mm):
+        # Un perfil fuente rectilíneo tiene líneas, pero su OFFSET con join
+        # redondo tiene LINE + ARC. No usar el detector general de curvas aquí:
+        # con escalones puede inferir ARC grandes y recorrer el anillo varias
+        # veces. La rutina dedicada acepta únicamente radios del tamaño exacto
+        # del desfase.
+        if rectilinear:
+            wrote = _export_rectilinear_offset_with_arcs(
+                msp, ring_mm, layer, corner_radius_mm=abs(float(offset_mm))
+            )
+        elif _outer_export_line_exact(ring_mm):
             wrote = bool(_export_ring_exact(msp, ring_mm, layer, closed=True))
         elif export_ring_native(
             msp,
@@ -1066,9 +1141,14 @@ def _ring_is_rectilinear(pts, tol: float = 0.55) -> bool:
     return non_degenerate >= 3
 
 
-def _outer_export_line_exact(ring) -> bool:
-    """Perfiles rectilíneos (sin diagonales): LINE exactas; curvos: ARC/CIRCLE."""
-    return _ring_is_rectilinear(list(ring or []))
+def _outer_export_line_exact(ring, *, tol: float = 0.55) -> bool:
+    """Perfiles rectilíneos (sin diagonales): LINE exactas; curvos: ARC/CIRCLE.
+
+    ``tol`` está en unidades del anillo. La ruta de OFFSET usa 0.02 mm para
+    no confundir las cuerdas de un radio pequeño con ruido de DXF; los paths
+    de geometría fuente conservan el 0.55 mm histórico.
+    """
+    return _ring_is_rectilinear(list(ring or []), tol=float(tol))
 
 
 def _bbox_aspect_ratio_plasma(pts) -> float:
@@ -1263,6 +1343,15 @@ def export_plasma_placement(
                 if issues:
                     for iss in issues:
                         log(f"    plasma[{nom}] FAIL: {iss}", level="ERROR")
+                    # El caller antes reducía cualquier validación a "sin
+                    # contorno exportable", que oculta el problema real. En
+                    # particular un .arganest legacy base+offset requiere
+                    # renestear para que la geometría compensada respete la
+                    # tabla de margen/kerf.
+                    p["_plasma_validation_error"] = (
+                        f"plasma inválido: {issues[0]}. "
+                        "Renestee esta placa con la compensación activa."
+                    )
                     # Poka-yoke fail-closed: no dar por buena una pieza plasma inválida.
                     return False
             except Exception as exc:

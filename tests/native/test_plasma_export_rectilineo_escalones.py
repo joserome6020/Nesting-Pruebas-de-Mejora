@@ -14,9 +14,13 @@ el borde del bbox — los escalones interiores fallaban — y el export caía al
 detector de curvas nativas, que inventaba ARC de radio ~26 mm y escribía el
 contorno 8 veces.
 
-Fix: rectilinear = segmentos horizontales/verticales (no "vértices en el
-borde"). El offset se escribe con LINE exactas; el bbox del ARC en la
-validación usa el sweep real, no el círculo completo.
+Fix inicial: rectilinear = segmentos horizontales/verticales (no "vértices
+en el borde"). El export ya no duplica LINE ni inventa ARC gigantes.
+
+Corrección 2026-08-17: el perfil fuente puede ser rectilíneo pero un OFFSET
+con join redondo agrega radios en sus esquinas. El criterio de escritura debe
+examinar el anillo ya compensado: sus tramos rectos van como LINE y los radios
+como ARC nativos. Forzar LINE sólo por el perfil fuente facetaba las esquinas.
 """
 from __future__ import annotations
 
@@ -54,7 +58,7 @@ def test_perfil_con_escalones_es_rectilineo() -> None:
     )
 
 
-def test_export_op211_sin_duplicados_ni_arco_inventado() -> None:
+def test_export_op211_sin_duplicados_y_con_radios_nativos() -> None:
     import ezdxf  # type: ignore
 
     from modules.dxf_export.validate import (
@@ -100,8 +104,9 @@ def test_export_op211_sin_duplicados_ni_arco_inventado() -> None:
     outer = [e for e in ents if str(e.dxf.layer).upper() == "CUT_OUTER"]
     assert outer, "sin CUT_OUTER"
     tipos = {e.dxftype() for e in outer}
-    assert "ARC" not in tipos, (
-        f"un perfil rectilíneo no debe inventar ARC; salió {tipos}"
+    assert "ARC" in tipos, (
+        "el OFFSET redondo de un perfil rectilíneo debe escribir sus esquinas "
+        f"como ARC nativos; salió {tipos}"
     )
     dups = _count_duplicate_lines(outer, layer_set=frozenset({"CUT_OUTER"}))
     assert dups == 0, f"empalmes CUT_OUTER: {dups} (antes eran 48)"
@@ -143,6 +148,6 @@ def test_outer_export_line_exact_no_cierra_en_8_vertices() -> None:
 
 if __name__ == "__main__":
     test_perfil_con_escalones_es_rectilineo()
-    test_export_op211_sin_duplicados_ni_arco_inventado()
+    test_export_op211_sin_duplicados_y_con_radios_nativos()
     test_outer_export_line_exact_no_cierra_en_8_vertices()
     print("OK plasma_export_rectilineo_escalones")

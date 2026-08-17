@@ -182,6 +182,41 @@ si la pieza está marcada y el mm falta, se recalcula con
 `compute_plasma_offset_mm(calibre)` — la misma regla del export — y la
 tabla vuelve a empatar con PARTS (42.51 × 40.83).
 
+### 2026-08-17 — plasma: margen/kerf finales y esquinas nativas
+
+Auditoría del archivo real `GIGA FLUIDSTACK - METAL - REV1.arganest`,
+H1 / PLC033:
+
+- La tabla estaba correctamente persistida: Cal 0.0747 → kerf `0.150"` y
+  margen `0.250"`.
+- Pero las piezas del resultado eran perfiles **base** rotados y llevaban la
+  bandera plasma por una heurística errónea que comparaba W/H sin normalizar
+  la rotación de 90°. El export les agregaba el offset después del nest:
+  el CUT_OUTER acababa a 6.017 mm del borde, menor que el margen final
+  configurado de 6.350 mm.
+
+Fix: el renesteo de compensación preserva metadata explícito por pieza
+(`plasma_compensada_manual`, `plasma_offset_mm_manual`,
+`plasma_fuente_ya_compensada`) desde el perfil ya compensado que recibe el
+packer; el fallback legacy compara dimensiones ordenadas, por lo que una
+rotación no se confunde con offset. La validación de export exige ahora el
+**kerf y margen completos** de tabla sobre CUT_OUTER final (ya no descuenta
+el offset). Un `.arganest` legacy base+offset se rechaza fail-closed y el
+diálogo explica que hay que renestear con la compensación activa, en vez de
+mentir `sin contorno exportable`.
+
+**Esquinas:** el DXF H1 exportado contenía `CUT_OUTER: 170 LINE, 0 ARC`.
+La causa era una rama que, al reconocer el perfil fuente rectilíneo, forzaba
+LINE también sobre los puntos de los joins redondos del OFFSET. Ahora la ruta
+específica escribe los segmentos rectos como LINE y convierte sólo los
+tripletes consecutivos cuyo radio coincide con el desfase a ARC nativos; no
+usa el detector general que antes podía inventar un ARC gigante de ~26 mm y
+duplicar el anillo. Candados actualizados:
+`test_plasma_export_rectilineo_escalones.py` exige ARC nativo sin LINE
+duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
+persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
+assets ni imports dinámicos nuevos.
+
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 
 Dos bugs independientes reportados en la misma sesión de planta (job 62177).
