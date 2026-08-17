@@ -1304,6 +1304,7 @@ def export_plasma_placement(
 
     nom = str(p.get("part_name") or p.get("name") or "?")
     ruta = str(p.get("ruta") or "").strip()
+    ruta_plasma = str(p.get("ruta_plasma") or "").strip()
     offset_mm = float(p.get("plasma_offset_mm") or 0.0)
     count_before = 0
     try:
@@ -1312,6 +1313,100 @@ def export_plasma_placement(
         count_before = _msp_count(msp)
     except Exception:
         pass
+
+    # Los DXF existentes en Plasma Compensated pueden haber sido generados con
+    # joins Round de una versión anterior. Antes de inyectarlos verificamos el
+    # sidecar de versión y se regeneran desde el original con la política
+    # actual (Miter para LINE→LINE, ARC nativo para curvas de origen).
+    if (
+        bool(p.get("plasma_fuente_ya_compensada"))
+        and ruta
+        and os.path.isfile(ruta)
+        and offset_mm > 0.0
+    ):
+        try:
+            from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+            ruta_actualizada, error_actualizar = asegurar_dxf_plasma_compensado(
+                ruta, offset_mm
+            )
+            if ruta_actualizada:
+                ruta_plasma = str(ruta_actualizada)
+                p["ruta_plasma"] = ruta_plasma
+            elif error_actualizar:
+                log(
+                    f"    plasma[{nom}]: no se pudo actualizar Plasma Compensated "
+                    f"({error_actualizar})",
+                    level="WARN",
+                )
+        except Exception as exc:
+            log(
+                f"    plasma[{nom}]: verificación Plasma Compensated falló ({exc})",
+                level="WARN",
+            )
+
+    # La geometría que se anidó ya vive en Plasma Compensated. Recalcular el
+    # OFFSET desde `ruta` aquí hacía que el DXF final no fuera la misma pieza
+    # que el packer colocó: además de perder ARC/bulges nativos, podía aplicar
+    # joins diferentes a los del archivo compensado. Exportarla 1:1 es el
+    # único modo de conservar la geometría de corte certificada.
+    if (
+        bool(p.get("plasma_fuente_ya_compensada"))
+        and ruta_plasma
+        and os.path.isfile(ruta_plasma)
+    ):
+        try:
+            from modules.nest_exporter import (
+                _export_source_dxf_at_placement,
+                _msp_snapshot,
+            )
+
+            p_compensada = dict(p)
+            p_compensada["ruta"] = ruta_plasma
+            _export_source_dxf_at_placement(
+                msp, doc, p_compensada, draw_marks=draw_marks, strict=False
+            )
+            new_ents = _msp_snapshot(msp)[count_before:]
+            outer = [
+                e
+                for e in new_ents
+                if str(getattr(e.dxf, "layer", "") or "").upper() == "CUT_OUTER"
+            ]
+            ok = bool(outer)
+            log(
+                f"    plasma[{nom}]: Plasma Compensated 1:1 "
+                f"outer={len(outer)} -> {'OK' if ok else 'FALLO'}",
+                level="INFO" if ok else "WARN",
+            )
+            if not ok:
+                return False
+            issues = validate_plasma_piece(
+                p,
+                new_ents,
+                # El fuente ya contiene el offset y el `outer` del nest debe
+                # coincidir con él; no se espera un segundo crecimiento.
+                offset_mm=0.0,
+                sheet=sheet,
+                all_piece_bounds=all_piece_bounds,
+            )
+            if issues:
+                for iss in issues:
+                    log(f"    plasma[{nom}] FAIL: {iss}", level="ERROR")
+                p["_plasma_validation_error"] = (
+                    f"plasma inválido: {issues[0]}. "
+                    "Renestee esta placa con la compensación activa."
+                )
+                return False
+            return True
+        except Exception as exc:
+            log(
+                f"    plasma[{nom}]: Plasma Compensated 1:1 falló ({exc})",
+                level="ERROR",
+            )
+            p["_plasma_validation_error"] = (
+                "plasma compensado no se pudo exportar 1:1 desde su DXF fuente"
+            )
+            return False
 
     if ruta and os.path.isfile(ruta) and offset_mm > 0:
         stats = export_compensated_plasma_from_source(

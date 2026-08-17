@@ -217,6 +217,30 @@ duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
 persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
 assets ni imports dinámicos nuevos.
 
+### 2026-08-17b — geometría de Plasma Compensated es la fuente final
+
+Corrección de semántica solicitada por planta:
+
+- Una esquina `LINE → LINE` (cuadrado, rectángulo, punta) **no se redondea**
+  al compensar. Los fallbacks Clipper2 y GEOS pasan de `Round` a `Miter`, y
+  OCCT intenta `GeomAbs_Intersection` antes del join Arc. Un radio sólo
+  sobrevive si ya era un `ARC`/bulge en el DXF fuente.
+- El export plasma final antes ignoraba `ruta_plasma` y volvía a calcular el
+  offset desde `ruta` original. Eso explicaba por qué el archivo dentro de
+  `Plasma Compensated` no se parecía al DXF final. Ahora, si la pieza fue
+  anidada desde `plasma_fuente_ya_compensada`, el export clona ese DXF
+  compensado **1:1** en la matriz de placement; no reaplica offset ni aplana
+  ARC/bulges.
+- Antes de inyectar, `asegurar_dxf_plasma_compensado` verifica el sidecar de
+  versión. `offset2d-v6-miter-sharp-corners` invalida el cache anterior para
+  regenerar archivos creados con joins Round.
+
+Candado ampliado: `test_plasma_export_rectilineo_escalones.py` exige que
+OP-1010-211 no gane ARC en sus puntas y crea un fixture donde un ARC de
+`Plasma Compensated` debe llegar al DXF final sin alteración. Regresiones
+27/27. Build sin cambios: se modificaron módulos existentes, sin assets,
+binarios ni imports dinámicos nuevos.
+
 ### 2026-08-14o — export plasma de flat patterns + rotación que trasladaba la msp
 
 Dos bugs independientes reportados en la misma sesión de planta (job 62177).

@@ -755,7 +755,11 @@ def offset_entities(entities: Iterable, *, delta: float) -> OcctOffsetResult:
         rechazos: list[str] = []
         # La dirección del offset depende de la orientación del wire; se prueban
         # ambos signos y se acepta solo el que valide contra la geometría origen.
-        for join in (GeomAbs_Arc, GeomAbs_Intersection):
+        # Intersección conserva las esquinas LINE→LINE como ingletes. Arc se
+        # deja sólo como fallback de compatibilidad para un wire que no pueda
+        # resolverse por intersección; nunca debe ser la primera opción porque
+        # redondea puntas que no existían en el DXF fuente.
+        for join in (GeomAbs_Intersection, GeomAbs_Arc):
             for signo in (1.0, -1.0):
                 try:
                     shape = _perform_offset(wire, d * signo, join)

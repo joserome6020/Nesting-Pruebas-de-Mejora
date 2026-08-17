@@ -2,8 +2,8 @@
 
 Backends:
   1. FreeCAD ``Part.Shape.makeOffset2D`` (primario, fidelidad CAD)
-  2. Semántica Clipper2/Ultra: outer+/holes− con joins redondos y densificación
-     fina (fallback empaquetable; no usa ``largest polygon wins``)
+  2. Semántica Clipper2/Ultra: outer+/holes− con joins a inglete y
+     densificación fina (fallback empaquetable; no usa ``largest polygon wins``)
 
 Shapely ``buffer`` solo se usa en el fallback poligonal con topología Ultra;
 nunca como único camino que aplana arcos a 7.5° y reescribe LWPOLYLINE.
@@ -22,7 +22,7 @@ from typing import Any, Sequence
 from shapely.geometry import MultiPolygon, Polygon
 
 # Bump al cambiar el algoritmo: invalida DXFs en Plasma Compensated/.
-PLASMA_OFFSET_ALGO_VERSION = "offset2d-v5-clipper2-fallback"
+PLASMA_OFFSET_ALGO_VERSION = "offset2d-v6-miter-sharp-corners"
 
 Point = tuple[float, float]
 Ring = list[Point]
@@ -465,9 +465,10 @@ def main():
         except Exception:
             shape = ow
 
-        # join=0 arc (más cercano a OFFSET Autodesk); intersection=True para compuestos.
+        # join=1 intersection: no inventa radios en esquinas LINE→LINE;
+        # los ARC nativos del perfil se conservan como ARC por OCCT.
         try:
-            off = shape.makeOffset2D(delta, join=0, fill=False, openResult=False, intersection=True)
+            off = shape.makeOffset2D(delta, join=1, fill=False, openResult=False, intersection=True)
         except TypeError:
             off = shape.makeOffset2D(delta)
 
@@ -552,7 +553,7 @@ def _offset_one(Part, FreeCAD, outer, holes, delta):
     except Exception:
         shape = ow
     try:
-        off = shape.makeOffset2D(delta, join=0, fill=False, openResult=False, intersection=True)
+        off = shape.makeOffset2D(delta, join=1, fill=False, openResult=False, intersection=True)
     except TypeError:
         off = shape.makeOffset2D(delta)
     rings = []
@@ -626,14 +627,15 @@ def _offset_clipper_semantics(
     holes_d = [densify_ring(h, max_seg=max_seg) for h in holes]
 
     try:
-        # Un solo anillo: buffer directo (join redondo = Autodesk-like en vértices).
+        # Un solo anillo: las esquinas LINE→LINE conservan inglete. Los radios
+        # reales se resuelven con OCCT antes de llegar a este fallback.
         if not holes_d:
             poly = Polygon(_as_ccw(outer_d))
             if not poly.is_valid:
                 poly = poly.buffer(0)
             if poly.is_empty:
                 return OffsetResult(error="outer vacío tras repair")
-            buff = poly.buffer(sign * abs_d, join_style=1, quad_segs=32, mitre_limit=5.0)
+            buff = poly.buffer(sign * abs_d, join_style=2, mitre_limit=5.0)
             rings, collapsed = _rings_from_polygon(buff)
             if not rings:
                 return OffsetResult(error="offset poligonal vacío")
@@ -651,7 +653,7 @@ def _offset_clipper_semantics(
         if outer_poly.is_empty:
             return OffsetResult(error="outer inválido")
 
-        outer_buff = outer_poly.buffer(abs_d, join_style=1, quad_segs=32)
+        outer_buff = outer_poly.buffer(abs_d, join_style=2, mitre_limit=5.0)
         if outer_buff.is_empty:
             return OffsetResult(error="outer offset vacío")
 
@@ -667,7 +669,7 @@ def _offset_clipper_semantics(
             # Huecos siempre se contraen en metal (radio − abs_d) cuando OUTER se
             # expande (plasma outer+ / inner−). Si delta es negativo (anillo
             # inner solo), el caller ya pasó delta negativo sin holes.
-            hc = hp.buffer(-abs_d, join_style=1, quad_segs=32)
+            hc = hp.buffer(-abs_d, join_style=2, mitre_limit=5.0)
             if hc is None or hc.is_empty:
                 collapsed += 1
                 continue
@@ -684,7 +686,7 @@ def _offset_clipper_semantics(
         # sentido del outer ya aplicado positivamente: no aplica en plasma PARTS.
         if sign < 0 and holes_d:
             # Contraer el sólido completo.
-            result_geom = result_geom.buffer(-abs_d, join_style=1, quad_segs=32)
+            result_geom = result_geom.buffer(-abs_d, join_style=2, mitre_limit=5.0)
 
         rings, extra_collapsed = _rings_from_polygon(result_geom)
         collapsed += extra_collapsed

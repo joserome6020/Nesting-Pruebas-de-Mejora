@@ -165,10 +165,15 @@ def offset_ring(
     ring: Sequence[tuple[float, float]],
     delta: float,
 ) -> ClipperOffsetResult:
-    """Offset de un anillo cerrado con Clipper2 (join redondo, poligonizado fino).
+    """Offset de un anillo cerrado con Clipper2 y joins a inglete.
 
     ``delta`` en mismas unidades que el anillo. Positivo crece hacia fuera del
     contorno CCW; el motor detecta la orientación y aplica el signo correcto.
+
+    Un OFFSET de producción no inventa radios en una esquina LINE→LINE:
+    una esquina en punta permanece en punta. Los ARC nativos se conservan por
+    la ruta OCCT; este fallback recibe un anillo muestreado y por eso debe
+    usar Miter, nunca Round.
     """
     try:
         import pyclipr
@@ -193,9 +198,7 @@ def offset_ring(
 
     po = pyclipr.ClipperOffset()
     po.scaleFactor = _ESCALA
-    # Tolerancia del arco escalada: FreeCAD Path/CAM usa el mismo enfoque.
-    po.arcTolerance = max(_ARC_TOL_IN, abs(delta) * 0.02) * _ESCALA
-    po.addPaths([pts], pyclipr.JoinType.Round, pyclipr.EndType.Polygon)
+    po.addPaths([pts], pyclipr.JoinType.Miter, pyclipr.EndType.Polygon)
     try:
         salida = po.execute(float(delta))
     except Exception as exc:

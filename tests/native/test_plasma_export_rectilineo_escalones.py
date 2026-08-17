@@ -17,15 +17,16 @@ contorno 8 veces.
 Fix inicial: rectilinear = segmentos horizontales/verticales (no "vértices
 en el borde"). El export ya no duplica LINE ni inventa ARC gigantes.
 
-Corrección 2026-08-17: el perfil fuente puede ser rectilíneo pero un OFFSET
-con join redondo agrega radios en sus esquinas. El criterio de escritura debe
-examinar el anillo ya compensado: sus tramos rectos van como LINE y los radios
-como ARC nativos. Forzar LINE sólo por el perfil fuente facetaba las esquinas.
+Corrección 2026-08-17: un perfil LINE→LINE debe preservar sus esquinas a
+inglete. Los joins Round del fallback inventaban radios y luego los exportaban
+como muchas LINE facetadas. Sólo los ARC/bulges ya existentes en el DXF fuente
+deben persistir como curvas.
 """
 from __future__ import annotations
 
 import math
 import sys
+import tempfile
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -58,7 +59,7 @@ def test_perfil_con_escalones_es_rectilineo() -> None:
     )
 
 
-def test_export_op211_sin_duplicados_y_con_radios_nativos() -> None:
+def test_export_op211_sin_duplicados_ni_radio_inventado() -> None:
     import ezdxf  # type: ignore
 
     from modules.dxf_export.validate import (
@@ -104,9 +105,9 @@ def test_export_op211_sin_duplicados_y_con_radios_nativos() -> None:
     outer = [e for e in ents if str(e.dxf.layer).upper() == "CUT_OUTER"]
     assert outer, "sin CUT_OUTER"
     tipos = {e.dxftype() for e in outer}
-    assert "ARC" in tipos, (
-        "el OFFSET redondo de un perfil rectilíneo debe escribir sus esquinas "
-        f"como ARC nativos; salió {tipos}"
+    assert "ARC" not in tipos, (
+        "un perfil de segmentos rectos no debe ganar radios por compensación; "
+        f"salió {tipos}"
     )
     dups = _count_duplicate_lines(outer, layer_set=frozenset({"CUT_OUTER"}))
     assert dups == 0, f"empalmes CUT_OUTER: {dups} (antes eran 48)"
@@ -146,8 +147,66 @@ def test_outer_export_line_exact_no_cierra_en_8_vertices() -> None:
     assert _outer_export_line_exact(pts) is True
 
 
+def test_export_final_usa_plasma_compensated_y_preserva_arc_fuente() -> None:
+    """El corte final clona `ruta_plasma`, no vuelve a compensar el original."""
+    import ezdxf  # type: ignore
+
+    from modules.plasma_dxf_export import export_plasma_placement
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        original = root / "original.dxf"
+        compensated = root / "compensated.dxf"
+
+        # Original recto: no contiene ARC.
+        doc_orig = ezdxf.new("R2018")
+        mo = doc_orig.modelspace()
+        mo.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 10), (0, 10)],
+            dxfattribs={"layer": "CUT_OUTER", "closed": True},
+        )
+        doc_orig.saveas(original)
+
+        # Plasma Compensated certificado: conserva un radio nativo.
+        doc_comp = ezdxf.new("R2018")
+        mc = doc_comp.modelspace()
+        mc.add_line((0, 0), (10, 0), dxfattribs={"layer": "CUT_OUTER"})
+        mc.add_line((10, 0), (10, 8), dxfattribs={"layer": "CUT_OUTER"})
+        mc.add_arc((8, 8), 2, 0, 90, dxfattribs={"layer": "CUT_OUTER"})
+        mc.add_line((8, 10), (0, 10), dxfattribs={"layer": "CUT_OUTER"})
+        mc.add_line((0, 10), (0, 0), dxfattribs={"layer": "CUT_OUTER"})
+        doc_comp.saveas(compensated)
+
+        out = ezdxf.new("R2018")
+        p = {
+            "part_name": "FUENTE_PLASMA",
+            "ruta": str(original),
+            "ruta_plasma": str(compensated),
+            "plasma_fuente_ya_compensada": True,
+            # El test verifica inyección 1:1; el refresco de cache por versión
+            # se prueba en `plasma_offset2d`, no queremos que regenere este
+            # fixture deliberadamente curvo desde el original rectilíneo.
+            "plasma_offset_mm": 0.0,
+            "outer": [(0, 0), (10, 0), (10, 10), (0, 10)],
+            "rot_deg": 0.0,
+            "shift_x": 0.0,
+            "shift_y": 0.0,
+        }
+        assert export_plasma_placement(out.modelspace(), out, p, draw_marks=False)
+        outer = [
+            e
+            for e in out.modelspace()
+            if str(e.dxf.layer or "").upper() == "CUT_OUTER"
+        ]
+        assert any(e.dxftype() == "ARC" for e in outer), (
+            "el ARC de Plasma Compensated se perdió: se reinyectó el original "
+            "o se volvió a compensar en vez de clonar la fuente certificada"
+        )
+
+
 if __name__ == "__main__":
     test_perfil_con_escalones_es_rectilineo()
-    test_export_op211_sin_duplicados_y_con_radios_nativos()
+    test_export_op211_sin_duplicados_ni_radio_inventado()
     test_outer_export_line_exact_no_cierra_en_8_vertices()
+    test_export_final_usa_plasma_compensated_y_preserva_arc_fuente()
     print("OK plasma_export_rectilineo_escalones")
