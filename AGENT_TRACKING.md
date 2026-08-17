@@ -217,6 +217,19 @@ duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
 persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
 assets ni imports dinámicos nuevos.
 
+### 2026-08-17e — SOLERA JACKING PAD: bbox anisotrópico del inglete
+
+PARTS rechazaba triángulos reales con
+`PLASMA: el contorno compensado no mide lo esperado (… vs …)`.
+La compuerta exigía `AABB_out == AABB_src + 2·offset`, válida solo en
+rectángulos alineados con join redondo. Con lados inclinados + inglete el
+bbox crece anisotrópico (una punta empuja un eje por encima y el otro puede
+quedar ligeramente por debajo) aunque el offset geométrico sea correcto.
+
+`validate_offset_bbox_growth` sustituye la igualdad estricta: exige
+crecimiento ~`2·|δ|` con holgura de proyección y techo de inglete
+(`_MITER_LIMIT`). Candado `test_plasma_bbox_triangulo_inglete.py`.
+
 ### 2026-08-17d — release zip: buzón, gaps, runtime y paridad build
 
 - Versiona en git el lote pendiente del ANS: buzón de soporte, tabla de

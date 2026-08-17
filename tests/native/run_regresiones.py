@@ -128,6 +128,10 @@ REGRESIONES = [
         "2026-08-17c - el nest inyecta Plasma Compensated 1:1 (arcos nativos) y el offset conserva puntas vivas",
     ),
     (
+        "test_plasma_bbox_triangulo_inglete.py",
+        "2026-08-17e - triángulo SOLERA JACKING PAD no se rechaza por AABB anisotrópico del inglete",
+    ),
+    (
         "test_cu_force_dxf_step.py",
         "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
     ),

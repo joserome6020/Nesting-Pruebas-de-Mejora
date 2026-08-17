@@ -494,6 +494,7 @@ def _verificar_dxf_compensado(
         ring_is_simple,
         specs_bbox,
         specs_from_dxf_entities,
+        validate_offset_bbox_growth,
     )
 
     src_outer = _pools_por_rol(doc_src, outer_set=outer_set, inner_set=inner_set)["outer"]
@@ -506,12 +507,13 @@ def _verificar_dxf_compensado(
     if bbox_src is None or bbox_out is None:
         raise RuntimeError("PLASMA: no se pudo medir el contorno exterior compensado.")
 
-    tol = max(abs(off_dxf) * 0.25, 1e-6)
-    esperado = (bbox_src[0] + 2.0 * off_dxf, bbox_src[1] + 2.0 * off_dxf)
-    if abs(bbox_out[0] - esperado[0]) > tol or abs(bbox_out[1] - esperado[1]) > tol:
+    motivo = validate_offset_bbox_growth(bbox_src, bbox_out, float(off_dxf))
+    if motivo:
         raise RuntimeError(
             "PLASMA: el contorno compensado no mide lo esperado "
-            f"({esperado[0]:.4f}x{esperado[1]:.4f} vs {bbox_out[0]:.4f}x{bbox_out[1]:.4f}); "
+            f"({bbox_src[0] + 2.0 * float(off_dxf):.4f}x"
+            f"{bbox_src[1] + 2.0 * float(off_dxf):.4f} vs "
+            f"{bbox_out[0]:.4f}x{bbox_out[1]:.4f}; {motivo}); "
             "se rechaza el DXF."
         )
 

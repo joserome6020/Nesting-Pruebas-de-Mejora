@@ -15,6 +15,10 @@ from typing import Any, Iterable, Sequence
 
 # Muestreo para validación (no se escribe al DXF: las curvas siguen nativas).
 _SAMPLE_STEP_DEG = 3.0
+# Más allá de esta relación punta/offset el inglete produce una aguja; en ese
+# caso se conserva el redondeo de OCCT. También acota el crecimiento axial
+# del AABB al validar perfiles con lados inclinados.
+_MITER_LIMIT = 8.0
 
 
 @dataclass
@@ -355,6 +359,50 @@ def _distancia_offset_valida(
     return ""
 
 
+def validate_offset_bbox_growth(
+    src_wh: tuple[float, float],
+    out_wh: tuple[float, float],
+    delta: float,
+) -> str:
+    """Comprueba crecimiento del AABB tras un offset; "" si es aceptable.
+
+    ``AABB + 2·|delta|`` solo es exacto en rectángulos alineados a ejes con
+    join redondo (Minkowski con disco). Un triángulo, bracket o cualquier
+    perfil con lados inclinados + inglete crece de forma anisotrópica: una
+    punta puede empujar un eje por encima de ``2·|delta|`` y el otro quedar
+    ligeramente por debajo. Rechazar eso tumba piezas reales de planta
+    (p. ej. SOLERA JACKING PAD) cuyo offset geométrico es correcto.
+    """
+    d = abs(float(delta))
+    if d <= 0.0:
+        return ""
+    try:
+        sw, sh = float(src_wh[0]), float(src_wh[1])
+        ow, oh = float(out_wh[0]), float(out_wh[1])
+    except (TypeError, ValueError, IndexError):
+        return "bbox inválido"
+    dw, dh = ow - sw, oh - sh
+    # Signo de delta: outward crece, inward encoge.
+    if float(delta) < 0.0:
+        dw, dh = -dw, -dh
+    target = 2.0 * d
+    # Déficit axial: normales oblicuas proyectan menos de |delta| en X/Y.
+    tol_bajo = max(d * 0.5, 1e-4)
+    # Exceso axial: puntas a inglete salen fuera del casquete redondo.
+    tol_alto = max(d * (_MITER_LIMIT - 1.0), d * 2.0)
+    if dw < target - tol_bajo or dh < target - tol_bajo:
+        return (
+            "dimensiones no crecieron como offset: "
+            f"Δ={dw:.4f}x{dh:.4f}, esperado ~{target:.4f} (±bajo {tol_bajo:.4f})"
+        )
+    if dw > target + tol_alto or dh > target + tol_alto:
+        return (
+            "dimensiones crecieron de más (posible lazo de esquina): "
+            f"Δ={dw:.4f}x{dh:.4f}, techo {target + tol_alto:.4f}"
+        )
+    return ""
+
+
 def validate_offset_ring(
     src_ring: Sequence[tuple[float, float]],
     out_ring: Sequence[tuple[float, float]],
@@ -371,21 +419,17 @@ def validate_offset_ring(
         return "contorno resultante insuficiente"
 
     d = float(delta)
-    tol = max(abs(d) * 0.25, 1e-6)
 
     if m_out["gap"] > max(abs(d) * 0.5, 1e-3):
         return f"contorno resultante abierto (gap={m_out['gap']:.5f})"
     if not ring_is_simple(out_ring):
         return "contorno resultante se auto-intersecta (lazos de esquina)"
 
-    esperado_w = m_in["w"] + 2.0 * d
-    esperado_h = m_in["h"] + 2.0 * d
-    if abs(m_out["w"] - esperado_w) > tol or abs(m_out["h"] - esperado_h) > tol:
-        return (
-            "dimensiones no cuadran: "
-            f"esperado {esperado_w:.4f}x{esperado_h:.4f}, "
-            f"obtenido {m_out['w']:.4f}x{m_out['h']:.4f}"
-        )
+    motivo_bbox = validate_offset_bbox_growth(
+        (m_in["w"], m_in["h"]), (m_out["w"], m_out["h"]), d
+    )
+    if motivo_bbox:
+        return motivo_bbox
     if d > 0 and m_out["area_abs"] <= m_in["area_abs"]:
         return "el área no creció con offset positivo"
     if d < 0 and m_out["area_abs"] >= m_in["area_abs"]:
@@ -727,7 +771,6 @@ def _native_entities_from_wire(wire) -> list[dict[str, Any]]:
 
 # Más allá de esta relación punta/offset el inglete produce una aguja; en ese
 # caso se conserva el redondeo de OCCT, que es inofensivo para el corte.
-_MITER_LIMIT = 8.0
 
 
 def _spec_start_end(
