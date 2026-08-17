@@ -132,6 +132,10 @@ REGRESIONES = [
         "2026-08-17e - triángulo SOLERA JACKING PAD no se rechaza por AABB anisotrópico del inglete",
     ),
     (
+        "test_plasma_switch_patch_muesca.py",
+        "2026-08-17f - SWITCH PATCH: bulge>1 no espeja el barreno debajo de la muesca",
+    ),
+    (
         "test_cu_force_dxf_step.py",
         "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
     ),

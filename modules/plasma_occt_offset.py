@@ -514,30 +514,37 @@ def _polyline_edges(entity) -> list:
     from OCP.gp import gp_Pnt
 
     edges = []
+    n = len(points)
     for i, (x0, y0, bulge) in enumerate(points):
-        x1, y1, _ = points[(i + 1) % len(points)]
+        x1, y1, _ = points[(i + 1) % n]
+        # Processed Files a veces repite el primer vértice al cerrar con
+        # bulge=0 → cuerda de longitud cero; se ignora.
+        chord = math.hypot(x1 - x0, y1 - y0)
+        if chord <= 1e-12:
+            continue
         p0, p1 = gp_Pnt(x0, y0, 0.0), gp_Pnt(x1, y1, 0.0)
         if abs(bulge) <= 1e-12:
-            if math.hypot(x1 - x0, y1 - y0) <= 1e-12:
-                continue
             edges.append(_safe_edge(BRepBuilderAPI_MakeEdge(p0, p1)))
             continue
-        dx, dy = x1 - x0, y1 - y0
-        chord = math.hypot(dx, dy)
+        # θ firmado (CCW si bulge>0). Para |θ|>180° (|bulge|>1) cos(θ/2)<0:
+        # el centro queda al OTRO lado de la cuerda. Usar h=sqrt(...) siempre
+        # positivo espejaba el arco mayor (SWITCH PATCH: el barreno saltaba
+        # debajo de la muesca y se comía el MARK).
         theta = 4.0 * math.atan(float(bulge))
-        sin_half = math.sin(abs(theta) / 2.0)
-        if chord <= 1e-12 or abs(sin_half) <= 1e-12:
+        half = theta * 0.5
+        sin_half = math.sin(half)
+        tan_half = math.tan(half)
+        if abs(sin_half) <= 1e-12 or abs(tan_half) <= 1e-15:
             raise ValueError("Bulge DXF degenerado")
-        radius = chord / (2.0 * sin_half)
-        mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-        h = math.sqrt(max(radius * radius - (chord / 2.0) ** 2, 0.0))
-        nx, ny = -dy / chord, dx / chord
-        sign = 1.0 if bulge > 0 else -1.0
-        cx, cy = mx + sign * h * nx, my + sign * h * ny
+        radius = abs(chord / (2.0 * sin_half))
+        mx, my = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+        nx, ny = -((y1 - y0) / chord), (x1 - x0) / chord  # normal izquierda
+        h = (chord * 0.5) / tan_half  # firmado: negativo en arcos reflejos
+        cx, cy = mx + h * nx, my + h * ny
         a0 = math.atan2(y0 - cy, x0 - cx)
         pm = gp_Pnt(
-            cx + radius * math.cos(a0 + theta / 2.0),
-            cy + radius * math.sin(a0 + theta / 2.0),
+            cx + radius * math.cos(a0 + half),
+            cy + radius * math.sin(a0 + half),
             0.0,
         )
         arc = GC_MakeArcOfCircle(p0, pm, p1)
@@ -556,6 +563,16 @@ def _collect_edges(entities: Iterable) -> list:
     ents = list(entities or [])
     if not ents:
         return []
+    # Processed Files cierra LWPOLY con un vértice repetido → virtual LINE de
+    # longitud cero. Se filtra antes de armar el wire.
+    limpios = []
+    for ent in ents:
+        if ent.dxftype() == "LINE":
+            s, e = ent.dxf.start, ent.dxf.end
+            if math.hypot(float(e.x) - float(s.x), float(e.y) - float(s.y)) <= 1e-12:
+                continue
+        limpios.append(ent)
+    ents = limpios
     try:
         from modules.plasma_dxf_export import _order_connected_entities
 

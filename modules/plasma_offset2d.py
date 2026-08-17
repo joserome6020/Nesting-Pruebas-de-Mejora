@@ -22,7 +22,7 @@ from typing import Any, Sequence
 from shapely.geometry import MultiPolygon, Polygon
 
 # Bump al cambiar el algoritmo: invalida DXFs en Plasma Compensated/.
-PLASMA_OFFSET_ALGO_VERSION = "offset2d-v7-inglete-analitico"
+PLASMA_OFFSET_ALGO_VERSION = "offset2d-v8-bulge-arco-reflejo"
 
 Point = tuple[float, float]
 Ring = list[Point]

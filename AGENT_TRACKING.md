@@ -217,6 +217,19 @@ duplicados; `test_plasma_separacion_piezas.py` cubre el H1 legacy y la
 persistencia/rotación. Regresiones 27/27. Build sin cambios: no hay módulos,
 assets ni imports dinámicos nuevos.
 
+### 2026-08-17f — SWITCH PATCH: arco mayor (bulge>1) ya no espeja el barreno
+
+En PARTS el compensado de SWITCH PATCH 1 “descomponía” la pieza: la muesca
+parecía arriba, el agujero verde bajaba y el texto MARK quedaba dentro del
+corte. Causa: Processed guarda el `CUT_INNER` como LWPOLYLINE con bulge ≈9.4
+(arco reflejo). `_polyline_edges` calculaba el centro con
+`h = +sqrt(r²-(c/2)²)` siempre al lado del signo del bulge; en |θ|>180° el
+centro va al otro lado (`h = (c/2)/tan(θ/2)` firmado). El wire OCCT partía
+del agujero ya espejado y el validador no lo veía porque muestrea ese mismo
+wire. También se ignoran LINE de longitud cero al cerrar la polilínea.
+`offset2d-v8-bulge-arco-reflejo` invalida el cache. Candado
+`test_plasma_switch_patch_muesca.py`.
+
 ### 2026-08-17e — SOLERA JACKING PAD: bbox anisotrópico del inglete
 
 PARTS rechazaba triángulos reales con
