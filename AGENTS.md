@@ -23,6 +23,11 @@
     cambio (imports, `.pyd`/Worker, assets, `_config`, defaults de `main.py`).
     Si no, **arregla el build en el mismo cambio** para que no se quede atrás.
     Ver `.cursor/rules/build-exe-parity.mdc`.
+10b. **Release = build + publicar + versionar:** si el usuario pide un release /
+    zip de Release, además del `--release` local hay que publicar el artefacto
+    (`python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
+    o el UNC indicado) y devolver la URL del tag nuevo. No dejar el zip solo
+    en `dist/releases/`. Ver `.cursor/rules/release-publish.mdc`.
 11. **Tras corregir un bug: commit local + push remoto obligatorio** en
     `New Arga Nesting Suite` (GitHub). No dejes el fix solo en disco: otras PCs
     y builds se actualizan desde el remoto. Incluye el candado, `AGENTS.md` /

@@ -1,0 +1,35 @@
+---
+description: Release ANS = build zip + publicar + versionar siempre
+alwaysApply: true
+---
+
+# Release completo (build + publicar + versionar)
+
+Cuando el usuario pida un **release**, un **zip de Release**, **versionar el ANS**,
+o equivalente, el agente **NO** se detiene en el artefacto local. El flujo
+obligatorio es:
+
+1. **Commit + push** de lo que entra al release (rama al día con `origin`).
+2. **Build**: `python tools/build_arga_exe.py --release` (onedir + zip en
+   `dist/releases/` + `latest.json`).
+3. **Publicar**: `python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
+   (o el `--unc` que indique el usuario). Eso crea/actualiza el tag de GitHub
+   Releases, sube el `.zip` y reescribe `latest.json` con `url` +
+   `published_at_utc`.
+4. **Verificar** y devolver al usuario la URL del release (p. ej.
+   `https://github.com/joserome6020/Nesting-Pruebas-de-Mejora/releases/tag/v…`)
+   y confirmar que el zip remoto es el de la versión/commit recién construidos
+   — **no** el release anterior.
+
+## Qué NO hacer
+
+- Dejar el zip solo en `dist/releases/` y decir "falta publicar".
+- Publicar sobre un tag viejo (p. ej. `v2026.08.13-…`) cuando el build nuevo
+  es otra versión/commit: cada build genera su propio tag
+  `v{version}-{commit_short}`.
+- Considerar el release cerrado sin URL pública / UNC usable por el updater.
+
+## Excepciones
+
+Solo omitir la publicación si el usuario lo pide explícitamente
+("solo build local", "no subir"). En ese caso indícalo en la respuesta.
