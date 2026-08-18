@@ -116,19 +116,67 @@ from modules.nesting_engine.sheet_numbering import (
     numeracion_hojas_es_consistente,
 )
 from modules.nesting_engine.cu_rtz_sin_gap import asignar_rtz_cu_sin_gap_ids
+from modules.nesting_engine.cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
 COLOR_TARJETA = "#FFFFFF"
 COLOR_BORDE = "#CBD5E1"
 COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
+# Fallbacks UI; el nest real por grupo siempre sobrescribe con gaps_for_calibre.
 DEFAULT_KERF_IN = 0.15
-DEFAULT_MARGIN_IN = 0.15
+DEFAULT_MARGIN_IN = PLATE_TO_PIECE_DEFAULT_IN
 
 
 
 class NestingCalcMixin:
     """Métodos de cálculo, ejecución y re-nesteo para TabNesting."""
+
+    def _gaps_tabla_para_renest(self, clave, hoja=None) -> tuple[float, float]:
+        """Kerf/margen oficiales para renestear (nunca UI 0.15 si la tabla pide más).
+
+        Acero: ``gaps_for_calibre`` / ``gaps_efectivos_para_hoja``.
+        Cobre: (0, 0).
+        """
+        from modules.nesting_engine.cut_gaps_table import (
+            PLATE_TO_PIECE_DEFAULT_IN,
+            gaps_efectivos_para_hoja,
+            gaps_for_calibre,
+        )
+
+        if self._es_grupo_cobre(clave) or (
+            isinstance(hoja, dict) and hoja.get("modo_largos_cu")
+        ):
+            return 0.0, 0.0
+        cal = ""
+        clv = str(clave or "").strip()
+        if "_" in clv:
+            cal = clv.split("_", 1)[0].strip()
+        if cal:
+            try:
+                return gaps_for_calibre(cal)[:2]
+            except Exception:
+                pass
+        try:
+            return gaps_efectivos_para_hoja(
+                hoja if isinstance(hoja, dict) else None,
+                clave=clv,
+                kerf_fallback=getattr(self, "global_kerf_val", DEFAULT_KERF_IN),
+                margin_fallback=getattr(
+                    self, "global_margin_val", PLATE_TO_PIECE_DEFAULT_IN
+                ),
+            )
+        except Exception:
+            pass
+        try:
+            k = self._kerf_efectivo()
+        except Exception:
+            k = DEFAULT_KERF_IN
+        try:
+            m = self._margin_efectivo()
+        except Exception:
+            m = PLATE_TO_PIECE_DEFAULT_IN
+        return float(k), float(m)
 
     def _bloquear_si_dxf_no_apto(self, *, titulo: str = "DXF no aptos (poka-yoke)") -> bool:
         """
@@ -1751,10 +1799,9 @@ class NestingCalcMixin:
             return QMessageBox.warning(self, "Atención", "No se encontró el calibre/material en el resultado.")
 
         try:
-            k = self._kerf_efectivo()
+            k, m = self._gaps_tabla_para_renest(clave)
         except Exception:
             return QMessageBox.critical(self, "Error", "Kerf inválido.")
-        m = self.global_margin_val
         opt = self.cmb_opt.currentText() if hasattr(self, "cmb_opt") else "OPTIMIZAR LARGO Y ANCHO"
         corner = self.global_corner_val
 
@@ -2039,10 +2086,9 @@ class NestingCalcMixin:
             opt, corner = "LARGOS CU", "INFERIOR IZQUIERDA"
         else:
             try:
-                k = self._kerf_efectivo()
+                k, m = self._gaps_tabla_para_renest(clave)
             except Exception:
                 return QMessageBox.critical(self, "Error", "Kerf inválido.")
-            m = self.global_margin_val
             opt = (
                 self.cmb_opt.currentText()
                 if hasattr(self, "cmb_opt")
@@ -2510,10 +2556,9 @@ class NestingCalcMixin:
             )
 
         try:
-            k = self._kerf_efectivo()
+            k, m = self._gaps_tabla_para_renest(clave, hoja)
         except Exception:
-            k = DEFAULT_KERF_IN
-        m = self.global_margin_val
+            k, m = DEFAULT_KERF_IN, DEFAULT_MARGIN_IN
 
         candidata = self._resolver_candidata_dimensiones_cambio_placa(
             clave,
@@ -2938,47 +2983,7 @@ class NestingCalcMixin:
                             f"[RENEST-PACK] pack incompleto {colocadas}/{n_esperado}",
                             flush=True,
                         )
-                        # Fallback espejo/DXF: renovar geometría en el acomodo actual.
-                        usar_pose = (
-                            prefer_dxf
-                            and not compensar_plasma
-                            and bool(getattr(self.app, "autodxf_reprocesado_pendiente", False))
-                        )
-                        if usar_pose:
-                            try:
-                                from modules.nesting_engine.display_geometry import (
-                                    renovar_hoja_desde_dxf_en_pose,
-                                )
-                                from modules.nesting_engine.nest_poka_yoke import (
-                                    validar_solapes_hojas_fail_closed,
-                                )
-
-                                candidata = copy.deepcopy(hoja)
-                                rutas = {
-                                    str(p.get("nombre") or "").strip(): str(p.get("ruta") or "").strip()
-                                    for p in piezas_a_reprocesar
-                                    if p.get("nombre") and p.get("ruta")
-                                }
-                                ok_n, fail_n = renovar_hoja_desde_dxf_en_pose(
-                                    candidata, rutas_por_nombre=rutas
-                                )
-                                print(
-                                    f"[RENEST-DXF-POSE] fallback ok={ok_n} fail={fail_n} | "
-                                    f"placa={hoja.get('placa_id')}",
-                                    flush=True,
-                                )
-                                if ok_n > 0 and fail_n == 0:
-                                    ok_s, msg_s = validar_solapes_hojas_fail_closed([candidata])
-                                    if ok_s:
-                                        nueva = candidata
-                                        renovada_en_pose = True
-                                    else:
-                                        print(
-                                            f"[RENEST-DXF-POSE] solape | {msg_s}",
-                                            flush=True,
-                                        )
-                            except Exception as exc:
-                                print(f"[RENEST-DXF-POSE] error: {exc}", flush=True)
+                        # NUNCA restaurar el nest viejo: eso deja el acomodo igual.
                         if nueva is None:
                             print(
                                 "[RENEST-PACK] no caben todas en la misma placa — sin hoja extra",
@@ -3029,75 +3034,17 @@ class NestingCalcMixin:
             for hoja_out in [hoja for hoja in [nueva, *hojas_extra] if hoja]:
                 enriquecer_piezas_hoja_con_fuentes(hoja_out, fuente_pack)
 
-        # Venom acabado (hole-fill + gravity) en renesteo de placa / contexto.
-        # No aplicar si solo renovamos DXF en pose (espejo): no mover el acomodo.
-        if (
-            nueva
-            and isinstance(nueva, dict)
-            and nueva.get("piezas")
-            and not renovada_en_pose
-        ):
-            try:
-                import os
-                from modules.nesting_engine import venom_ai
-
-                # Forzar kerf de Config/UI en la hoja (no el 0.3 viejo del nest cargado).
-                nueva["kerf_usado"] = float(k)
-                for hx in hojas_extra or []:
-                    if isinstance(hx, dict):
-                        hx["kerf_usado"] = float(k)
-                print(
-                    f"[RENEST-VENOM] kerf_forzado={float(k):.4f}in | placa={nueva.get('placa_id')}",
-                    flush=True,
-                )
-                engine_id = (
-                    getattr(getattr(self.app, "motor_nesting", None), "active_engine_id", None)
-                    or os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
-                )
-                venom_ai.apply_smart_polisher(nueva, engine_id, kerf_in=float(k))
-                # Si casi no mejoró: 2º pase explorando (sube el techo por renesteo).
-                try:
-                    r1 = float(nueva.get("venom_reward") or 0.0)
-                    filled = int(nueva.get("venom_fill_count") or 0)
-                    if r1 < 4.0 and filled <= 0:
-                        print(
-                            f"[RENEST-VENOM] 2do pase (explore) reward1={r1:.2f}",
-                            flush=True,
-                        )
-                        venom_ai.apply_smart_polisher(
-                            nueva, engine_id, kerf_in=float(k), force_explore=True
-                        )
-                    elif r1 < 2.0:
-                        print(
-                            f"[RENEST-VENOM] 2do pase (explore) reward1={r1:.2f}",
-                            flush=True,
-                        )
-                        venom_ai.apply_smart_polisher(
-                            nueva, engine_id, kerf_in=float(k), force_explore=True
-                        )
-                except Exception:
-                    pass
-                for hx in hojas_extra or []:
-                    if isinstance(hx, dict) and hx.get("piezas"):
-                        venom_ai.apply_smart_polisher(hx, engine_id, kerf_in=float(k))
-                        try:
-                            if float(hx.get("venom_reward") or 0.0) < 4.0:
-                                venom_ai.apply_smart_polisher(
-                                    hx, engine_id, kerf_in=float(k), force_explore=True
-                                )
-                        except Exception:
-                            pass
-            except Exception as e:
-                try:
-                    import traceback
-                    with open(
-                        r"c:\Proyectos\New Arga Nesting Suite\_logs\venom_debug.log",
-                        "a",
-                        encoding="utf-8",
-                    ) as f:
-                        f.write(f"ERROR VENOM RENEST PLACA: {e}\n{traceback.format_exc()}\n")
-                except Exception:
-                    pass
+        # Kerf de tabla en la hoja. No densify / hole-fill / Venom: eso
+        # reacomoda un nest ya hecho (diagonales, huecos, “amontonado”).
+        if nueva and isinstance(nueva, dict) and nueva.get("piezas"):
+            nueva["kerf_usado"] = float(k)
+            nueva["margin_usado"] = float(m)
+            if clave and not nueva.get("clave"):
+                nueva["clave"] = clave
+            for hx in hojas_extra or []:
+                if isinstance(hx, dict) and (hx.get("piezas") or []):
+                    hx["kerf_usado"] = float(k)
+                    hx["margin_usado"] = float(m)
 
         # Venom mueve piezas: rot/shift previos quedan stale y el display 1:1
         # puede dibujar la geometría DXF desplazada (parece solape / UI rota).
@@ -3504,10 +3451,9 @@ class NestingCalcMixin:
                 "Las placas reutilizadas (RTZ) o mini-nest no se pueden renestear desde el menú contextual.",
             )
         try:
-            k = self._kerf_efectivo()
+            k, m = self._gaps_tabla_para_renest(clave, hoja)
         except Exception:
             return QMessageBox.critical(self, "Error", "Valores no válidos.")
-        m = self.global_margin_val
 
         bloque_previo = self._desglosar_bloque_placa_mini(clave, hoja)
         if compensar_plasma and bloque_previo.get("idx_retazos"):

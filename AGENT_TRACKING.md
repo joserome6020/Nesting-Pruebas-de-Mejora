@@ -1,7 +1,7 @@
 # ANS C++ — Seguimiento
 
 > Core **0.5.3** · ABI **1.4.0** · Paridad CAM relativa  
-> Compact-lite: **ON** (band-close + backfill) · Lite = **MC propio** (no FORCE) · Venom OFF  
+> Compact-lite: **ON** (band-close + backfill) · Lite = **MC propio** (no FORCE) · hole-fill ON · Venom OFF  
 
 > Sesión: [`_logs/SESSION_2026-08-03_AI_DETERMINISTIC.md`](./_logs/SESSION_2026-08-03_AI_DETERMINISTIC.md)
 
@@ -22,6 +22,7 @@
 - `ARGA_NEST_AI=0|1` (**default 1** · L1 ranker; off con `=0`)
 - `ARGA_NEST_VENOM=0|1` (**default 0**)
 - `ARGA_NEST_COMPACT=0|1` (**default 1**) · band-close + backfill (Lite sigue en MC)
+- `ARGA_LITE_HOLE_FILL=0|1` (**default 1**) · post-pase nest-in-hole en Lite
 - STEPS por carpeta: `_config/step_export_folders.json` (Configuración Global)
 - Lite: `ARGA_LITE_PASSES=1` · `ARGA_LITE_PLATE_RENEST=1` · tries/mc=1
 
@@ -41,10 +42,145 @@ código viejo. Un bug sin candado vuelve.
 ## Siguiente foco
 
 1. Fase 4 Spark: obtener SSH key vía NVIDIA Sync (`arga_dev`) y levantar `nest_remote_server` en `192.168.2.35:8765`
-2. Relleno de huecos VFM **barato** en Lite (sin llamar FORCE/base)
+2. Lite hole-fill: probar en bridas reales (P13 / SP rings); si falta, pull desde restos
 3. Telemetría WO → AI UI default (ya hay `result.runtime` en packs)
 
 ## Changelog
+
+### 2026-08-18j — Nest bien desde el primer pase (no “corregir” después)
+- El acomodo “culero” (diagonales, huecos, P28/P64 reinyectadas) era
+  post-proceso: expel+reinject + densify + Venom 2º explore sobre un nest
+  ya hecho, más Ultra renest a 30° sin parar.
+- Renest Ultra: 90° (ortogonal), se detiene al nest completo. Pokayoke
+  solo nudge (~mm). Sin densify/hole-fill/Venom al recalcular placa.
+- Tabla sigue igual: pieza↔pieza ≥ calibre; placa→pieza 0.250".
+- Candado: `permitir_expulsar=False` no reubica ni expulsa.
+
+### 2026-08-18i — Renest ya no restaura el nest viejo
+- Ultra sí armaba nido nuevo; pokayoke expulsaba 1 y el fallback DXF-en-pose
+  **dejaba el acomodo anterior**. Por eso “empieza pero no cambia”.
+- Expulsada se reinyecta junto al origen. Sin fallback al nest viejo.
+- Renest Ultra ignora rotación 90° del caller (usa 30°).
+
+- El “amontonado” era Ultra fast-first: 1 generación, rotación 90°, y el
+  repair pegaba al bbox global (X=900). Eso no es nesteo.
+- En renest Ultra usa 30°, ≥4 gens. Repair solo hop local / acordeón (~mm).
+- Tabla: mínimo pieza↔pieza y 0.250" placa; el motor vuelve a compactar.
+
+- El acomodo “culero” era ``[POKA-KERF-RELOC] idx=0 -> (900, 1214, 1427)``.
+- La tabla solo pide ~0.5 mm extra (0.355→0.375). Se abre en acordeón o
+  pegado al cluster; se quitó la grilla por toda la placa.
+
+- El acomodo “culero” (piezas sueltas, 17–18% en 120") era Ultra fast-first +
+  Venom OFF: el pulidor no corría y nadie juntaba al origen.
+- `densificar_nido_en_placa` (band-close + gravedad a **toda** la placa) corre
+  en todo renest, incluido DXF-en-pose. Tabla: nunca menos; más sí.
+- Candado: 3 piezas a 1800 mm se juntan cerca del origen con kerf Cal 2.
+
+- El espejo dejaba las 10 P64 en 18.3% con «0 mejoras» porque el repair
+  **expulsaba 3** (columna trabada en el 0.250" de placa) y el fallback DXF
+  restauraba el acomodo original.
+- Ahora: cadena se abre aunque acerque al vecino; si no hay holgura, **reubica
+  en el hueco de la misma placa**. Ultra además puntúa bbox más compacto.
+- Candado: 4 P64 en columna que llena los 48".
+
+- Contrato: **placa→pieza = 0.250" (nunca menos)**; **pieza→pieza ≥ tabla** (más sí, menos no).
+- Ultra Cal 2 dejaba P64 a 0.355" pegadas al borde; el split simétrico empujaba
+  la del rincón fuera del 0.250" y expulsaba 3 → “espejo no debería requerir hoja extra”.
+- Nudge ahora gasta la holgura de quien mira al centro. Fallback DXF-en-pose ya no
+  exige `autodxf_pendiente` y repara kerf sin expulsar. Candado 2×2 en el margen.
+
+### 2026-08-18c — Espejo Cal 2: abrir par (0.355→0.375), no expulsar
+- Renest/espejo Ultra dejó P64×P64 a 0.355" (tabla Cal 2 = 0.375"). El repair
+  expulsaba 3 y el diálogo decía “no caben en la misma placa”.
+- Nudge ahora prueba ejes + **abrir ambos lados**. Candado 2×2 P64.
+
+### 2026-08-18b — TABLA GAPS al 100% (sin holgura 0.025")
+- El pokayoke restaba ``tol=0.025"``: aceptaba 0.225" / 0.200" de margen cuando
+  la tabla pide **0.250"**.
+- Epsilon geométrico ``0.002"`` (~0.05 mm). Repair empuja al kerf **completo**.
+- Candado: gap 0.240" y margen placa 0.200" fallan en Cal 0.5.
+
+### 2026-08-18a — Repair kerf apunta al par geométrico (no homónimo)
+- Diálogo “no pudo acomodar… P03”: Lite sí empaquetó 0.5; el repair buscaba
+  `P13×P32` por **nombre** y movía las copias lejanas (qty 3 y 6). Tras 40
+  rounds fallaba y **vaciaba** la hoja → grupo rechazado.
+- Ahora elige el par **más cercano** por geometría; si el repair no cierra,
+  conserva las piezas colocadas (no `marcar_pack_fault` vacío).
+- Candado homónimos en `test_repair_kerf_nudge`. Paridad ANS C++.
+
+### 2026-08-17q — Repair kerf empuja antes de expulsar (nest ya no agujereado)
+- Causa del nest “culeriso” en 0.5: Lite dejaba ~0.183"; pokayoke **expulsaba
+  13+9 piezas** y dejaba huecos (log `POKA-KERF-REPAIR`).
+- `reparar_separacion_minima_hoja` ahora **empuja** el par ~mm hasta kerf tabla;
+  solo expulsa si no hay espacio. Log `[POKA-KERF-NUDGE]`.
+- Hole-fill mini-sheet: primer guest centrado en el orificio (no esquina BLF).
+- Candado `test_repair_kerf_nudge`. Paridad ANS C++.
+
+### 2026-08-17p — Distancia exacta ≥ kerf tabla en todos los movers
+- Causa WO62176: `buffer(kerf/2)` + paso 2 mm dejaba metal a ~0.17" (tabla 0.250").
+- Band-close `_collides`, hole-fill `_place_ok` / pared, Venom AI gravity+candidates,
+  compact Lite: `distance()` metal↔metal ≥ kerf completo; paso fino ≤0.5 mm.
+- Candado `test_exact_kerf_movers` (gap 0.17" rechazado). Paridad ANS C++.
+
+### 2026-08-17o — Fix KeyError poly tras repair kerf (0.375 incompleto)
+- Tras expulsar FPP/P08 por gap, se reinyectaban al pool **sin** ``poly`` →
+  `SAFE-EMPAQUE-EXCEPTION: 'poly'` y el grupo quedaba con 35 faltantes.
+- `_piezas_expulsadas_a_pool` normaliza a formato pack; inventario incompleto
+  ya no descarta las hojas nestéadas. Candado `test_expulsadas_a_pool_poly`.
+
+### 2026-08-17n — Nest 0.375 no tumba grupo por kerf en orificio
+- Causa WO62176: Lite dejó `P05×FPP-PELSUE` a ~0.031" (tabla 0.250"); pokayoke vaciaba la 2ª placa y **borraba** el grupo aunque la 1ª placa (PLC082) ya estaba bien.
+- Fix: `reparar_separacion_minima_hoja` expulsa guests/violadores y conserva hoja; si ya hay hojas OK, no `return error` del grupo.
+- Candado `test_repair_kerf_hole_guest`. Paridad ANS C++.
+
+### 2026-08-17m — Todos los movers respetan TABLA GAPS
+- Contrato: **entre piezas** = kerf de calibre; **placa→pieza** = **0.250"** — motores, hole-fill, compact/band-close/gravity, pockets Venom, drag canvas, Ed. libre, renest/cambiar placa.
+- Pokayoke relee tabla (UI 0.15 no gana a Cal 2 → 0.375). Renest usa `_gaps_tabla_para_renest`.
+- Plate inset = margen tabla (no kerf/2). Candado `test_movers_respetan_tabla_gaps`. Paridad ANS C++.
+
+### 2026-08-17l — Pokayoke kerf fail-closed (calibre 2 / APEX a piso)
+- `validar_separacion_minima_hoja`: rechaza nests con gap pieza↔pieza &lt; kerf de tabla (tol 0.025").
+- Enganche en `_safe_empaquetar_una_hoja_mc` + post-compact. Log `[KERF-TABLA]` / `[POKA-KERF-FAIL]`.
+- Defaults UI margen → 0.250". Candado `test_kerf_calibre2_pokayoke` (0.15 vs 0.375).
+
+### 2026-08-17k — Lite void-first + Pedir largos + gaps planta
+- Void-first Lite (orificios antes del MC) + expand cargo.
+- Pedir/No de Nesteo de largos: persistencia en `_config/largos_mrl_exclusiones.json`; recalcular plan ya no borra marcas.
+- Defaults `CUT_GAP_RULES` alineados a foto planta (0.250" entre piezas desde Cal 0.250"). Candados gaps + `test_largos_pedir_persist`.
+
+### 2026-08-17j — Lite hole-fill = orificio como mini-placa
+
+- Meta: acomodo manual (varios guests por anillo, kerf completo).
+- `pack_cavities_as_mini_sheets`: BLF dentro del orificio shrinkeado;
+  reempaca los ya dentro + mete outsiders que quepan.
+- Fill 1× al final del renest (no en cada shot). Candado ≥3 guests/anillo.
+- Paridad ANS C++.
+
+### 2026-08-17i — Lite hole-fill denser + kerf full en bridas
+
+- 2 pases: compactar a esquina → meter más guests → strip pack.
+- Orificios cerrados: kerf **completo** guest↔guest y guest↔anillo
+  (antes half a pared por open_profile engañoso en anillos).
+- Grilla más fina; sembrar occupants ya dentro. Candado mide gaps.
+- Paridad ANS C++.
+
+### 2026-08-17h — Lite hole-fill también en renest placa/calibre
+
+- Causa: renest pasa `mc_iterations` → Lite “shot único” salía sin
+  compact/hole-fill; el bloque `[RENEST-VENOM]` no-op con Venom OFF.
+- Fix: `_lite_apply_post_pack` en shot único; `apply_lite_hole_fill` en
+  renest placa (`_mixin_nesting_calc`), `recalcular_hoja_full` y redistribución.
+- Candado ampliado. Paridad ANS C++.
+
+### 2026-08-17g — Lite hole-fill (nest-in-hole barato)
+
+- Post-pase Lite reusa `fill_host_cavities`: guests de la misma hoja
+  entran en orificios grandes del host (bridas / anillos).
+- Default ON (`ARGA_LITE_HOLE_FILL=1`); opt-out `=0`. Independiente de Venom.
+- Hooks: fin de `empaquetar_una_hoja_arga_lite`, post-densify y batch final.
+- Candado `test_lite_hole_fill_brida.py`. Paridad ANS C++.
+- Build: sin módulos nuevos (`venom_hole_fill` ya empaquetado).
 
 ### 2026-08-14s — Switch cobre: forzar DXF+STEP sin RTZCU
 

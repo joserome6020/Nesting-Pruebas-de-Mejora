@@ -1143,23 +1143,52 @@ def _empaquetar_arga_combinado(
 
 def _as_pack_piece_from_colocada(p):
     """Convierte pieza ya colocada en hoja al formato de empaque (origen local)."""
-    poly = reconstruir_poly_seguro(p.get("poligonos") or [])
-    if poly is None or poly.is_empty:
+    poly = p.get("poly") if p else None
+    if poly is None or getattr(poly, "is_empty", True):
+        poly = reconstruir_poly_seguro((p or {}).get("poligonos") or [])
+    if poly is None or getattr(poly, "is_empty", True):
         return None
 
-    marks_geom = _rebuild_marks_geom(p.get("marcas") or [])
+    marks_geom = _rebuild_marks_geom((p or {}).get("marcas") or [])
     if marks_geom is None:
         marks_geom = LineString()
 
     minx, miny, _, _ = poly.bounds
-    return {
-        "nombre": str(p.get("nombre", "")),
+    out = {
+        "nombre": str((p or {}).get("nombre", "")),
         "poly": affinity.translate(poly, -minx, -miny),
         "marks": affinity.translate(marks_geom, -minx, -miny) if not marks_geom.is_empty else marks_geom,
-        "area": float(p.get("area", poly.area) or poly.area),
-        "calibre": p.get("calibre", ""),
-        "material": p.get("material", ""),
+        "area": float((p or {}).get("area", poly.area) or poly.area),
+        "calibre": (p or {}).get("calibre", ""),
+        "material": (p or {}).get("material", ""),
     }
+    for k in ("debug_id", "ruta", "orig_minx", "orig_miny"):
+        if (p or {}).get(k) is not None:
+            out[k] = (p or {}).get(k)
+    return out
+
+
+def _piezas_expulsadas_a_pool(expulsadas) -> list:
+    """Reinyecta al pool piezas sacadas por pokayoke kerf (siempre con ``poly``)."""
+    pool = []
+    for raw in expulsadas or []:
+        if not isinstance(raw, dict):
+            continue
+        pack = _as_pack_piece_from_colocada(raw)
+        if pack is not None and pack.get("poly") is not None:
+            pool.append(pack)
+            continue
+        # Último recurso: si ya trae poly usable, normalizar a origen.
+        poly = raw.get("poly")
+        if poly is not None and not getattr(poly, "is_empty", True):
+            try:
+                minx, miny, _, _ = poly.bounds
+                p2 = dict(raw)
+                p2["poly"] = affinity.translate(poly, -minx, -miny)
+                pool.append(p2)
+            except Exception:
+                pass
+    return pool
 
 
 def _zonas_libres_hoja_madre(hoja, w_placa, h_placa, kerf_in, margin_in):
@@ -1581,10 +1610,18 @@ def _renest_hoja_desde_pack(hoja, piezas_pack, *, mc_iterations=1, accesorios_re
     if sobras or not nueva or not nueva.get("piezas"):
         return False
     _aplicar_renest_en_hoja(hoja, nueva, params)
-    # --- VENOM POLISHER AI (Re-nesteo interno) ---
+    # --- Lite hole-fill + Venom (re-nesteo interno) ---
     import os
     try:
+        from .venom_hole_fill import apply_lite_hole_fill
+
+        _engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+        apply_lite_hole_fill(hoja, engine_id=_engine_id)
+    except Exception:
+        pass
+    try:
         from . import venom_ai
+
         _engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
         venom_ai.apply_smart_polisher(hoja, _engine_id)
     except Exception:
@@ -2098,6 +2135,115 @@ def _safe_empaquetar_una_hoja_mc(
             _dbg_nesting(f"[SAFE-EMPAQUE-RESTOS-NONE] {debug_tag}")
             restos = restos_default
 
+        # Sellar kerf/margin de tabla en la hoja y pokayoke fail-closed.
+        if isinstance(hoja, dict):
+            try:
+                hoja["kerf_usado"] = float(kerf_override or 0.0)
+            except Exception:
+                pass
+            try:
+                hoja["margin_usado"] = float(margin_override or 0.0)
+            except Exception:
+                pass
+            hoja.setdefault("placa_w", float(w_placa or 0))
+            hoja.setdefault("placa_h", float(h_placa or 0))
+            if hoja.get("piezas"):
+                from .nest_poka_yoke import (
+                    colocar_piezas_cerca_origen,
+                    reparar_separacion_minima_hoja,
+                    validar_separacion_minima_hoja,
+                )
+
+                ok_gap, detail_gap = validar_separacion_minima_hoja(
+                    hoja,
+                    float(kerf_override or 0.0),
+                    margin_in=float(margin_override or 0.0),
+                    w_placa=float(w_placa or 0.0),
+                    h_placa=float(h_placa or 0.0),
+                )
+                if not ok_gap:
+                    # Renest/recalc: el packer ya colocó; no rearmar el nido.
+                    es_renest = False
+                    try:
+                        from .nest_engine_context import is_ultra_renest_accept_mode
+
+                        es_renest = bool(is_ultra_renest_accept_mode()) or (
+                            "recalc" in str(debug_tag or "").lower()
+                        )
+                    except Exception:
+                        es_renest = "recalc" in str(debug_tag or "").lower()
+                    ok_fix, det_fix, expulsadas = reparar_separacion_minima_hoja(
+                        hoja,
+                        float(kerf_override or 0.0),
+                        margin_in=float(margin_override or 0.0),
+                        w_placa=float(w_placa or 0.0),
+                        h_placa=float(h_placa or 0.0),
+                        permitir_expulsar=not es_renest,
+                    )
+                    if ok_fix and hoja.get("piezas"):
+                        if expulsadas and not es_renest:
+                            still = colocar_piezas_cerca_origen(
+                                hoja,
+                                expulsadas,
+                                kerf_in=float(kerf_override or 0.0),
+                                margin_in=float(margin_override or 0.0),
+                                w_placa=float(w_placa or 0.0),
+                                h_placa=float(h_placa or 0.0),
+                            )
+                            if still:
+                                msg_r = (
+                                    f"[POKA-KERF-REPAIR] {debug_tag} | "
+                                    f"expulsadas={len(still)} | was={detail_gap}"
+                                )
+                                print(msg_r, flush=True)
+                                _dbg_nesting(msg_r)
+                                restos = list(restos or []) + _piezas_expulsadas_a_pool(
+                                    still
+                                )
+                            else:
+                                msg_r = (
+                                    f"[POKA-KERF-NUDGE] {debug_tag} | "
+                                    f"reinject={len(expulsadas)} | was={detail_gap}"
+                                )
+                                print(msg_r, flush=True)
+                                _dbg_nesting(msg_r)
+                        elif "ok_separado" in str(det_fix or ""):
+                            msg_r = (
+                                f"[POKA-KERF-NUDGE] {debug_tag} | "
+                                f"{det_fix} | was={detail_gap}"
+                            )
+                            print(msg_r, flush=True)
+                            _dbg_nesting(msg_r)
+                    else:
+                        # No vaciar la hoja: P03/0.5 cabía; el fail era el repair
+                        # apuntando al homónimo equivocado. Conservar lo colocado.
+                        if hoja.get("piezas"):
+                            if expulsadas and not es_renest:
+                                restos = list(restos or []) + _piezas_expulsadas_a_pool(
+                                    expulsadas
+                                )
+                            msg = (
+                                f"[POKA-KERF-REPAIR] {debug_tag} | parcial "
+                                f"expulsadas={len(expulsadas)} quedan={len(hoja.get('piezas') or [])} "
+                                f"| was={detail_gap}"
+                            )
+                            print(msg, flush=True)
+                            _dbg_nesting(msg)
+                        else:
+                            msg = (
+                                f"[POKA-KERF-FAIL] {debug_tag} | kerf={kerf_override} "
+                                f"margin={margin_override} | {detail_gap}"
+                            )
+                            print(msg, flush=True)
+                            _dbg_nesting(msg)
+                            return (
+                                marcar_pack_fault(
+                                    {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+                                    f"kerf_gap:{detail_gap}",
+                                ),
+                                restos_default,
+                            )
+
         return hoja, restos
 
     except Exception as e:
@@ -2364,8 +2510,15 @@ class MotorNesting:
         if not mejor_resultado:
             return None
             
-        # --- VENOM POLISHER AI (Re-nesteo Manual) ---
+        # --- Lite hole-fill + Venom (re-nesteo manual) ---
         import os
+        try:
+            from .venom_hole_fill import apply_lite_hole_fill
+
+            engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
+            apply_lite_hole_fill(mejor_resultado, engine_id=engine_id)
+        except Exception:
+            pass
         try:
             from . import venom_ai
             engine_id = os.environ.get("ARGA_MOTOR_NESTING", "svgnest_ultra")
@@ -3778,6 +3931,12 @@ class MotorNesting:
             f"gap_regla={regla_gap.get('label') if regla_gap else 'CU'} | "
             f"opt={config_opt} | corner={config_corner} | wo={wo_name}"
         )
+        print(
+            f"[KERF-TABLA] clave={clave} | entre_piezas={float(config_kerf):.3f}in | "
+            f"placa_pieza={float(config_margin):.3f}in | "
+            f"regla={(regla_gap or {}).get('label') or 'CU'}",
+            flush=True,
+        )
         for pz in piezas:
             poly_dbg = pz.get("poly")
             _dbg_nesting(
@@ -4365,6 +4524,16 @@ class MotorNesting:
                         f"ruta={pz.get('ruta', 'SIN_RUTA')}"
                     )
 
+                if hojas_finales:
+                    # Ya hay placas buenas: no tumbar el grupo entero.
+                    # El candado de inventario al final marca incompleto.
+                    _dbg_nesting(
+                        f"[EMPAQUE-STOP-PARCIAL] clave={clave} | "
+                        f"hojas_ok={len(hojas_finales)} | target={tgt} | "
+                        f"utiles={n_utiles} — se conserva progreso"
+                    )
+                    break
+
                 if n_utiles <= 0:
                     if n_skip_fmt > 0:
                         msg_err = (
@@ -4536,6 +4705,66 @@ class MotorNesting:
                     clave=clave,
                     engine_id=engine_compact,
                 )
+                try:
+                    from .venom_hole_fill import apply_lite_hole_fill
+
+                    apply_lite_hole_fill(hoja_ganadora, engine_id=engine_compact)
+                except Exception as hole_ex:
+                    _dbg_nesting(f"[LITE-HOLE-FILL-ERR] {hole_ex}")
+                # Post-compact: no permitir que band-close/fill reduzcan el kerf de tabla.
+                try:
+                    from .nest_poka_yoke import (
+                        reparar_separacion_minima_hoja,
+                        validar_separacion_minima_hoja,
+                    )
+
+                    ok_post, det_post = validar_separacion_minima_hoja(
+                        hoja_ganadora,
+                        float(config_kerf or 0.0),
+                        margin_in=float(config_margin or 0.0),
+                        w_placa=float(candidato_ganador["w"]),
+                        h_placa=float(candidato_ganador["h"]),
+                    )
+                    if not ok_post:
+                        ok_fix, det_fix, expulsadas = reparar_separacion_minima_hoja(
+                            hoja_ganadora,
+                            float(config_kerf or 0.0),
+                            margin_in=float(config_margin or 0.0),
+                            w_placa=float(candidato_ganador["w"]),
+                            h_placa=float(candidato_ganador["h"]),
+                        )
+                        if ok_fix and hoja_ganadora.get("piezas"):
+                            if expulsadas:
+                                rein = _piezas_expulsadas_a_pool(expulsadas)
+                                pendientes_est = list(pendientes_est) + rein
+                                msg_post = (
+                                    f"[POKA-KERF-REPAIR] post-compact clave={clave} | "
+                                    f"expulsadas={len(expulsadas)} reinject={len(rein)} | "
+                                    f"was={det_post}"
+                                )
+                                print(msg_post, flush=True)
+                                _dbg_nesting(msg_post)
+                            elif "ok_separado" in str(det_fix or ""):
+                                msg_post = (
+                                    f"[POKA-KERF-NUDGE] post-compact clave={clave} | "
+                                    f"{det_fix} | was={det_post}"
+                                )
+                                print(msg_post, flush=True)
+                                _dbg_nesting(msg_post)
+                        else:
+                            msg_post = (
+                                f"[POKA-KERF-FAIL] post-compact clave={clave} | {det_post}"
+                            )
+                            print(msg_post, flush=True)
+                            _dbg_nesting(msg_post)
+                            raise RuntimeError(
+                                f"El nest viola la TABLA GAPS DE CORTE ({det_post}). "
+                                "No se envía a piso."
+                            )
+                except RuntimeError:
+                    raise
+                except Exception as poka_ex:
+                    _dbg_nesting(f"[POKA-KERF-CHECK-ERR] {poka_ex}")
                 delta = contar_piezas_reales_hoja(hoja_ganadora) - conteo_antes
                 if delta:
                     pendientes_est = calcular_restos_por_delta(pendientes_est, delta)
@@ -4959,19 +5188,25 @@ class MotorNesting:
             if not ok_inv:
                 _dbg_nesting(f"[INVENTARIO-INCOMPLETO] clave={clave} | {msg_inv}")
                 inventario_aviso = msg_inv
-                from .nest_poka_yoke import allow_incomplete_nest
+                from .nest_poka_yoke import allow_incomplete_nest, aplicar_resultado_inventario
 
+                # Conservar hojas ya nestéadas; el poka marca error/aviso sin borrar progreso.
+                grupo_parcial = {
+                    "hojas": hojas_finales,
+                    "costo_total": costo_total_lote,
+                    "advertencia": msg_inv,
+                    "inventario_incompleto": True,
+                }
+                aplicar_resultado_inventario(
+                    grupo_parcial, ok_inv=False, msg_inv=msg_inv
+                )
                 if not allow_incomplete_nest():
-                    # Poka-yoke: no devolver grupo "OK" con BOM incompleto.
-                    return clave, {
-                        "error": (
-                            f"{msg_inv} "
-                            "(Poka-yoke: nest incompleto rechazado. "
-                            "ARGA_ALLOW_INCOMPLETE_NEST=1 para aviso suave.)"
-                        ),
-                        "advertencia": msg_inv,
-                        "inventario_incompleto": True,
-                    }
+                    grupo_parcial["error"] = (
+                        f"{msg_inv} "
+                        "(Poka-yoke: nest incompleto rechazado. "
+                        "ARGA_ALLOW_INCOMPLETE_NEST=1 para aviso suave.)"
+                    )
+                return clave, grupo_parcial
             # Construimos mapa 1-a-1 por nombre base para no agarrar siempre
             # la primera coincidencia cuando hay piezas repetidas.
             source_map = {}
@@ -5084,6 +5319,16 @@ class MotorNesting:
                             compact_lite.apply_band_compact(hoja, engine_id=engine_id)
             except Exception as compact_ex:
                 _dbg_nesting(f"[COMPACT-BATCH-ERR] {compact_ex}")
+            # Lite hole-fill DESPUÉS del compact final (huéspedes en orificios).
+            try:
+                from .venom_hole_fill import apply_lite_hole_fill, lite_hole_fill_enabled
+
+                if lite_hole_fill_enabled():
+                    for hoja in hojas_finales:
+                        if isinstance(hoja, dict) and (hoja.get("piezas") or []):
+                            apply_lite_hole_fill(hoja, engine_id=engine_id)
+            except Exception as hole_ex:
+                _dbg_nesting(f"[LITE-HOLE-FILL-BATCH-ERR] {hole_ex}")
             try:
                 from . import venom_ai
 

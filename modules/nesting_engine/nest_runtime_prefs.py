@@ -16,6 +16,8 @@ _DEFAULTS: dict[str, Any] = {
     # OFF: cobre normal (sin_gap / RTZCU / Amada vertical según geometría).
     # ON: fuerza gap + DXF/STEP y desactiva RTZCU / CyPTube / fixtura Amada nest.
     "cu_force_dxf_step": False,
+    # Switch footer: EXPORTAR A SERVIDOR Y BD (default ON = comportamiento histórico).
+    "exportar_a_servidor": True,
     "spark": {
         "host": "192.168.2.35",
         "port": 8765,
@@ -77,6 +79,7 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
 
     prefs["prefer"] = normalize_prefer(str(prefs.get("prefer") or "local"))
     prefs["cu_force_dxf_step"] = bool(prefs.get("cu_force_dxf_step"))
+    prefs["exportar_a_servidor"] = bool(prefs.get("exportar_a_servidor", True))
     spark = dict(prefs.get("spark") or {})
     for key, value in _DEFAULTS["spark"].items():
         spark.setdefault(key, value)
@@ -85,10 +88,21 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
 
 
 def save_nest_runtime_prefs(prefs: dict[str, Any]) -> Path:
-    data = _deep_merge(_DEFAULTS, dict(prefs or {}))
+    """Merge parcial: preserva claves no enviadas (p.ej. exportar_a_servidor)."""
+    path = config_path()
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                existing = raw
+        except Exception:
+            pass
+    data = _deep_merge(_DEFAULTS, existing)
+    data = _deep_merge(data, dict(prefs or {}))
     data["prefer"] = normalize_prefer(str(data.get("prefer") or "local"))
     data["cu_force_dxf_step"] = bool(data.get("cu_force_dxf_step"))
-    path = config_path()
+    data["exportar_a_servidor"] = bool(data.get("exportar_a_servidor", True))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
@@ -98,3 +112,16 @@ def is_cu_force_dxf_step_enabled(prefs: dict[str, Any] | None = None) -> bool:
     """True = cobre solo con gap + DXF/STEP (sin RTZCU / sin_gap / Amada nest)."""
     data = prefs if isinstance(prefs, dict) else load_nest_runtime_prefs()
     return bool(data.get("cu_force_dxf_step"))
+
+
+def is_exportar_a_servidor_enabled(prefs: dict[str, Any] | None = None) -> bool:
+    """True = export escribe a servidor/BD; False = solo nest locales."""
+    data = prefs if isinstance(prefs, dict) else load_nest_runtime_prefs()
+    return bool(data.get("exportar_a_servidor", True))
+
+
+def set_exportar_a_servidor(enabled: bool) -> Path:
+    """Persiste el switch footer EXPORTAR A SERVIDOR Y BD."""
+    prefs = load_nest_runtime_prefs()
+    prefs["exportar_a_servidor"] = bool(enabled)
+    return save_nest_runtime_prefs(prefs)

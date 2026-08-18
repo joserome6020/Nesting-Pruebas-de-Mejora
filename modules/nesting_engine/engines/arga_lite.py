@@ -11,7 +11,8 @@ class ArgaLiteEngine:
         engine_id="arga_lite",
         display_name="ARGA LITE",
         description=(
-            "MC rápido + pack combinado + compact (band-close/backfill). "
+            "MC rápido + pack combinado + compact (band-close/backfill) + "
+            "hole-fill en orificios grandes (ARGA_LITE_HOLE_FILL=1). "
             "No usa pipeline FORCE. Venom opt-in. Más pases: ARGA_LITE_PASSES=2."
         ),
         phase=0,

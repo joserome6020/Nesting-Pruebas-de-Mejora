@@ -122,7 +122,14 @@ class SistemaNestingPro(QMainWindow):
         self.lote_editado_dirty = False
         self.source_dxf_paths_workspace = []
         self.source_dxf_paths_by_lote = []
-        self.exportar_a_servidor = True
+        try:
+            from modules.nesting_engine.nest_runtime_prefs import (
+                is_exportar_a_servidor_enabled,
+            )
+
+            self.exportar_a_servidor = bool(is_exportar_a_servidor_enabled())
+        except Exception:
+            self.exportar_a_servidor = True
         self.COL_CONFIG = [
             {"min": 250, "weight": 4}, {"min": 150, "weight": 2}, {"min": 80, "weight": 1},
             {"min": 120, "weight": 1}, {"min": 100, "weight": 1}, {"min": 100, "weight": 1},
@@ -211,7 +218,7 @@ class SistemaNestingPro(QMainWindow):
         self.switch_exportar_servidor = HerinoxSwitch(
             label_on="EXPORTAR A SERVIDOR Y BD",
             label_off="SOLO NESTEOS LOCALES",
-            checked=True,
+            checked=bool(getattr(self, "exportar_a_servidor", True)),
         )
         self.switch_exportar_servidor.toggled.connect(self._on_toggle_exportar_servidor)
         footer.addWidget(self.switch_exportar_servidor)
@@ -237,6 +244,12 @@ class SistemaNestingPro(QMainWindow):
 
     def _on_toggle_exportar_servidor(self, activo: bool):
         self.exportar_a_servidor = bool(activo)
+        try:
+            from modules.nesting_engine.nest_runtime_prefs import set_exportar_a_servidor
+
+            set_exportar_a_servidor(self.exportar_a_servidor)
+        except Exception as exc:
+            print(f"[PREFS] exportar_a_servidor no persistió: {exc}", flush=True)
 
     def abrir_buzon_soporte(self):
         """Abre el canal de soporte sin interrumpir el trabajo de nesting."""

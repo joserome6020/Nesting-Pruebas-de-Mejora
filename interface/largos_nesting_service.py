@@ -1028,17 +1028,102 @@ def _slot_overflow(cortes: list[dict], largo_com: float) -> bool:
     return used > util + 0.02
 
 
-def obtener_exclusiones_mrl_unidades(app, lote_idx: int) -> set[str]:
-    raw = (getattr(app, "exclusiones_mrl_unidades_por_lote", None) or {}).get(int(lote_idx))
+def _norm_job_key(job: str) -> str:
+    return str(job or "").strip().upper()
+
+
+def _exclusiones_mrl_config_path():
+    """JSON persistente: Pedir/No por job+lote (sobrevive cerrar nesteo / recalcular)."""
+    import os
+    from pathlib import Path
+
+    rel = os.path.join("_config", "largos_mrl_exclusiones.json")
+    try:
+        return Path(config.asegurar_archivo_persistente(rel))
+    except Exception:
+        return Path(__file__).resolve().parents[1] / rel
+
+
+def _load_exclusiones_mrl_disk() -> dict[str, Any]:
+    import json
+
+    path = _exclusiones_mrl_config_path()
+    try:
+        if path.is_file():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                jobs = raw.get("jobs")
+                if isinstance(jobs, dict):
+                    return raw
+                return {"version": 1, "jobs": raw}
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] leer exclusiones MRL: {exc}", flush=True)
+    return {"version": 1, "jobs": {}}
+
+
+def _save_exclusiones_mrl_disk(payload: dict[str, Any]) -> None:
+    import json
+
+    path = _exclusiones_mrl_config_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] guardar exclusiones MRL: {exc}", flush=True)
+
+
+def _exclusiones_mrl_desde_disk(job: str, lote_idx: int) -> set[str]:
+    data = _load_exclusiones_mrl_disk()
+    jobs = data.get("jobs") or {}
+    job_map = jobs.get(_norm_job_key(job)) or {}
+    raw = job_map.get(str(int(lote_idx)))
     if not raw:
         return set()
     return {str(k) for k in raw}
 
 
-def guardar_exclusiones_mrl_unidades(app, lote_idx: int, unidades_excluidas: set[str]) -> None:
+def _persistir_exclusiones_mrl_disk(job: str, lote_idx: int, unidades: set[str]) -> None:
+    data = _load_exclusiones_mrl_disk()
+    jobs = data.setdefault("jobs", {})
+    jkey = _norm_job_key(job)
+    job_map = jobs.setdefault(jkey, {})
+    if unidades:
+        job_map[str(int(lote_idx))] = sorted(str(k) for k in unidades)
+    else:
+        # Vacío = todas en Pedir; no dejar basura.
+        job_map.pop(str(int(lote_idx)), None)
+        if not job_map:
+            jobs.pop(jkey, None)
+    data["version"] = 1
+    _save_exclusiones_mrl_disk(data)
+
+
+def obtener_exclusiones_mrl_unidades(app, lote_idx: int) -> set[str]:
+    idx = int(lote_idx)
+    mem = getattr(app, "exclusiones_mrl_unidades_por_lote", None) or {}
+    if idx in mem and mem[idx] is not None:
+        return {str(k) for k in (mem[idx] or set())}
+
+    job = str(getattr(app, "job_activo", "") or getattr(app, "plan_largos_job", "") or "")
+    from_disk = _exclusiones_mrl_desde_disk(job, idx)
     if not hasattr(app, "exclusiones_mrl_unidades_por_lote") or app.exclusiones_mrl_unidades_por_lote is None:
         app.exclusiones_mrl_unidades_por_lote = {}
-    app.exclusiones_mrl_unidades_por_lote[int(lote_idx)] = set(unidades_excluidas)
+    app.exclusiones_mrl_unidades_por_lote[idx] = set(from_disk)
+    return set(from_disk)
+
+
+def guardar_exclusiones_mrl_unidades(app, lote_idx: int, unidades_excluidas: set[str]) -> None:
+    idx = int(lote_idx)
+    excl = {str(k) for k in (unidades_excluidas or set())}
+    if not hasattr(app, "exclusiones_mrl_unidades_por_lote") or app.exclusiones_mrl_unidades_por_lote is None:
+        app.exclusiones_mrl_unidades_por_lote = {}
+    app.exclusiones_mrl_unidades_por_lote[idx] = set(excl)
+    job = str(getattr(app, "job_activo", "") or getattr(app, "plan_largos_job", "") or "")
+    if job:
+        _persistir_exclusiones_mrl_disk(job, idx, excl)
 
 
 def piezas_por_material(plan: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -1147,7 +1232,15 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
 
     app.plan_largos_por_lote = planes
     app.exclusiones_largos_pedido_por_lote = exclusiones
-    app.exclusiones_mrl_unidades_por_lote = {idx: set() for idx in planes}
+    # NO borrar Pedir/No: preservar memoria + disco por job/lote.
+    prev_mrl = dict(getattr(app, "exclusiones_mrl_unidades_por_lote", None) or {})
+    merged_mrl: dict[int, set[str]] = {}
+    for idx in planes:
+        if idx in prev_mrl and prev_mrl[idx] is not None:
+            merged_mrl[idx] = {str(k) for k in (prev_mrl[idx] or set())}
+        else:
+            merged_mrl[idx] = _exclusiones_mrl_desde_disk(job, idx)
+    app.exclusiones_mrl_unidades_por_lote = merged_mrl
     app.plan_largos_job = str(job or "").strip()
     app.plan_largos_sin_demanda_por_lote = sin_demanda
     app.plan_largos_error = error_calculo

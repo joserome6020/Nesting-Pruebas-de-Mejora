@@ -120,8 +120,10 @@ COLOR_GRIS_DARK = "#1E293B"
 COLOR_GRIS_MED = "#475569"
 COLOR_TEXTO_TITULO = "#0F172A"
 COLOR_TEXTO_SECUNDARIO = "#64748B"
+from modules.nesting_engine.cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
+
 DEFAULT_KERF_IN = 0.15
-DEFAULT_MARGIN_IN = 0.15
+DEFAULT_MARGIN_IN = PLATE_TO_PIECE_DEFAULT_IN
 
 
 from interface.qt.tabs._mixin_export import ExportMixin
@@ -189,8 +191,9 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
 
     def _margin_efectivo(self) -> float:
         from modules.nesting_engine.nest_poka_yoke import validar_margin_in
+        from modules.nesting_engine.cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
 
-        raw = getattr(self, "global_margin_val", 0.15)
+        raw = getattr(self, "global_margin_val", PLATE_TO_PIECE_DEFAULT_IN)
         if hasattr(self, "ent_margin"):
             try:
                 txt = str(self.ent_margin.text() or "").strip()

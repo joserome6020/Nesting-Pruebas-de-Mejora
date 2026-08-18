@@ -370,6 +370,24 @@ def densify_sheet(
     if not compact_enabled() or not isinstance(hoja, dict):
         return list(leftovers or [])
 
+    try:
+        from .cut_gaps_table import gaps_efectivos_para_hoja
+
+        kt, mt = gaps_efectivos_para_hoja(
+            hoja,
+            clave=clave,
+            kerf_fallback=kerf,
+            margin_fallback=margin if margin > 0 else None,
+        )
+        kerf = max(float(kerf or 0.0), float(kt)) if float(kerf or 0.0) > 0 else float(kt)
+        margin = (
+            max(float(margin or 0.0), float(mt))
+            if float(margin or 0.0) > 0
+            else float(mt)
+        )
+    except Exception:
+        pass
+
     w = float(w_placa if w_placa is not None else (hoja.get("placa_w") or 0) or 0)
     h = float(h_placa if h_placa is not None else (hoja.get("placa_h") or 0) or 0)
     pool = list(leftovers or [])
@@ -392,3 +410,318 @@ def densify_sheet(
 
     apply_band_compact(hoja, engine_id=engine_id)
     return pool
+
+
+def _classify_cavity_guests(hoja: dict) -> tuple[set[int], dict[int, list[int]]]:
+    """Guests dentro de orificio → skip_idxs + rigid_children[host]=[guests]."""
+    from .venom_hole_fill import (
+        _guest_already_in_cavity,
+        _is_cavity_host,
+        _is_virtual,
+        _piece_poly,
+        list_closed_interior_cavities,
+    )
+
+    skip: set[int] = set()
+    rigid: dict[int, list[int]] = {}
+    piezas = hoja.get("piezas") or []
+    hosts: list[tuple[int, list]] = []
+    for idx, p in enumerate(piezas):
+        if _is_virtual(str(p.get("nombre") or "")):
+            continue
+        poly = _piece_poly(p)
+        if poly is None:
+            continue
+        if _is_cavity_host(poly, p):
+            cavs = list_closed_interior_cavities(poly)
+            if cavs:
+                hosts.append((idx, cavs))
+
+    if not hosts:
+        return skip, rigid
+
+    for idx, p in enumerate(piezas):
+        if _is_virtual(str(p.get("nombre") or "")):
+            continue
+        # Hosts no son guests.
+        if any(idx == h for h, _ in hosts):
+            continue
+        poly = _piece_poly(p)
+        if poly is None:
+            continue
+        for host_idx, cavs in hosts:
+            if _guest_already_in_cavity(poly, cavs):
+                skip.add(idx)
+                rigid.setdefault(host_idx, []).append(idx)
+                break
+    return skip, rigid
+
+
+def _gravity_slide_exterior(
+    hoja: dict,
+    *,
+    skip_idxs: set[int],
+    rigid_children: dict[int, list[int]],
+    engine_id: str = "arga_lite",
+    max_slide_mm: float | None = None,
+) -> dict[str, Any]:
+    """Desliza piezas exteriores (y hosts con sus guests) hacia origen."""
+    from .venom_band_close import (
+        _apply_group_move,
+        _group_can_move,
+        _piece_entries,
+    )
+
+    stats = {"moved": 0, "mm": 0.0}
+    entries = _piece_entries(hoja)
+    if len(entries) < 2:
+        return stats
+
+    skip = {int(i) for i in skip_idxs}
+    kids = {int(k): [int(x) for x in v] for k, v in (rigid_children or {}).items()}
+    placa_w = float(hoja.get("placa_w", 0) or 0)
+    placa_h = float(hoja.get("placa_h", 0) or 0)
+    try:
+        from .cut_gaps_table import gaps_efectivos_para_hoja
+
+        kerf_in, margin_in = gaps_efectivos_para_hoja(hoja)
+    except Exception:
+        kerf_in = float(hoja.get("kerf_usado", 0.0) or 0.0)
+        margin_in = float(hoja.get("margin_usado", 0.25) or 0.25)
+    kerf_half = max((kerf_in * 25.4) / 2.0, 0.5)
+    plate_inset = max(float(margin_in) * 25.4, 0.0)
+    step = min(0.5, max(kerf_half * 0.15, 0.25))
+    if max_slide_mm is None:
+        max_mm = min(600.0, max(placa_w, placa_h) * 0.35)
+    else:
+        max_mm = max(1.0, float(max_slide_mm))
+
+    movable = [e for e in entries if e["idx"] not in skip]
+    # Lejos del origen primero → llenan huecos que dejaron las piezas metidas al orificio.
+    movable.sort(
+        key=lambda e: -(float(e["poly"].bounds[0]) + float(e["poly"].bounds[1]))
+    )
+
+    for e in movable:
+        members = [e]
+        moved_mm = 0.0
+        for dx_unit, dy_unit in ((0.0, -step), (-step, 0.0)):
+            while moved_mm + step <= max_mm + 1e-9:
+                if not _group_can_move(
+                    members,
+                    entries,
+                    dx_unit,
+                    dy_unit,
+                    kerf_half,
+                    placa_w,
+                    placa_h,
+                    rigid_children=kids,
+                    plate_inset_mm=plate_inset,
+                ):
+                    break
+                _apply_group_move(
+                    members, entries, dx_unit, dy_unit, rigid_children=kids
+                )
+                moved_mm += step
+        if moved_mm > 0.5:
+            stats["moved"] += 1
+            stats["mm"] += moved_mm
+
+    if stats["moved"]:
+        print(
+            f"[LITE-RECOMPACT] gravity Motor: {engine_id} | "
+            f"moved={stats['moved']} mm={stats['mm']:.1f}",
+            flush=True,
+        )
+    return stats
+
+
+def recompact_exterior_after_hole_fill(
+    hoja: dict, engine_id: str = "arga_lite"
+) -> dict[str, Any]:
+    """Tras meter guests a orificios: reacomoda lo que NO está dentro de una pieza.
+
+    - Guests en cavidad: no se mueven solos (van pegados al host si el host se mueve).
+    - Exterior + hosts: band-close + gravedad hacia origen para cerrar huecos.
+    """
+    stats: dict[str, Any] = {
+        "enabled": compact_enabled(),
+        "skipped": True,
+        "frozen": 0,
+        "band": {},
+        "gravity": {},
+        "reverted": False,
+    }
+    if not compact_enabled() or not isinstance(hoja, dict):
+        return stats
+    filled = int((hoja.get("lite_hole_fill") or {}).get("filled") or 0)
+    if filled <= 0:
+        stats["reason"] = "no_fill"
+        return stats
+
+    skip, rigid = _classify_cavity_guests(hoja)
+    stats["frozen"] = len(skip)
+    if not skip and filled > 0:
+        # Fill reportó movimientos pero no clasificó guests — igual compactar todo.
+        skip, rigid = set(), {}
+
+    snapshot = copy.deepcopy(hoja.get("piezas") or [])
+    t0 = time.perf_counter()
+    try:
+        from .venom_band_close import _piece_entries, close_inter_band_gaps
+
+        entries = _piece_entries(hoja)
+        band = close_inter_band_gaps(
+            hoja,
+            engine_id=engine_id,
+            force=True,
+            skip_idxs=skip,
+            rigid_children=rigid,
+            all_entries=entries,
+        )
+        stats["band"] = {
+            "bands_y": int(band.get("bands_y") or 0),
+            "bands_x": int(band.get("bands_x") or 0),
+            "mm_y": float(band.get("mm_y") or 0),
+            "mm_x": float(band.get("mm_x") or 0),
+        }
+        grav = _gravity_slide_exterior(
+            hoja, skip_idxs=skip, rigid_children=rigid, engine_id=engine_id
+        )
+        stats["gravity"] = grav
+        stats["skipped"] = False
+        stats["t"] = time.perf_counter() - t0
+    except Exception as exc:
+        stats["error"] = str(exc)
+        hoja["piezas"] = snapshot
+        return stats
+
+    # Pokayoke con polys en memoria (no fail-closed por poligonos ausentes).
+    try:
+        from .venom_band_close import _piece_entries
+
+        ents = _piece_entries(hoja)
+        bad = False
+        detail = ""
+        for i in range(len(ents)):
+            for j in range(i + 1, len(ents)):
+                try:
+                    a = float(ents[i]["poly"].intersection(ents[j]["poly"]).area)
+                except Exception:
+                    continue
+                if a > 25.0:
+                    ni = str(ents[i]["p"].get("nombre") or i)
+                    nj = str(ents[j]["p"].get("nombre") or j)
+                    bad = True
+                    detail = f"{ni} × {nj} ({a:.0f} mm²)"
+                    break
+            if bad:
+                break
+        if bad:
+            hoja["piezas"] = snapshot
+            stats["reverted"] = True
+            stats["revert_detail"] = detail
+            print(
+                f"[LITE-RECOMPACT] REVERTIDO | {detail}",
+                flush=True,
+            )
+            return stats
+    except Exception as exc:
+        hoja["piezas"] = snapshot
+        stats["reverted"] = True
+        stats["error"] = str(exc)
+        return stats
+
+    print(
+        f"[LITE-RECOMPACT] Motor: {engine_id} | frozen={stats['frozen']} | "
+        f"band_y={stats['band'].get('bands_y', 0)} "
+        f"band_x={stats['band'].get('bands_x', 0)} | "
+        f"grav={stats['gravity'].get('moved', 0)} | t={stats.get('t', 0):.2f}s",
+        flush=True,
+    )
+    hoja["lite_recompact"] = dict(stats)
+    return stats
+
+
+def densificar_nido_en_placa(hoja: dict, engine_id: str = "arga_lite") -> dict[str, Any]:
+    """Junta el nido al origen (band-close + gravedad) con kerf/margen de tabla.
+
+    No depende de Venom. Ultra/renest con Venom OFF dejaba el acomodo desparramado
+    (18% de área pero huecos de pulgadas entre piezas).
+    """
+    stats: dict[str, Any] = {
+        "enabled": compact_enabled(),
+        "skipped": True,
+        "band": {},
+        "gravity": {},
+        "reverted": False,
+    }
+    if not compact_enabled() or not isinstance(hoja, dict):
+        return stats
+    if not (hoja.get("piezas") or []):
+        return stats
+
+    snapshot = copy.deepcopy(hoja.get("piezas") or [])
+    t0 = time.perf_counter()
+    try:
+        from .venom_band_close import close_inter_band_gaps
+
+        skip, rigid = _classify_cavity_guests(hoja)
+        placa_w = float(hoja.get("placa_w", 0) or 0)
+        placa_h = float(hoja.get("placa_h", 0) or 0)
+        band = close_inter_band_gaps(
+            hoja,
+            engine_id=engine_id,
+            force=True,
+            skip_idxs=skip,
+            rigid_children=rigid,
+        )
+        stats["band"] = {
+            "bands_y": int(band.get("bands_y") or 0),
+            "bands_x": int(band.get("bands_x") or 0),
+            "mm_y": float(band.get("mm_y") or 0),
+            "mm_x": float(band.get("mm_x") or 0),
+        }
+        grav = _gravity_slide_exterior(
+            hoja,
+            skip_idxs=skip,
+            rigid_children=rigid,
+            engine_id=engine_id,
+            max_slide_mm=max(placa_w, placa_h, 1.0),
+        )
+        stats["gravity"] = grav
+        stats["skipped"] = False
+        stats["t"] = time.perf_counter() - t0
+    except Exception as exc:
+        hoja["piezas"] = snapshot
+        stats["error"] = str(exc)
+        stats["reverted"] = True
+        return stats
+
+    try:
+        from .nest_poka_yoke import validar_separacion_minima_hoja
+
+        ok, detail = validar_separacion_minima_hoja(hoja)
+        if not ok:
+            hoja["piezas"] = snapshot
+            stats["reverted"] = True
+            stats["revert_detail"] = detail
+            print(f"[DENSIFY] REVERTIDO | {detail}", flush=True)
+            return stats
+    except Exception as exc:
+        hoja["piezas"] = snapshot
+        stats["reverted"] = True
+        stats["error"] = str(exc)
+        return stats
+
+    print(
+        f"[DENSIFY] Motor: {engine_id} | "
+        f"band_y={stats['band'].get('bands_y', 0)} "
+        f"band_x={stats['band'].get('bands_x', 0)} | "
+        f"grav={stats['gravity'].get('moved', 0)} "
+        f"mm={float(stats['gravity'].get('mm') or 0):.1f} | "
+        f"t={stats.get('t', 0):.2f}s",
+        flush=True,
+    )
+    hoja["densify_pack"] = dict(stats)
+    return stats

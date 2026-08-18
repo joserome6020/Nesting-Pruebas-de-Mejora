@@ -35,9 +35,9 @@ CUT_GAP_RULES: tuple[dict[str, Any], ...] = (
     {"key": "cal_11", "label": "Cal 11", "kerf_in": 0.150, "gauges": ("11",)},
     {"key": "cal_10", "label": "Cal 10", "kerf_in": 0.150, "gauges": ("10",)},
     {"key": "thk_0188", "label": 'Cal 0.188"', "kerf_in": 0.150, "thicknesses": (0.188,)},
-    {"key": "thk_0250", "label": 'Cal 0.250"', "kerf_in": 0.200, "thicknesses": (0.250,)},
-    {"key": "thk_03125", "label": 'Cal 0.3125"', "kerf_in": 0.200, "thicknesses": (0.3125,)},
-    {"key": "thk_0375", "label": 'Cal 0.375"', "kerf_in": 0.200, "thicknesses": (0.375,)},
+    {"key": "thk_0250", "label": 'Cal 0.250"', "kerf_in": 0.250, "thicknesses": (0.250,)},
+    {"key": "thk_03125", "label": 'Cal 0.3125"', "kerf_in": 0.250, "thicknesses": (0.3125,)},
+    {"key": "thk_0375", "label": 'Cal 0.375"', "kerf_in": 0.250, "thicknesses": (0.375,)},
     {"key": "thk_0500", "label": 'Cal 0.500"', "kerf_in": 0.250, "thicknesses": (0.500,)},
     {"key": "thk_0625", "label": 'Cal 0.625"', "kerf_in": 0.250, "thicknesses": (0.625,)},
     {"key": "thk_0750", "label": 'Cal 0.750"', "kerf_in": 0.250, "thicknesses": (0.750,)},
@@ -229,3 +229,71 @@ def gaps_for_calibre(
     kerf = float(current["kerf_by_rule"][rule_key])
     margin = float(current["plate_to_piece_in"])
     return kerf, margin, rule
+
+
+def gaps_efectivos_para_hoja(
+    hoja: dict | None = None,
+    *,
+    clave: str = "",
+    kerf_fallback: float | None = None,
+    margin_fallback: float | None = None,
+) -> tuple[float, float]:
+    """Kerf/margen oficiales para cualquier movimiento de piezas.
+
+    Prioridad:
+      1) ``gaps_for_calibre`` desde calibre de la hoja/clave
+      2) ``kerf_usado`` / ``margin_usado`` ya sellados en la hoja
+      3) fallbacks explícitos del caller
+      4) placa→pieza 0.250" (nunca 0.15" como margen de acero)
+    """
+    cal = ""
+    if isinstance(hoja, dict):
+        cal = str(hoja.get("placa_cal") or hoja.get("calibre") or "").strip()
+    if not cal:
+        clv = str(clave or (hoja or {}).get("clave") or "").strip()
+        if "_" in clv:
+            cal = clv.split("_", 1)[0].strip()
+        else:
+            cal = clv
+    if cal:
+        try:
+            return gaps_for_calibre(cal)[:2]
+        except CutGapTableError:
+            pass
+        except Exception:
+            pass
+
+    kerf = None
+    margin = None
+    if isinstance(hoja, dict):
+        try:
+            k = float(hoja.get("kerf_usado") or 0.0)
+            if k > 0:
+                kerf = k
+        except Exception:
+            pass
+        try:
+            m = float(hoja.get("margin_usado") or 0.0)
+            if m > 0:
+                margin = m
+        except Exception:
+            pass
+    if kerf is None and kerf_fallback is not None:
+        try:
+            kf = float(kerf_fallback)
+            if kf > 0:
+                kerf = kf
+        except Exception:
+            pass
+    if margin is None and margin_fallback is not None:
+        try:
+            mf = float(margin_fallback)
+            if mf >= 0:
+                margin = mf
+        except Exception:
+            pass
+    if kerf is None:
+        kerf = 0.15  # último recurso; acero debe haber resuelto tabla arriba
+    if margin is None:
+        margin = float(PLATE_TO_PIECE_DEFAULT_IN)
+    return float(kerf), float(margin)

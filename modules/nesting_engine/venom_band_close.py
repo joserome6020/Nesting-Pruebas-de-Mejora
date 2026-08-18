@@ -90,24 +90,56 @@ def _collides(
     others: list,
     kerf_half: float,
 ) -> bool:
+    """Pieza↔pieza: distancia exacta ≥ kerf completo (2×kerf_half). Sin buffer flojo."""
+    kerf_full = max(float(kerf_half) * 2.0, 1.0)
     try:
-        test_clear = test_poly.buffer(kerf_half, resolution=2, join_style=2)
+        from .nest_poka_yoke import distancia_menor_que_kerf_mm, metal_solapa
     except Exception:
-        test_clear = test_poly
-    tc = test_clear.bounds
+        distancia_menor_que_kerf_mm = None  # type: ignore
+        metal_solapa = None  # type: ignore
+
+    tb = test_poly.bounds
+    pad = kerf_full + 1.0
     for op in others:
         if op is None or getattr(op, "is_empty", True):
             continue
         ob = op.bounds
-        if tc[2] <= ob[0] or tc[0] >= ob[2] or tc[3] <= ob[1] or tc[1] >= ob[3]:
+        if (
+            tb[2] + pad < ob[0]
+            or tb[0] - pad > ob[2]
+            or tb[3] + pad < ob[1]
+            or tb[1] - pad > ob[3]
+        ):
             continue
+        if metal_solapa is not None and metal_solapa(test_poly, op):
+            return True
+        if distancia_menor_que_kerf_mm is not None:
+            if distancia_menor_que_kerf_mm(test_poly, op, kerf_full):
+                return True
+            continue
+        # Fallback legacy
         try:
-            op_clear = op.buffer(kerf_half, resolution=2, join_style=2)
+            if float(test_poly.distance(op)) + 1e-6 < kerf_full:
+                return True
         except Exception:
-            op_clear = op
-        if test_clear.intersects(op_clear) and not test_clear.touches(op_clear):
             return True
     return False
+
+
+def _expand_members(members: list[dict], all_by_idx: dict[int, dict], rigid_children: dict[int, list[int]]) -> list[dict]:
+    """Incluye hijos rígidos (guests en orificio anclados al host)."""
+    seen = {m["idx"] for m in members}
+    out = list(members)
+    for m in members:
+        for cid in rigid_children.get(int(m["idx"]), []) or []:
+            if cid in seen:
+                continue
+            child = all_by_idx.get(int(cid))
+            if child is None:
+                continue
+            out.append(child)
+            seen.add(int(cid))
+    return out
 
 
 def _group_can_move(
@@ -118,27 +150,50 @@ def _group_can_move(
     kerf_half: float,
     placa_w: float,
     placa_h: float,
+    *,
+    rigid_children: dict[int, list[int]] | None = None,
+    plate_inset_mm: float | None = None,
 ) -> bool:
-    member_idx = {m["idx"] for m in members}
+    all_by_idx = {e["idx"]: e for e in all_entries}
+    expanded = _expand_members(members, all_by_idx, rigid_children or {})
+    member_idx = {m["idx"] for m in expanded}
     others = [e["poly"] for e in all_entries if e["idx"] not in member_idx]
-    for m in members:
+    # Placa→pieza: margen de tabla (0.250"), NUNCA kerf/2.
+    if plate_inset_mm is not None:
+        inset = float(plate_inset_mm)
+    else:
+        try:
+            from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
+
+            inset = float(PLATE_TO_PIECE_DEFAULT_IN) * 25.4
+        except Exception:
+            inset = 0.250 * 25.4
+    inset = max(inset, 0.0)
+    for m in expanded:
         test = affinity.translate(m["poly"], dx, dy)
         tb = test.bounds
-        if tb[0] < kerf_half - 1e-6 or tb[1] < kerf_half - 1e-6:
+        if tb[0] < inset - 1e-6 or tb[1] < inset - 1e-6:
             return False
-        if placa_w > 0 and tb[2] > placa_w - kerf_half + 1e-6:
+        if placa_w > 0 and tb[2] > placa_w - inset + 1e-6:
             return False
-        if placa_h > 0 and tb[3] > placa_h - kerf_half + 1e-6:
+        if placa_h > 0 and tb[3] > placa_h - inset + 1e-6:
             return False
-        # Entre miembros del mismo grupo: se mueven juntos → no chequear.
         if _collides(test, others, kerf_half):
             return False
     return True
 
 
-def _apply_group_move(members: list[dict], all_entries: list[dict], dx: float, dy: float) -> None:
+def _apply_group_move(
+    members: list[dict],
+    all_entries: list[dict],
+    dx: float,
+    dy: float,
+    *,
+    rigid_children: dict[int, list[int]] | None = None,
+) -> None:
     by_idx = {e["idx"]: e for e in all_entries}
-    for m in members:
+    expanded = _expand_members(members, by_idx, rigid_children or {})
+    for m in expanded:
         _translate_piece(m["p"], dx, dy)
         new_poly = affinity.translate(m["poly"], dx, dy)
         m["poly"] = new_poly
@@ -146,8 +201,9 @@ def _apply_group_move(members: list[dict], all_entries: list[dict], dx: float, d
             by_idx[m["idx"]]["poly"] = new_poly
 
 
-def _slide_bands_axis(
-    entries: list[dict],
+def _slide_bands_axis_full(
+    band_entries: list[dict],
+    full_entries: list[dict],
     *,
     axis: str,
     direction: float,
@@ -157,18 +213,15 @@ def _slide_bands_axis(
     merge_gap: float,
     step: float,
     max_mm: float,
+    rigid_children: dict[int, list[int]] | None = None,
+    plate_inset_mm: float | None = None,
 ) -> tuple[int, float]:
-    """
-    direction < 0 → hacia lo-/miny; > 0 → hacia hi/max.
-    Desliza bandas desde el extremo opuesto a la gravedad hacia el ancla.
-    """
-    bands = _cluster_bands(entries, axis=axis, merge_gap=merge_gap)
+    """Como _slide_bands_axis pero colisiona contra full_entries (incl. frozen)."""
+    bands = _cluster_bands(band_entries, axis=axis, merge_gap=merge_gap)
     if len(bands) < 2:
         return 0, 0.0
 
-    # Anclar la banda más cercana al borde de gravedad; mover el resto hacia ella.
     if direction < 0:
-        # hacia lo: procesar de hi → lo (bandas altas primero)
         order = sorted(range(len(bands)), key=lambda i: bands[i]["lo"], reverse=True)
         dx_unit, dy_unit = (-step, 0.0) if axis == "x" else (0.0, -step)
     else:
@@ -178,8 +231,6 @@ def _slide_bands_axis(
     closed = 0
     mm_tot = 0.0
     for bi in order:
-        # La banda ancla (extremo gravedad) no se mueve como grupo prioritario:
-        # si direction<0, ancla = banda con menor lo.
         if direction < 0 and bi == min(range(len(bands)), key=lambda i: bands[i]["lo"]):
             continue
         if direction > 0 and bi == max(range(len(bands)), key=lambda i: bands[i]["hi"]):
@@ -189,15 +240,24 @@ def _slide_bands_axis(
         moved = 0.0
         while moved + step <= max_mm + 1e-9:
             if not _group_can_move(
-                members, entries, dx_unit, dy_unit, kerf_half, placa_w, placa_h
+                members,
+                full_entries,
+                dx_unit,
+                dy_unit,
+                kerf_half,
+                placa_w,
+                placa_h,
+                rigid_children=rigid_children,
+                plate_inset_mm=plate_inset_mm,
             ):
                 break
-            _apply_group_move(members, entries, dx_unit, dy_unit)
+            _apply_group_move(
+                members, full_entries, dx_unit, dy_unit, rigid_children=rigid_children
+            )
             moved += step
         if moved > 0.5:
             closed += 1
             mm_tot += moved
-            # refrescar bounds de banda
             if axis == "y":
                 bands[bi]["lo"] = min(m["poly"].bounds[1] for m in members)
                 bands[bi]["hi"] = max(m["poly"].bounds[3] for m in members)
@@ -213,11 +273,18 @@ def close_inter_band_gaps(
     engine_id: str = "default",
     *,
     force: bool = False,
+    skip_idxs: set[int] | None = None,
+    rigid_children: dict[int, list[int]] | None = None,
+    all_entries: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
     Cierra aire entre hileras (Y) y columnas (X).
     Llamar DESPUÉS de gravedad individual y ANTES de sheet pockets.
     force=True: ignora flags (compact-lite / tests).
+
+    skip_idxs: no forman banda propia (p.ej. guests ya dentro de orificio).
+    rigid_children: host_idx → [guest_idx...] se mueven pegados al host.
+    all_entries: mapa completo de piezas (incl. skip) para colisiones/hijos.
     """
     enabled = bool(force) or band_close_enabled()
     stats: dict[str, Any] = {
@@ -232,27 +299,39 @@ def close_inter_band_gaps(
         return stats
 
     t0 = time.perf_counter()
-    entries = _piece_entries(hoja)
-    if len(entries) < 3:
+    full_entries = all_entries if all_entries is not None else _piece_entries(hoja)
+    skip = {int(i) for i in (skip_idxs or set())}
+    band_entries = [e for e in full_entries if e["idx"] not in skip]
+    if len(band_entries) < 2:
         return stats
 
     placa_w = float(hoja.get("placa_w", 0) or 0)
     placa_h = float(hoja.get("placa_h", 0) or 0)
-    kerf_in = float(hoja.get("kerf_usado", 0.0) or 0.0)
-    kerf_half = max((kerf_in * 25.4) / 2.0, 0.5)
+    try:
+        from .cut_gaps_table import gaps_efectivos_para_hoja
 
-    # merge_gap: piezas de la misma fila suelen solaparse en Y o quedar cerca.
-    areas = [float(e["poly"].area) for e in entries]
+        kerf_in, margin_in = gaps_efectivos_para_hoja(
+            hoja, clave=str(hoja.get("clave") or "")
+        )
+    except Exception:
+        kerf_in = float(hoja.get("kerf_usado", 0.0) or 0.0)
+        margin_in = float(hoja.get("margin_usado", 0.25) or 0.25)
+    kerf_half = max((kerf_in * 25.4) / 2.0, 0.5)
+    plate_inset = max(float(margin_in) * 25.4, 0.0)
+
+    areas = [float(e["poly"].area) for e in band_entries]
     areas.sort()
     med_area = areas[len(areas) // 2] if areas else 1.0
     typical_h = max(25.0, (med_area ** 0.5) * 0.35)
+    # Paso fino: 2 mm dejaba gaps ~0.17" bajo kerf 0.250" al compactar.
+    step = min(0.5, max(kerf_half * 0.15, 0.25))
     merge_gap = max(kerf_half * 4.0, typical_h * 0.45)
-    step = 2.0
     max_mm = min(900.0, max(placa_w, placa_h) * 0.45)
+    kids = {int(k): [int(x) for x in (v or [])] for k, v in (rigid_children or {}).items()}
 
-    # Preferir compactar hacia origen (esquina kerf) — misma convención que Venom.
-    cy, my = _slide_bands_axis(
-        entries,
+    cy, my = _slide_bands_axis_full(
+        band_entries,
+        full_entries,
         axis="y",
         direction=-1.0,
         kerf_half=kerf_half,
@@ -261,10 +340,12 @@ def close_inter_band_gaps(
         merge_gap=merge_gap,
         step=step,
         max_mm=max_mm,
+        rigid_children=kids,
+        plate_inset_mm=plate_inset,
     )
-    # Refrescar polys tras Y (entries ya mutados).
-    cx, mx = _slide_bands_axis(
-        entries,
+    cx, mx = _slide_bands_axis_full(
+        band_entries,
+        full_entries,
         axis="x",
         direction=-1.0,
         kerf_half=kerf_half,
@@ -273,6 +354,8 @@ def close_inter_band_gaps(
         merge_gap=merge_gap,
         step=step,
         max_mm=max_mm,
+        rigid_children=kids,
+        plate_inset_mm=plate_inset,
     )
 
     stats["bands_y"] = int(cy)
@@ -280,6 +363,7 @@ def close_inter_band_gaps(
     stats["mm_y"] = float(my)
     stats["mm_x"] = float(mx)
     stats["t"] = time.perf_counter() - t0
+    stats["skip"] = len(skip)
 
     hoja["venom_band_close"] = stats
     if cy or cx:

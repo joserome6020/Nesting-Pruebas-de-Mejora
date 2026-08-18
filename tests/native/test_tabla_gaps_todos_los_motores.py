@@ -96,7 +96,7 @@ def test_gaps_for_calibre_devuelve_tabla_por_calibre() -> None:
     assert abs(margin250 - PLATE_TO_PIECE_DEFAULT_IN) < 1e-9
     assert abs(margin1000 - PLATE_TO_PIECE_DEFAULT_IN) < 1e-9
 
-    # Kerf per calibre distinto: 0.150 (delgado) < 0.200 (medio) < 0.313 (1").
+    # Kerf per calibre: 0.150 (delgado) < 0.250 (medio) < 0.313 (1").
     assert kerf14 < kerf250 < kerf1000
 
 

@@ -973,22 +973,26 @@ class VisorNesting(QWidget):
             out.append(idx)
         return out
 
-    def _clearance_mm(self, hoja):
-        # Entre piezas: kerf completo (2 × kerf_radio del motor C++).
-        from modules.nesting_engine.sheet_integrity import kerf_efectivo_hoja
+    def _gaps_in_tabla(self, hoja):
+        """(kerf_entre_piezas, margin_placa) en pulgadas — siempre desde TABLA GAPS."""
+        from modules.nesting_engine.cut_gaps_table import gaps_efectivos_para_hoja
 
         clave = getattr(self, "clave_actual", "") or ""
-        return kerf_efectivo_hoja(hoja, clave=clave) * 25.4
+        return gaps_efectivos_para_hoja(hoja, clave=clave)
+
+    def _clearance_mm(self, hoja):
+        # Entre piezas: kerf completo de tabla (no UI 0.15 si el calibre pide más).
+        kerf_in, _ = self._gaps_in_tabla(hoja)
+        return float(kerf_in) * 25.4
 
     def _plate_margin_mm(self, hoja):
-        return float(hoja.get("margin_usado", 0.15) or 0.15) * 25.4
+        # Placa→pieza: siempre margen de tabla (0.250"), nunca 0.15.
+        _, margin_in = self._gaps_in_tabla(hoja)
+        return float(margin_in) * 25.4
 
     def _plate_inset_mm(self, hoja):
-        """
-        Distancia mínima del contorno real de la pieza al borde de la placa madre.
-        Replica el criterio del packer C++: bbox con buffer kerf/2 dentro del margen global.
-        """
-        return self._plate_margin_mm(hoja) + self._clearance_mm(hoja) * 0.5
+        """Distancia mínima contorno pieza → borde de placa = PLACA A PIEZA (tabla)."""
+        return self._plate_margin_mm(hoja)
 
     def _set_canvas_cursor(self, mode):
         if mode == self._cursor_mode:
@@ -1381,6 +1385,32 @@ class VisorNesting(QWidget):
         if len(idx_list) < 2:
             return True, ""
 
+        clearance = self._clearance_mm(hoja)
+        kerf_in = clearance / 25.4
+
+        def _poly_pieza(p):
+            poly = (p or {}).get("poly")
+            if poly is not None and not getattr(poly, "is_empty", True):
+                return poly
+            try:
+                from modules.nesting_engine.geometry_parser import reconstruir_poly_seguro
+
+                return reconstruir_poly_seguro((p or {}).get("poligonos") or [])
+            except Exception:
+                return None
+
+        def _gap_insuficiente(pa, pb) -> bool:
+            if self._piezas_empalmadas_pieza(pa, pb):
+                return True
+            try:
+                a = _poly_pieza(pa)
+                b = _poly_pieza(pb)
+                if a is None or b is None:
+                    return False
+                return float(a.distance(b)) + 1e-6 < float(clearance)
+            except Exception:
+                return False
+
         piezas_grupo = []
         for idx in idx_list:
             if 0 <= idx < len(hoja.get("piezas") or []):
@@ -1390,10 +1420,11 @@ class VisorNesting(QWidget):
 
         for i, pa in enumerate(piezas_grupo):
             for pb in piezas_grupo[i + 1 :]:
-                if self._piezas_empalmadas_pieza(pa, pb):
+                if _gap_insuficiente(pa, pb):
                     return False, (
-                        "Las piezas del grupo aún se solapan entre sí.\n\n"
-                        "Sepáralas hasta que no compartan área."
+                        "Las piezas del grupo no respetan el gap de la TABLA "
+                        f"GAPS DE CORTE ({kerf_in:.3f}\").\n\n"
+                        "Sepáralas al menos esa distancia (sin solapes)."
                     )
 
         for idx in idx_list:
@@ -1407,10 +1438,11 @@ class VisorNesting(QWidget):
                     continue
                 if not self._es_pieza_manual(p_otra.get("nombre", "")):
                     continue
-                if self._piezas_empalmadas_pieza(pieza_g, p_otra):
+                if _gap_insuficiente(pieza_g, p_otra):
                     nom = str(p_otra.get("nombre", "") or "pieza")
                     return False, (
-                        f"Una pieza del grupo se solapa con «{nom}».\n\n"
+                        f"Una pieza del grupo queda a menos de {kerf_in:.3f}\" "
+                        f"de «{nom}» (TABLA GAPS).\n\n"
                         "Aléjala de las demás piezas reales."
                     )
         return True, ""

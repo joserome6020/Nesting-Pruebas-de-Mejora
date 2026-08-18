@@ -49,13 +49,25 @@ def _es_grupo_cu(clave: str = "", hoja=None) -> bool:
 
 
 def kerf_efectivo_hoja(hoja, clave: str = "", kerf_global: float = DEFAULT_KERF_IN) -> float:
-    """Cobre/largos CU: kerf 0; placa: el kerf persistido de su propia hoja.
+    """Cobre/largos CU: kerf 0; placa: TABLA GAPS (calibre) o kerf_usado sellado.
 
-    ``kerf_global`` queda solo como fallback de hojas legacy sin valor. No puede
-    sobrescribir una regla por calibre de la tabla oficial de gaps.
+    ``kerf_global`` (UI 0.15) solo como último recurso si no hay calibre ni
+    ``kerf_usado``. Nunca debe ganarle a la tabla cuando el calibre es resoluble.
     """
     if _es_grupo_cu(clave, hoja):
         return 0.0
+    try:
+        from .cut_gaps_table import gaps_efectivos_para_hoja
+
+        k_tabla, _ = gaps_efectivos_para_hoja(
+            hoja if isinstance(hoja, dict) else None,
+            clave=clave,
+            kerf_fallback=kerf_global,
+        )
+        if k_tabla > 0:
+            return float(k_tabla)
+    except Exception:
+        pass
     try:
         k = float((hoja or {}).get("kerf_usado") or 0.0)
     except Exception:

@@ -33,6 +33,9 @@ if __name__ == "__main__":
     os.environ.setdefault("ARGA_LITE_PLATE_RENEST", "1")
     os.environ.setdefault("ARGA_LITE_PLATE_RENEST_TRIES", "1")
     os.environ.setdefault("ARGA_LITE_PLATE_RENEST_MC", "1")
+    # Lite: meter piezas chicas en orificios grandes del host (post-pase). Opt-out=0.
+    os.environ.setdefault("ARGA_LITE_HOLE_FILL", "1")
+    os.environ.setdefault("ARGA_LITE_VOID_FIRST", "1")
     try:
         from modules.win_dll_bootstrap import bootstrap_proceso_nesting
 

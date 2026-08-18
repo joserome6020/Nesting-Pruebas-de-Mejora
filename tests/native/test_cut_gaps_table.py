@@ -30,9 +30,7 @@ def test_tabla_oficial_por_calibre_y_espesor():
     # Valores exactos de la TABLA GAPS DE CORTE de planta.
     for calibre in ("18", "16", "14", "12", "11", "10", "0.188"):
         _assert_gap(calibre, 0.150)
-    for calibre in ("0.250", "5/16", "0.375"):
-        _assert_gap(calibre, 0.200)
-    for calibre in ("0.500", "5/8", "0.750"):
+    for calibre in ("0.250", "5/16", "0.375", "0.500", "5/8", "0.750"):
         _assert_gap(calibre, 0.250)
     for calibre in ("1.000", "1 1/4"):
         _assert_gap(calibre, 0.313)
@@ -67,9 +65,12 @@ def test_edicion_protegida_y_validada():
     assert margin == 0.300
 
 
-def test_integridad_no_reemplaza_kerf_de_hoja_por_fallback_legacy():
+def test_integridad_kerf_tabla_gana_a_ui_global():
+    # Con calibre 2: tabla 0.375 (el kerf_usado coincidente no cambia el resultado).
     assert kerf_efectivo_hoja({"kerf_usado": 0.375}, "2_A 36", kerf_global=0.150) == 0.375
-    assert kerf_efectivo_hoja({}, "18_A 36", kerf_global=0.100) == 0.100
+    # Sin kerf_usado: la TABLA del calibre gana al UI global (nunca 0.100 en Cal 18).
+    assert kerf_efectivo_hoja({}, "18_A 36", kerf_global=0.100) == 0.150
+    assert kerf_efectivo_hoja({}, "2_SS", kerf_global=0.150) == 0.375
 
 
 if __name__ == "__main__":
@@ -77,5 +78,5 @@ if __name__ == "__main__":
     test_decimales_reales_herinox_resuelven_su_calibre()
     test_calibre_fuera_de_tabla_falla_cerrado()
     test_edicion_protegida_y_validada()
-    test_integridad_no_reemplaza_kerf_de_hoja_por_fallback_legacy()
+    test_integridad_kerf_tabla_gana_a_ui_global()
     print("SMOKE OK")

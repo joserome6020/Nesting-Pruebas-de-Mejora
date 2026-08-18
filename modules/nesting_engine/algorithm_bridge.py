@@ -513,12 +513,43 @@ def empaquetar_una_hoja_libnest2d(
     return _assemble_pack_result(hoja_native, restos_native, piezas)
 
 
+def _svgnest_cluster_aabb(hoja: dict) -> float:
+    """Área del bbox del nido: misma cantidad de piezas, layout más compacto gana."""
+    minx, miny, maxx, maxy = 1e18, 1e18, -1e18, -1e18
+    n = 0
+    for p in (hoja or {}).get("piezas") or []:
+        poly = (p or {}).get("poly")
+        b = None
+        if poly is not None and hasattr(poly, "bounds"):
+            try:
+                b = poly.bounds
+            except Exception:
+                b = None
+        if b is None:
+            rings = (p or {}).get("poligonos") or []
+            for ring in rings:
+                for pt in ring or []:
+                    if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+                        n += 1
+                        minx, maxx = min(minx, float(pt[0])), max(maxx, float(pt[0]))
+                        miny, maxy = min(miny, float(pt[1])), max(maxy, float(pt[1]))
+            continue
+        n += 1
+        minx, maxx = min(minx, float(b[0])), max(maxx, float(b[2]))
+        miny, maxy = min(miny, float(b[1])), max(maxy, float(b[3]))
+    if n <= 0 or maxx <= minx or maxy <= miny:
+        return 1e18
+    return float((maxx - minx) * (maxy - miny))
+
+
 def _svgnest_score(hoja: dict, restos: list) -> tuple:
     placed = len(hoja.get("piezas") or [])
     pending = len(restos or [])
     area = float(hoja.get("area_usada", 0.0) or 0.0)
     efi = float(hoja.get("eficiencia", 0.0) or 0.0)
-    return (placed, area, -pending, efi)
+    # Si ya caben todas, un nest más junto (bbox menor) sí es mejora.
+    compact = -_svgnest_cluster_aabb(hoja)
+    return (placed, -pending, efi, area, compact)
 
 
 def _svgnest_is_better(hoja_a: dict, restos_a: list, hoja_b: dict, restos_b: list) -> bool:
@@ -617,6 +648,19 @@ def empaquetar_una_hoja_svgnest_ultra(
     )
 
     renest_accept = is_ultra_renest_accept_mode() and not is_ultra_sim_bounded()
+    if renest_accept:
+        # Un nest ortogonal desde gen 1. 30° deja diagonales; el refine
+        # continuo “corrige” un nido ya hecho y lo desarma.
+        fast_first = False
+        pop = max(8, min(16, int(ga_population or profile.get("ga_population", 12) or 12)))
+        rot_step = 90.0
+        first_gens = max(4, int(profile.get("mc_iterations", 6) or 6))
+        refine_gens = max(3, int(profile.get("refinar_intentos", 6) or 6))
+        print(
+            f"[ULTRA-HW] renest_calidad pop={pop} rot={rot_step} "
+            f"gens={first_gens} refine={refine_gens}",
+            flush=True,
+        )
     if renest_accept and cancel_checker is None:
         try:
             from .manager import _active_pack_cancel_checker
@@ -828,6 +872,8 @@ def empaquetar_una_hoja_svgnest_ultra(
                             f"{_efi_pct(mejor_hoja):.1f}% · mejoras={mejoras}"
                         )
                         notified_best = True
+                        # Nest completo: no seguir explorando (desarma el acomodo).
+                        break
                 seed += 1
         finally:
             pool.shutdown(wait=False, cancel_futures=False)
@@ -1300,6 +1346,62 @@ def _lite_resolve_renest_mc(profile: dict) -> int:
     return max(1, min(int(profile.get("lite_plate_renest_mc", 1) or 1), 4))
 
 
+def _lite_apply_void_first(piezas, kerf_override):
+    """Pre-fill orificios en el pool. Devuelve (mc_pool, stats)."""
+    try:
+        from .venom_hole_fill import prefill_voids_in_pool
+
+        return prefill_voids_in_pool(
+            list(piezas or []),
+            float(kerf_override or 0.0),
+            engine_id="arga_lite",
+        )
+    except Exception as exc:
+        print(f"[LITE-VOID-FIRST] skip: {exc}", flush=True)
+        return list(piezas or []), {"error": str(exc), "filled": 0}
+
+
+def _lite_expand_void_cargo(hoja, mc_pool) -> None:
+    if not isinstance(hoja, dict) or not mc_pool:
+        return
+    try:
+        from .venom_hole_fill import expand_void_cargo_onto_hoja
+
+        expand_void_cargo_onto_hoja(hoja, mc_pool, engine_id="arga_lite")
+    except Exception as exc:
+        print(f"[LITE-VOID-FIRST] expand skip: {exc}", flush=True)
+
+
+def _lite_apply_post_pack(
+    hoja, w_placa, h_placa, kerf_override, *, hole_fill: bool = True
+) -> None:
+    """Compact + opcional hole-fill tras pack Lite.
+
+    En shot único de renest (muchos tries) hole_fill=False: el fill corre
+    una sola vez al final del renest/manager (evita 10–20× 7s inútiles).
+    """
+    if not isinstance(hoja, dict) or not (hoja.get("piezas") or []):
+        return
+    hoja.setdefault("placa_w", float(w_placa or 0))
+    hoja.setdefault("placa_h", float(h_placa or 0))
+    hoja.setdefault("kerf_usado", float(kerf_override or 0))
+    try:
+        from . import compact_lite
+
+        if compact_lite.compact_enabled():
+            compact_lite.apply_band_compact(hoja, engine_id="arga_lite")
+    except Exception as compact_ex:
+        print(f"[LITE] compact skip: {compact_ex}", flush=True)
+    if not hole_fill:
+        return
+    try:
+        from .venom_hole_fill import apply_lite_hole_fill
+
+        apply_lite_hole_fill(hoja, engine_id="arga_lite")
+    except Exception as hole_ex:
+        print(f"[LITE] hole_fill skip: {hole_ex}", flush=True)
+
+
 def empaquetar_una_hoja_arga_lite(
     piezas,
     w_placa,
@@ -1312,11 +1414,14 @@ def empaquetar_una_hoja_arga_lite(
     mc_iterations=None,
 ):
     """
-    ARGA LITE (rápido): 1 pase MC + opcional 1 renest de placa (1 MC, keep-if-better).
+    ARGA LITE (rápido): void-first (orificios) → MC + opcional renest de placa.
 
     Opt-in más calidad (más lento):
       ARGA_LITE_PASSES=2  ARGA_LITE_PLATE_RENEST_TRIES=2  ARGA_LITE_PLATE_RENEST_MC=2
     Opt-out renest: ARGA_LITE_PLATE_RENEST=0
+    Opt-out void-first: ARGA_LITE_VOID_FIRST=0
+
+    Renest placa/calibre pasa mc_iterations (shot único): también aplica hole-fill.
     """
     from .nest_optimization import get_engine_profile
 
@@ -1326,12 +1431,17 @@ def empaquetar_una_hoja_arga_lite(
     renest_tries = _lite_resolve_renest_tries(profile)
     renest_mc = _lite_resolve_renest_mc(profile)
 
+    pool_src = list(piezas or [])
+    mc_pool, vf_stats = _lite_apply_void_first(pool_src, kerf_override)
+    if int(vf_stats.get("filled") or 0) > 0:
+        pool_src = list(mc_pool)
+
     if mc_iterations is not None:
-        # Compat: si piden iterations explícitas, un solo shot MC.
+        # Compat: shot único MC (renest placa/calibre). No saltar hole-fill.
         iters = max(1, min(int(mc_iterations), 8))
         print(f"[LITE] empaque MC · iterations={iters} (shot único)", flush=True)
-        return empaquetar_una_hoja_legacy_mc(
-            piezas,
+        hoja, restos = empaquetar_una_hoja_legacy_mc(
+            pool_src,
             w_placa,
             h_placa,
             kerf_override=kerf_override,
@@ -1341,8 +1451,13 @@ def empaquetar_una_hoja_arga_lite(
             limite_poly=limite_poly,
             mc_iterations=iters,
         )
+        _lite_expand_void_cargo(hoja, pool_src)
+        _lite_apply_post_pack(
+            hoja, w_placa, h_placa, kerf_override, hole_fill=False
+        )
+        return hoja, restos
 
-    pool0 = list(piezas or [])
+    pool0 = list(pool_src)
     if not pool0:
         return {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0}, []
 
@@ -1377,6 +1492,7 @@ def empaquetar_una_hoja_arga_lite(
             limite_poly=limite_poly,
             mc_iterations=iters_pase,
         )
+        _lite_expand_void_cargo(hoja, pool0)
         if _svgnest_is_better(hoja, restos, mejor_hoja, mejor_restos):
             mejoras += 1
             mejor_hoja, mejor_restos = hoja, restos
@@ -1430,6 +1546,7 @@ def empaquetar_una_hoja_arga_lite(
                     limite_poly=limite_poly,
                     mc_iterations=renest_mc,
                 )
+                _lite_expand_void_cargo(hoja_r, pool0)
                 n_ok = len(hoja_r.get("piezas") or [])
                 if n_ok < len(batch) or restos_r:
                     print(
@@ -1460,16 +1577,7 @@ def empaquetar_una_hoja_arga_lite(
         f"restos={len(mejor_restos or [])}",
         flush=True,
     )
-    try:
-        from . import compact_lite
-
-        if compact_lite.compact_enabled() and (mejor_hoja.get("piezas") or []):
-            mejor_hoja.setdefault("placa_w", float(w_placa or 0))
-            mejor_hoja.setdefault("placa_h", float(h_placa or 0))
-            mejor_hoja.setdefault("kerf_usado", float(kerf_override or 0))
-            compact_lite.apply_band_compact(mejor_hoja, engine_id="arga_lite")
-    except Exception as compact_ex:
-        print(f"[LITE] compact skip: {compact_ex}", flush=True)
+    _lite_apply_post_pack(mejor_hoja, w_placa, h_placa, kerf_override)
     return mejor_hoja, mejor_restos
 
 

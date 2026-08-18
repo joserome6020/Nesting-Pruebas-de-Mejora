@@ -73,7 +73,35 @@ REGRESIONES = [
     ),
     (
         "test_nvidia_spark_prefs.py",
-        "2026-08-13e - NvidiaSpark inicia Local y persiste Auto solo al activarlo",
+        "2026-08-13e - NvidiaSpark inicia Local; exportar_a_servidor persiste en nest_runtime.json",
+    ),
+    (
+        "test_largos_pedir_persist.py",
+        "2026-08-17k - Pedir/No de Nesteo de largos persiste en disco y sobrevive recalcular plan",
+    ),
+    (
+        "test_kerf_calibre2_pokayoke.py",
+        "2026-08-17l - calibre 2 exige 0.375in; pokayoke rechaza nests a 0.15in (APEX/piso)",
+    ),
+    (
+        "test_movers_respetan_tabla_gaps.py",
+        "2026-08-17m - movers/renest/drag/band-close respetan TABLA GAPS (no UI 0.15 en cal 2)",
+    ),
+    (
+        "test_repair_kerf_hole_guest.py",
+        "2026-08-17n - pokayoke kerf repara expulsando guest en orificio; no tumba toda la hoja",
+    ),
+    (
+        "test_repair_kerf_nudge.py",
+        "2026-08-17q - repair kerf empuja 0.18→0.25in antes de expulsar (evita nest agujereado)",
+    ),
+    (
+        "test_expulsadas_a_pool_poly.py",
+        "2026-08-17o - piezas expulsadas por kerf regresan al pool con poly (no KeyError)",
+    ),
+    (
+        "test_exact_kerf_movers.py",
+        "2026-08-17p - band-close/hole-fill usan distancia exacta ≥ kerf tabla (no buffer ~0.17\")",
     ),
     (
         "test_plasma_compensation_persistence.py",
@@ -138,6 +166,10 @@ REGRESIONES = [
     (
         "test_cu_force_dxf_step.py",
         "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
+    ),
+    (
+        "test_lite_hole_fill_brida.py",
+        "2026-08-17g - Lite hole-fill denso en brida + kerf completo guest↔guest/host",
     ),
 ]
 

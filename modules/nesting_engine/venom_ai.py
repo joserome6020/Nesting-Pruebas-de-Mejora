@@ -520,8 +520,21 @@ def apply_smart_polisher(
             hoja["kerf_usado"] = kerf_eff
         except Exception:
             pass
+    try:
+        from .cut_gaps_table import gaps_efectivos_para_hoja
+
+        kt, mt = gaps_efectivos_para_hoja(hoja, kerf_fallback=kerf_eff)
+        if float(kt) > float(kerf_eff or 0.0):
+            kerf_eff = float(kt)
+            hoja["kerf_usado"] = kerf_eff
+        margin_eff = float(mt)
+        if float(hoja.get("margin_usado") or 0.0) <= 0:
+            hoja["margin_usado"] = margin_eff
+    except Exception:
+        margin_eff = float(hoja.get("margin_usado") or 0.25) or 0.25
     kerf_mm = kerf_eff * 25.4
     kerf_half = max(kerf_mm / 2.0, 0.5)
+    plate_inset = max(float(margin_eff) * 25.4, 0.0)
 
     from shapely import affinity
     from .geometry_parser import reconstruir_poly_seguro
@@ -560,14 +573,14 @@ def apply_smart_polisher(
 
     global_dx = 0.0
     global_dy = 0.0
-    if vx < 0 and min_x_todas > kerf_half:
-        global_dx = -(min_x_todas - kerf_half)
-    elif vx > 0 and max_x_todas < placa_w - kerf_half:
-        global_dx = (placa_w - kerf_half) - max_x_todas
-    if vy < 0 and min_y_todas > kerf_half:
-        global_dy = -(min_y_todas - kerf_half)
-    elif vy > 0 and max_y_todas < placa_h - kerf_half:
-        global_dy = (placa_h - kerf_half) - max_y_todas
+    if vx < 0 and min_x_todas > plate_inset:
+        global_dx = -(min_x_todas - plate_inset)
+    elif vx > 0 and max_x_todas < placa_w - plate_inset:
+        global_dx = (placa_w - plate_inset) - max_x_todas
+    if vy < 0 and min_y_todas > plate_inset:
+        global_dy = -(min_y_todas - plate_inset)
+    elif vy > 0 and max_y_todas < placa_h - plate_inset:
+        global_dy = (placa_h - plate_inset) - max_y_todas
 
     if global_dx != 0.0 or global_dy != 0.0:
         for item in items:
@@ -614,13 +627,13 @@ def apply_smart_polisher(
         u_verts_centered = [(x - minx, y - miny) for x, y in u_verts]
 
         candidates = []
-        candidates.append((kerf_half, kerf_half))
+        candidates.append((plate_inset, plate_inset))
         if placa_w > 0:
-            candidates.append((placa_w - poly_w - kerf_half, kerf_half))
+            candidates.append((placa_w - poly_w - plate_inset, plate_inset))
         if placa_h > 0:
-            candidates.append((kerf_half, placa_h - poly_h - kerf_half))
+            candidates.append((plate_inset, placa_h - poly_h - plate_inset))
         if placa_w > 0 and placa_h > 0:
-            candidates.append((placa_w - poly_w - kerf_half, placa_h - poly_h - kerf_half))
+            candidates.append((placa_w - poly_w - plate_inset, placa_h - poly_h - plate_inset))
 
         for j in range(len(all_polys_data)):
             if i == j:
@@ -631,17 +644,17 @@ def apply_smart_polisher(
                     candidates.append((vx_coord - ux_coord, vy_coord - uy_coord))
 
         if placa_w > 0 and placa_h > 0:
-            for gx in range(int(kerf_half), int(placa_w), 150):
-                for gy in range(int(kerf_half), int(placa_h), 150):
+            for gx in range(int(plate_inset), int(placa_w), 150):
+                for gy in range(int(plate_inset), int(placa_h), 150):
                     candidates.append((gx, gy))
 
         valid_candidates = []
         for cx, cy in candidates:
-            if cx < kerf_half or cy < kerf_half:
+            if cx < plate_inset or cy < plate_inset:
                 continue
-            if placa_w > 0 and cx + poly_w > placa_w - kerf_half:
+            if placa_w > 0 and cx + poly_w > placa_w - plate_inset:
                 continue
-            if placa_h > 0 and cy + poly_h > placa_h - kerf_half:
+            if placa_h > 0 and cy + poly_h > placa_h - plate_inset:
                 continue
             if vx < 0 and cx > minx + 1.0:
                 continue
@@ -693,31 +706,39 @@ def apply_smart_polisher(
             test_bounds = test_poly.bounds
 
             collision = False
+            kerf_full = max(float(kerf_half) * 2.0, 1.0)
             try:
-                test_clear = test_poly.buffer(kerf_half, resolution=2, join_style=2)
+                from .nest_poka_yoke import distancia_menor_que_kerf_mm, metal_solapa
             except Exception:
-                test_clear = test_poly
-            tc_bounds = test_clear.bounds
+                distancia_menor_que_kerf_mm = None  # type: ignore
+                metal_solapa = None  # type: ignore
             for j in range(len(all_polys_data)):
                 if i == j:
                     continue
                 op_poly = all_polys_data[j][1]
                 op_bounds = all_polys_data[j][2]
                 if (
-                    tc_bounds[2] <= op_bounds[0]
-                    or tc_bounds[0] >= op_bounds[2]
-                    or tc_bounds[3] <= op_bounds[1]
-                    or tc_bounds[1] >= op_bounds[3]
+                    test_bounds[2] + kerf_full < op_bounds[0]
+                    or test_bounds[0] - kerf_full > op_bounds[2]
+                    or test_bounds[3] + kerf_full < op_bounds[1]
+                    or test_bounds[1] - kerf_full > op_bounds[3]
                 ):
                     continue
-                # Kerf completo: ambos lados (test_clear vs other raw ≡ kerf/2+kerf/2 si other también buffer, aquí other.buffer)
-                try:
-                    op_clear = op_poly.buffer(kerf_half, resolution=2, join_style=2)
-                except Exception:
-                    op_clear = op_poly
-                if test_clear.intersects(op_clear) and not test_clear.touches(op_clear):
+                if metal_solapa is not None and metal_solapa(test_poly, op_poly):
                     collision = True
                     break
+                if distancia_menor_que_kerf_mm is not None:
+                    if distancia_menor_que_kerf_mm(test_poly, op_poly, kerf_full):
+                        collision = True
+                        break
+                else:
+                    try:
+                        if float(test_poly.distance(op_poly)) + 1e-6 < kerf_full:
+                            collision = True
+                            break
+                    except Exception:
+                        collision = True
+                        break
 
             if not collision:
                 best_poly = test_poly
@@ -752,7 +773,14 @@ def apply_smart_polisher(
             nudges_totales += 1
 
     # --- Gravity slide exacto (ejes independientes; cierra gaps reales) ---
-    step_mm = 2.0
+    # Paso fino: buffer/step grueso (~2 mm) dejaba metal a ~0.17" con kerf 0.25".
+    kerf_full = max(float(kerf_half) * 2.0, 1.0)
+    step_mm = min(0.5, max(kerf_half * 0.15, 0.25))
+    try:
+        from .nest_poka_yoke import distancia_menor_que_kerf_mm, metal_solapa
+    except Exception:
+        distancia_menor_que_kerf_mm = None  # type: ignore
+        metal_solapa = None  # type: ignore
     axis_steps = []
     if vx < 0:
         axis_steps.append((-step_mm, 0.0))
@@ -783,37 +811,40 @@ def apply_smart_polisher(
                     poly = all_polys_data[i][1]
                     test_poly = affinity.translate(poly, sx, sy)
                     tb = test_poly.bounds
-                    if tb[0] < kerf_half - 1e-6 or tb[1] < kerf_half - 1e-6:
+                    if tb[0] < plate_inset - 1e-6 or tb[1] < plate_inset - 1e-6:
                         break
-                    if placa_w > 0 and tb[2] > placa_w - kerf_half + 1e-6:
+                    if placa_w > 0 and tb[2] > placa_w - plate_inset + 1e-6:
                         break
-                    if placa_h > 0 and tb[3] > placa_h - kerf_half + 1e-6:
+                    if placa_h > 0 and tb[3] > placa_h - plate_inset + 1e-6:
                         break
                     collision = False
-                    try:
-                        test_clear = test_poly.buffer(kerf_half, resolution=2, join_style=2)
-                    except Exception:
-                        test_clear = test_poly
-                    tc_b = test_clear.bounds
                     for j in range(len(all_polys_data)):
                         if i == j:
                             continue
                         op_poly = all_polys_data[j][1]
                         op_bounds = all_polys_data[j][2]
                         if (
-                            tc_b[2] <= op_bounds[0]
-                            or tc_b[0] >= op_bounds[2]
-                            or tc_b[3] <= op_bounds[1]
-                            or tc_b[1] >= op_bounds[3]
+                            tb[2] + kerf_full < op_bounds[0]
+                            or tb[0] - kerf_full > op_bounds[2]
+                            or tb[3] + kerf_full < op_bounds[1]
+                            or tb[1] - kerf_full > op_bounds[3]
                         ):
                             continue
-                        try:
-                            op_clear = op_poly.buffer(kerf_half, resolution=2, join_style=2)
-                        except Exception:
-                            op_clear = op_poly
-                        if test_clear.intersects(op_clear) and not test_clear.touches(op_clear):
+                        if metal_solapa is not None and metal_solapa(test_poly, op_poly):
                             collision = True
                             break
+                        if distancia_menor_que_kerf_mm is not None:
+                            if distancia_menor_que_kerf_mm(test_poly, op_poly, kerf_full):
+                                collision = True
+                                break
+                        else:
+                            try:
+                                if float(test_poly.distance(op_poly)) + 1e-6 < kerf_full:
+                                    collision = True
+                                    break
+                            except Exception:
+                                collision = True
+                                break
                     if collision:
                         break
                     item["poly"] = test_poly
