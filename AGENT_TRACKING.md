@@ -47,15 +47,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
-### 2026-08-18p — SWO sin lista de largos no se congela ni dispara PO
+### 2026-08-18q — PO GAM SWO-022: observaciones ContPAQ > 60 chars
+- El pedido de placas SÍ debe crearse sin lista de largos. InsertaPO falló
+  HTTP 500 / SQL 8152: el detalle
+  `9919-11CABINET/GIGA | 9919-14CABINET/GIGA | 9919-15CABINET/GIGA | SWO: S.W.O 22`
+  (79 chars) iba a `COBSERVACIONES` (varchar ~60). CTEXTOEXTRA3 ya se recortaba.
+- InsertaPO recorta ambos campos a 60. El PDF/correo sigue con el detalle completo.
+- ANS no omite la PO por falta de MRL: las placas se compran igual.
+
+### 2026-08-18p — SWO sin lista de largos no se congela
 - SWO-022 (gabinetes 9919-11CABINET / 14 / 15) se colgó 10+ min al exportar:
   AutoDXF no existe junto a la SWO y `_buscar_carpeta_job_corporate` hacía
   `rglob` de todo `TANKS` en SMB. Los DXF ya estaban en disco; el commit de
   PQART esperaba esa búsqueda.
-- Sin CSV de perfiles no es limitante: aviso, se omite MRL/PO ContPAQ, VSM
-  sí avanza (ingeniería terminó). No se crea OC vacía.
+- Sin CSV de perfiles no es limitante: aviso y se omite MRL de largos.
+  La PO GAM de **placas** sí se crea.
 - Búsqueda corporativa solo 3 niveles (producto/cliente/job), nunca `rglob`.
-- Candado: `test_export_sin_lista_largos.py` (rglob prohibido + omitir PO).
+- Candado: `test_export_sin_lista_largos.py` (rglob prohibido).
 
 ### 2026-08-18o — El nest nace a 0.250" de metal (sin empujar)
 - 4.86 mm era el globo de kerf pegado a 0.250": el metal quedaba

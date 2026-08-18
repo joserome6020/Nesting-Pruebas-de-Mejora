@@ -26,7 +26,6 @@ from modules.lista_largos_importer import (
 from postgres_connector import (
     ESTADOS_LARGOS_SIN_LISTA,
     _registrar_wo_sin_lista_largos,
-    debe_omitir_po_contpaq_sin_largos,
     obtener_wos_sin_lista_largos,
     reiniciar_avisos_lista_largos,
 )
@@ -165,15 +164,6 @@ def test_swo_sin_csv_omite_lista_sin_rglob():
         assert resultado["status"] in ESTADOS_LARGOS_SIN_LISTA
 
 
-def test_swo_sin_largos_omite_po_contpaq():
-    """Sin MRL ni lista no se dispara InsertaPO; con demanda sí."""
-    assert debe_omitir_po_contpaq_sin_largos(0, 0) is True
-    assert debe_omitir_po_contpaq_sin_largos(3, 0) is False
-    assert debe_omitir_po_contpaq_sin_largos(0, 10) is False
-    assert debe_omitir_po_contpaq_sin_largos(-1, 0) is False
-    assert debe_omitir_po_contpaq_sin_largos(-1, -1) is False
-
-
 if __name__ == "__main__":
     test_autodxf_sin_csv_no_resuelve_lista()
     test_job_sin_carpeta_autodxf_reporta_estado()
@@ -182,5 +172,4 @@ if __name__ == "__main__":
     test_corporate_search_no_usa_rglob()
     test_corporate_prefiere_carpeta_con_autodxf()
     test_swo_sin_csv_omite_lista_sin_rglob()
-    test_swo_sin_largos_omite_po_contpaq()
     print("SMOKE OK")

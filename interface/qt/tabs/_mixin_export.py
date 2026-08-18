@@ -66,8 +66,6 @@ from nesting_workspace import (
     filetypes_workspace_abrir,
 )
 from postgres_connector import (
-    consultar_demanda_largos_swo,
-    debe_omitir_po_contpaq_sin_largos,
     guardar_nesting_en_postgresql,
     obtener_wos_sin_lista_largos,
     reiniciar_avisos_lista_largos,
@@ -662,19 +660,9 @@ class ExportMixin:
 
         # No avance VSM si la OC SWO ni siquiera puede validarse. Esto evita
         # una tarjeta EXPORTADO sin PO por equivalencias/catálogo pendientes.
-        # Excepción: SWO sin lista de largos / sin MRL — no hay nada que
-        # comprar; no se valida ni se crea OC (caso SWO-022 gabinetes).
-        omitir_po_sin_largos = False
+        # Sin lista de largos NO se omite la PO: las placas (GAM) se compran
+        # igual; InsertaPO simplemente no agrega líneas MRL.
         if es_swo:
-            n_mrl, n_lista = consultar_demanda_largos_swo(job_activo, db_conf)
-            omitir_po_sin_largos = debe_omitir_po_contpaq_sin_largos(n_mrl, n_lista)
-            if omitir_po_sin_largos:
-                print(
-                    f"[CENTRALIZED] SWO '{job_activo}' sin demanda de largos "
-                    f"(MRL={n_mrl}, lista={n_lista}): se omite ContPAQ; VSM sí avanza."
-                )
-
-        if es_swo and not omitir_po_sin_largos:
             stage = "CONTPAQ_PREFLIGHT"
             if _pendiente(stage):
                 resultado_preflight = validar_po_contpaq(job_activo)
@@ -748,16 +736,6 @@ class ExportMixin:
                 ),
             )
             print("[CENTRALIZED] CONTPAQ omitido para WO normal; solo las SWO generan PO.")
-        elif omitir_po_sin_largos:
-            detalle_omitir = (
-                "PO ContPAQ omitida: la SWO no tiene lista de largos ni MRL; "
-                "no hay material de perfiles que comprar."
-            )
-            if _pendiente("CONTPAQ_PREFLIGHT"):
-                _checkpoint("CONTPAQ_PREFLIGHT", status="OK", detail=detalle_omitir)
-            if _pendiente(stage):
-                _checkpoint(stage, status="OK", detail=detalle_omitir)
-            print(f"[CENTRALIZED] {detalle_omitir}")
         elif _pendiente(stage):
             resultado_po = trigger_po_contpaq(job_activo)
             if not resultado_po:
