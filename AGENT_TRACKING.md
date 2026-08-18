@@ -47,6 +47,28 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-18n — Ultra de planta no usa ArgaNestCore (Galv 4.86 mm)
+- El diálogo pokayoke de `0.105_GALVANIZADO` / `GENE-SIVC-40-40-113` a
+  **4.86 mm** (tabla 0.250" = 6.35 mm) no era el packer `algorithm_cpp`
+  (ese DXF sale legal ≈6.6 mm). ANS arrancaba con `ARGA_NEST_CORE=1` y
+  el wrapper Ultra desviaba el pack de hoja a ArgaNestCore, que no tiene
+  la TABLA GAPS placa→pieza.
+- Ultra packea otra vez por `algorithm_cpp`. Default `ARGA_NEST_CORE=0`.
+- Candado: `test_ultra_pack_not_core.py` (CORE=1 en env, metal ≥0.250").
+
+### 2026-08-18l — Margen 0.250" se mide en el METAL, no en el buffer
+- Galv 6.29 mm se repitió con el packer nuevo: AABB/slide usaban el
+  polígono inflado (kerf + Simplify 0.1 mm). El pokayoke mide el metal.
+- Coloca y compacta contra bounds de `poly` (metal). Sin empujar después.
+- Candado: pico 0.08 mm a la izquierda queda ≥0.250".
+
+### 2026-08-18k — Packer respeta 0.250" de placa (sin empujar después)
+- Galv 0.105 a 6.29 mm del borde (tabla 6.35 mm) no se “arregla” empujando:
+  el nest debe nacer legal. Causa: packer C++ devolvía 0.1 mm de margen
+  (Clipper grow-back + AABB `margin-0.1`).
+- Packers: margen exacto de tabla. Pokayoke AVISA `margen_placa`; no empuja.
+- Candado: 6.29 mm sigue ilegal; gravity no baja de 0.250".
+
 ### 2026-08-18j — Nest bien desde el primer pase (no “corregir” después)
 - El acomodo “culero” (diagonales, huecos, P28/P64 reinyectadas) era
   post-proceso: expel+reinject + densify + Venom 2º explore sobre un nest

@@ -51,6 +51,10 @@ struct Variation {
     double b_miny = 0.0;
     double b_maxx = 0.0;
     double b_maxy = 0.0;
+    double m_minx = 0.0;
+    double m_miny = 0.0;
+    double m_maxx = 0.0;
+    double m_maxy = 0.0;
 };
 
 struct LimitContext {
@@ -477,6 +481,7 @@ std::vector<Variation> build_variaciones(
             poly_buff = buffer_rings({poly_rot.front()}, kerf_radio);
         }
 
+        const Bounds mb = bounds_of_rings(poly_rot);
         const Bounds bb = bounds_of_rings(poly_buff);
         Variation var;
         var.poly = poly_rot;
@@ -488,6 +493,10 @@ std::vector<Variation> build_variaciones(
         var.b_miny = bb.miny;
         var.b_maxx = bb.maxx;
         var.b_maxy = bb.maxy;
+        var.m_minx = mb.minx;
+        var.m_miny = mb.miny;
+        var.m_maxx = mb.maxx;
+        var.m_maxy = mb.maxy;
         variaciones.push_back(std::move(var));
     }
     return variaciones;
@@ -501,9 +510,6 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     auto paths = to_paths_d(*limite_rings);
     if (margin_px > 0.0) {
         paths = InflatePaths(paths, -margin_px, JoinType::Miter, EndType::Polygon);
-    }
-    if (!paths.empty()) {
-        paths = InflatePaths(paths, 0.1, JoinType::Miter, EndType::Polygon);
     }
     if (paths.empty()) {
         return ctx;
@@ -649,7 +655,7 @@ void compact_slide_position(
             moved = false;
             ++steps;
             const double test_px = px - step_mm;
-            if (test_px + var.b_minx >= min_x - 0.01) {
+            if (test_px + var.m_minx >= min_x) {
                 if (!comprobar_colision(
                         test_px,
                         py,
@@ -665,7 +671,7 @@ void compact_slide_position(
                 }
             }
             const double test_py = py - step_mm;
-            if (test_py + var.b_miny >= min_y - 0.01) {
+            if (test_py + var.m_miny >= min_y) {
                 if (!comprobar_colision(
                         px,
                         test_py,
@@ -830,10 +836,27 @@ bool colocar_pieza(
         for (const auto& anclaje : anclajes) {
             double px = anclaje.first - var.b_minx;
             double py = anclaje.second - var.b_miny;
+            clamp_placement_to_plate_margin(
+                px,
+                py,
+                var.m_minx,
+                var.m_miny,
+                var.m_maxx,
+                var.m_maxy,
+                margin_px,
+                w_placa,
+                h_placa);
             if (!limit.active) {
-                if (px + var.b_minx < margin_px - 0.1 || py + var.b_miny < margin_px - 0.1
-                    || px + var.b_maxx > w_placa - margin_px + 0.1
-                    || py + var.b_maxy > h_placa - margin_px + 0.1) {
+                if (!placement_respects_plate_margin(
+                        px,
+                        py,
+                        var.m_minx,
+                        var.m_miny,
+                        var.m_maxx,
+                        var.m_maxy,
+                        margin_px,
+                        w_placa,
+                        h_placa)) {
                     continue;
                 }
             } else {
@@ -1804,12 +1827,17 @@ void compact_slide_sheet_final(
             continue;
         }
         const Bounds vb = bounds_of_rings(var.poly_buff);
+        const Bounds mb = bounds_of_rings(var.poly);
         var.w = bb.maxx - bb.minx;
         var.h = bb.maxy - bb.miny;
         var.b_minx = vb.minx;
         var.b_miny = vb.miny;
         var.b_maxx = vb.maxx;
         var.b_maxy = vb.maxy;
+        var.m_minx = mb.minx;
+        var.m_miny = mb.miny;
+        var.m_maxx = mb.maxx;
+        var.m_maxy = mb.maxy;
 
         double px = bb.minx;
         double py = bb.miny;

@@ -96,6 +96,10 @@ REGRESIONES = [
         "2026-08-17q - repair kerf empuja 0.18→0.25in antes de expulsar (evita nest agujereado)",
     ),
     (
+        "test_packer_metal_plate_margin.py",
+        "2026-08-18l - packer C++ coloca el metal ≥0.250in de placa (no el buffer de kerf)",
+    ),
+    (
         "test_expulsadas_a_pool_poly.py",
         "2026-08-17o - piezas expulsadas por kerf regresan al pool con poly (no KeyError)",
     ),
@@ -170,6 +174,10 @@ REGRESIONES = [
     (
         "test_lite_hole_fill_brida.py",
         "2026-08-17g - Lite hole-fill denso en brida + kerf completo guest↔guest/host",
+    ),
+    (
+        "test_ultra_pack_not_core.py",
+        "2026-08-18n - Ultra no empaca por ArgaNestCore (Galv SIVC-113 a 4.86 mm)",
     ),
 ]
 

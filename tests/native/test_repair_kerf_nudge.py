@@ -269,6 +269,47 @@ def main() -> int:
     assert any(p.get("nombre") == "GUEST" for p in expelled), expelled
     assert all(p.get("nombre") != "GUEST" for p in hoja_t["piezas"])
 
+    # --- Galv 0.105: 6.29 mm al borde es ILEGAL (tabla 6.35 mm / 0.250").
+    # El packer C++ debe colocar ≥0.250"; pokayoke AVISA, no empuja.
+    sivc = box(6.29, 50.0, 206.29, 150.0)
+    otra = box(400.0, 50.0, 600.0, 150.0)
+    hoja_galv = {
+        "placa_cal": "0.105",
+        "placa_w": 3048.0,
+        "placa_h": 1524.0,
+        "clave": "0.105_GALVANIZADO",
+        "kerf_usado": 0.15,
+        "margin_usado": 0.25,
+        "piezas": [
+            {
+                "nombre": "GENE-SIVC-40-40-136",
+                "poly": sivc,
+                "area": float(sivc.area),
+                "poligonos": [list(sivc.exterior.coords)],
+            },
+            {
+                "nombre": "OTRA",
+                "poly": otra,
+                "area": float(otra.area),
+                "poligonos": [list(otra.exterior.coords)],
+            },
+        ],
+    }
+    okg0, detg0 = validar_separacion_minima_hoja(
+        hoja_galv, 0.15, margin_in=0.25, clave="0.105_GALVANIZADO"
+    )
+    assert okg0 is False and "margen_placa" in detg0, (okg0, detg0)
+    minx_antes = float(hoja_galv["piezas"][0]["poly"].bounds[0])
+    okg, detg, expg = reparar_separacion_minima_hoja(
+        hoja_galv, 0.15, margin_in=0.25, clave="0.105_GALVANIZADO"
+    )
+    assert okg is False and "margen_placa" in detg, (okg, detg, expg)
+    assert len(expg) == 0, f"no expulsar por margen placa: {detg}"
+    minx_despues = float(hoja_galv["piezas"][0]["poly"].bounds[0])
+    assert abs(minx_despues - minx_antes) < 1e-9, (
+        f"pokayoke no debe empujar: {minx_antes} → {minx_despues}"
+    )
+
     # --- Nest desparramado (Ultra 18%): gravedad debe juntar al origen, kerf tabla ---
     margin250 = 0.250 * 25.4
     a = box(margin250, margin250, margin250 + 200, margin250 + 100)
@@ -295,6 +336,10 @@ def main() -> int:
     assert maxy < 350, f"siguio desparramado en Y: maxy={maxy:.1f} {st}"
     oks, dets = validar_separacion_minima_hoja(hoja_sp, 0.15, margin_in=0.15, clave="2_A 36")
     assert oks is True, dets
+    minx_sp = min(p["poly"].bounds[0] for p in hoja_sp["piezas"])
+    miny_sp = min(p["poly"].bounds[1] for p in hoja_sp["piezas"])
+    assert minx_sp + 1e-6 >= margin250, f"gravedad bajo 0.250in: minx={minx_sp:.4f}"
+    assert miny_sp + 1e-6 >= margin250, f"gravedad bajo 0.250in: miny={miny_sp:.4f}"
 
     print("REPAIR_KERF_NUDGE PASS", det)
     return 0

@@ -638,10 +638,8 @@ LimitContext make_limit_context(
     }
     auto paths = to_paths_d(*limite_rings);
     if (margin_px > 0.0) {
+        // Tabla exacta: no devolver 0.1 mm (Galv 6.29 vs 6.35 mm).
         paths = InflatePaths(paths, -margin_px, JoinType::Miter, EndType::Polygon);
-    }
-    if (!paths.empty()) {
-        paths = InflatePaths(paths, 0.1, JoinType::Miter, EndType::Polygon);
     }
     if (paths.empty()) {
         return ctx;
@@ -824,10 +822,10 @@ bool try_place_piece(
                 for (double x = margin_px; x <= x_max + 1e-9; x += kGridStepMm) {
                     const double dx = x - var.bb.minx;
                     const double dy = y - var.bb.miny;
-                    if (dx + var.bb.minx < margin_px - 0.1
-                        || dy + var.bb.miny < margin_px - 0.1
-                        || dx + var.bb.maxx > w_placa - margin_px + 0.1
-                        || dy + var.bb.maxy > h_placa - margin_px + 0.1) {
+                    if (dx + var.bb.minx + 1e-6 < margin_px
+                        || dy + var.bb.miny + 1e-6 < margin_px
+                        || dx + var.bb.maxx > w_placa - margin_px + 1e-6
+                        || dy + var.bb.maxy > h_placa - margin_px + 1e-6) {
                         continue;
                     }
                     ++state.hoja.packer_timing.candidate_count;
@@ -881,10 +879,10 @@ bool try_place_piece(
         const auto accept_candidate = [&](const CandidateLocation& candidate) {
             const double dx = candidate.dx;
             const double dy = candidate.dy;
-            if (dx + var.bb.minx < margin_px - 0.1
-                || dy + var.bb.miny < margin_px - 0.1
-                || dx + var.bb.maxx > w_placa - margin_px + 0.1
-                || dy + var.bb.maxy > h_placa - margin_px + 0.1) {
+            if (dx + var.bb.minx + 1e-6 < margin_px
+                || dy + var.bb.miny + 1e-6 < margin_px
+                || dx + var.bb.maxx > w_placa - margin_px + 1e-6
+                || dy + var.bb.maxy > h_placa - margin_px + 1e-6) {
                 return false;
             }
             ++state.hoja.packer_timing.candidate_count;

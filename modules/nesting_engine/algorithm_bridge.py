@@ -689,72 +689,9 @@ def empaquetar_una_hoja_svgnest_ultra(
         use_pip: bool | None = None,
         seed_order=None,
     ):
-        # ANS C++: ruta ArgaNestCore cuando ARGA_NEST_CORE=1
-        try:
-            from . import arga_nest_core_bridge as _anc
-
-            if _anc.core_enabled() and limite_rings is None and not seed_order:
-                req = _anc.prepare_pack_request(
-                    plate_w=float(w_placa),
-                    plate_h=float(h_placa),
-                    pieces=native_piezas,
-                    kerf=float(kerf_override),
-                    margin=float(margin_override),
-                    engine="svgnest_ultra",
-                    ga_population=int(pop_n if pop_n is not None else pop),
-                    ga_generations=int(generations),
-                    rotation_step_deg=float(rot if rot is not None else rot_step),
-                    part_in_part=bool(pip if use_pip is None else use_pip),
-                    certify=True,
-                    enable_tabu=True,
-                    tabu_seed_trials=3,
-                    extra={"opt": opt_override, "corner": corner_override},
-                )
-                raw = _anc.pack_sheet_json(req)
-                if not (raw.get("certify") or {}).get("ok", raw.get("ok", False)):
-                    issues = (raw.get("certify") or {}).get("issues") or []
-                    raise RuntimeError(f"ArgaNestCore certify fail: {issues}")
-                try:
-                    from .ai_telemetry import log_nest_event
-
-                    log_nest_event(
-                        engine="svgnest_ultra",
-                        profile=str(os.environ.get("ARGA_NEST_MODE") or "first"),
-                        n_piezas=len(native_piezas or []),
-                        n_sheets=1,
-                        efi=float((raw.get("metrics") or {}).get("eficiencia") or 0.0),
-                        seed_order=[str(p.get("nombre") or "") for p in (native_piezas or [])],
-                        certify_ok=True,
-                        kerf=float(kerf_override),
-                        plate_w=float(w_placa),
-                        plate_h=float(h_placa),
-                        source="algorithm_bridge_core",
-                    )
-                except Exception:
-                    pass
-                hoja_native = {
-                    "piezas": [
-                        {
-                            "nombre": p.get("nombre"),
-                            "area": p.get("area"),
-                            "calibre": p.get("calibre"),
-                            "material": p.get("material"),
-                            "poligonos": p.get("poligonos") or [],
-                        }
-                        for p in (raw.get("placed") or [])
-                    ],
-                    "area_usada": float((raw.get("metrics") or {}).get("area_usada") or 0.0),
-                    "eficiencia": float((raw.get("metrics") or {}).get("eficiencia") or 0.0),
-                }
-                restos_native = [{"nombre": n} for n in (raw.get("leftovers") or [])]
-                hoja, restos = _assemble_pack_result(hoja_native, restos_native, piezas)
-                return hoja, restos, []
-        except Exception as _anc_exc:
-            # Degradación limpia al algorithm_cpp legacy
-            if str(os.environ.get("ARGA_NEST_CORE_STRICT", "")).strip() in ("1", "true", "yes"):
-                raise
-            print(f"[ARGA_NEST_CORE] fallback algorithm_cpp: {_anc_exc}", flush=True)
-
+        # Pack de hoja SIEMPRE por algorithm_cpp. ArgaNestCore (ARGA_NEST_CORE=1)
+        # no aplica TABLA GAPS placa→pieza: Galv GENE-SIVC-40-40-113 salió a
+        # 4.86 mm vs 0.250" = 6.35 mm y el pokayoke lo mandó a BORRADOR.
         args = dict(
             piezas=native_piezas,
             w_placa=w_placa,

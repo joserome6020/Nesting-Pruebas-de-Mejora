@@ -11,8 +11,9 @@ for _p in (_ROOT, _IFACE):
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    # ANS C++ defaults de adopción (opt-out: ARGA_NEST_CORE=0 / ARGA_NEST_CUDA=0 / ARGA_NEST_WORKER=0)
-    os.environ.setdefault("ARGA_NEST_CORE", "1")
+    # Default runtime = algorithm_cpp (AGENTS.md). Core nuevo es opt-in:
+    # ARGA_NEST_CORE=1 aún no respeta TABLA GAPS placa→pieza (Galv 4.86 mm).
+    os.environ.setdefault("ARGA_NEST_CORE", "0")
     os.environ.setdefault("ARGA_NEST_CUDA", "1")
     os.environ.setdefault("ARGA_NEST_WORKER", "1")
     os.environ.setdefault("ARGA_NEST_MODE", os.environ.get("ARGA_NEST_MODE") or "first")

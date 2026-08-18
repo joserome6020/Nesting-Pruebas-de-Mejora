@@ -75,6 +75,59 @@ constexpr double kAreaEstructuralUmbralMm2 = 2'500'000.0;
 constexpr double kSlideStepCoarseMm = 3.0;
 constexpr double kSlideStepFineMm = 0.5;
 
+/** Placa→pieza usa el metal, no el buffer de kerf (Clipper/simplify puede no cubrir un vértice). */
+inline void clamp_placement_to_plate_margin(
+    double& px,
+    double& py,
+    double metal_minx,
+    double metal_miny,
+    double metal_maxx,
+    double metal_maxy,
+    double margin_px,
+    double w_placa,
+    double h_placa) {
+    if (margin_px <= 0.0) {
+        return;
+    }
+    if (px + metal_minx < margin_px) {
+        px = margin_px - metal_minx;
+    }
+    if (py + metal_miny < margin_px) {
+        py = margin_px - metal_miny;
+    }
+    if (w_placa > 0.0 && px + metal_maxx > w_placa - margin_px) {
+        px = w_placa - margin_px - metal_maxx;
+    }
+    if (h_placa > 0.0 && py + metal_maxy > h_placa - margin_px) {
+        py = h_placa - margin_px - metal_maxy;
+    }
+}
+
+inline bool placement_respects_plate_margin(
+    double px,
+    double py,
+    double metal_minx,
+    double metal_miny,
+    double metal_maxx,
+    double metal_maxy,
+    double margin_px,
+    double w_placa,
+    double h_placa) {
+    if (margin_px <= 0.0) {
+        return true;
+    }
+    if (px + metal_minx + 1e-6 < margin_px || py + metal_miny + 1e-6 < margin_px) {
+        return false;
+    }
+    if (w_placa > 0.0 && px + metal_maxx > w_placa - margin_px + 1e-6) {
+        return false;
+    }
+    if (h_placa > 0.0 && py + metal_maxy > h_placa - margin_px + 1e-6) {
+        return false;
+    }
+    return true;
+}
+
 PackResult empaquetar_una_hoja_mc(
     const std::vector<PieceIn>& piezas,
     double w_placa,

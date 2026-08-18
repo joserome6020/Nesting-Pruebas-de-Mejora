@@ -6242,10 +6242,10 @@ class MotorNesting:
     ):
         """Valida una posición candidata (con slide) para transferencia incremental."""
         if (
-            px + var["b_minx"] < margin_mm - 0.1
-            or py + var["b_miny"] < margin_mm - 0.1
-            or px + var["b_maxx"] > w - margin_mm + 0.1
-            or py + var["b_maxy"] > h - margin_mm + 0.1
+            px + var["b_minx"] + 1e-6 < margin_mm
+            or py + var["b_miny"] + 1e-6 < margin_mm
+            or px + var["b_maxx"] > w - margin_mm + 1e-6
+            or py + var["b_maxy"] > h - margin_mm + 1e-6
         ):
             if rechazos is not None:
                 rechazos["limite"] += 1

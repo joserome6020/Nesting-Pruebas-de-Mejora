@@ -882,6 +882,9 @@ def reparar_separacion_minima_hoja(
             if nudged:
                 return True, f"ok_separado nudges={nudged}", expulsadas
             return True, detail, expulsadas
+        if str(detail).startswith("margen_placa"):
+            # El nest ya debía respetar 0.250"; no empujar post-facto.
+            return False, detail, expulsadas
         if not str(detail).startswith("gap_insuficiente"):
             return False, detail, expulsadas
 
