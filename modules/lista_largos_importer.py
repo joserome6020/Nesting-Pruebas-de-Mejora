@@ -71,10 +71,24 @@ def _jobs_equivalentes(job_a: str, job_b: str) -> bool:
     return False
 
 
+def _path_is_dir(path: Path) -> bool:
+    try:
+        return path.exists() and path.is_dir()
+    except OSError:
+        return False
+
+
+def _path_is_file(path: Path) -> bool:
+    try:
+        return path.exists() and path.is_file()
+    except OSError:
+        return False
+
+
 def _iter_context_paths(ruta_exportacion: str):
     base = Path(_norm_text(ruta_exportacion))
 
-    if base.exists() and base.is_file():
+    if _path_is_file(base):
         base = base.parent
 
     vistos = set()
@@ -96,99 +110,99 @@ def _resolver_ruta_autodxf(ruta_exportacion: str) -> Path:
                 return padre
 
         candidata_1 = actual / "AutoDXF"
-        if candidata_1.exists() and candidata_1.is_dir():
+        if _path_is_dir(candidata_1):
             return candidata_1
 
         candidata_2 = actual / "MODEL CORE FILES" / "AutoDXF"
-        if candidata_2.exists() and candidata_2.is_dir():
+        if _path_is_dir(candidata_2):
             return candidata_2
 
     base = Path(_norm_text(ruta_exportacion))
-    if base.exists() and base.is_file():
+    if _path_is_file(base):
         base = base.parent
 
     return base / "AutoDXF"
 
 
-def _buscar_carpeta_job_corporate(job: str) -> Path | None:
+TANKS_CORPORATE_ROOTS = (
+    Path(
+        r"\\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals"
+        r"\ARGA METALS CORPORATE SYSTEM\TANKS"
+    ),
+)
+
+
+def _es_carpeta_job_corporate(nombre: str, job_n: str, job_key: str) -> bool:
+    """Match de carpeta TANKS/*/*/job sin recorrer el árbol (GIGA BOARD 5 ≡ GIGABOARD5)."""
+    if not nombre:
+        return False
+    if _jobs_equivalentes(nombre, job_n):
+        return True
+    return bool(job_key) and _job_compact(nombre) == job_key
+
+
+def _buscar_carpeta_job_corporate(
+    job: str,
+    roots: list[Path] | tuple[Path, ...] | None = None,
+) -> Path | None:
     """
     Localiza carpeta de job en ARGA METALS CORPORATE SYSTEM/TANKS
     cuando la ruta de export no tiene AutoDXF (p. ej. duplicado «GIGA BOARD 5»
     vs carpeta VSM «GIGABOARD5»).
     Prefiere la carpeta que sí tenga MODEL CORE FILES/AutoDXF.
+
+    Solo recorre 3 niveles (producto / cliente / job). Un rglob sobre TANKS
+    en SMB congela el export de SWO (caso SWO-022 / 9919-11CABINET, 10+ min).
     """
     job_n = _norm_job(job)
     if not job_n:
         return None
     job_key = _job_compact(job_n)
 
-    roots = [
-        Path(
-            r"\\192.168.2.80\Users\Administrator\Desktop\Grupo Arga Metals"
-            r"\ARGA METALS CORPORATE SYSTEM\TANKS"
-        ),
-    ]
-    patrones = [
-        f"*TANK_{job_n}",
-        f"*TANK{job_n}",
-        f"*_{job_n}",
-        job_n,
-        job_key,
-    ]
-
     candidatos_con_autodxf: list[Path] = []
     candidatos_sin_autodxf: list[Path] = []
 
     def _registrar(hit: Path) -> None:
         autodxf = hit / "MODEL CORE FILES" / "AutoDXF"
-        try:
-            if autodxf.exists() and autodxf.is_dir():
-                candidatos_con_autodxf.append(hit)
-            else:
-                candidatos_sin_autodxf.append(hit)
-        except OSError:
-            pass
+        if _path_is_dir(autodxf):
+            candidatos_con_autodxf.append(hit)
+        else:
+            candidatos_sin_autodxf.append(hit)
 
-    for root in roots:
-        try:
-            if not root.exists():
-                continue
-        except OSError:
+    for root in list(roots if roots is not None else TANKS_CORPORATE_ROOTS):
+        if not _path_is_dir(root):
             continue
 
         vistos: set[str] = set()
-        for pat in patrones:
-            try:
-                hits = [p for p in root.rglob(pat) if p.is_dir()]
-            except OSError:
-                hits = []
-            for hit in sorted(hits, key=lambda p: str(p).lower()):
-                clave = str(hit).lower()
-                if clave in vistos:
-                    continue
-                vistos.add(clave)
-                _registrar(hit)
-
-        # Igualdad compacta (espacios/guiones): GIGA BOARD 5 ↔ GIGABOARD5.
         try:
-            for producto in root.iterdir():
-                if not producto.is_dir():
-                    continue
-                for cliente in producto.iterdir():
-                    if not cliente.is_dir():
-                        continue
-                    for hit in cliente.iterdir():
-                        if not hit.is_dir():
-                            continue
-                        if _job_compact(hit.name) != job_key:
-                            continue
-                        clave = str(hit).lower()
-                        if clave in vistos:
-                            continue
-                        vistos.add(clave)
-                        _registrar(hit)
+            productos = list(root.iterdir())
         except OSError:
-            pass
+            continue
+
+        for producto in productos:
+            if not _path_is_dir(producto):
+                continue
+            try:
+                clientes = list(producto.iterdir())
+            except OSError:
+                continue
+            for cliente in clientes:
+                if not _path_is_dir(cliente):
+                    continue
+                try:
+                    jobs_dirs = list(cliente.iterdir())
+                except OSError:
+                    continue
+                for hit in jobs_dirs:
+                    if not _path_is_dir(hit):
+                        continue
+                    if not _es_carpeta_job_corporate(hit.name, job_n, job_key):
+                        continue
+                    clave = str(hit).lower()
+                    if clave in vistos:
+                        continue
+                    vistos.add(clave)
+                    _registrar(hit)
 
     if candidatos_con_autodxf:
         return sorted(candidatos_con_autodxf, key=lambda p: str(p).lower())[0]
@@ -198,12 +212,12 @@ def _buscar_carpeta_job_corporate(job: str) -> Path | None:
 
 
 def _resolver_csv_lista_largos(ruta_autodxf: Path) -> Path | None:
-    if not ruta_autodxf.exists() or not ruta_autodxf.is_dir():
+    if not _path_is_dir(ruta_autodxf):
         return None
 
     for nombre in CANDIDATOS_CSV:
         candidato = ruta_autodxf / nombre
-        if candidato.exists() and candidato.is_file():
+        if _path_is_file(candidato):
             return candidato
 
     for archivo in sorted(ruta_autodxf.glob("*.csv")):
@@ -666,7 +680,11 @@ def importar_lista_largos_job(
 
     ruta_autodxf = _resolver_ruta_autodxf(ruta_exportacion)
     print(f"[IMPORTADOR_LARGOS] ruta_autodxf_resuelta={ruta_autodxf}")
-    if not ruta_autodxf.exists():
+    if not _path_is_dir(ruta_autodxf):
+        print(
+            "[IMPORTADOR_LARGOS] AutoDXF ausente junto al export; "
+            "búsqueda corporativa TANKS (3 niveles, sin rglob)..."
+        )
         job_folder = _buscar_carpeta_job_corporate(job)
         if job_folder is not None:
             print(f"[IMPORTADOR_LARGOS] fallback carpeta job={job_folder}")
@@ -685,7 +703,9 @@ def importar_lista_largos_job(
                     "job_job_data": job_job_data,
                     "insertados": 0,
                 }
-    if not ruta_autodxf.exists():
+        else:
+            print("[IMPORTADOR_LARGOS] sin carpeta job en TANKS; se omite lista de largos.")
+    if not _path_is_dir(ruta_autodxf):
         return {
             "ok": False,
             "status": "autodxf_no_existe",

@@ -47,6 +47,24 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-18p — SWO sin lista de largos no se congela ni dispara PO
+- SWO-022 (gabinetes 9919-11CABINET / 14 / 15) se colgó 10+ min al exportar:
+  AutoDXF no existe junto a la SWO y `_buscar_carpeta_job_corporate` hacía
+  `rglob` de todo `TANKS` en SMB. Los DXF ya estaban en disco; el commit de
+  PQART esperaba esa búsqueda.
+- Sin CSV de perfiles no es limitante: aviso, se omite MRL/PO ContPAQ, VSM
+  sí avanza (ingeniería terminó). No se crea OC vacía.
+- Búsqueda corporativa solo 3 niveles (producto/cliente/job), nunca `rglob`.
+- Candado: `test_export_sin_lista_largos.py` (rglob prohibido + omitir PO).
+
+### 2026-08-18o — El nest nace a 0.250" de metal (sin empujar)
+- 4.86 mm era el globo de kerf pegado a 0.250": el metal quedaba
+  `0.250" − kerf/2`. Placa rectangular ahora tiene límite EXACTO para el
+  metal (no Clipper, no globo). Compact/slide no baja de ese límite.
+- Transfer WO usa AABB de metal contra la placa. Default margin de
+  `empaquetar_una_hoja_mc` = tabla 0.250".
+- Candado: Ultra + Lite + gravity ≥ 0.250" con SIVC-113.
+
 ### 2026-08-18n — Ultra de planta no usa ArgaNestCore (Galv 4.86 mm)
 - El diálogo pokayoke de `0.105_GALVANIZADO` / `GENE-SIVC-40-40-113` a
   **4.86 mm** (tabla 0.250" = 6.35 mm) no era el packer `algorithm_cpp`

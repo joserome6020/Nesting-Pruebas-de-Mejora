@@ -67,6 +67,78 @@ def obtener_wos_sin_lista_largos() -> list[str]:
     return list(_wos_sin_lista_largos)
 
 
+def debe_omitir_po_contpaq_sin_largos(n_mrl: int, n_lista: int) -> bool:
+    """Sin MRL ni lista de largos no hay nada que comprar: no crear OC ContPAQ.
+
+    Conteos negativos = consulta fallida: no se omite (mejor validar que
+    crear una OC a ciegas o saltársela por un error de red).
+    """
+    mrl = int(n_mrl)
+    lista = int(n_lista)
+    if mrl < 0 or lista < 0:
+        return False
+    return mrl <= 0 and lista <= 0
+
+
+def consultar_demanda_largos_swo(swo_id: str, db_config: dict | None) -> tuple[int, int]:
+    """
+    Conteos de pedido MRL y de lista_largos para una SWO.
+
+    Devuelve (-1, -1) si no se pudo consultar: el export no debe omitir PO
+    por un fallo de lectura.
+    """
+    swo = str(swo_id or "").strip()
+    if not swo or not db_config:
+        return -1, -1
+    conexion = None
+    cursor = None
+    try:
+        conexion = psycopg2.connect(**db_config)
+        cursor = conexion.cursor()
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM material_requerido_ldg
+            WHERE BTRIM(orden_id) = %s AND tipo_orden = 'SWO'
+            """,
+            (swo,),
+        )
+        n_mrl = int((cursor.fetchone() or [0])[0] or 0)
+        cursor.execute(
+            """
+            SELECT COUNT(*) FROM lista_largos_job
+            WHERE BTRIM(job) IN (
+                SELECT DISTINCT BTRIM(job) FROM reporte_cortes
+                WHERE BTRIM(super_work_order) = %s
+                  AND job IS NOT NULL
+                  AND BTRIM(job) <> ''
+            )
+            """,
+            (swo,),
+        )
+        n_lista = int((cursor.fetchone() or [0])[0] or 0)
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM lista_largos_swo
+                WHERE BTRIM(super_work_order) = %s
+                """,
+                (swo,),
+            )
+            n_lista += int((cursor.fetchone() or [0])[0] or 0)
+        except Exception:
+            if conexion:
+                conexion.rollback()
+        return n_mrl, n_lista
+    except Exception as exc:
+        print(f"[BD][LISTA_LARGOS][WARN] No se pudo leer demanda de largos SWO '{swo}': {exc}")
+        return -1, -1
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
 def _registrar_wo_sin_lista_largos(nombre_wo: str, job: str, status: str) -> None:
     wo = str(nombre_wo or "").strip()
     job_txt = str(job or "").strip()
