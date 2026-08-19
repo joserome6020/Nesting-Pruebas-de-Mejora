@@ -68,6 +68,13 @@ def _usar_pack_combinado_grupo(pendientes_est, accesorios) -> bool:
     """
     if not (pendientes_est and accesorios):
         return False
+    try:
+        from .giga_cal11_galv import should_force_giga_engine
+
+        if should_force_giga_engine():
+            return True
+    except Exception:
+        pass
     if _es_motor_arga_force():
         return True
     try:
@@ -906,11 +913,20 @@ def _refinar_hoja_empaque(
         mc_iterations if mc_iterations is not None
         else get_nest_profile().get("mc_iterations", 15)
     )
+    n_intentos = max(1, int(intentos))
+    try:
+        from .giga_cal11_galv import should_force_giga_engine
+
+        if should_force_giga_engine():
+            n_intentos = 1
+            mc_iters = 1
+    except Exception:
+        pass
     mejor = hoja
     mejor_area = float(hoja.get("area_usada", 0) or 0)
     mejor_n = len(hoja.get("piezas") or [])
 
-    for intento in range(max(1, int(intentos))):
+    for intento in range(n_intentos):
         if intento == 0:
             orden = sorted(batch, key=lambda x: float(x.get("area", 0) or 0), reverse=True)
         else:
@@ -2100,6 +2116,17 @@ def _safe_empaquetar_una_hoja_mc(
     restos_default = list(piezas or [])
     cc = cancel_checker if cancel_checker is not None else _active_pack_cancel_checker()
 
+    clave_tok = None
+    try:
+        from .giga_cal11_galv import clave_desde_debug_tag
+        from .nest_engine_context import get_pack_group_clave, set_pack_group_clave
+
+        clave_pack = clave_desde_debug_tag(debug_tag) or get_pack_group_clave()
+        if clave_pack:
+            clave_tok = set_pack_group_clave(clave_pack)
+    except Exception:
+        clave_tok = None
+
     try:
         result = empaquetar_una_hoja_mc(
             piezas,
@@ -2249,6 +2276,14 @@ def _safe_empaquetar_una_hoja_mc(
     except Exception as e:
         _dbg_nesting(f"[SAFE-EMPAQUE-EXCEPTION] {debug_tag} | {e}")
         return marcar_pack_fault(hoja_vacia, str(e)), restos_default
+    finally:
+        if clave_tok is not None:
+            try:
+                from .nest_engine_context import reset_pack_group_clave
+
+                reset_pack_group_clave(clave_tok)
+            except Exception:
+                pass
 
 class MotorNesting:
     def __init__(self):
@@ -2363,6 +2398,14 @@ class MotorNesting:
         )
         n = max(1, int(intentos or 1))
         mc_iters = int(get_nest_profile().get("mc_iterations", 15))
+        try:
+            from .giga_cal11_galv import clave_desde_debug_tag, should_force_giga_engine
+
+            if should_force_giga_engine(clave_desde_debug_tag(debug_tag)):
+                n = 1
+                mc_iters = 1
+        except Exception:
+            pass
         mejor_parcial = None
         mejor_area = -1.0
         mejor_resto_n = len(base) + 1
@@ -3479,6 +3522,10 @@ class MotorNesting:
 
                 plate_allowed = getattr(self, "_plate_formats_allowed", None)
                 plate_limits = getattr(self, "_plate_format_limits", None)
+                from .giga_cal11_galv import (
+                    ENGINE_ID as GIGA_ID,
+                    should_force_giga_engine,
+                )
 
                 with concurrent.futures.ProcessPoolExecutor(
                     max_workers=nucleos_a_usar,
@@ -3496,7 +3543,11 @@ class MotorNesting:
                                 config_opt,
                                 config_corner,
                                 wo_name,
-                                resolved_engine,
+                                (
+                                    GIGA_ID
+                                    if should_force_giga_engine(clave)
+                                    else resolved_engine
+                                ),
                                 cancel_event,
                                 plate_allowed,
                                 plate_limits,
@@ -3854,13 +3905,33 @@ class MotorNesting:
         cu_largo_sin_separacion_in=None,
     ):
         prev_cc = _bind_pack_cancel_checker(self._cancelado)
+        clave_tok = None
+        engine_tok = None
+        prev_self_engine = getattr(self, "active_engine_id", None)
         try:
             import os
             from modules.nesting_engine.ai_heuristic import smart_seed_order
+            from modules.nesting_engine.giga_cal11_galv import (
+                ENGINE_ID as GIGA_ID,
+                should_force_giga_engine,
+            )
             from modules.nesting_engine.hive_mind_nests import (
                 force_eddie_policy,
                 suggest_seed_policy,
             )
+            from modules.nesting_engine.nest_engine_context import (
+                set_active_engine_id,
+                set_pack_group_clave,
+            )
+
+            clave_tok = set_pack_group_clave(str(clave or ""))
+            if should_force_giga_engine(clave):
+                engine_tok = set_active_engine_id(GIGA_ID)
+                self.active_engine_id = GIGA_ID
+                print(
+                    f"[GIGA-CAL11] grupo {clave} → motor nativo {GIGA_ID}",
+                    flush=True,
+                )
 
             _engine_id = getattr(self, "active_engine_id", "default")
             try:
@@ -3896,6 +3967,20 @@ class MotorNesting:
                 cu_largo_sin_separacion_in=cu_largo_sin_separacion_in,
             )
         finally:
+            try:
+                from modules.nesting_engine.nest_engine_context import (
+                    reset_active_engine_id,
+                    reset_pack_group_clave,
+                )
+
+                if engine_tok is not None:
+                    reset_active_engine_id(engine_tok)
+                if clave_tok is not None:
+                    reset_pack_group_clave(clave_tok)
+            except Exception:
+                pass
+            if prev_self_engine is not None:
+                self.active_engine_id = prev_self_engine
             _unbind_pack_cancel_checker(prev_cc)
 
     def _procesar_grupo_parallel_impl(
@@ -4782,6 +4867,22 @@ class MotorNesting:
                         f"pool={len(pool_fill)}"
                     )
                 actualizar_eficiencias_hoja(hoja_ganadora)
+
+            try:
+                from .giga_cal11_galv import fill_vfm_open_channels, should_force_giga_engine
+
+                if should_force_giga_engine(clave):
+                    if not isinstance(pendientes_est, list):
+                        pendientes_est = list(pendientes_est or [])
+                    if not isinstance(accesorios, list):
+                        accesorios = list(accesorios or [])
+                    n0 = len(hoja_ganadora.get("piezas") or [])
+                    fill_vfm_open_channels(hoja_ganadora, pendientes_est)
+                    fill_vfm_open_channels(hoja_ganadora, accesorios)
+                    if len(hoja_ganadora.get("piezas") or []) != n0:
+                        actualizar_eficiencias_hoja(hoja_ganadora)
+            except Exception as giga_ch_ex:
+                _dbg_nesting(f"[GIGA-CAL11] post-compact canal skip: {giga_ch_ex}")
 
             if sin_rtz:
                 _dbg_nesting(
@@ -6059,6 +6160,7 @@ class MotorNesting:
                 poly_buff = poly_rot.convex_hull.buffer(kerf_radio)
 
             b_minx, b_miny, b_maxx, b_maxy = poly_buff.bounds
+            m_minx, m_miny, m_maxx, m_maxy = poly_rot.bounds
             variaciones.append(
                 {
                     "rot": angulo,
@@ -6069,6 +6171,10 @@ class MotorNesting:
                     "b_miny": b_miny,
                     "b_maxx": b_maxx,
                     "b_maxy": b_maxy,
+                    "m_minx": m_minx,
+                    "m_miny": m_miny,
+                    "m_maxx": m_maxx,
+                    "m_maxy": m_maxy,
                 }
             )
         return variaciones
@@ -6242,10 +6348,10 @@ class MotorNesting:
     ):
         """Valida una posición candidata (con slide) para transferencia incremental."""
         if (
-            px + var["b_minx"] + 1e-6 < margin_mm
-            or py + var["b_miny"] + 1e-6 < margin_mm
-            or px + var["b_maxx"] > w - margin_mm + 1e-6
-            or py + var["b_maxy"] > h - margin_mm + 1e-6
+            px + var["m_minx"] + 1e-6 < margin_mm
+            or py + var["m_miny"] + 1e-6 < margin_mm
+            or px + var["m_maxx"] > w - margin_mm + 1e-6
+            or py + var["m_maxy"] > h - margin_mm + 1e-6
         ):
             if rechazos is not None:
                 rechazos["limite"] += 1
@@ -6261,14 +6367,14 @@ class MotorNesting:
         while hubo_movimiento:
             hubo_movimiento = False
             test_px = px - SLIDE_STEP_MM
-            if test_px + var["b_minx"] >= margin_mm:
+            if test_px + var["m_minx"] >= margin_mm:
                 if not self._comprobar_colision_transfer(
                     test_px, py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
                 ):
                     px = test_px
                     hubo_movimiento = True
             test_py = py - SLIDE_STEP_MM
-            if test_py + var["b_miny"] >= margin_mm:
+            if test_py + var["m_miny"] >= margin_mm:
                 if not self._comprobar_colision_transfer(
                     px, test_py, var, limite_prep, l_bounds, fijas_bounds, fijas_preps
                 ):
@@ -6528,6 +6634,13 @@ class MotorNesting:
             reverse=True,
         )
         n = max(1, int(intentos or 1))
+        try:
+            from .giga_cal11_galv import clave_desde_debug_tag, should_force_giga_engine
+
+            if should_force_giga_engine(clave_desde_debug_tag(debug_tag)):
+                n = 1
+        except Exception:
+            pass
 
         for intento in range(n):
             if intento == 0:

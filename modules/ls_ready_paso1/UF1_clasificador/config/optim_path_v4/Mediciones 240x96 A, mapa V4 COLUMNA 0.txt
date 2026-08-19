@@ -1,0 +1,220 @@
+{
+  "meta": {
+    "robot": "R3",
+    "cama": "A",
+    "placa": "240x96",
+    "sheet_width_mm": 6096.0,
+    "sheet_height_mm": 2438.0,
+    "notas": "Mediciones path E1_fixed columna 0"
+  },
+  "puntos exteriores": [
+    {
+      "node_id": "octavo1_inf_izq (AB)",
+      "x_dxf": 0.0,
+      "y_dxf": 304.75,
+      "profiles": {
+        "max_y": {
+          "enabled": false
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": 37.5,
+          "tolerance_deg": 1.0,
+          "E1_mm": -2570.0,
+          "measured_node_J2_deg": 37.472
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": 37.5,
+          "tolerance_deg": 1.0,
+          "E1_mm": -2570.0,
+          "measured_node_J2_deg": 37.472
+        }
+      }
+    },
+    {
+      "node_id": "cuarto_inf_izq (B)",
+      "x_dxf": 0.0,
+      "y_dxf": 609.5,
+      "profiles": {
+        "max_y": {
+          "enabled": false
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": 23.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -2670.0,
+          "measured_node_J2_deg": 23.142
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": 18.1,
+          "tolerance_deg": 1.0,
+          "E1_mm": -2570.0,
+          "measured_node_J2_deg": 18.099
+        }
+      }
+    },
+    {
+      "node_id": "octavo2_inf_izq (BC)",
+      "x_dxf": 0.0,
+      "y_dxf": 914.25,
+      "profiles": {
+        "max_y": {
+          "enabled": false
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": 3.9,
+          "tolerance_deg": 2.0,
+          "E1_mm": -2670.0,
+          "measured_node_J2_deg": 3.897
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": 3.0,
+          "tolerance_deg": 1.0,
+          "E1_mm": -2570.0,
+          "measured_node_J2_deg": 2.964
+        }
+      }
+    },
+    {
+      "node_id": "mitad_borde_izquierdo (C)",
+      "x_dxf": 0.0,
+      "y_dxf": 1219.0,
+      "profiles": {
+        "max_y": {
+          "enabled": false
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": -11.5,
+          "tolerance_deg": 2.0,
+          "E1_mm": -2770.0,
+          "measured_node_J2_deg": -11.561
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": -13.2,
+          "tolerance_deg": 1.0,
+          "E1_mm": -2670.0,
+          "measured_node_J2_deg": -13.287
+        }
+      }
+    },
+    {
+      "node_id": "octavo1_sup_izq (CD)",
+      "x_dxf": 0.0,
+      "y_dxf": 1523.75,
+      "profiles": {
+        "max_y": {
+          "enabled": true,
+          "target_J2_deg": -22.1,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3070.0,
+          "measured_node_J2_deg": -22.128
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": -18.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3170.0,
+          "measured_node_J2_deg": -18.088
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": -22.1,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3070.0,
+          "measured_node_J2_deg": -22.128
+        }
+      }
+    },
+    {
+      "node_id": "cuarto_sup_izq (D)",
+      "x_dxf": 0.0,
+      "y_dxf": 1828.5,
+      "profiles": {
+        "max_y": {
+          "enabled": true,
+          "target_J2_deg": -25.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3370.0,
+          "measured_node_J2_deg": -25.095
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": -19.3,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3470.0,
+          "measured_node_J2_deg": -19.288
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": -25.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3370.0,
+          "measured_node_J2_deg": -25.095
+        }
+      }
+    },
+    {
+      "node_id": "octavo2_sup_izq (DF)",
+      "x_dxf": 0.0,
+      "y_dxf": 2133.25,
+      "profiles": {
+        "max_y": {
+          "enabled": true,
+          "target_J2_deg": -25.4,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3570.0,
+          "measured_node_J2_deg": -25.453
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": -18.6,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3670.0,
+          "measured_node_J2_deg": -18.652
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": -25.4,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3570.0,
+          "measured_node_J2_deg": -25.453
+        }
+      }
+    },
+    {
+      "node_id": "esquina_sup_izq (F)",
+      "x_dxf": 0.0,
+      "y_dxf": 2438.0,
+      "profiles": {
+        "max_y": {
+          "enabled": true,
+          "target_J2_deg": -26.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3670.0,
+          "measured_node_J2_deg": -26.423
+        },
+        "usual_y": {
+          "enabled": true,
+          "target_J2_deg": -26.0,
+          "tolerance_deg": 2.0,
+          "E1_mm": -3670.0,
+          "measured_node_J2_deg": -26.423
+        },
+        "min_y_min_x": {
+          "enabled": true,
+          "target_J2_deg": -26.0,
+          "tolerance_deg": 1.0,
+          "E1_mm": -3670.0,
+          "measured_node_J2_deg": -26.423
+        }
+      }
+    }
+  ]
+}

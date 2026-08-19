@@ -1,0 +1,33 @@
+{
+  "package": "CARLOS_RPA_classification_R3_240X96_B_UF2",
+  "version_note": "V3.1.5: conserva barrenos PTH <25 mm y fuerza cut_outer desde Y_DXF mínimo, con X_DXF máximo como desempate.",
+  "base_package": "CARLOS_RPA_classification_240X96_B_UF2 (R4)",
+  "profile": "240X96",
+  "robot": "R3",
+  "bed": "B",
+  "uframe": 2,
+  "sheet_mm": [
+    6096.0,
+    2438.0
+  ],
+  "main_changes": [
+    "Preserved the complete 240x96 geometry, normalization, ordering and entry methodology.",
+    "Forced robot_programming.robot=3 independently from source DXF scene metadata.",
+    "Changed the official DXF reader default calibrated scene to L3.",
+    "Added R3_B_240X96_E1_J2_V1.json with the 25 supplied 5x5 measurements.",
+    "Changed active policy IDs and motion-map metadata from R4 to R3.",
+    "Kept normalization margin at 20 mm, column band at 100 mm and individual hole E1_fixed logic.",
+    "Decoupled detected PLATE/bbox dimensions from the fixed 6096x2438 programming envelope.",
+    "Allows smaller or nonstandard source plate sizes when the useful normalized nesting fits the 240x96 envelope.",
+    "Reports detected nesting size and source in LS-ready JSON and generator report.",
+    "Keeps hard rejection for normalized geometry outside 6096x2438.",
+    "Circular holes with diameter under 25 mm use 10 CNT40 PTH to the first cut point, 10 CNT60 PTH on arc 1, and 7 CNT40 PTH on arc 2.",
+    "Circular holes with diameter 25 mm or greater keep the standard 35 mm/sec, CNT50, FINE profile.",
+    "All linear hole motions omit COORD because every hole path uses a fixed E1 value.",
+    "Outer cut entry now prioritizes minimum Y_DXF and uses maximum X_DXF only as a tie-breaker, preventing the equivalent diagonal-side start at mid-height."
+  ],
+  "tests": [
+    "tests/ls_ready_v3_smoke_test.py",
+    "tests/test_240x96_rules.py"
+  ]
+}

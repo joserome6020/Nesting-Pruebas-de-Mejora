@@ -138,6 +138,8 @@ PackResult empaquetar_una_hoja_mc(
     const std::string& corner_override = "INFERIOR IZQUIERDA",
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings = std::nullopt,
     std::mt19937* rng = nullptr,
-    int mc_iterations = kMonteCarloIterationsDefault);
+    int mc_iterations = kMonteCarloIterationsDefault,
+    bool preserve_input_order = false,
+    bool seed_bottom_alley = false);
 
 }  // namespace arga

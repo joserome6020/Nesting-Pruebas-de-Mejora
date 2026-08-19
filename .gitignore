@@ -76,6 +76,10 @@ modules/nesting_engine/arga_nest_core*.pyd
 # Local secrets
 .env
 
+# LS-READY vendor runtime junk
+modules/ls_ready_paso1/**/ultimo_json.txt
+modules/ls_ready_paso1/**/json/
+
 
 # Code-sign secrets
 *.pfx

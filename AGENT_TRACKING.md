@@ -47,6 +47,60 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19e — GIGA: bahía 8.77\" (manual planta)
+- El filtro solo veía tiras ≤5.7\" y se saltaba la bolsa 8.77\" junto a la T.
+  Ahí caben BKT-304/153 y GS (como en ed. libre). Pase de canal también
+  después del compact Lite. Candado bahía alta.
+
+### 2026-08-19d — GIGA: canales de ala VFM
+- Tras el pack mixto, pase dedicado: canales abiertos de VFM-20 (~3.7\")
+  con kerf completo 0.150\". BKT ~3.00\" entra; GS ~3.61\" no. Jala de
+  restos si cabe. Switch ON only. Candados canal/pool/gordo.
+
+### 2026-08-19c — Switch Cal 11 Galv (Configuración Global)
+- OFF (default): nest/renest de `0.11811_GALVANIZADO` con el motor del
+  selector, igual que antes. ON: motor experimental giga_cal11_galv.
+- Contraseña para activar, como cobre/Spark. Guardar y aplicar.
+
+### 2026-08-19b — GIGA: un par I, luego llenar la L
+- 4 I primero llenan el alto y dejan ~62% (metal I + patio). Eso no es techo:
+  la L (arriba del par + derecha) y canales que sí caben con kerf suben DIR.
+- Orden: 1×101 + 1×102, barras/BKT, resto de I al final. Fill cavidades ON.
+
+### 2026-08-19a — GIGA: pool mixto, no zona 2 vacía
+- El clip de zona 2 anclaba MC en (0,0); el patio derecho colocaba 0 y
+  partía VFM/BKT (DIR 29% / 87 placas). Ahora: un pase MC, I-primero,
+  anclaje al patio, combinado est+acc. Candado mixto en la misma hoja.
+
+### 2026-08-18v — GIGA: empalme I + MC zona 2
+- VFM-20-101/102 son perfiles en I (alma ~4", canales ~3.7"). Lite los
+  apilaba como ladrillos (~56%). GS 3.61"+kerf no cabe en el canal.
+- Packer: empalme analítico 101+102 (pestaña en canal) en tira izquierda;
+  segundo MC en el rectángulo libre (~40"). Sin NFP de Burke.
+- Candado: `test_empalme_i_mas_bajo_que_apilado`. Cerrar ANS y reabrir.
+
+### 2026-08-18u — GIGA Cal 11: MC rápido, no NFP de Burke
+- `giga_cal11_galv` con 540 piezas se iba a minutos (NFP Burke, UI muda).
+- Ahora: 1 pase MC (kernel Lite) + orden de marcos + pasillos. Segundos.
+- Hay que **cerrar ANS** y recompilar/cargar el `.pyd`.
+
+### 2026-08-18t — Motor nativo GIGA Cal 11 Galv (`giga_cal11_galv`)
+- `0.11811_GALVANIZADO` ya no es un overlay sobre Lite: es un motor
+  compilado (`packer_giga_cal11.cpp` → `empaquetar_una_hoja_giga_cal11`).
+  BLF+NFP de un pase, marcos VFM/HFM primero, luego pasillos.
+- Sigue oculto: no selector, no compare. Renest de ese calibre: solo
+  «Renestear». Kerf/margen de tabla 0.150 / 0.250.
+- Candado: `test_giga_cal11_galv.py`. Recompilar `.pyd` y **cerrar ANS**.
+
+### 2026-08-18s — Overlay oculto Cal 11 Galv (pasillos VFM)
+- Superado por 2026-08-18t: el overlay Lite se reemplazó por motor nativo.
+
+### 2026-08-18r — El registro mandaba 0.250−kerf/2 (Galv 4.85 mm)
+- Preflight de 1 pieza ya salía a 4.85 mm: `engine_registry` restaba
+  `kerf/2` al margen (0.175" con kerf 0.150; 0.125" → 3.3 mm en Cal 0.25).
+  El pokayoke mide metal. Los tests al packer directo no pasaban por ahí.
+- El packer recibe **0.250"**. Cerrar ANS y reabrir (cambio Python).
+
 ### 2026-08-18q — PO GAM SWO-022: observaciones ContPAQ > 60 chars
 - El pedido de placas SÍ debe crearse sin lista de largos. InsertaPO falló
   HTTP 500 / SQL 8152: el detalle

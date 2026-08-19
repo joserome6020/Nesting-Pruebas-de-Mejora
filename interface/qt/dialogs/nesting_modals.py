@@ -554,6 +554,58 @@ def abrir_modal_configuracion(parent):
 
     switch_cu.toggled.connect(_toggle_cu)
 
+    sep_giga = QFrame()
+    sep_giga.setFrameShape(QFrame.Shape.HLine)
+    sep_giga.setStyleSheet("color:#CBD5E1;")
+    lay.addWidget(sep_giga)
+
+    giga_enabled = [bool(runtime_prefs.get("giga_cal11_galv"))]
+    giga_tit = QLabel("CAL 11 GALV — motor de nest experimental")
+    giga_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(giga_tit)
+    giga_hint = QLabel(
+        "ON usa el motor nativo solo en 0.11811_GALVANIZADO (nest y renest). "
+        "OFF deja el ANS como siempre: motor del selector, Ultra/Lite, sin ese packer."
+    )
+    giga_hint.setWordWrap(True)
+    giga_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(giga_hint)
+    giga_row = QHBoxLayout()
+    giga_row.addWidget(QLabel("Motor Cal 11 Galv:"))
+    switch_giga = HerinoxSwitch(
+        label_on="CAL 11 GALV EXPERIMENTAL",
+        label_off="NEST / RENEST NORMAL",
+        checked=giga_enabled[0],
+    )
+    giga_row.addWidget(switch_giga)
+    giga_row.addStretch(1)
+    lay.addLayout(giga_row)
+    lbl_giga = QLabel(
+        "Motor experimental activo: solo calibre 11 galvanizado."
+        if giga_enabled[0]
+        else "Apagado: Cal 11 Galv nestea con el motor elegido en FILES."
+    )
+    lbl_giga.setWordWrap(True)
+    lbl_giga.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(lbl_giga)
+
+    def _toggle_giga(activo: bool):
+        if activo and not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Motor Cal 11 Galv",
+            mensaje="Ingrese la contraseña para activar el motor experimental de Cal 11 Galv.",
+        ):
+            switch_giga.setChecked(False)
+            return
+        giga_enabled[0] = bool(activo)
+        lbl_giga.setText(
+            "Motor experimental activo: solo calibre 11 galvanizado."
+            if activo
+            else "Apagado: Cal 11 Galv nestea con el motor elegido en FILES."
+        )
+
+    switch_giga.toggled.connect(_toggle_giga)
+
     sep = QFrame()
     sep.setFrameShape(QFrame.Shape.HLine)
     sep.setStyleSheet("color:#CBD5E1;")
@@ -609,6 +661,7 @@ def abrir_modal_configuracion(parent):
                 {
                     "prefer": "auto" if spark_enabled[0] else "local",
                     "cu_force_dxf_step": bool(cu_force_enabled[0]),
+                    "giga_cal11_galv": bool(giga_enabled[0]),
                     "spark": {
                         "host": ent_spark_host.text().strip() or "192.168.2.35",
                         "port": spark_port,

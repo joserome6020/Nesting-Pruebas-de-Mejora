@@ -473,7 +473,8 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
     double margin_custom,
     const std::string& /*opt_mode*/,
     const std::string& /*corner_mode*/,
-    const std::optional<std::vector<std::vector<Point2D>>>& limite_rings) {
+    const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
+    bool seed_bottom_alley) {
     SheetOut hoja;
     std::vector<PathsD> fijas_buff_paths;
     std::vector<Bounds> fijas_bounds;
@@ -602,6 +603,12 @@ std::pair<SheetOut, std::vector<PieceIn>> llenar_una_hoja_ultrafast(
             fijas_bounds.push_back(bounds_of_rings(cand_buff_final));
 
             anclajes.insert(anclajes.end(), mejor_anchors.begin(), mejor_anchors.end());
+            if (seed_bottom_alley) {
+                const double alley_x = mejor_px + mejor_var->b_maxx + (kerf_radio * 2.0);
+                if (alley_x + 40.0 < w_placa - margin_px) {
+                    anclajes.emplace_back(alley_x, margin_px);
+                }
+            }
             anclajes.erase(
                 std::remove_if(
                     anclajes.begin(),
@@ -642,7 +649,9 @@ PackResult empaquetar_una_hoja_mc(
     const std::string& corner_override,
     const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
     std::mt19937* rng,
-    int mc_iterations) {
+    int mc_iterations,
+    bool preserve_input_order,
+    bool seed_bottom_alley) {
     PackResult out;
     out.hoja.eficiencia = 0.0;
     out.restos = piezas;
@@ -655,17 +664,19 @@ PackResult empaquetar_una_hoja_mc(
     }
 
     std::vector<PieceIn> pool_base = piezas;
-    std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
-        const auto ka = sort_key_pool(a);
-        const auto kb = sort_key_pool(b);
-        if (std::get<0>(ka) != std::get<0>(kb)) {
-            return std::get<0>(ka) < std::get<0>(kb);
-        }
-        if (std::get<1>(ka) != std::get<1>(kb)) {
-            return std::get<1>(ka) < std::get<1>(kb);
-        }
-        return std::get<2>(ka) < std::get<2>(kb);
-    });
+    if (!preserve_input_order) {
+        std::sort(pool_base.begin(), pool_base.end(), [](const PieceIn& a, const PieceIn& b) {
+            const auto ka = sort_key_pool(a);
+            const auto kb = sort_key_pool(b);
+            if (std::get<0>(ka) != std::get<0>(kb)) {
+                return std::get<0>(ka) < std::get<0>(kb);
+            }
+            if (std::get<1>(ka) != std::get<1>(kb)) {
+                return std::get<1>(ka) < std::get<1>(kb);
+            }
+            return std::get<2>(ka) < std::get<2>(kb);
+        });
+    }
 
     const double kerf_a_usar = kerf_override;
     std::mt19937 local_rng(static_cast<uint32_t>(std::random_device{}()));
@@ -761,7 +772,8 @@ PackResult empaquetar_una_hoja_mc(
             margin_override,
             opt_override,
             corner_override,
-            limite_rings);
+            limite_rings,
+            seed_bottom_alley);
 
         if (es_mejor(hoja, restos, mejor_hoja, mejor_restos)) {
             mejor_hoja = std::move(hoja);

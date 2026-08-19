@@ -1764,7 +1764,9 @@ def densify_cavity_strips(
     return moved
 
 
-def fill_sheet_free_pockets(hoja: dict, engine_id: str = "default") -> int:
+def fill_sheet_free_pockets(
+    hoja: dict, engine_id: str = "default", *, force_corridor: bool = False
+) -> int:
     """Reubica guests sueltos en huecos libres de placa. Llamar DESPUÉS de gravedad."""
     import copy as _copy
 
@@ -1801,7 +1803,7 @@ def fill_sheet_free_pockets(hoja: dict, engine_id: str = "default") -> int:
         hoja, entries, hosts, used, kerf_half, t0, plate_inset_mm=plate_inset
     )
     corridor_n = 0
-    if corridor_fill_enabled() and len(hosts) >= 2:
+    if (force_corridor or corridor_fill_enabled()) and len(hosts) >= 2:
         corridor_n = _fill_corridor_gaps(
             hoja, entries, hosts, used, kerf_half, t0, plate_inset_mm=plate_inset
         )

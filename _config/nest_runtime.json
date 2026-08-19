@@ -1,6 +1,7 @@
 {
   "prefer": "local",
   "cu_force_dxf_step": true,
+  "giga_cal11_galv": false,
   "spark": {
     "host": "192.168.2.35",
     "port": 8765,

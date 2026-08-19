@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import time
-from dataclasses import replace
 from typing import Callable, Optional, Type
 
 from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
@@ -12,6 +11,7 @@ from .engines import (
     ArgaLabPilotEngine,
     ArgaLiteEngine,
     BurkeBlfEngine,
+    GigaCal11GalvEngine,
     Libnest2dEngine,
     SvgnestUltraEngine,
 )
@@ -31,43 +31,21 @@ _ENGINE_CLASSES: dict[str, Type] = {
     ArgaApexEngine.META.engine_id: ArgaApexEngine,
     ArgaLiteEngine.META.engine_id: ArgaLiteEngine,
     ArgaLabPilotEngine.META.engine_id: ArgaLabPilotEngine,
+    GigaCal11GalvEngine.META.engine_id: GigaCal11GalvEngine,
 }
-
-_BUFFERED_EDGE_ENGINES = frozenset(
-    {
-        ArgaApexEngine.META.engine_id,
-        ArgaForceEngine.META.engine_id,
-        ArgaLiteEngine.META.engine_id,
-        BurkeBlfEngine.META.engine_id,
-        Libnest2dEngine.META.engine_id,
-        SvgnestUltraEngine.META.engine_id,
-    }
-)
-
 
 def _request_con_margen_final_placa(
     request: PackSheetRequest,
     engine_id: str,
 ) -> PackSheetRequest:
-    """Adapta el margen físico al contrato del packer C++ legacy.
+    """El packer recibe el margen de tabla (0.250\") para el METAL.
 
-    Los packers legacy expanden cada pieza medio kerf para medir colisiones,
-    incluido el borde de la placa. Sin este ajuste, un margen solicitado de
-    ``0.250"`` y kerf ``0.150"`` se materializa como ``0.325"``.
-
-    En una placa normal el margen de la tabla es la distancia final
-    placa→pieza, por lo que se entrega al packer ``margen - kerf/2``. Los
-    límites irregulares (RTZ/huecos) ya aplican contención con geometría exacta
-    y conservan el margen original.
+    Antes se restaba kerf/2 (0.250-0.075=0.175\") creyendo que el globo de
+    kerf se pegaba al canto y el metal acababa a 0.250\". En planta el metal
+    quedaba a ~4.85 mm (Galv) y ~3.3 mm (Cal 0.25). El pokayoke mide metal.
     """
-    if engine_id not in _BUFFERED_EDGE_ENGINES or request.limite_poly is not None:
-        return request
-    margin_final = max(0.0, float(request.margin_override or 0.0))
-    kerf = max(0.0, float(request.kerf_override or 0.0))
-    margin_packer = max(0.0, margin_final - (kerf / 2.0))
-    if abs(margin_packer - margin_final) <= 1e-12:
-        return request
-    return replace(request, margin_override=margin_packer)
+    del engine_id
+    return request
 
 
 def list_engine_metas(*, include_hidden: bool = False) -> list[NestEngineMeta]:
@@ -152,6 +130,18 @@ def empaquetar_una_hoja_detalle(
     """API unificada con routing Local | NvidiaSpark para cualquier motor."""
     eid = normalize_engine_id(engine_id or get_active_engine_id())
     request = _request_con_margen_final_placa(request, eid)
+    try:
+        from .giga_cal11_galv import ENGINE_ID as GIGA_ID
+        from .giga_cal11_galv import should_force_giga_engine
+
+        if should_force_giga_engine() and eid != GIGA_ID:
+            print(
+                f"[GIGA-CAL11] motor nativo {GIGA_ID} (cede {eid})",
+                flush=True,
+            )
+            eid = GIGA_ID
+    except Exception as giga_ex:
+        print(f"[GIGA-CAL11] route skip: {giga_ex}", flush=True)
     try:
         from modules.nesting_engine.nest_executor import pack_engine
 

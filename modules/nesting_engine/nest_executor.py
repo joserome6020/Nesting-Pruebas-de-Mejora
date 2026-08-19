@@ -88,6 +88,12 @@ def pack_engine(
         }
         return result
 
+    from modules.nesting_engine.nest_engine_context import ENGINE_GIGA_CAL11_GALV
+
+    # Spark no lleva el packer GIGA; este calibre corre siempre en local.
+    if str(engine_id) == ENGINE_GIGA_CAL11_GALV:
+        return local(fallback_used=False, detail="giga_cal11_local")
+
     if mode == "local":
         return local(fallback_used=False, detail="prefer_local")
 

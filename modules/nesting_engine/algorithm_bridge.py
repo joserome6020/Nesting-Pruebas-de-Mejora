@@ -228,7 +228,7 @@ def empaquetar_una_hoja_arga_base(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -410,7 +410,7 @@ def empaquetar_una_hoja_burke_blf(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -464,12 +464,62 @@ def empaquetar_una_hoja_burke_blf(
     return _assemble_pack_result(hoja_native, restos_native, piezas)
 
 
+def empaquetar_una_hoja_giga_cal11(
+    piezas,
+    w_placa,
+    h_placa,
+    kerf_override=0.15,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
+    opt_override="OPTIMIZAR LARGO Y ANCHO",
+    corner_override="INFERIOR IZQUIERDA",
+    limite_poly=None,
+    cancel_checker=None,
+):
+    """Motor GIGA Cal 11 Galv — C++: MC mixto I-primero + anclaje patio."""
+    try:
+        if cancel_checker and cancel_checker():
+            return (
+                {"piezas": [], "area_usada": 0.0, "eficiencia": 0.0},
+                list(piezas or []),
+            )
+    except Exception:
+        pass
+
+    try:
+        from . import algorithm_cpp
+    except ImportError as exc:
+        raise NestingEngineUnavailableError(_CPP_REQUIRED_MSG) from exc
+
+    if not hasattr(algorithm_cpp, "empaquetar_una_hoja_giga_cal11"):
+        raise NestingEngineUnavailableError(
+            "algorithm_cpp.pyd desactualizado (falta empaquetar_una_hoja_giga_cal11). "
+            "Recompila con build_cpp_engine.ps1."
+        )
+
+    native_piezas = [_piece_to_native(p) for p in (piezas or [])]
+    limite_rings = None
+    if limite_poly is not None:
+        limite_rings = _rings_from_shapely_polygon(limite_poly)
+
+    hoja_native, restos_native = algorithm_cpp.empaquetar_una_hoja_giga_cal11(
+        native_piezas,
+        w_placa,
+        h_placa,
+        kerf_override,
+        margin_override,
+        opt_override,
+        corner_override,
+        limite_rings,
+    )
+    return _assemble_pack_result(hoja_native, restos_native, piezas)
+
+
 def empaquetar_una_hoja_libnest2d(
     piezas,
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -561,7 +611,7 @@ def empaquetar_una_hoja_svgnest_ultra(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -825,7 +875,7 @@ def empaquetar_una_hoja_arga_apex(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -1137,7 +1187,7 @@ def empaquetar_una_hoja_legacy_mc(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,
@@ -1523,7 +1573,7 @@ def empaquetar_una_hoja_mc(
     w_placa,
     h_placa,
     kerf_override=0.15,
-    margin_override=0.0,
+    margin_override=PLATE_TO_PIECE_DEFAULT_IN,
     opt_override="OPTIMIZAR LARGO Y ANCHO",
     corner_override="INFERIOR IZQUIERDA",
     limite_poly=None,

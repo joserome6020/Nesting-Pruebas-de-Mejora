@@ -13,6 +13,7 @@ ENGINE_ARGA_LAB_PILOT = "arga_lab_pilot"
 ENGINE_BURKE_BLF = "burke_blf"
 ENGINE_LIBNEST2D = "libnest2d"
 ENGINE_SVGNEST_ULTRA = "svgnest_ultra"
+ENGINE_GIGA_CAL11_GALV = "giga_cal11_galv"  # oculto: motor nativo Cal 11 Galv
 
 STEEL_ENGINE_IDS: tuple[str, ...] = (
     ENGINE_ARGA_FORCE,
@@ -22,12 +23,13 @@ STEEL_ENGINE_IDS: tuple[str, ...] = (
     ENGINE_ARGA_APEX,  # calidad + velocidad (NFP fino + Venom)
     ENGINE_ARGA_LITE,  # al final: respaldo rápido / menor densidad
     ENGINE_ARGA_LAB_PILOT,  # oculto: experimental; no operativo
+    ENGINE_GIGA_CAL11_GALV,  # oculto: motor nativo, nunca en selector
 )
 
 # Menú diario / renest / FILES / SIM-LAB. Código de libnest2d intacto.
 # Reactivar en UI: ARGA_SHOW_LIBNEST2D=1
 UI_HIDDEN_STEEL_ENGINE_IDS: frozenset[str] = frozenset(
-    {ENGINE_LIBNEST2D, ENGINE_ARGA_LAB_PILOT}
+    {ENGINE_LIBNEST2D, ENGINE_ARGA_LAB_PILOT, ENGINE_GIGA_CAL11_GALV}
 )
 
 UI_STEEL_ENGINE_IDS: tuple[str, ...] = tuple(
@@ -68,6 +70,14 @@ _ultra_sim_bounded: contextvars.ContextVar[bool] = contextvars.ContextVar(
 _ultra_best_callback: contextvars.ContextVar[Optional[Callable[..., Any]]] = contextvars.ContextVar(
     "nest_ultra_best_callback",
     default=None,
+)
+_pack_group_clave: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "nest_pack_group_clave",
+    default="",
+)
+_giga_pack_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "nest_giga_pack_active",
+    default=False,
 )
 
 
@@ -130,6 +140,8 @@ def is_engine_ui_visible(engine_id: str | None) -> bool:
         return True
     raw = str(os.environ.get("ARGA_SHOW_LIBNEST2D", "")).strip().lower()
     experimental = str(os.environ.get("ARGA_SHOW_EXPERIMENTAL_ENGINES", "")).strip().lower()
+    if key == ENGINE_GIGA_CAL11_GALV:
+        return False
     if key == ENGINE_ARGA_LAB_PILOT:
         return experimental in ("1", "true", "yes", "on")
     return raw in ("1", "true", "yes", "on")
@@ -146,12 +158,14 @@ def iter_ui_steel_engine_ids() -> Iterable[str]:
         os.environ.get("ARGA_SHOW_EXPERIMENTAL_ENGINES", "")
     ).strip().lower() in ("1", "true", "yes", "on")
     if show_hidden and show_experimental:
-        return STEEL_ENGINE_IDS
-    if show_hidden:
-        return tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_ARGA_LAB_PILOT)
-    if show_experimental:
-        return tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_LIBNEST2D)
-    return UI_STEEL_ENGINE_IDS
+        ids = STEEL_ENGINE_IDS
+    elif show_hidden:
+        ids = tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_ARGA_LAB_PILOT)
+    elif show_experimental:
+        ids = tuple(eid for eid in STEEL_ENGINE_IDS if eid != ENGINE_LIBNEST2D)
+    else:
+        ids = UI_STEEL_ENGINE_IDS
+    return tuple(eid for eid in ids if eid != ENGINE_GIGA_CAL11_GALV)
 
 
 def is_ultra_renest_accept_mode() -> bool:
@@ -194,3 +208,27 @@ def notify_ultra_best_ready(resumen: str = "") -> None:
         cb(str(resumen or ""))
     except Exception:
         pass
+
+
+def get_pack_group_clave() -> str:
+    return str(_pack_group_clave.get() or "")
+
+
+def set_pack_group_clave(clave: str) -> contextvars.Token:
+    return _pack_group_clave.set(str(clave or "").strip())
+
+
+def reset_pack_group_clave(token: contextvars.Token) -> None:
+    _pack_group_clave.reset(token)
+
+
+def is_giga_pack_active() -> bool:
+    return bool(_giga_pack_active.get())
+
+
+def set_giga_pack_active(enabled: bool) -> contextvars.Token:
+    return _giga_pack_active.set(bool(enabled))
+
+
+def reset_giga_pack_active(token: contextvars.Token) -> None:
+    _giga_pack_active.reset(token)

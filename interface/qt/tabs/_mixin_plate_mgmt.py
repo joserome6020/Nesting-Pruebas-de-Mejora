@@ -265,12 +265,14 @@ class PlateManagementMixin:
         ):
             self._renestear_solo_barra_cobre(self.clave_actual, self.hoja_actual_data)
             return
-        engine_id = self._mostrar_dialogo_motor_renest(
-            "Renestear placa",
-            f"Elija el motor para renestear la placa {self.hoja_actual_data.get('placa_id', '')}.",
-        )
-        if not engine_id:
-            return
+        engine_id = self._engine_renest_fijo_para_clave(self.clave_actual)
+        if engine_id is None:
+            engine_id = self._mostrar_dialogo_motor_renest(
+                "Renestear placa",
+                f"Elija el motor para renestear la placa {self.hoja_actual_data.get('placa_id', '')}.",
+            )
+            if not engine_id:
+                return
         self.renestear_solo_placa(
             self.clave_actual, self.hoja_actual_data, engine_id=engine_id
         )
@@ -284,6 +286,8 @@ class PlateManagementMixin:
         if self._es_grupo_cobre(clave):
             self.renestear_calibre_completo_ui(clave)
             return
+        if engine_id is None:
+            engine_id = self._engine_renest_fijo_para_clave(clave)
         if engine_id is None:
             engine_id = self._mostrar_dialogo_motor_renest(
                 "Renestear calibre completo",
@@ -851,42 +855,74 @@ class PlateManagementMixin:
 
             bloque = self._desglosar_bloque_placa_mini(clave, hoja)
             tiene_rtz = bool(bloque.get("idx_retazos"))
-            # Motores como submenú (mismo patrón que calibre), no como ítems planos.
-            sub_renest = QMenu("Renestear placa", menu)
-            if tiene_rtz:
-                for eid, label in self._opciones_motores_renest():
-                    sub_m = QMenu(label, sub_renest)
-                    sub_m.addAction(
-                        "CON RTZ (conservar retazo)",
+            fijo = self._engine_renest_fijo_para_clave(clave)
+            if fijo:
+                if tiene_rtz:
+                    menu.addAction(
+                        "RENESTEAR (conservar retazo)",
                         self._safe_ctx(
                             "Renestear con RTZ",
-                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                            lambda c=clave, h=hoja, e=fijo: self.renestear_solo_placa(
                                 c, h, absorber_rtz=False, engine_id=e
                             ),
                         ),
                     )
-                    sub_m.addAction(
-                        "SIN RTZ (piezas a placa madre)",
+                    menu.addAction(
+                        "RENESTEAR SIN RTZ (piezas a placa madre)",
                         self._safe_ctx(
                             "Renestear sin RTZ",
-                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                            lambda c=clave, h=hoja, e=fijo: self.renestear_solo_placa(
                                 c, h, absorber_rtz=True, engine_id=e
                             ),
                         ),
                     )
-                    sub_renest.addMenu(sub_m)
-            else:
-                for eid, label in self._opciones_motores_renest():
-                    sub_renest.addAction(
-                        label,
+                else:
+                    menu.addAction(
+                        "RENESTEAR",
                         self._safe_ctx(
                             "Renestear placa",
-                            lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                            lambda c=clave, h=hoja, e=fijo: self.renestear_solo_placa(
                                 c, h, engine_id=e
                             ),
                         ),
                     )
-            menu.addMenu(sub_renest)
+            else:
+                # Motores como submenú (mismo patrón que calibre), no como ítems planos.
+                sub_renest = QMenu("Renestear placa", menu)
+                if tiene_rtz:
+                    for eid, label in self._opciones_motores_renest():
+                        sub_m = QMenu(label, sub_renest)
+                        sub_m.addAction(
+                            "CON RTZ (conservar retazo)",
+                            self._safe_ctx(
+                                "Renestear con RTZ",
+                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                    c, h, absorber_rtz=False, engine_id=e
+                                ),
+                            ),
+                        )
+                        sub_m.addAction(
+                            "SIN RTZ (piezas a placa madre)",
+                            self._safe_ctx(
+                                "Renestear sin RTZ",
+                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                    c, h, absorber_rtz=True, engine_id=e
+                                ),
+                            ),
+                        )
+                        sub_renest.addMenu(sub_m)
+                else:
+                    for eid, label in self._opciones_motores_renest():
+                        sub_renest.addAction(
+                            label,
+                            self._safe_ctx(
+                                "Renestear placa",
+                                lambda c=clave, h=hoja, e=eid: self.renestear_solo_placa(
+                                    c, h, engine_id=e
+                                ),
+                            ),
+                        )
+                menu.addMenu(sub_renest)
             menu.addAction(
                 "CAMBIAR PIEZAS A OTRA PLACA",
                 self._safe_ctx(
@@ -1070,6 +1106,19 @@ class PlateManagementMixin:
                 self._safe_ctx(
                     "Renestear calibre cobre",
                     lambda c=clave: self.renestear_calibre_completo_ui(c),
+                ),
+            )
+            return
+
+        fijo = self._engine_renest_fijo_para_clave(clave)
+        if fijo:
+            sub_menu.addAction(
+                "RENESTEAR",
+                self._safe_ctx(
+                    "Renestear calibre",
+                    lambda c=clave, e=fijo: self.renestear_calibre_completo_ui(
+                        c, engine_id=e
+                    ),
                 ),
             )
             return

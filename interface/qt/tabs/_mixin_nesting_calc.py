@@ -2234,6 +2234,12 @@ class NestingCalcMixin:
             out.append(("arga_force", "ARGA FORCE"))
         return out
 
+    def _engine_renest_fijo_para_clave(self, clave) -> str | None:
+        """Si el calibre tiene motor oculto, no se pregunta. None = diálogo."""
+        from modules.nesting_engine.giga_cal11_galv import engine_id_for_renest
+
+        return engine_id_for_renest(clave)
+
     def _mostrar_dialogo_motor_renest(self, titulo, texto):
         """Diálogo para elegir motor de renesteo. Retorna engine_id o None si cancela."""
         from interface.qt.theme import apply_push_button
@@ -2892,7 +2898,7 @@ class NestingCalcMixin:
                     opt,
                     corner,
                     intentos_por_placa=24,
-                    debug_tag="recalc_absorber_rtz",
+                    debug_tag=f"clave={clave} | recalc_absorber_rtz",
                 )
                 if not hojas_raw:
                     return None, idx_retazos_asociados, []
@@ -2920,7 +2926,7 @@ class NestingCalcMixin:
                         piezas_a_reprocesar,
                         hoja,
                         hojas_grupo,
-                        debug_tag="recalc_contexto_rtz",
+                        debug_tag=f"clave={clave} | recalc_contexto_rtz",
                         intentos=24,
                     )
                     if nh and not sobras:
@@ -2947,6 +2953,15 @@ class NestingCalcMixin:
                     n_esperado = len(piezas_a_reprocesar)
                     renovada_en_pose = False
                     n_intentos = 24 if prefer_dxf else 12
+                    try:
+                        from modules.nesting_engine.giga_cal11_galv import (
+                            should_force_giga_engine,
+                        )
+
+                        if should_force_giga_engine(clave):
+                            n_intentos = 1
+                    except Exception:
+                        pass
                     print(
                         f"[RENEST-PACK] piezas={n_esperado} | misma_placa | "
                         f"intentos={n_intentos} | engine={get_active_engine_id()} | "
@@ -2963,7 +2978,7 @@ class NestingCalcMixin:
                         opt,
                         corner,
                         intentos=n_intentos,
-                        debug_tag="recalc_contexto",
+                        debug_tag=f"clave={clave} | recalc_contexto",
                     )
                     colocadas = self._conteo_piezas_reales_en_nest(nh) if nh else 0
                     if nh and colocadas >= n_esperado:

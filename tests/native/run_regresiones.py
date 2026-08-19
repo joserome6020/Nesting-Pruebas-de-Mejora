@@ -179,6 +179,10 @@ REGRESIONES = [
         "test_ultra_pack_not_core.py",
         "2026-08-18n - Ultra no empaca por ArgaNestCore (Galv SIVC-113 a 4.86 mm)",
     ),
+    (
+        "test_giga_cal11_galv.py",
+        "2026-08-19e - Cal 11 Galv: bahía VFM 8.77\" (BKT-304/GS) + canal 3.74\"",
+    ),
 ]
 
 

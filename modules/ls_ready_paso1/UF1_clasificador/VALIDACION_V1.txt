@@ -1,0 +1,6 @@
+VALIDACION R3 UF-1 240x96: OK
+Mapa 5x5: 25 nodos
+Clasificador principal: 3 piezas, 51 pasos, 0 errores, 0 advertencias
+Reconstruccion R4 -> R3 desde legacy/raw: OK
+Pruebas: tests/ls_ready_v3_smoke_test.py y tests/test_240x96_rules.py
+Ver VALIDACION_R3.md para auditoria completa.

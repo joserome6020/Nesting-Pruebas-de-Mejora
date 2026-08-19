@@ -8,6 +8,7 @@
 #include "packer.hpp"
 #include "packer_base.hpp"
 #include "packer_burke_blf.hpp"
+#include "packer_giga_cal11.hpp"
 #include "packer_libnest2d.hpp"
 #include "packer_svgnest_ultra.hpp"
 #include "cuda/nest_accel.hpp"
@@ -315,6 +316,59 @@ PYBIND11_MODULE(algorithm_cpp, m) {
         py::arg("hill_climb_iterations") = 10,
         py::arg("rng_seed") = 1,
         py::arg("preserve_input_order") = true);
+
+    m.def(
+        "empaquetar_una_hoja_giga_cal11",
+        [](py::list piezas_in,
+           double w_placa,
+           double h_placa,
+           double kerf_override,
+           double margin_override,
+           const std::string& opt_override,
+           const std::string& corner_override,
+           py::object limite_rings_obj) {
+            std::vector<arga::PieceIn> piezas;
+            piezas.reserve(piezas_in.size());
+            for (const auto& item : piezas_in) {
+                piezas.push_back(parse_piece(py::cast<py::dict>(item)));
+            }
+
+            std::optional<std::vector<std::vector<arga::Point2D>>> limite;
+            if (!limite_rings_obj.is_none()) {
+                auto rings = parse_rings(limite_rings_obj);
+                if (!rings.empty()) {
+                    limite = rings;
+                }
+            }
+
+            arga::PackResult result;
+            {
+                py::gil_scoped_release release;
+                result = arga::empaquetar_una_hoja_giga_cal11(
+                    piezas,
+                    w_placa,
+                    h_placa,
+                    kerf_override,
+                    margin_override,
+                    opt_override,
+                    corner_override,
+                    limite);
+            }
+
+            py::list restos;
+            for (const auto& p : result.restos) {
+                restos.append(piece_in_to_py(p));
+            }
+            return py::make_tuple(sheet_to_py(result.hoja), restos);
+        },
+        py::arg("piezas"),
+        py::arg("w_placa"),
+        py::arg("h_placa"),
+        py::arg("kerf_override") = 0.15,
+        py::arg("margin_override") = 0.25,
+        py::arg("opt_override") = "OPTIMIZAR LARGO Y ANCHO",
+        py::arg("corner_override") = "INFERIOR IZQUIERDA",
+        py::arg("limite_rings") = py::none());
 
     m.def(
         "empaquetar_una_hoja_libnest2d",

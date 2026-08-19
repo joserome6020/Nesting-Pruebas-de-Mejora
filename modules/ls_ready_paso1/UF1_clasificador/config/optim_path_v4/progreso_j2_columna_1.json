@@ -1,0 +1,762 @@
+{
+  "column_id": 1,
+  "reference_x_dxf": 1524.0,
+  "motion_direction_dxf": "decreasing",
+  "node_y_dxf": {
+    "A": 0.0,
+    "AB": 304.75,
+    "B": 609.5,
+    "BC": 914.25,
+    "C": 1219.0,
+    "CD": 1523.75,
+    "D": 1828.5,
+    "DF": 2133.25,
+    "F": 2438.0
+  },
+  "profiles": {
+    "usual_y": {
+      "A": {
+        "anchor_node_code": "A",
+        "anchor_y_dxf": 0.0,
+        "samples": [
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 54.378
+          }
+        ]
+      },
+      "AB": {
+        "anchor_node_code": "AB",
+        "anchor_y_dxf": 304.75,
+        "samples": [
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 37.472
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 54.378
+          }
+        ]
+      },
+      "B": {
+        "anchor_node_code": "B",
+        "anchor_y_dxf": 609.5,
+        "samples": [
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 23.142
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 37.472
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 54.378
+          }
+        ]
+      },
+      "BC": {
+        "anchor_node_code": "BC",
+        "anchor_y_dxf": 914.25,
+        "samples": [
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 3.897
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 18.838
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 33.471
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.851
+          }
+        ]
+      },
+      "C": {
+        "anchor_node_code": "C",
+        "anchor_y_dxf": 1219.0,
+        "samples": [
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": -11.561
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 5.084
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 19.788
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 34.339
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 50.807
+          }
+        ]
+      },
+      "CD": {
+        "anchor_node_code": "CD",
+        "anchor_y_dxf": 1523.75,
+        "samples": [
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -18.088
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": -2.077
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 12.037
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 25.581
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 39.818
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 57.203
+          }
+        ]
+      },
+      "D": {
+        "anchor_node_code": "D",
+        "anchor_y_dxf": 1828.5,
+        "samples": [
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -19.288
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -5.928
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 6.748
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 19.131
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 31.881
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 46.171
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 65.874
+          }
+        ]
+      },
+      "DF": {
+        "anchor_node_code": "DF",
+        "anchor_y_dxf": 2133.25,
+        "samples": [
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -18.652
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -8.705
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": 2.048
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 13.122
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 24.602
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 37.013
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 51.724
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 71.262
+          }
+        ]
+      },
+      "F": {
+        "anchor_node_code": "F",
+        "anchor_y_dxf": 2438.0,
+        "samples": [
+          {
+            "node_code": "F",
+            "y_dxf": 2438.0,
+            "J2_deg": -18.984
+          },
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -12.493
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -3.802
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": 5.995
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 16.433
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 27.555
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 39.887
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 55.031
+          }
+        ]
+      }
+    },
+    "min_y_min_x": {
+      "A": {
+        "anchor_node_code": "A",
+        "anchor_y_dxf": 0.0,
+        "samples": [
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.117
+          }
+        ]
+      },
+      "AB": {
+        "anchor_node_code": "AB",
+        "anchor_y_dxf": 304.75,
+        "samples": [
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 32.8
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.117
+          }
+        ]
+      },
+      "B": {
+        "anchor_node_code": "B",
+        "anchor_y_dxf": 609.5,
+        "samples": [
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 18.099
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 32.8
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.117
+          }
+        ]
+      },
+      "BC": {
+        "anchor_node_code": "BC",
+        "anchor_y_dxf": 914.25,
+        "samples": [
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 2.964
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 18.099
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 32.8
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.117
+          }
+        ]
+      },
+      "C": {
+        "anchor_node_code": "C",
+        "anchor_y_dxf": 1219.0,
+        "samples": [
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": -13.287
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 3.897
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 18.838
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 33.471
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 49.851
+          }
+        ]
+      },
+      "CD": {
+        "anchor_node_code": "CD",
+        "anchor_y_dxf": 1523.75,
+        "samples": [
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -22.128
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": -4.754
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 10.002
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 23.846
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 38.144
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 55.172
+          }
+        ]
+      },
+      "D": {
+        "anchor_node_code": "D",
+        "anchor_y_dxf": 1828.5,
+        "samples": [
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -25.095
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -9.963
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 3.696
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 16.612
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 29.6
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 43.818
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 62.432
+          }
+        ]
+      },
+      "DF": {
+        "anchor_node_code": "DF",
+        "anchor_y_dxf": 2133.25,
+        "samples": [
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -25.453
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -13.848
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -1.924
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 9.893
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 21.795
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 34.35
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 48.793
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 70.262
+          }
+        ]
+      },
+      "F": {
+        "anchor_node_code": "F",
+        "anchor_y_dxf": 2438.0,
+        "samples": [
+          {
+            "node_code": "F",
+            "y_dxf": 2438.0,
+            "J2_deg": -26.423
+          },
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -18.652
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -8.705
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": 2.048
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 13.122
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 24.602
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 37.013
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 51.724
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 71.262
+          }
+        ]
+      }
+    },
+    "max_y": {
+      "A": {
+        "anchor_node_code": "A",
+        "anchor_y_dxf": 0.0,
+        "samples": [
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 0.0
+          }
+        ]
+      },
+      "CD": {
+        "anchor_node_code": "CD",
+        "anchor_y_dxf": 1523.75,
+        "samples": [
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -22.128
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": -4.754
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 10.002
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 23.846
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 38.144
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 55.172
+          }
+        ]
+      },
+      "D": {
+        "anchor_node_code": "D",
+        "anchor_y_dxf": 1828.5,
+        "samples": [
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -25.095
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -9.963
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 3.696
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 16.612
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 29.6
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 43.818
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 62.432
+          }
+        ]
+      },
+      "DF": {
+        "anchor_node_code": "DF",
+        "anchor_y_dxf": 2133.25,
+        "samples": [
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -25.453
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -13.848
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": -1.924
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 9.893
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 21.795
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 34.35
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 48.793
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 70.262
+          }
+        ]
+      },
+      "F": {
+        "anchor_node_code": "F",
+        "anchor_y_dxf": 2438.0,
+        "samples": [
+          {
+            "node_code": "F",
+            "y_dxf": 2438.0,
+            "J2_deg": -26.423
+          },
+          {
+            "node_code": "DF",
+            "y_dxf": 2133.25,
+            "J2_deg": -18.652
+          },
+          {
+            "node_code": "D",
+            "y_dxf": 1828.5,
+            "J2_deg": -8.705
+          },
+          {
+            "node_code": "CD",
+            "y_dxf": 1523.75,
+            "J2_deg": 2.048
+          },
+          {
+            "node_code": "C",
+            "y_dxf": 1219.0,
+            "J2_deg": 13.122
+          },
+          {
+            "node_code": "BC",
+            "y_dxf": 914.25,
+            "J2_deg": 24.602
+          },
+          {
+            "node_code": "B",
+            "y_dxf": 609.5,
+            "J2_deg": 37.013
+          },
+          {
+            "node_code": "AB",
+            "y_dxf": 304.75,
+            "J2_deg": 51.724
+          },
+          {
+            "node_code": "A",
+            "y_dxf": 0.0,
+            "J2_deg": 71.262
+          }
+        ]
+      }
+    }
+  }
+}

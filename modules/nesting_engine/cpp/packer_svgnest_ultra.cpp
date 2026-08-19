@@ -990,14 +990,32 @@ std::vector<Variation> build_variaciones_fine(
     return variaciones;
 }
 
-LimitContext make_limit_context(const std::optional<std::vector<std::vector<Point2D>>>& limite_rings, double margin_px) {
+PathsD rect_plate_metal_limit(double w_placa, double h_placa, double margin_px) {
+    PathD rect;
+    rect.emplace_back(margin_px, margin_px);
+    rect.emplace_back(w_placa - margin_px, margin_px);
+    rect.emplace_back(w_placa - margin_px, h_placa - margin_px);
+    rect.emplace_back(margin_px, h_placa - margin_px);
+    return PathsD{std::move(rect)};
+}
+
+LimitContext make_limit_context(
+    const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
+    double margin_px,
+    double w_placa,
+    double h_placa) {
     LimitContext ctx;
     if (!limite_rings || limite_rings->empty()) {
+        // Placa rectangular: límite EXACTO 0.250" para el METAL (no Clipper, no globo).
+        if (margin_px > 0.0 && w_placa > 2.0 * margin_px && h_placa > 2.0 * margin_px) {
+            ctx.active = true;
+            ctx.eval_paths = rect_plate_metal_limit(w_placa, h_placa, margin_px);
+            ctx.bounds = Bounds{margin_px, margin_px, w_placa - margin_px, h_placa - margin_px};
+        }
         return ctx;
     }
     auto paths = to_paths_d(*limite_rings);
     if (margin_px > 0.0) {
-        // Tabla exacta: no devolver 0.1 mm (Galv 6.29 vs 6.35 mm).
         paths = InflatePaths(paths, -margin_px, JoinType::Miter, EndType::Polygon);
     }
     if (paths.empty()) {
@@ -1006,6 +1024,16 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     ctx.active = true;
     ctx.eval_paths = paths;
     ctx.bounds = bounds_of_paths(paths);
+    if (margin_px > 0.0) {
+        ctx.bounds.minx = std::max(ctx.bounds.minx, margin_px);
+        ctx.bounds.miny = std::max(ctx.bounds.miny, margin_px);
+        if (w_placa > 0.0) {
+            ctx.bounds.maxx = std::min(ctx.bounds.maxx, w_placa - margin_px);
+        }
+        if (h_placa > 0.0) {
+            ctx.bounds.maxy = std::min(ctx.bounds.maxy, h_placa - margin_px);
+        }
+    }
     return ctx;
 }
 
@@ -1132,19 +1160,21 @@ void compact_slide_position(
     const LimitContext& limit,
     const PlacementState& state,
     double kerf_radio) {
+    const double min_x = std::max(margin_px, limit.active ? limit.bounds.minx : margin_px);
+    const double min_y = std::max(margin_px, limit.active ? limit.bounds.miny : margin_px);
     auto try_slide = [&](double step_mm) {
         bool moved = true;
         while (moved) {
             moved = false;
             const double test_px = px - step_mm;
-            if (test_px + var.m_minx >= margin_px) {
+            if (test_px + var.m_minx >= min_x) {
                 if (!comprobar_colision(test_px, py, var, limit, state, kerf_radio)) {
                     px = test_px;
                     moved = true;
                 }
             }
             const double test_py = py - step_mm;
-            if (test_py + var.m_miny >= margin_px) {
+            if (test_py + var.m_miny >= min_y) {
                 if (!comprobar_colision(px, test_py, var, limit, state, kerf_radio)) {
                     py = test_py;
                     moved = true;
@@ -1154,6 +1184,12 @@ void compact_slide_position(
     };
     try_slide(kSlideStepCoarseMm);
     try_slide(kSlideStepFineMm);
+    if (px + var.m_minx < min_x) {
+        px = min_x - var.m_minx;
+    }
+    if (py + var.m_miny < min_y) {
+        py = min_y - var.m_miny;
+    }
 }
 
 double nfp_score_deepnest(
@@ -1300,6 +1336,21 @@ bool colocar_pieza_nfp(
             }
 
             compact_slide_position(px, py, var, margin_px, place_limit, state, kerf_radio);
+            if (!placement_respects_plate_margin(
+                    px,
+                    py,
+                    var.m_minx,
+                    var.m_miny,
+                    var.m_maxx,
+                    var.m_maxy,
+                    margin_px,
+                    w_placa,
+                    h_placa)) {
+                continue;
+            }
+            if (comprobar_colision(px, py, var, place_limit, state, kerf_radio)) {
+                continue;
+            }
 
             const double score = nfp_score_deepnest(px, py, var, state);
             if (score < mejor_score) {
@@ -1582,7 +1633,7 @@ std::pair<PlacementState, std::vector<PieceIn>> pack_with_order(
 
     const double kerf_radio = (kerf_custom * 25.4) / 2.0;
     const double margin_px = margin_custom > 0.0 ? (margin_custom * 25.4) : 0.0;
-    const LimitContext sheet_limit = make_limit_context(limite_rings, margin_px);
+    const LimitContext sheet_limit = make_limit_context(limite_rings, margin_px, w_placa, h_placa);
 
     std::vector<size_t> hosts_ord;
     std::vector<size_t> peq_ord;

@@ -502,9 +502,26 @@ std::vector<Variation> build_variaciones(
     return variaciones;
 }
 
-LimitContext make_limit_context(const std::optional<std::vector<std::vector<Point2D>>>& limite_rings, double margin_px) {
+LimitContext make_limit_context(
+    const std::optional<std::vector<std::vector<Point2D>>>& limite_rings,
+    double margin_px,
+    double w_placa = 0.0,
+    double h_placa = 0.0) {
     LimitContext ctx;
     if (!limite_rings || limite_rings->empty()) {
+        if (margin_px > 0.0 && w_placa > 2.0 * margin_px && h_placa > 2.0 * margin_px) {
+            ctx.active = true;
+            PathD rect;
+            rect.emplace_back(margin_px, margin_px);
+            rect.emplace_back(w_placa - margin_px, margin_px);
+            rect.emplace_back(w_placa - margin_px, h_placa - margin_px);
+            rect.emplace_back(margin_px, h_placa - margin_px);
+            ctx.eval_paths = PathsD{std::move(rect)};
+            ctx.bounds.minx = margin_px;
+            ctx.bounds.miny = margin_px;
+            ctx.bounds.maxx = w_placa - margin_px;
+            ctx.bounds.maxy = h_placa - margin_px;
+        }
         return ctx;
     }
     auto paths = to_paths_d(*limite_rings);
@@ -517,6 +534,16 @@ LimitContext make_limit_context(const std::optional<std::vector<std::vector<Poin
     ctx.active = true;
     ctx.eval_paths = paths;
     ctx.bounds = bounds_of_paths(paths);
+    if (margin_px > 0.0) {
+        ctx.bounds.minx = std::max(ctx.bounds.minx, margin_px);
+        ctx.bounds.miny = std::max(ctx.bounds.miny, margin_px);
+        if (w_placa > 0.0) {
+            ctx.bounds.maxx = std::min(ctx.bounds.maxx, w_placa - margin_px);
+        }
+        if (h_placa > 0.0) {
+            ctx.bounds.maxy = std::min(ctx.bounds.maxy, h_placa - margin_px);
+        }
+    }
     return ctx;
 }
 
@@ -648,8 +675,8 @@ void compact_slide_position(
     // Coarse grande + fine corto: evita miles de comprobar_colision por piece.
     auto try_slide_capped = [&](double step_mm, int max_steps) {
         bool moved = true;
-        const double min_x = limit.active ? limit.bounds.minx : margin_px;
-        const double min_y = limit.active ? limit.bounds.miny : margin_px;
+        const double min_x = std::max(margin_px, limit.active ? limit.bounds.minx : margin_px);
+        const double min_y = std::max(margin_px, limit.active ? limit.bounds.miny : margin_px);
         int steps = 0;
         while (moved && steps < max_steps) {
             moved = false;
@@ -846,20 +873,19 @@ bool colocar_pieza(
                 margin_px,
                 w_placa,
                 h_placa);
-            if (!limit.active) {
-                if (!placement_respects_plate_margin(
-                        px,
-                        py,
-                        var.m_minx,
-                        var.m_miny,
-                        var.m_maxx,
-                        var.m_maxy,
-                        margin_px,
-                        w_placa,
-                        h_placa)) {
-                    continue;
-                }
-            } else {
+            if (!placement_respects_plate_margin(
+                    px,
+                    py,
+                    var.m_minx,
+                    var.m_miny,
+                    var.m_maxx,
+                    var.m_maxy,
+                    margin_px,
+                    w_placa,
+                    h_placa)) {
+                continue;
+            }
+            if (limit.active) {
                 if (px + var.b_minx < -0.1 || py + var.b_miny < -0.1
                     || px + var.b_maxx > w_placa + 0.1
                     || py + var.b_maxy > h_placa + 0.1) {
@@ -1040,7 +1066,7 @@ std::pair<PlacementState, std::vector<PieceIn>> colocar_en_orden(
 
     const double kerf_radio = (kerf_custom * 25.4) / 2.0;
     const double margin_px = margin_custom > 0.0 ? (margin_custom * 25.4) : 0.0;
-    const LimitContext limit = make_limit_context(limite_rings, margin_px);
+    const LimitContext limit = make_limit_context(limite_rings, margin_px, w_placa, h_placa);
 
     for (const auto& p_data : ordenadas) {
         if (!colocar_pieza(p_data, state, w_placa, h_placa, kerf_radio, margin_px, limit)) {
@@ -1788,7 +1814,7 @@ void compact_slide_sheet_final(
         || state.fijas_es_anfitriona.size() != n) {
         return;
     }
-    const LimitContext sheet_limit = make_limit_context(std::nullopt, margin_px);
+    const LimitContext sheet_limit = make_limit_context(std::nullopt, margin_px, w_placa, h_placa);
     std::vector<size_t> order(n);
     std::iota(order.begin(), order.end(), 0);
     std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
@@ -1976,7 +2002,7 @@ PackResult empaquetar_una_hoja_base(
     }
     if (!estructurales.empty()) {
         auto orden_est = orden_pizarron(std::move(estructurales));
-        const LimitContext limit = make_limit_context(std::nullopt, margin_px);
+        const LimitContext limit = make_limit_context(std::nullopt, margin_px, w_placa, h_placa);
         std::vector<PieceIn> cola = std::move(orden_est);
         while (!cola.empty()) {
             PieceIn p_data = std::move(cola.front());
@@ -2052,7 +2078,7 @@ PackResult empaquetar_una_hoja_base(
     // Restos: placa libre; morfología intercalada cada 8 (Clipper caro con anillos).
     if (!pool_peq.empty()) {
         auto orden_peq = orden_pizarron(std::move(pool_peq));
-        const LimitContext limit = make_limit_context(std::nullopt, margin_px);
+        const LimitContext limit = make_limit_context(std::nullopt, margin_px, w_placa, h_placa);
         std::vector<PieceIn> cola = std::move(orden_peq);
         size_t since_fill = 0;
         while (!cola.empty()) {

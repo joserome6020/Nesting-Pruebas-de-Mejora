@@ -25,7 +25,7 @@ def _request(*, kerf: float, margin: float, limite_poly=None) -> PackSheetReques
 
 
 def test_margen_final_placa_es_constante_0250():
-    """El buffer de medio kerf no puede ampliar el borde físico de placa."""
+    """El packer recibe 0.250\" de metal, no 0.250-kerf/2 (eso era 4.85 mm)."""
     for engine, kerf in (
         ("svgnest_ultra", 0.100),
         ("arga_force", 0.150),
@@ -38,9 +38,7 @@ def test_margen_final_placa_es_constante_0250():
             _request(kerf=kerf, margin=0.250),
             engine,
         )
-        # El packer infla medio kerf al contorno. Su entrada más esa inflación
-        # debe acabar exactamente en los 0.250" exigidos por la tabla.
-        assert abs((packed.margin_override + (kerf / 2.0)) - 0.250) < 1e-12, engine
+        assert packed.margin_override == 0.250, (engine, packed.margin_override, kerf)
 
 
 def test_limite_irregular_conserva_margen_exacto():

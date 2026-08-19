@@ -72,6 +72,7 @@ set(
     packer.cpp
     packer_base.cpp
     packer_burke_blf.cpp
+    packer_giga_cal11.cpp
     packer_libnest2d.cpp
     packer_svgnest_ultra.cpp
     cuda/nest_accel.cpp
