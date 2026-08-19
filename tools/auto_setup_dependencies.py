@@ -66,6 +66,18 @@ NON_PIP_IMPORTS = {
     # Paquetes internos del proyecto que no siempre viven bajo repo_root/
     # (p.ej. `engine` bajo `CAD (OCCT)/engine/`). No están en PyPI.
     "engine",
+    # LS-READY UF1/UF2: imports de top-level al correr el clasificador aislado.
+    # No son PyPI; si el scanner los marca faltantes, `pip install` tumba el release.
+    "classification",
+    "classification_config",
+    "carousel_config",
+    "dxf",
+    "lector_dxf",
+    "json_source",
+    "path_geometry",
+    "placement_transform",
+    "scene_resolver",
+    "simple_r12_dxf",
 }
 
 # Solo se instala con --include-legacy-tk (UI Tk antigua).
@@ -137,6 +149,7 @@ def _discover_local_top_modules() -> set[str]:
         if rel.name == "__init__.py":
             if rel.parent.parts:
                 local_modules.add(rel.parent.parts[0])
+                local_modules.add(rel.parent.name)
         else:
             _add_from_rel(rel, stem=rel.stem)
 

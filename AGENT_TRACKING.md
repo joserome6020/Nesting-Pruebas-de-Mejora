@@ -47,6 +47,9 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19f — Build: LS-READY no es pip
+- `auto_setup_dependencies` ya no intenta `pip install classification/dxf`.
+
 ### 2026-08-19e — GIGA: bahía 8.77\" (manual planta)
 - El filtro solo veía tiras ≤5.7\" y se saltaba la bolsa 8.77\" junto a la T.
   Ahí caben BKT-304/153 y GS (como en ed. libre). Pase de canal también

@@ -44,7 +44,14 @@ def main() -> int:
 
     # 1) Blocklist explícito: nombres de módulos internos NUNCA deben resolverse
     #    a un paquete pip (aunque `_discover_local_top_modules` los pase por alto).
-    for name in ("arga_nest_core", "engine", "algorithm_cpp"):
+    for name in (
+        "arga_nest_core",
+        "engine",
+        "algorithm_cpp",
+        "classification",
+        "carousel_config",
+        "dxf",
+    ):
         assert name in mod.NON_PIP_IMPORTS, (
             f"'{name}' debe estar en NON_PIP_IMPORTS para no bajarlo de PyPI."
         )
@@ -65,7 +72,14 @@ def main() -> int:
         include_optional=True,
         include_legacy_tk=False,
     )
-    for prohibido in ("arga_nest_core", "engine", "algorithm_cpp"):
+    for prohibido in (
+        "arga_nest_core",
+        "engine",
+        "algorithm_cpp",
+        "classification",
+        "carousel_config",
+        "dxf",
+    ):
         assert prohibido not in resolved, (
             f"resolve_required_packages devolvió '{prohibido}': "
             "el build va a intentar bajarlo de PyPI y fallar."
