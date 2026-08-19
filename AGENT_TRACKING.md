@@ -54,6 +54,11 @@ código viejo. Un bug sin candado vuelve.
 - Retazos <12\" sin void/pasillo.
 - Máx. 32 invitados por hueco (no 400 fallos × 70 s). Candado satura 12 GS.
 
+### 2026-08-19r — GIGA: no más placas de 4 I al 29%
+- Nest real BOARD 6: P11–P24 = 4 I vacías; P9 patio 127 (GS/304).
+- Prefill reparte cargo a todas las I (cavidades en caché) y el MC
+  solo ve 1×101+1×102; el resto de I espera con invitados.
+
 ### 2026-08-19p — GIGA: AutoDXF de toda la carpeta TANKS/GIGA
 - Recorrido UNC (sin COBRE): hosts Cal 11 Galv = VFM-20-101/102 en BOARD 4,
   GIGABOARD5, BOARD 6, BOARD 11 y Fluidstack metal. Misma geometría

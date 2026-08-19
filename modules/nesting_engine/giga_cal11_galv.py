@@ -218,6 +218,36 @@ def _bay_free_regions(host_metal, cavity, kerf_full: float):
     return [legal]
 
 
+_CAV_CACHE: dict[tuple, list] = {}
+
+
+def _channel_cavs_cached(poly, kerf_full: float):
+    """Misma I local (AutoDXF) no vuelve a list_host_cavities (~1 s/host)."""
+    from .venom_hole_fill import list_host_cavities
+
+    minx, miny, maxx, maxy = poly.bounds
+    key = (
+        round(minx, 0),
+        round(miny, 0),
+        round(maxx - minx, 1),
+        round(maxy - miny, 1),
+        round(float(poly.area), 1),
+        round(float(kerf_full), 2),
+    )
+    hit = _CAV_CACHE.get(key)
+    if hit is not None:
+        return hit
+    cavs = [
+        c
+        for c in list_host_cavities(poly, open_profile=True)
+        if _channel_like(c, kerf_full)
+    ]
+    _CAV_CACHE[key] = cavs
+    if len(_CAV_CACHE) > 48:
+        _CAV_CACHE.pop(next(iter(_CAV_CACHE)))
+    return cavs
+
+
 def _fits_legal_box(guest_poly, legal) -> bool:
     lw = legal.bounds[2] - legal.bounds[0]
     lh = legal.bounds[3] - legal.bounds[1]
@@ -305,7 +335,6 @@ def prefill_vfm_void_cargo(
         _apply_rigid_pose,
         _is_virtual,
         _piece_poly,
-        list_host_cavities,
     )
 
     stats: dict[str, Any] = {
@@ -358,20 +387,11 @@ def prefill_vfm_void_cargo(
     if not hosts or not guests:
         return pool, stats
 
-    # Esta hoja C++ pone 1×101+1×102. Escanear las 70+ I restantes
-    # (~1 min de list_host_cavities) y filled=0 por presupuesto.
-    hosts = hosts[:2]
-    stats["seed_hosts"] = len(hosts)
-
     slots: list[dict] = []
     for h in hosts:
         if time.perf_counter() - t0 > time_budget:
             break
-        cavs = [
-            c
-            for c in list_host_cavities(h["poly"], open_profile=True)
-            if _channel_like(c, kerf_full)
-        ]
+        cavs = _channel_cavs_cached(h["poly"], kerf_full)
         stats["bays"] += len(cavs)
         bays: list = []
         for cav in cavs:
@@ -391,57 +411,74 @@ def prefill_vfm_void_cargo(
 
     used: set[int] = set()
     filled = 0
-    for st in slots:
+
+    def _place_one(st: dict) -> bool:
+        nonlocal filled
         if time.perf_counter() - t0 > time_budget:
-            break
+            return False
         host_e = st["h"]
         for bi, free in enumerate(list(st["bays"])):
-            if time.perf_counter() - t0 > time_budget:
+            if free is None or getattr(free, "is_empty", True):
+                continue
+            pool_g = [
+                e
+                for e in guests
+                if e["idx"] not in used
+                and not e["p"].get("_void_prefilled")
+                and _fits_legal_box(e["poly"], free)
+            ]
+            pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
+            hit_e = None
+            pose = None
+            for guest_e in pool_g[:32]:
+                hit = _try_strip_place(
+                    guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
+                )
+                if hit is None:
+                    continue
+                hit_e, pose = guest_e, hit
                 break
-            while free is not None and not getattr(free, "is_empty", True):
-                if time.perf_counter() - t0 > time_budget:
-                    break
-                pool_g = [
-                    e
-                    for e in guests
-                    if e["idx"] not in used
-                    and not e["p"].get("_void_prefilled")
-                    and _fits_legal_box(e["poly"], free)
-                ]
-                pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
-                hit_e = None
-                pose = None
-                for guest_e in pool_g[:32]:
-                    if time.perf_counter() - t0 > time_budget:
-                        break
-                    hit = _try_strip_place(
-                        guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
-                    )
-                    if hit is None:
-                        continue
-                    hit_e, pose = guest_e, hit
-                    break
-                if hit_e is None or pose is None:
-                    break
-                angle_deg, test = pose
-                old = hit_e["poly"]
-                _apply_rigid_pose(hit_e["p"], old, test, angle_deg)
-                hit_e["poly"] = test
-                hit_e["p"]["_void_prefilled"] = True
-                hit_e["p"]["_void_parent"] = str(host_e["p"].get("_void_uid") or "")
-                st["cargo"].append(copy.deepcopy(hit_e["p"]))
-                used.add(hit_e["idx"])
-                st["placed"].append(test)
-                filled += 1
-                try:
-                    free = free.difference(
-                        test.buffer(kerf_full, resolution=4, join_style=2)
-                    )
-                except Exception:
-                    break
-            st["bays"][bi] = free
+            if hit_e is None or pose is None:
+                continue
+            angle_deg, test = pose
+            old = hit_e["poly"]
+            _apply_rigid_pose(hit_e["p"], old, test, angle_deg)
+            hit_e["poly"] = test
+            hit_e["p"]["_void_prefilled"] = True
+            hit_e["p"]["_void_parent"] = str(host_e["p"].get("_void_uid") or "")
+            st["cargo"].append(copy.deepcopy(hit_e["p"]))
+            used.add(hit_e["idx"])
+            st["placed"].append(test)
+            filled += 1
+            try:
+                st["bays"][bi] = free.difference(
+                    test.buffer(kerf_full, resolution=4, join_style=2)
+                )
+            except Exception:
+                st["bays"][bi] = None
+            return True
+        return False
+
+    # Reparte invitados a TODAS las I (si no, P9 se traga el patio y P11–P24
+    # quedan 4 I vacías al 29%).
+    cap_rr = 4
+    moved = True
+    while moved and time.perf_counter() - t0 <= time_budget:
+        moved = False
+        for st in slots:
+            if len(st["cargo"]) >= cap_rr:
+                continue
+            if _place_one(st):
+                moved = True
+
+    # El par que sí entra a ESTA hoja: saturar bahías (no 2 azules con aire).
+    for st in slots[:2]:
+        while time.perf_counter() - t0 <= time_budget and _place_one(st):
+            pass
+
+    for st in slots:
         if st["cargo"]:
-            host_e["p"]["_void_cargo"] = st["cargo"]
+            st["h"]["p"]["_void_cargo"] = st["cargo"]
 
     mc_pool = [p for i, p in enumerate(pool) if i not in used]
     stats["filled"] = filled

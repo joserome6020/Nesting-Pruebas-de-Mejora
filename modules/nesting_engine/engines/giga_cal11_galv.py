@@ -38,6 +38,7 @@ class GigaCal11GalvEngine:
         from ..giga_cal11_galv import (
             apply_giga_pasillo_fill,
             expand_giga_void_cargo,
+            partition_vfm_sheet_quota,
             plate_too_small_for_vfm,
             prefill_vfm_void_cargo,
             restore_unplaced_void_cargo,
@@ -60,10 +61,14 @@ class GigaCal11GalvEngine:
             if skip_void:
                 mc_pool = list(request.piezas or [])
                 vf_stats = {"filled": 0}
+                held_i: list = []
             else:
                 mc_pool, vf_stats = prefill_vfm_void_cargo(
                     list(request.piezas or []), kerf
                 )
+                seed, held_i = partition_vfm_sheet_quota(mc_pool)
+                vf_stats["held_i"] = len(held_i)
+                mc_pool = seed
             hoja, restos = empaquetar_una_hoja_giga_cal11(
                 mc_pool,
                 request.w_placa,
@@ -84,6 +89,7 @@ class GigaCal11GalvEngine:
             else:
                 n_exp = expand_giga_void_cargo(hoja, mc_pool)
                 n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
+                restos = list(held_i) + restos
                 fill_stats = apply_giga_pasillo_fill(
                     hoja, engine_id=cls.META.engine_id, pool=restos
                 )

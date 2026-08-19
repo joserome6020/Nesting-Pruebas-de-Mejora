@@ -103,6 +103,7 @@ def test_es_motor_nativo_no_overlay_lite():
     assert "empaquetar_una_hoja_giga_cal11" in src
     assert "prefill_vfm_void_cargo" in src
     assert "restore_unplaced_void_cargo" in src
+    assert "partition_vfm_sheet_quota" in src
     assert "close_stacked_vfm_pairs" not in src
     assert "pool=restos" in src
     assert "arga_lite" not in src
@@ -596,7 +597,34 @@ def test_prefill_todos_los_vfm_del_pool():
     n_gs_mc = sum(1 for p in mc if "GS" in str(p.get("nombre") or "").upper())
     assert n_gs_mc == 0, n_gs_mc
     assert int(stats.get("filled") or 0) >= 4
-    assert int(stats.get("seed_hosts") or 0) == 2
+    assert int(stats.get("seed_hosts") or 0) == 5
+    n_with = sum(
+        1 for p in mc if "VFM" in str(p.get("nombre") or "").upper() and p.get("_void_cargo")
+    )
+    assert n_with >= 3, n_with
+
+
+def test_extra_i_llevan_cargo_fuera_de_hoja():
+    """Las I que no entran esta hoja se van a restos YA con GS (no placas 29%)."""
+    from modules.nesting_engine.giga_cal11_galv import partition_vfm_sheet_quota
+
+    inch = 25.4
+    host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    piezas = (
+        [_mk("GENE-VFM-20-101", host) for _ in range(2)]
+        + [_mk("GENE-VFM-20-102", host) for _ in range(2)]
+        + [_mk("GENE-GS-0820-708", gs) for _ in range(8)]
+    )
+    mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
+    seed, held = partition_vfm_sheet_quota(mc)
+    n_seed_i = sum(1 for p in seed if "VFM" in str(p.get("nombre") or "").upper())
+    assert n_seed_i == 2, n_seed_i
+    assert len(held) == 2, len(held)
+    cargo_held = sum(len(p.get("_void_cargo") or []) for p in held)
+    cargo_seed = sum(len(p.get("_void_cargo") or []) for p in seed if "VFM" in str(p.get("nombre") or "").upper())
+    assert cargo_held >= 2, (cargo_held, cargo_seed, stats)
+    assert cargo_held + cargo_seed >= 8, (cargo_held, cargo_seed, stats)
 
 
 def test_cierra_par_vfm_reduce_alto():
@@ -702,6 +730,7 @@ if __name__ == "__main__":
     test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala()
     test_prefill_satura_bahia_no_una_pieza()
     test_prefill_todos_los_vfm_del_pool()
+    test_extra_i_llevan_cargo_fuera_de_hoja()
     test_hfm_entra_bolsa_877()
     test_cierra_par_vfm_reduce_alto()
     test_cargo_host_no_colocado_vuelve_a_restos()
