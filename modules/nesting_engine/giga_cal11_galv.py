@@ -218,32 +218,25 @@ def _try_strip_place(guest_poly, free, host_metal, placed, kerf_full: float):
             lw, lh = maxx - minx, maxy - miny
             if gw > lw + 0.5 or gh > lh + 0.5:
                 continue
-            along_x = lw >= lh
             cands: list[tuple[float, float]] = [
                 (minx, miny),
                 (minx, maxy - gh),
                 (maxx - gw, miny),
                 (maxx - gw, maxy - gh),
-                ((minx + maxx - gw) * 0.5, (miny + maxy - gh) * 0.5),
             ]
-            if along_x:
-                step = max(8.0, min(gw * 0.55, 50.0))
+            step_x = max(float(kerf_full) + gw, 8.0)
+            step_y = max(float(kerf_full) + gh, 8.0)
+            y = miny
+            ny = 0
+            while y <= maxy - gh + 0.5 and ny < 48:
                 x = minx
-                n = 0
-                while x <= maxx - gw + 0.5 and n < 24:
-                    cands.append((x, miny))
-                    cands.append((x, maxy - gh))
-                    x += step
-                    n += 1
-            else:
-                step = max(8.0, min(gh * 0.55, 50.0))
-                y = miny
-                n = 0
-                while y <= maxy - gh + 0.5 and n < 24:
-                    cands.append((minx, y))
-                    cands.append((maxx - gw, y))
-                    y += step
-                    n += 1
+                nx = 0
+                while x <= maxx - gw + 0.5 and nx < 96:
+                    cands.append((x, y))
+                    x += step_x
+                    nx += 1
+                y += step_y
+                ny += 1
             seen: set[tuple[float, float]] = set()
             for cx, cy in cands:
                 key = (round(cx, 1), round(cy, 1))
@@ -267,9 +260,16 @@ def _try_strip_place(guest_poly, free, host_metal, placed, kerf_full: float):
                 except Exception:
                     continue
                 ok_gap = True
+                tb = test.bounds
+                k = float(kerf_full)
                 for op in placed:
+                    ob = op.bounds
+                    if tb[2] + k < ob[0] or ob[2] + k < tb[0]:
+                        continue
+                    if tb[3] + k < ob[1] or ob[3] + k < tb[1]:
+                        continue
                     try:
-                        if float(test.distance(op)) + 1e-3 < kerf_full:
+                        if float(test.distance(op)) + 1e-3 < k:
                             ok_gap = False
                             break
                     except Exception:
@@ -694,7 +694,7 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
     used: set[int] = set()
     for a in range(len(hosts)):
         for b in range(a + 1, len(hosts)):
-            if time.perf_counter() - t0 > 4.0:
+            if time.perf_counter() - t0 > 8.0:
                 break
             ia, pa = hosts[a]
             ib, pb = hosts[b]
@@ -718,7 +718,7 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
             progress = True
             while progress:
                 progress = False
-                if time.perf_counter() - t0 > 4.0:
+                if time.perf_counter() - t0 > 8.0:
                     break
                 best_i = None
                 best_pose = None
@@ -753,6 +753,7 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
                 if old is None:
                     break
                 _apply_rigid_pose(guest, old, test, angle_deg)
+                guest["_giga_gap_fill"] = True
                 used.add(best_i)
                 other_idx = [(j, op) for j, op in other_idx if j != best_i]
                 other_idx.append((best_i, test))
@@ -768,6 +769,117 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
         print(
             f"[GIGA-CAL11] facing_gap moved={stats['facing']} pairs={stats['pairs']} "
             f"pockets={stats['pockets']} t={time.perf_counter() - t0:.2f}s",
+            flush=True,
+        )
+    return stats
+
+
+def fill_vfm_host_bays_from_sheet(hoja: dict) -> dict[str, Any]:
+    """Mueve patio a bahías abiertas del VFM (bolsa 8.77\" / tiras) que el MC dejó vacías."""
+    from shapely.ops import unary_union
+
+    from .venom_hole_fill import _apply_rigid_pose, _piece_poly, list_host_cavities
+
+    stats: dict[str, Any] = {"bays": 0, "moved": 0}
+    piezas = list(hoja.get("piezas") or [])
+    kerf_in = float(hoja.get("kerf_usado", 0.150) or 0.150)
+    kerf_full = max(kerf_in * 25.4, 1.0)
+    t0 = time.perf_counter()
+    used: set[int] = set()
+
+    for ia, p in enumerate(piezas):
+        if time.perf_counter() - t0 > 8.0:
+            break
+        if p.get("_void_prefilled"):
+            continue
+        if not _is_vfm20_name(p.get("nombre")):
+            continue
+        poly = _piece_poly(p)
+        if poly is None:
+            continue
+        cavs = [
+            c
+            for c in list_host_cavities(poly, open_profile=True)
+            if _channel_like(c, kerf_full)
+        ]
+        regions: list = []
+        for cav in cavs:
+            regions.extend(_bay_free_regions(poly, cav, kerf_full))
+        if not regions:
+            continue
+        try:
+            legal = regions[0] if len(regions) == 1 else unary_union(regions)
+        except Exception:
+            legal = regions[0]
+        stats["bays"] += len(cavs)
+        other_idx: list[tuple[int, Any]] = []
+        for j, pz in enumerate(piezas):
+            if j == ia:
+                continue
+            gp = _piece_poly(pz)
+            if gp is None:
+                continue
+            other_idx.append((j, gp))
+            try:
+                if float(gp.intersection(legal).area) > 0.55 * float(gp.area):
+                    legal = legal.difference(
+                        gp.buffer(kerf_full, resolution=4, join_style=2)
+                    )
+            except Exception:
+                pass
+        progress = True
+        while progress:
+            progress = False
+            if time.perf_counter() - t0 > 8.0:
+                break
+            cands: list[tuple[int, Any]] = []
+            for i, pz in enumerate(piezas):
+                if i == ia or i in used:
+                    continue
+                if pz.get("_void_prefilled") or pz.get("_giga_gap_fill"):
+                    continue
+                gp = _piece_poly(pz)
+                if gp is None or _is_vfm_i_host(str(pz.get("nombre") or ""), gp):
+                    continue
+                try:
+                    if float(gp.intersection(legal).area) > 0.55 * float(gp.area):
+                        continue
+                except Exception:
+                    pass
+                cands.append((i, gp))
+            cands.sort(key=lambda t: float(t[1].area), reverse=True)
+            best_i = None
+            best_pose = None
+            for i, gp in cands:
+                placed = [op for j, op in other_idx if j != i]
+                hit = _try_strip_place(gp, legal, poly, placed, kerf_full)
+                if hit is None:
+                    continue
+                best_i, best_pose = i, hit
+                break
+            if best_i is None or best_pose is None:
+                break
+            guest = piezas[best_i]
+            old = _piece_poly(guest)
+            if old is None:
+                break
+            angle_deg, test = best_pose
+            _apply_rigid_pose(guest, old, test, angle_deg)
+            used.add(best_i)
+            other_idx = [(j, op) for j, op in other_idx if j != best_i]
+            other_idx.append((best_i, test))
+            stats["moved"] += 1
+            progress = True
+            try:
+                legal = legal.difference(
+                    test.buffer(kerf_full, resolution=4, join_style=2)
+                )
+            except Exception:
+                break
+    if stats["moved"] or stats["bays"]:
+        print(
+            f"[GIGA-CAL11] host_bays moved={stats['moved']} bays={stats['bays']} "
+            f"t={time.perf_counter() - t0:.2f}s",
             flush=True,
         )
     return stats
@@ -1063,7 +1175,7 @@ def fill_vfm_open_channels(hoja: dict, pool: list | None = None) -> dict[str, An
 def apply_giga_pasillo_fill(
     hoja: dict, *, engine_id: str = ENGINE_ID, pool: list | None = None
 ) -> dict[str, Any]:
-    """Post-MC barato: solo el hueco entre dos VFM apilados. Bahías = void-first."""
+    """Post-MC: pasillo entre VFM + bahías del host que el patio no usó."""
     del engine_id, pool
     stats: dict[str, Any] = {
         "cavities": 0,
@@ -1071,6 +1183,7 @@ def apply_giga_pasillo_fill(
         "pockets": 0,
         "channels": 0,
         "facing": 0,
+        "host_bays": 0,
         "moved": 0,
     }
     if not isinstance(hoja, dict) or not (hoja.get("piezas") or []):
@@ -1079,10 +1192,19 @@ def apply_giga_pasillo_fill(
         gap = fill_vfm_facing_gap(hoja)
         stats["facing"] = int(gap.get("facing") or 0)
         stats["corridors"] = int(gap.get("pairs") or 0)
+        stats["pockets"] = int(gap.get("pockets") or 0)
         stats["moved"] = stats["facing"]
     except Exception as exc:
         stats["error"] = str(exc)
         print(f"[GIGA-CAL11] facing_gap skip: {exc}", flush=True)
+    try:
+        bays = fill_vfm_host_bays_from_sheet(hoja)
+        stats["host_bays"] = int(bays.get("moved") or 0)
+        stats["channels"] = int(bays.get("bays") or 0)
+        stats["moved"] = int(stats["moved"]) + stats["host_bays"]
+    except Exception as exc:
+        stats["error_bays"] = str(exc)
+        print(f"[GIGA-CAL11] host_bays skip: {exc}", flush=True)
     return stats
 
 

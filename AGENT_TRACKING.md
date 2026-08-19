@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19m — GIGA: grilla densa + bahías post-MC
+- El fill del pasillo solo probaba 24 poses (paso 50 mm) y dejaba GS/304
+  en el patio. Ahora grilla pieza+kerf, y un segundo pase mueve patio a
+  las bahías 8.77\" del VFM. Candado ≥10 GS en hueco T-vs-T.
+
 ### 2026-08-19l — GIGA: bolsillo entre T enfrentadas
 - El pasillo se medía por AABB (puntas de T). Con T contra T el hueco
   era ~0 y GS/BKT se iban al patio. Ahora: AABB conjunto − metal − kerf,

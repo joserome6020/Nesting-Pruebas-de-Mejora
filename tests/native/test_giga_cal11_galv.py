@@ -194,6 +194,76 @@ def test_pasillo_t_enfrentadas_recibe_gs():
     )
 
 
+def test_pasillo_denso_llena_varios_gs():
+    """El hueco entre T no se llena con 8 piezas y deja el resto en el patio."""
+    from shapely.affinity import translate as shp_translate
+
+    from shapely.ops import unary_union
+
+    w, rail, tw, th, tx = 1600.0, 40.0, 90.0, 140.0, 755.0
+    t_up = Polygon(
+        [
+            (0.0, 0.0),
+            (w, 0.0),
+            (w, rail),
+            (tx + tw, rail),
+            (tx + tw, rail + th),
+            (tx, rail + th),
+            (tx, rail),
+            (0.0, rail),
+            (0.0, 0.0),
+        ]
+    )
+    t_dn = Polygon(
+        [
+            (0.0, th),
+            (tx, th),
+            (tx, 0.0),
+            (tx + tw, 0.0),
+            (tx + tw, th),
+            (w, th),
+            (w, th + rail),
+            (0.0, th + rail),
+            (0.0, th),
+        ]
+    )
+    y102 = (rail + th) + 8.0
+    p102 = shp_translate(t_dn, 0.0, y102)
+    gw, gh = 3.84 * 25.4, 3.61 * 25.4
+    piezas = [
+        _mk("GENE-VFM-20-101", t_up),
+        _mk("GENE-VFM-20-102", p102),
+    ]
+    for i in range(16):
+        x0 = 1700.0 + (i % 8) * (gw + 8.0)
+        y0 = 20.0 + (i // 8) * (gh + 8.0)
+        piezas.append(_mk(f"GENE-GS-0820-708#{i}", box(x0, y0, x0 + gw, y0 + gh)))
+    hoja = {
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "piezas": piezas,
+    }
+    pocket = unary_union(
+        [
+            box(0.0, rail, tx, y102 + th),
+            box(tx + tw, rail, w, y102 + th),
+        ]
+    )
+    stats = apply_giga_pasillo_fill(hoja)
+    n_in = 0
+    for p in hoja["piezas"]:
+        if "GS" not in str(p.get("nombre") or ""):
+            continue
+        poly = p.get("poly")
+        if poly is None:
+            continue
+        if float(poly.intersection(pocket).area) > 0.5 * float(poly.area):
+            n_in += 1
+    assert n_in >= 10, f"solo {n_in}/16 GS en el pasillo stats={stats}"
+
+
 def test_pasillo_entre_vfm_recibe_bkt():
     """Dos marcos apilados dejan un pasillo; el BKT a la derecha debe entrar."""
     rail_a = box(20.0, 20.0, 220.0, 45.0)
@@ -562,6 +632,7 @@ if __name__ == "__main__":
     test_frames_vfm()
     test_pasillo_entre_vfm_recibe_bkt()
     test_pasillo_t_enfrentadas_recibe_gs()
+    test_pasillo_denso_llena_varios_gs()
     test_mixin_renest_fijo()
     test_mixto_invitados_en_la_misma_hoja()
     test_vfm_canal_recibe_bkt()
