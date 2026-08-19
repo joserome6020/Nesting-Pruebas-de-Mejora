@@ -411,7 +411,9 @@ def prefill_vfm_void_cargo(
                 pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
                 hit_e = None
                 pose = None
-                for guest_e in pool_g:
+                for guest_e in pool_g[:32]:
+                    if time.perf_counter() - t0 > time_budget:
+                        break
                     hit = _try_strip_place(
                         guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
                     )
@@ -718,6 +720,7 @@ def _pull_from_pool_into_legal(
 
         idxs.sort(key=_ar, reverse=not small_first)
         placed_one = False
+        tried = 0
         for i in idxs:
             pz = pool[i]
             if pz.get("_void_prefilled"):
@@ -727,6 +730,9 @@ def _pull_from_pool_into_legal(
                 continue
             if not _fits_legal_box(gp, legal):
                 continue
+            tried += 1
+            if tried > 32:
+                break
             hit = _try_strip_place(gp, legal, host_metal, placed, kerf_full)
             if hit is None:
                 continue

@@ -577,7 +577,7 @@ def test_prefill_satura_bahia_no_una_pieza():
     mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
     host_p = next(p for p in mc if "VFM" in str(p.get("nombre") or "").upper())
     cargo = host_p.get("_void_cargo") or []
-    assert len(cargo) >= 8, (len(cargo), stats)
+    assert len(cargo) >= 12, (len(cargo), stats)
 
 
 def test_prefill_todos_los_vfm_del_pool():

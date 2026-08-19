@@ -52,6 +52,7 @@ código viejo. Un bug sin candado vuelve.
 - Grilla 96×48 en bahías (~74 s, moved=0). Esquinas+BLF.
 - Combinado 36\"+48\" en serie. Solo la placa más alta.
 - Retazos <12\" sin void/pasillo.
+- Máx. 32 invitados por hueco (no 400 fallos × 70 s). Candado satura 12 GS.
 
 ### 2026-08-19p — GIGA: AutoDXF de toda la carpeta TANKS/GIGA
 - Recorrido UNC (sin COBRE): hosts Cal 11 Galv = VFM-20-101/102 en BOARD 4,
