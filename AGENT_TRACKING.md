@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19l — GIGA: bolsillo entre T enfrentadas
+- El pasillo se medía por AABB (puntas de T). Con T contra T el hueco
+  era ~0 y GS/BKT se iban al patio. Ahora: AABB conjunto − metal − kerf,
+  bolsillos cuyo centro queda entre los dos VFM. Candado T-vs-T.
+
 ### 2026-08-19k — GIGA: no perder cargo (80 faltantes)
 - Prefill sacaba invitados del pool; si el expand no los proyectaba, el
   pokayoke veía nest incompleto. Ahora el cargo no expandido vuelve a restos.

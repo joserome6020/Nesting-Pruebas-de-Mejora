@@ -595,28 +595,98 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
     return stats
 
 
-def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
-    """Un rectángulo entre dos VFM apilados (aire entre almas), kerf 0.150\"."""
+def _vfm_hosts_on_sheet(piezas: list) -> list[tuple[int, Any]]:
+    from .venom_hole_fill import _piece_poly
+
+    hosts: list[tuple[int, Any]] = []
+    for i, p in enumerate(piezas):
+        if p.get("_void_prefilled"):
+            continue
+        poly = _piece_poly(p)
+        if poly is None:
+            continue
+        if not _is_vfm20_name(p.get("nombre")):
+            continue
+        hosts.append((i, poly))
+    return hosts
+
+
+def _stacked_vfm_pair(
+    ia: int, pa, ib: int, pb, hosts: list[tuple[int, Any]]
+) -> bool:
+    """Par apilado (solape X) sin otro VFM entre medias en Y."""
+    aa, bb = pa.bounds, pb.bounds
+    ox = min(aa[2], bb[2]) - max(aa[0], bb[0])
+    if ox < 50.0:
+        return False
+    y1, y2 = float(pa.centroid.y), float(pb.centroid.y)
+    if abs(y1 - y2) < 25.0:
+        return False
+    lo, hi = (y1, y2) if y1 < y2 else (y2, y1)
+    ox0, ox1 = max(aa[0], bb[0]), min(aa[2], bb[2])
+    for ic, pc in hosts:
+        if ic in (ia, ib):
+            continue
+        cy = float(pc.centroid.y)
+        if not (lo + 8.0 < cy < hi - 8.0):
+            continue
+        cc = pc.bounds
+        if min(ox1, cc[2]) - max(ox0, cc[0]) > 80.0:
+            return False
+    return True
+
+
+def _sandwich_pockets(pa, pb, kerf_full: float):
+    """Aire entre dos VFM (izq/der de la T), no el hueco AABB entre puntas."""
     from shapely.geometry import box as shp_box
     from shapely.ops import unary_union
 
+    from .venom_hole_fill import _iter_free_parts
+
+    aa, bb = pa.bounds, pb.bounds
+    span = shp_box(
+        max(aa[0], bb[0]),
+        min(aa[1], bb[1]),
+        min(aa[2], bb[2]),
+        max(aa[3], bb[3]),
+    )
+    try:
+        host_u = unary_union([pa, pb])
+        legal = span.difference(host_u.buffer(float(kerf_full), resolution=4, join_style=2))
+    except Exception:
+        return None, []
+    y1, y2 = float(pa.centroid.y), float(pb.centroid.y)
+    lo, hi = (y1, y2) if y1 < y2 else (y2, y1)
+    pockets = []
+    for part in _iter_free_parts(legal, min_area=80.0):
+        cy = float(part.centroid.y)
+        if not (lo < cy < hi):
+            continue
+        minx, miny, maxx, maxy = part.bounds
+        if min(maxx - minx, maxy - miny) < 18.0:
+            continue
+        pockets.append(part)
+    if not pockets:
+        return host_u, []
+    try:
+        free = pockets[0] if len(pockets) == 1 else unary_union(pockets)
+    except Exception:
+        free = pockets[0]
+    return host_u, [free]
+
+
+def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
+    """Mete invitados de la misma hoja en el aire entre dos VFM apilados."""
     from .venom_hole_fill import _apply_rigid_pose, _piece_poly
 
-    stats: dict[str, Any] = {"facing": 0, "pairs": 0}
+    stats: dict[str, Any] = {"facing": 0, "pairs": 0, "pockets": 0}
     piezas = list(hoja.get("piezas") or [])
     if len(piezas) < 3:
         return stats
     kerf_in = float(hoja.get("kerf_usado", 0.150) or 0.150)
     kerf_full = max(kerf_in * 25.4, 1.0)
 
-    hosts: list[tuple[int, Any]] = []
-    for i, p in enumerate(piezas):
-        poly = _piece_poly(p)
-        if poly is None:
-            continue
-        if "VFM" not in str(p.get("nombre") or "").upper():
-            continue
-        hosts.append((i, poly))
+    hosts = _vfm_hosts_on_sheet(piezas)
     if len(hosts) < 2:
         return stats
 
@@ -624,40 +694,31 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
     used: set[int] = set()
     for a in range(len(hosts)):
         for b in range(a + 1, len(hosts)):
-            if time.perf_counter() - t0 > 2.0:
+            if time.perf_counter() - t0 > 4.0:
                 break
             ia, pa = hosts[a]
             ib, pb = hosts[b]
-            aa, bb = pa.bounds, pb.bounds
-            ox0, ox1 = max(aa[0], bb[0]), min(aa[2], bb[2])
-            if ox1 - ox0 < 50.0:
+            if not _stacked_vfm_pair(ia, pa, ib, pb, hosts):
                 continue
-            if aa[3] <= bb[1] + 1.0:
-                gy0, gy1 = aa[3], bb[1]
-            elif bb[3] <= aa[1] + 1.0:
-                gy0, gy1 = bb[3], aa[1]
-            else:
+            host_u, frees = _sandwich_pockets(pa, pb, kerf_full)
+            if host_u is None or not frees:
                 continue
-            gap_h = gy1 - gy0
-            if gap_h < kerf_full + 8.0 or gap_h > 260.0:
-                continue
+            legal = frees[0]
             stats["pairs"] += 1
-            legal = shp_box(ox0, gy0 + kerf_full, ox1, gy1 - kerf_full)
-            if legal.is_empty or float(legal.area) < 80.0:
-                continue
-            host_u = unary_union([pa, pb])
-            others: list = []
+            stats["pockets"] += 1
+            other_idx: list[tuple[int, Any]] = []
             for j, pz in enumerate(piezas):
                 if j in (ia, ib):
                     continue
                 gp = _piece_poly(pz)
-                if gp is not None:
-                    others.append(gp)
+                if gp is None:
+                    continue
+                other_idx.append((j, gp))
 
             progress = True
             while progress:
                 progress = False
-                if time.perf_counter() - t0 > 2.0:
+                if time.perf_counter() - t0 > 4.0:
                     break
                 best_i = None
                 best_pose = None
@@ -665,13 +726,21 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
                 for i, pz in enumerate(piezas):
                     if i in (ia, ib) or i in used:
                         continue
+                    if pz.get("_void_prefilled"):
+                        continue
                     gp = _piece_poly(pz)
                     if gp is None or _is_vfm_i_host(str(pz.get("nombre") or ""), gp):
                         continue
+                    try:
+                        if float(gp.intersection(legal).area) > 0.55 * float(gp.area):
+                            continue
+                    except Exception:
+                        pass
                     cands.append((i, gp))
-                cands.sort(key=lambda t: float(t[1].area), reverse=True)
+                cands.sort(key=lambda t: float(t[1].area))
                 for i, gp in cands:
-                    hit = _try_strip_place(gp, legal, host_u, others, kerf_full)
+                    placed = [op for j, op in other_idx if j != i]
+                    hit = _try_strip_place(gp, legal, host_u, placed, kerf_full)
                     if hit is None:
                         continue
                     best_i, best_pose = i, hit
@@ -685,7 +754,8 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
                     break
                 _apply_rigid_pose(guest, old, test, angle_deg)
                 used.add(best_i)
-                others.append(test)
+                other_idx = [(j, op) for j, op in other_idx if j != best_i]
+                other_idx.append((best_i, test))
                 stats["facing"] += 1
                 progress = True
                 try:
@@ -697,7 +767,7 @@ def fill_vfm_facing_gap(hoja: dict) -> dict[str, Any]:
     if stats["facing"] or stats["pairs"]:
         print(
             f"[GIGA-CAL11] facing_gap moved={stats['facing']} pairs={stats['pairs']} "
-            f"t={time.perf_counter() - t0:.2f}s",
+            f"pockets={stats['pockets']} t={time.perf_counter() - t0:.2f}s",
             flush=True,
         )
     return stats
