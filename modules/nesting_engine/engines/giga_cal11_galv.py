@@ -11,7 +11,7 @@ class GigaCal11GalvEngine:
         engine_id="giga_cal11_galv",
         display_name="GIGA Cal 11 Galv",
         description=(
-            "Motor nativo 0.11811_GALVANIZADO: MC mixto I-primero + patio. "
+            "Motor nativo 0.11811_GALVANIZADO: void-first VFM + MC mixto. "
             "No seleccionable."
         ),
         phase=0,
@@ -35,19 +35,28 @@ class GigaCal11GalvEngine:
     @classmethod
     def empaquetar(cls, request: PackSheetRequest) -> PackSheetResult:
         from ..algorithm_bridge import empaquetar_una_hoja_giga_cal11
-        from ..giga_cal11_galv import apply_giga_pasillo_fill, tabla_kerf_margin
+        from ..giga_cal11_galv import (
+            apply_giga_pasillo_fill,
+            expand_giga_void_cargo,
+            prefill_vfm_void_cargo,
+            restore_unplaced_void_cargo,
+            tabla_kerf_margin,
+        )
 
         t0 = time.perf_counter()
         kerf, margin = tabla_kerf_margin()
         n_pool = len(request.piezas or [])
         print(
-            f"[GIGA-CAL11] pack n={n_pool} par+fill L "
+            f"[GIGA-CAL11] pack n={n_pool} void-first+MC "
             f"{float(request.w_placa):.0f}x{float(request.h_placa):.0f}mm",
             flush=True,
         )
         try:
+            mc_pool, vf_stats = prefill_vfm_void_cargo(
+                list(request.piezas or []), kerf
+            )
             hoja, restos = empaquetar_una_hoja_giga_cal11(
-                request.piezas,
+                mc_pool,
                 request.w_placa,
                 request.h_placa,
                 kerf_override=kerf,
@@ -59,9 +68,15 @@ class GigaCal11GalvEngine:
             )
             hoja = dict(hoja or {})
             restos = list(restos or [])
+            n_exp = expand_giga_void_cargo(hoja, mc_pool)
+            n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
             fill_stats = apply_giga_pasillo_fill(
-                hoja, engine_id=cls.META.engine_id, pool=restos
+                hoja, engine_id=cls.META.engine_id
             )
+            fill_stats = dict(fill_stats)
+            fill_stats["void_first"] = int(vf_stats.get("filled") or 0)
+            fill_stats["void_expand"] = int(n_exp)
+            fill_stats["cargo_restos"] = int(n_back)
             hoja["giga_cal11_galv"] = True
             hoja["giga_fill"] = dict(fill_stats)
             hoja["engine_pack"] = cls.META.engine_id

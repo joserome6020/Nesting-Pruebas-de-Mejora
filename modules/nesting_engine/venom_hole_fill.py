@@ -311,20 +311,24 @@ def expand_void_cargo_onto_hoja(
         sy = float(transform.get("shift_y") or 0.0)
         pe0 = src.get("poly_exact") or src.get("poly")
         origin = _origen_rotacion_pieza(pe0)
+        leftover: list[dict] = []
         for g in cargo:
             g2 = copy.deepcopy(g)
             old = _piece_poly(g2)
             if old is None:
+                leftover.append(g)
                 continue
             try:
                 new = affinity.translate(
                     affinity.rotate(old, rot, origin=origin), sx, sy
                 )
             except Exception:
+                leftover.append(g)
                 continue
             _apply_rigid_pose(g2, old, new, rot)
             g2["_void_prefilled"] = True
             expanded.append(g2)
+        src["_void_cargo"] = leftover
 
     if not expanded:
         return 0

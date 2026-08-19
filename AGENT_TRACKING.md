@@ -47,6 +47,30 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19k — GIGA: no perder cargo (80 faltantes)
+- Prefill sacaba invitados del pool; si el expand no los proyectaba, el
+  pokayoke veía nest incompleto. Ahora el cargo no expandido vuelve a restos.
+- Se quitó el cierre 180° del par (empujaba fuera de placa 36\").
+
+### 2026-08-19j — GIGA: revertir cuota 2 I (H70–H99 vacías)
+- Sacar I extra del MC llenó ~30 placas 120×36 a 19% con solo el par.
+  Extra I vuelven al MC. Prefill sigue en 1×101+1×102.
+- Cierre de par: 102 a 180° y acercar al 101 hasta kerf 0.150\".
+
+### 2026-08-19i — PARTS: más ancho al listado
+- Splitter ~55% lista (min 640px); detalle cede espacio. Nombres eliden al
+  ancho real (no a 200px). Miniaturas 48px.
+
+### 2026-08-19h — GIGA: 2 I/hoja + rectángulo de bahía
+- Prefill solo 1×101+1×102; el resto de I no entra al MC (evita placas al 30%).
+- Bahía = AABB inscrito con kerf, no C. HFM-10 cabe en bolsa 8.77\".
+- Cargo de un VFM no colocado vuelve a restos. Candados quota/HFM/restos.
+
+### 2026-08-19g — GIGA: void-first bahías VFM
+- Prefill de bahías abiertas VFM-20 (AABB legal, kerf 0.150\") → `_void_cargo`
+  → MC → expand. Sin Venom/canal post-MC (eso duplicaba tiempo sin densidad).
+- Pase barato: hueco entre dos I apilados. Candado H+T tipo planta.
+
 ### 2026-08-19f — Build: LS-READY no es pip
 - `auto_setup_dependencies` ya no intenta `pip install classification/dxf`.
 

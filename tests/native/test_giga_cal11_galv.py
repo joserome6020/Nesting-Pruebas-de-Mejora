@@ -18,8 +18,10 @@ from modules.nesting_engine.giga_cal11_galv import (  # noqa: E402
     clave_desde_debug_tag,
     engine_id_for_group,
     engine_id_for_renest,
+    expand_giga_void_cargo,
     is_frame_piece,
     is_giga_cal11_galv_clave,
+    prefill_vfm_void_cargo,
     should_force_giga_engine,
 )
 from modules.nesting_engine.nest_engine_context import (  # noqa: E402
@@ -99,6 +101,9 @@ def test_es_motor_nativo_no_overlay_lite():
 
     src = inspect.getsource(GigaCal11GalvEngine.empaquetar)
     assert "empaquetar_una_hoja_giga_cal11" in src
+    assert "prefill_vfm_void_cargo" in src
+    assert "restore_unplaced_void_cargo" in src
+    assert "close_stacked_vfm_pairs" not in src
     assert "arga_lite" not in src
     assert "fallback_engine" not in src
 
@@ -177,6 +182,19 @@ def test_mixin_renest_fijo():
     _switch_giga(False)
 
 
+def _void_roundtrip(piezas: list, kerf: float = 0.150):
+    mc, stats = prefill_vfm_void_cargo(piezas, kerf)
+    hoja = {
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "kerf_usado": kerf,
+        "margin_usado": 0.250,
+        "piezas": list(mc),
+    }
+    n_exp = expand_giga_void_cargo(hoja, mc)
+    return hoja, stats, n_exp
+
+
 def _u_open_top(w, h, thick, post=50.0):
     """U abierta arriba: alma/base sólida + postes laterales (101)."""
     return [
@@ -249,23 +267,38 @@ def test_mixto_invitados_en_la_misma_hoja():
     )
 
 
+def _h_with_t():
+    """H+T tipo VFM-20-101: bolsa ~8.77\" junto a la T y tiras de ala ~3.74\"."""
+    from shapely.ops import unary_union
+
+    inch = 25.4
+    w, h = 78.35 * inch, 12.24 * inch
+    web0 = 40.63 * inch
+    web1 = web0 + 4.0 * inch
+    flange = (12.24 - 8.77) * 0.5 * inch
+    t_w = 8.0 * inch
+    t_h = 4.0 * inch
+    metal = unary_union(
+        [
+            box(0.0, 0.0, w, flange),
+            box(0.0, h - flange, w, h),
+            box(web0, 0.0, web1, h),
+            box(web0 - t_w, flange, web0, flange + t_h),
+        ]
+    )
+    if metal.geom_type != "Polygon":
+        metal = max(metal.geoms, key=lambda g: g.area)
+    return metal
+
+
 def test_vfm_canal_recibe_bkt():
     """Canal de ala VFM (~3.7\") con kerf 0.150\": BKT-287 3.00\" debe entrar."""
     host = Polygon(_u_open_top(1990.0, 311.0, 180.0))
-    # 7.33" × 3.00" ≈ BKT-287 planta
     guest = box(2100.0, 20.0, 2100.0 + 186.2, 20.0 + 76.2)
-    hoja = {
-        "placa_w": 3048.0,
-        "placa_h": 1219.2,
-        "kerf_usado": 0.150,
-        "margin_usado": 0.250,
-        "piezas": [
-            _mk("GENE-VFM-20-101", host),
-            _mk("GENE-BKT-287", guest),
-        ],
-    }
+    hoja, stats, _n = _void_roundtrip(
+        [_mk("GENE-VFM-20-101", host), _mk("GENE-BKT-287", guest)]
+    )
     channel = box(50.0, 180.0, 1940.0, 311.0)
-    stats = apply_giga_pasillo_fill(hoja)
     bkt = next(p for p in hoja["piezas"] if "BKT" in str(p.get("nombre") or ""))
     poly = bkt.get("poly")
     assert poly is not None
@@ -277,22 +310,15 @@ def test_vfm_canal_recibe_bkt():
 
 
 def test_vfm_canal_desde_pool():
-    """Invitado que quedó en restos (otra placa) se jala al canal si cabe."""
+    """Invitado en el pool (no en la hoja) entra al canal por void-first."""
     host = Polygon(_u_open_top(1990.0, 311.0, 180.0))
     guest = box(0.0, 0.0, 186.2, 76.2)
-    hoja = {
-        "placa_w": 3048.0,
-        "placa_h": 1219.2,
-        "kerf_usado": 0.150,
-        "margin_usado": 0.250,
-        "area_usada": float(host.area),
-        "piezas": [_mk("GENE-VFM-20-101", host)],
-    }
-    pool = [_mk("GENE-BKT-287", guest)]
+    hoja, stats, n_exp = _void_roundtrip(
+        [_mk("GENE-VFM-20-101", host), _mk("GENE-BKT-287", guest)]
+    )
+    assert int(stats.get("filled") or 0) >= 1, stats
+    assert n_exp >= 1
     channel = box(50.0, 180.0, 1940.0, 311.0)
-    stats = apply_giga_pasillo_fill(hoja, pool=pool)
-    assert stats.get("channel_pool", 0) >= 1, stats
-    assert not pool, "el BKT debía salir de restos"
     bkt = next(p for p in hoja["piezas"] if "BKT" in str(p.get("nombre") or ""))
     poly = bkt.get("poly")
     assert poly is not None
@@ -302,20 +328,11 @@ def test_vfm_canal_desde_pool():
 def test_vfm_canal_gs_gordo_no_entra():
     """GS ~3.61\" + kerf 0.150\" no cabe en canal ~3.7\" (no forzar)."""
     host = Polygon(_u_open_top(1990.0, 95.0, 20.0))
-    # Canal corto ≈ 75 mm; GS 3.61" = 91.7 mm no cabe.
     guest = box(2100.0, 20.0, 2100.0 + 91.7, 20.0 + 97.5)
-    hoja = {
-        "placa_w": 3048.0,
-        "placa_h": 1219.2,
-        "kerf_usado": 0.150,
-        "margin_usado": 0.250,
-        "piezas": [
-            _mk("GENE-VFM-20-101", host),
-            _mk("GENE-GS-0820-708", guest),
-        ],
-    }
+    hoja, _stats, _n = _void_roundtrip(
+        [_mk("GENE-VFM-20-101", host), _mk("GENE-GS-0820-708", guest)]
+    )
     channel = box(50.0, 20.0, 1940.0, 95.0)
-    apply_giga_pasillo_fill(hoja)
     gs = next(p for p in hoja["piezas"] if "GS" in str(p.get("nombre") or ""))
     poly = gs.get("poly")
     assert poly is not None
@@ -332,18 +349,13 @@ def test_vfm_bahia_alta_recibe_bkt304_y_gs():
     bay = box(50.0, thick, 1940.0, h)
     bkt = box(2100.0, 20.0, 2100.0 + 7.08 * inch, 20.0 + 4.20 * inch)
     gs = box(2300.0, 20.0, 2300.0 + 3.84 * inch, 20.0 + 3.61 * inch)
-    hoja = {
-        "placa_w": 3048.0,
-        "placa_h": 1219.2,
-        "kerf_usado": 0.150,
-        "margin_usado": 0.250,
-        "piezas": [
+    hoja, stats, _n = _void_roundtrip(
+        [
             _mk("GENE-VFM-20-101", host),
             _mk("GENE-BKT-304", bkt),
             _mk("GENE-GS-0820-708", gs),
-        ],
-    }
-    stats = apply_giga_pasillo_fill(hoja)
+        ]
+    )
     for tag in ("BKT-304", "GS-0820"):
         pz = next(p for p in hoja["piezas"] if tag in str(p.get("nombre") or ""))
         poly = pz.get("poly")
@@ -353,6 +365,125 @@ def test_vfm_bahia_alta_recibe_bkt304_y_gs():
             f"{tag} no entró a bahía 8.77\": centroid="
             f"({poly.centroid.x:.1f},{poly.centroid.y:.1f}) stats={stats}"
         )
+
+
+def test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala():
+    """Candado planta: H+T. 304/GS en bolsa ~8.77\"; GS no se fuerza a tira 3.74\"."""
+    inch = 25.4
+    host = _h_with_t()
+    bag = box(0.0, (12.24 - 8.77) * 0.5 * inch, 40.63 * inch, host.bounds[3])
+    strip_h = 3.74 * inch
+    flange_strip = box(40.63 * inch + 4.0 * inch, 0.0, host.bounds[2], strip_h)
+    bkt = box(0.0, 400.0, 7.08 * inch, 400.0 + 4.20 * inch)
+    gs = box(250.0, 400.0, 250.0 + 3.84 * inch, 400.0 + 3.61 * inch)
+    thin = box(500.0, 400.0, 500.0 + 7.33 * inch, 400.0 + 3.00 * inch)
+    hoja, stats, n_exp = _void_roundtrip(
+        [
+            _mk("GENE-VFM-20-101", host),
+            _mk("GENE-BKT-304", bkt),
+            _mk("GENE-GS-0820-708", gs),
+            _mk("GENE-BKT-287", thin),
+        ]
+    )
+    assert int(stats.get("filled") or 0) >= 2, stats
+    assert n_exp >= 2
+    pz304 = next(p for p in hoja["piezas"] if "BKT-304" in str(p.get("nombre") or ""))
+    pgs = next(p for p in hoja["piezas"] if "GS-0820" in str(p.get("nombre") or ""))
+    p287 = next(p for p in hoja["piezas"] if "BKT-287" in str(p.get("nombre") or ""))
+    a304 = pz304.get("poly")
+    ags = pgs.get("poly")
+    a287 = p287.get("poly")
+    assert float(a304.intersection(bag).area) > 0.6 * float(a304.area), (
+        f"BKT-304 fuera de bolsa: c=({a304.centroid.x:.1f},{a304.centroid.y:.1f}) "
+        f"stats={stats}"
+    )
+    in_strip_gs = float(ags.intersection(flange_strip).area) > 0.5 * float(ags.area)
+    assert not in_strip_gs, "GS no debe forzarse a la tira de ala 3.74\""
+    in_bag_gs = float(ags.intersection(bag).area) > 0.5 * float(ags.area)
+    in_strip_287 = float(a287.intersection(flange_strip).area) > 0.5 * float(a287.area)
+    in_bag_287 = float(a287.intersection(bag).area) > 0.5 * float(a287.area)
+    assert in_bag_gs or in_strip_287 or in_bag_287, (
+        f"ni GS ni BKT-287 usaron aire VFM stats={stats}"
+    )
+
+
+def test_prefill_solo_par_semilla():
+    """Prefill 1×101+1×102; el resto de I sigue en el pool (no placas vacías)."""
+    inch = 25.4
+    host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    piezas = (
+        [_mk("GENE-VFM-20-101", host) for _ in range(3)]
+        + [_mk("GENE-VFM-20-102", host) for _ in range(2)]
+        + [_mk("GENE-GS-0820-708", gs) for _ in range(4)]
+    )
+    mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
+    n_vfm = sum(1 for p in mc if "VFM" in str(p.get("nombre") or "").upper())
+    assert n_vfm == 5, n_vfm
+    cargo_n = sum(1 for p in mc if p.get("_void_cargo"))
+    assert cargo_n <= 2, cargo_n
+    assert int(stats.get("seed_hosts") or 0) == 2
+
+
+def test_cierra_par_vfm_reduce_alto():
+    from shapely.affinity import translate as shp_translate
+    from shapely.ops import unary_union
+
+    from modules.nesting_engine.giga_cal11_galv import close_stacked_vfm_pairs
+
+    host = _h_with_t()
+    h = host.bounds[3] - host.bounds[1]
+    kerf = 0.150 * 25.4
+    p101 = _mk("GENE-VFM-20-101", host)
+    p102 = _mk("GENE-VFM-20-102", shp_translate(host, 0.0, h + kerf + 40.0))
+    h0 = unary_union([p101["poly"], p102["poly"]]).bounds
+    h0 = h0[3] - h0[1]
+    hoja = {"kerf_usado": 0.150, "piezas": [p101, p102]}
+    st = close_stacked_vfm_pairs(hoja)
+    h1 = unary_union([p101["poly"], p102["poly"]]).bounds
+    h1 = h1[3] - h1[1]
+    assert st.get("closed", 0) >= 1, st
+    assert h1 < h0 - 5.0, (h0, h1, st)
+
+
+def test_hfm_entra_bolsa_877():
+    """HFM-10 6.29\" cabe en bolsa 8.77\" con kerf 0.150\" (rectángulo inscrito)."""
+    inch = 25.4
+    h = 12.24 * inch
+    thick = (12.24 - 8.77) * inch
+    host = Polygon(_u_open_top(1990.0, h, thick))
+    bay = box(50.0, thick, 1940.0, h)
+    hfm = box(2100.0, 20.0, 2100.0 + 34.65 * inch, 20.0 + 6.29 * inch)
+    hoja, stats, n_exp = _void_roundtrip(
+        [_mk("GENE-VFM-20-101", host), _mk("GENE-HFM-10-102", hfm)]
+    )
+    assert int(stats.get("filled") or 0) >= 1, stats
+    pz = next(p for p in hoja["piezas"] if "HFM" in str(p.get("nombre") or ""))
+    poly = pz.get("poly")
+    assert poly is not None
+    assert float(poly.intersection(bay).area) > 0.7 * float(poly.area), (
+        f"HFM no entró a bolsa 8.77\": c=({poly.centroid.x:.1f},{poly.centroid.y:.1f}) "
+        f"stats={stats} expand={n_exp}"
+    )
+
+
+def test_cargo_host_no_colocado_vuelve_a_restos():
+    from modules.nesting_engine.giga_cal11_galv import restore_unplaced_void_cargo
+
+    inch = 25.4
+    host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
+    guest = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    piezas = [
+        _mk("GENE-VFM-20-101", host),
+        _mk("GENE-VFM-20-102", host),
+        _mk("GENE-GS-0820-708", guest),
+    ]
+    mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
+    assert int(stats.get("filled") or 0) >= 1, stats
+    restos: list = []
+    n_back = restore_unplaced_void_cargo({"piezas": []}, mc, restos)
+    assert n_back >= 1, n_back
+    assert any("GS" in str(p.get("nombre") or "") for p in restos)
 
 
 def test_combinado_forzado_en_giga():
@@ -380,5 +511,10 @@ if __name__ == "__main__":
     test_vfm_canal_desde_pool()
     test_vfm_canal_gs_gordo_no_entra()
     test_vfm_bahia_alta_recibe_bkt304_y_gs()
+    test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala()
+    test_prefill_solo_par_semilla()
+    test_hfm_entra_bolsa_877()
+    test_cierra_par_vfm_reduce_alto()
+    test_cargo_host_no_colocado_vuelve_a_restos()
     test_combinado_forzado_en_giga()
     print("GIGA_CAL11_GALV PASS")
