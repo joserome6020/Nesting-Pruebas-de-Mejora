@@ -4,6 +4,7 @@ from __future__ import annotations
 import inspect
 import os
 import sys
+import time
 from pathlib import Path
 
 from shapely.geometry import Polygon, box
@@ -720,6 +721,106 @@ def test_combinado_forzado_en_giga():
     assert "should_force_giga_engine" in src
 
 
+def test_planta_giga_no_par_vacio_y_azules_en_bahia():
+    """Candado planta: GS/RLG/304 en bahía; jamás hoja de solo 101+102 con invitados en pool."""
+    from modules.nesting_engine.engines.giga_cal11_galv import GigaCal11GalvEngine
+    from modules.nesting_engine.engines.types import PackSheetRequest
+    from modules.nesting_engine.giga_cal11_galv import _channel_like
+    from modules.nesting_engine.venom_hole_fill import _piece_poly, list_host_cavities
+
+    if not GigaCal11GalvEngine.is_ready():
+        print("SKIP planta (no algorithm_cpp giga)")
+        return
+
+    inch = 25.4
+    k = 0.150 * inch
+    p101 = Polygon(_u_open_top(78.35 * inch, 12.24 * inch, (12.24 - 8.77) * inch))
+    p102 = Polygon(_u_open_top(78.35 * inch, 11.19 * inch, (11.19 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    rlg = box(0.0, 0.0, 7.55 * inch, 4.00 * inch)
+    b304 = box(0.0, 0.0, 7.08 * inch, 4.20 * inch)
+    hfm = box(0.0, 0.0, 34.65 * inch, 6.29 * inch)
+
+    def _p(nombre, poly):
+        d = _mk(nombre, poly)
+        d["rings"] = [list(poly.exterior.coords)]
+        d["calibre"] = "0.11811"
+        d["material"] = "GALVANIZADO"
+        return d
+
+    pool = []
+    for i in range(6):
+        pool.append(_p(f"GENE-VFM-20-101#{i}", p101))
+        pool.append(_p(f"GENE-VFM-20-102#{i}", p102))
+    pool.extend(_p(f"GENE-GS-0820-708#{i}", gs) for i in range(24))
+    pool.extend(_p(f"GENE-BKT-RLG-123#{i}", rlg) for i in range(10))
+    pool.extend(_p(f"GENE-BKT-304#{i}", b304) for i in range(8))
+    pool.extend(_p(f"GENE-HFM-10-102#{i}", hfm) for i in range(6))
+
+    def _guest(nom: str) -> bool:
+        u = nom.upper()
+        return any(t in u for t in ("GS-", "BKT-RLG", "BKT-304", "BKT-287"))
+
+    def _in_bay(hoja) -> tuple[int, int]:
+        hosts, guests = [], []
+        for p in hoja.get("piezas") or []:
+            nom = str(p.get("nombre") or "")
+            g = _piece_poly(p)
+            if g is None:
+                continue
+            if "VFM-20" in nom.upper():
+                hosts.append(g)
+            elif _guest(nom):
+                guests.append(g)
+        cavs = []
+        for h in hosts:
+            cavs.extend(
+                c
+                for c in list_host_cavities(h, open_profile=True)
+                if _channel_like(c, k)
+            )
+        n_in = 0
+        for g in guests:
+            for c in cavs:
+                try:
+                    if float(g.intersection(c).area) > 0.45 * float(g.area):
+                        n_in += 1
+                        break
+                except Exception:
+                    pass
+        return n_in, len(guests)
+
+    hojas = []
+    t0 = time.perf_counter()
+    for _si in range(12):
+        if not pool:
+            break
+        n_guest_pool = sum(1 for p in pool if _guest(str(p.get("nombre") or "")))
+        res = GigaCal11GalvEngine.empaquetar(
+            PackSheetRequest(piezas=list(pool), w_placa=3048.0, h_placa=1219.2)
+        )
+        placed = list((res.hoja or {}).get("piezas") or [])
+        if not placed:
+            break
+        n_vfm = sum(1 for p in placed if "VFM-20" in str(p.get("nombre") or "").upper())
+        n_g = sum(1 for p in placed if _guest(str(p.get("nombre") or "")))
+        assert not (len(placed) <= 2 and n_vfm >= 2 and n_guest_pool >= 4), (
+            f"hoja solo-par VFM con {n_guest_pool} invitados aún en pool "
+            f"(H69–H99). placed={len(placed)} vfm={n_vfm} guests_on_sheet={n_g}"
+        )
+        hojas.append(res.hoja)
+        fill = (res.hoja or {}).get("giga_fill") or {}
+        assert not fill.get("error_bays"), fill.get("error_bays")
+        pool = list(res.restos or [])
+    assert time.perf_counter() - t0 < 45.0, "motor planta >45s (otra vez el pase vacío)"
+    assert hojas, "no empacó ninguna hoja"
+    n_in, n_g = _in_bay(hojas[0])
+    assert n_g >= 1, "primera hoja sin GS/RLG/304"
+    assert n_in >= 6, (
+        f"azules fuera de bahía en P1: in_bay={n_in}/{n_g} (espacios vacíos del VFM)"
+    )
+
+
 if __name__ == "__main__":
     test_detector_cal11_galv_no_a36()
     test_clave_desde_debug_tag()
@@ -749,4 +850,5 @@ if __name__ == "__main__":
     test_cargo_host_no_colocado_vuelve_a_restos()
     test_giga_no_simula_dos_alturas()
     test_combinado_forzado_en_giga()
+    test_planta_giga_no_par_vacio_y_azules_en_bahia()
     print("GIGA_CAL11_GALV PASS")

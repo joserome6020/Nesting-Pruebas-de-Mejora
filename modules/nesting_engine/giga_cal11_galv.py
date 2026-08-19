@@ -853,11 +853,11 @@ def _pull_from_sheet_into_legal(
             if not _fits_legal_box(gp, legal):
                 continue
             cands.append((i, gp))
-        cands.sort(key=lambda t: float(t[1].area), reverse=True)
+        cands.sort(key=lambda t: float(t[1].area))
         hit_i = None
         pose = None
         for i, gp in cands:
-            hit = _try_strip_place(gp, legal, host_metal, others, kerf_full)
+            hit = _try_strip_place(gp, legal, host_metal, placed, kerf_full)
             if hit is None:
                 continue
             hit_i, pose = i, hit

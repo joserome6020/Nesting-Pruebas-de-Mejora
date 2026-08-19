@@ -58,6 +58,8 @@ código viejo. Un bug sin candado vuelve.
 - El hold 1×101+1×102 dejó ~30 placas 120×48 con solo el par.
 - Invitados chicos (GS/RLG) primero en bahía, no HFM que no cabe.
 - Cargo repartido a todas las I (no vaciar el pool en las primeras).
+- Candado planta: motor real 120×48, GS/RLG en bahía, no hoja solo-par.
+- Fix `others` indefinido que tumbaba host_bays.
 
 ### 2026-08-19r — GIGA: no más placas de 4 I al 29%
 - Nest real BOARD 6: P11–P24 = 4 I vacías; P9 patio 127 (GS/304).
