@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19u — Plasma: visor y Mudar usan el offset vigente
+- PARTS/nest ya no reusan un DXF Plasma Compensated viejo (0.0125\") solo porque el archivo exista.
+- Al mudar, el pack recarga el DXF de 0.0625\" por lado y la pieza colocada conserva ruta + flags plasma (si no, el visor volvía al DXF base).
+- Candados sidecar + transferencia. ANS C++ no está en esta PC.
+
 ### 2026-08-19t — Plasma: 0.0625\" por lado en todos los calibres
 - Compensación unificada: 1/16\" por lado (fino y grueso). Ya no 0.0125\" / 0.250\".
 - Sidecar guarda `offset_mm` para no reusar DXF compensados con la regla vieja.

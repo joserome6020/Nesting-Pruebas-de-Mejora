@@ -12,6 +12,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RAIZ))
 
 from modules.plasma_compensator import (  # noqa: E402
+    asegurar_dxf_plasma_compensado,
     compensate_dxf_for_plasma,
     compute_plasma_offset_mm,
 )
@@ -115,10 +116,52 @@ def test_despachador_reusa_la_regla() -> None:
     assert "else 0.0125" not in src
 
 
+def test_sidecar_offset_viejo_se_regenera() -> None:
+    """Un Plasma Compensated de 0.0125\" no se reusa con la regla 0.0625\"."""
+    import tempfile
+
+    import ezdxf
+
+    from modules.plasma_offset2d import write_version_sidecar
+
+    old_mm = 0.0125 * 25.4
+    new_mm = OFFSET_MM
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src = root / "p63.dxf"
+        old = root / "Plasma Compensated" / "p63.dxf"
+        doc = ezdxf.new("R2010")
+        doc.header["$INSUNITS"] = 1
+        doc.modelspace().add_lwpolyline(
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)],
+            close=True,
+            dxfattribs={"layer": "CUT_OUTER"},
+        )
+        doc.saveas(src)
+        st = compensate_dxf_for_plasma(src, old, offset_mm=old_mm)
+        assert int(st.get("changed") or 0) >= 1, st
+        write_version_sidecar(old, backend="test", offset_mm=old_mm)
+
+        out, err = asegurar_dxf_plasma_compensado(src, new_mm)
+        assert out and not err, err
+        msp = ezdxf.readfile(out).modelspace()
+        xs, ys = [], []
+        for e in msp:
+            if e.dxftype() != "LWPOLYLINE":
+                continue
+            for x, y, *_ in e.get_points("xy"):
+                xs.append(float(x))
+                ys.append(float(y))
+        assert xs and ys
+        assert abs((max(xs) - min(xs)) - (10.0 + 2.0 * OFFSET_IN)) < 1e-3
+        assert abs((max(ys) - min(ys)) - (6.0 + 2.0 * OFFSET_IN)) < 1e-3
+
+
 if __name__ == "__main__":
     test_offset_0625_fino_y_grueso()
     test_regla_unica_en_fuente()
     test_barrenos_inner_encogen_el_mismo_0625()
     test_compensador_inner_usa_el_negativo()
     test_despachador_reusa_la_regla()
+    test_sidecar_offset_viejo_se_regenera()
     print("OK plasma_offset_todos_calibres")

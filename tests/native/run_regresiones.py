@@ -187,6 +187,10 @@ REGRESIONES = [
         "test_plasma_offset_todos_calibres.py",
         "2026-08-19t - offset plasma 0.0625\" por lado en todos los calibres",
     ),
+    (
+        "test_plasma_transfer_sigue_compensada.py",
+        "2026-08-19u - mudar pieza plasma recarga DXF compensado vigente",
+    ),
 ]
 
 

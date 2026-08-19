@@ -188,14 +188,39 @@ def _transform_desde_pieza(pieza: dict) -> dict | None:
 def _ruta_dxf_efectiva(pieza: dict) -> str:
     """Devuelve la fuente CAD que corresponde a la geometría ya nestada.
 
-    Una pieza de plasma marcada en PARTS se acomoda con ``ruta_plasma``. Si
-    ésta ya no existe, no se permite degradarla al DXF base durante un refresh:
-    se conserva el polígono nestado hasta poder regenerar el compensado.
+    Una pieza de plasma marcada en PARTS se acomoda con ``ruta_plasma``.
+    Si el sidecar no coincide con el offset vigente, se regenera desde el DXF
+    original. No se degrada al DXF base (quedaría sin stock).
     """
-    if pieza.get("plasma_fuente_ya_compensada"):
+    plasma = bool(
+        pieza.get("plasma_compensada_manual")
+        or pieza.get("plasma_fuente_ya_compensada")
+    )
+    origen = str(pieza.get("ruta") or "").strip()
+    if plasma:
+        off = float(pieza.get("plasma_offset_mm_manual") or 0.0)
+        if origen and os.path.isfile(origen):
+            try:
+                from modules.plasma_compensator import (
+                    asegurar_dxf_plasma_compensado,
+                    compute_plasma_offset_mm,
+                )
+
+                if off <= 0:
+                    off = float(
+                        compute_plasma_offset_mm(float(pieza.get("calibre") or 0.25))
+                    )
+                if off > 0:
+                    out, _err = asegurar_dxf_plasma_compensado(origen, off)
+                    if out and os.path.isfile(str(out)):
+                        return str(out)
+            except Exception:
+                pass
         ruta_plasma = str(pieza.get("ruta_plasma") or "").strip()
-        return ruta_plasma if ruta_plasma and os.path.isfile(ruta_plasma) else ""
-    return str(pieza.get("ruta") or "").strip()
+        if ruta_plasma and os.path.isfile(ruta_plasma):
+            return ruta_plasma
+        return ""
+    return origen
 
 
 def poligonos_display_desde_dxf(pieza: dict) -> list | None:

@@ -1583,18 +1583,26 @@ class NestingCalcMixin:
                 raise RuntimeError(
                     f"No se pudo calcular la compensación plasma de {src.get('nombre')!r}."
                 )
-            mapa_dxf = getattr(self.app, "plasma_dxf_por_ruta", None) or {}
-            ruta_plasma = str(mapa_dxf.get(clave_ruta) or "").strip()
-            if not ruta_plasma or not os.path.isfile(ruta_plasma):
-                ruta_plasma, error = asegurar_dxf_plasma_compensado(ruta, offset_mm)
-                if not ruta_plasma:
-                    raise RuntimeError(
-                        f"No se pudo restaurar compensación plasma de "
-                        f"{src.get('nombre')!r}: {error or 'DXF compensado no disponible.'}"
+            if not hasattr(self.app, "plasma_dxf_por_ruta") or self.app.plasma_dxf_por_ruta is None:
+                self.app.plasma_dxf_por_ruta = {}
+            ruta_plasma, error = asegurar_dxf_plasma_compensado(ruta, offset_mm)
+            if not ruta_plasma:
+                cached = str(
+                    (getattr(self.app, "plasma_dxf_por_ruta", None) or {}).get(
+                        clave_ruta, ""
                     )
-                if not hasattr(self.app, "plasma_dxf_por_ruta") or self.app.plasma_dxf_por_ruta is None:
-                    self.app.plasma_dxf_por_ruta = {}
-                self.app.plasma_dxf_por_ruta[clave_ruta] = ruta_plasma
+                    or ""
+                )
+                if cached and os.path.isfile(cached):
+                    # Workspace/renest: el origen puede no estar; reusar el DXF
+                    # compensado ya mapeado en PARTS.
+                    ruta_plasma, error = cached, ""
+            if not ruta_plasma:
+                raise RuntimeError(
+                    f"No se pudo restaurar compensación plasma de "
+                    f"{src.get('nombre')!r}: {error or 'DXF compensado no disponible.'}"
+                )
+            self.app.plasma_dxf_por_ruta[clave_ruta] = ruta_plasma
             poly_p, marks_p = self.app.motor_nesting.recuperar_geometria_robusta(ruta_plasma)
             if poly_p is None or poly_p.is_empty:
                 raise RuntimeError(

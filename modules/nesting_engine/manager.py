@@ -3083,27 +3083,21 @@ class MotorNesting:
                     if thk_in is None:
                         thk_in = float(self._extraer_numero(cal) or 0.0)
                     plasma_off = float(compute_plasma_offset_mm(float(thk_in or 0.0)))
-                    mapa_dxf = getattr(self, "plasma_dxf_por_ruta", {}) or {}
-                    prec = str(mapa_dxf.get(clave_ruta) or "").strip()
-                    if prec and os.path.isfile(prec):
-                        ruta_parse = prec
-                        ruta_plasma = prec
+                    if not hasattr(self, "plasma_dxf_por_ruta") or self.plasma_dxf_por_ruta is None:
+                        self.plasma_dxf_por_ruta = {}
+                    out_dxf, err_dxf = asegurar_dxf_plasma_compensado(
+                        ruta, plasma_off
+                    )
+                    if out_dxf and os.path.isfile(out_dxf):
+                        ruta_parse = out_dxf
+                        ruta_plasma = out_dxf
+                        self.plasma_dxf_por_ruta[clave_ruta] = out_dxf
                     else:
-                        out_dxf, err_dxf = asegurar_dxf_plasma_compensado(
-                            ruta, plasma_off
+                        plasma_flag = False
+                        plasma_off = 0.0
+                        _dbg_nesting(
+                            f"[PLASMA-DXF-FAIL] clave={clave} | pieza={pieza} | {err_dxf}"
                         )
-                        if out_dxf and os.path.isfile(out_dxf):
-                            ruta_parse = out_dxf
-                            ruta_plasma = out_dxf
-                            if not hasattr(self, "plasma_dxf_por_ruta") or self.plasma_dxf_por_ruta is None:
-                                self.plasma_dxf_por_ruta = {}
-                            self.plasma_dxf_por_ruta[clave_ruta] = out_dxf
-                        else:
-                            plasma_flag = False
-                            plasma_off = 0.0
-                            _dbg_nesting(
-                                f"[PLASMA-DXF-FAIL] clave={clave} | pieza={pieza} | {err_dxf}"
-                            )
                     if plasma_flag:
                         _dbg_nesting(
                             f"[PLASMA-DXF] clave={clave} | pieza={pieza} | "
@@ -5559,18 +5553,89 @@ class MotorNesting:
             "material": p.get("material", ""),
             "ruta": p.get("ruta", ""),
         }
-        # Una transferencia vuelve a empacar origen/destino. Conservar estos
-        # campos evita que una pieza compensada pierda su geometría/estado al
-        # pasar por el pack visual.
-        for campo in (
-            "debug_id",
-            "plasma_compensada_manual",
-            "plasma_offset_mm_manual",
-            "plasma_fuente_ya_compensada",
-            "ruta_plasma",
-        ):
-            if p.get(campo) is not None:
-                pieza_pack[campo] = p.get(campo)
+        self._heredar_identidad_pieza(pieza_pack, p)
+        return self._refrescar_poly_pack_plasma(pieza_pack, p)
+
+    _CAMPOS_IDENTIDAD_TRANSFERENCIA = (
+        "ruta",
+        "debug_id",
+        "orig_minx",
+        "orig_miny",
+        "plasma_compensada_manual",
+        "plasma_offset_mm_manual",
+        "plasma_fuente_ya_compensada",
+        "ruta_plasma",
+        "grain_locked",
+        "allowed_rotations",
+        "orientacion_corte_bloqueada",
+        "orientacion_corte_deg",
+        "cu_especial_vertical",
+    )
+
+    def _heredar_identidad_pieza(self, destino, origen):
+        """Copia ruta/plasma/orientación para que Mudar no deje la pieza en geometría base."""
+        if not isinstance(destino, dict) or not isinstance(origen, dict):
+            return destino
+        for campo in self._CAMPOS_IDENTIDAD_TRANSFERENCIA:
+            val = origen.get(campo)
+            if val is not None:
+                destino[campo] = val
+        return destino
+
+    def _src_requiere_plasma(self, p_src, pieza_pack=None):
+        if not isinstance(p_src, dict):
+            return False
+        if p_src.get("plasma_compensada_manual") or p_src.get("plasma_fuente_ya_compensada"):
+            return True
+        try:
+            if float(p_src.get("plasma_offset_mm_manual") or 0.0) > 0.0:
+                return True
+        except Exception:
+            pass
+        ruta = str(p_src.get("ruta") or (pieza_pack or {}).get("ruta") or "").strip()
+        if not ruta:
+            return False
+        clave = clave_orientacion_cobre_ruta(ruta)
+        return bool((getattr(self, "plasma_compensada_por_ruta", None) or {}).get(clave))
+
+    def _refrescar_poly_pack_plasma(self, pieza_pack, p_src):
+        """Al mudar, recarga el DXF plasma vigente (no el polígono viejo sin stock)."""
+        if not isinstance(pieza_pack, dict) or not isinstance(p_src, dict):
+            return pieza_pack
+        if not self._src_requiere_plasma(p_src, pieza_pack):
+            return pieza_pack
+        ruta = str(p_src.get("ruta") or pieza_pack.get("ruta") or "").strip()
+        if not ruta or not os.path.isfile(ruta):
+            return pieza_pack
+        off = float(p_src.get("plasma_offset_mm_manual") or 0.0)
+        if off <= 0:
+            try:
+                from modules.plasma_compensator import compute_plasma_offset_mm
+
+                cal = p_src.get("calibre") or pieza_pack.get("calibre") or 0.25
+                off = float(compute_plasma_offset_mm(float(cal)))
+            except Exception:
+                off = 0.0625 * 25.4
+        try:
+            from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+            out, _err = asegurar_dxf_plasma_compensado(ruta, off)
+        except Exception:
+            return pieza_pack
+        if not out or not os.path.isfile(str(out)):
+            return pieza_pack
+        poly_p, marks_p = recuperar_geometria_robusta(str(out))
+        if poly_p is None or getattr(poly_p, "is_empty", True):
+            return pieza_pack
+        minx, miny, _, _ = poly_p.bounds
+        pieza_pack["poly"] = affinity.translate(poly_p, -minx, -miny)
+        if marks_p is not None and not getattr(marks_p, "is_empty", True):
+            pieza_pack["marks"] = affinity.translate(marks_p, -minx, -miny)
+        pieza_pack["area"] = float(pieza_pack["poly"].area)
+        pieza_pack["plasma_compensada_manual"] = True
+        pieza_pack["plasma_offset_mm_manual"] = float(off)
+        pieza_pack["plasma_fuente_ya_compensada"] = True
+        pieza_pack["ruta_plasma"] = str(out)
         return pieza_pack
 
     def _piezas_reales_en_hoja(self, hoja):
@@ -5872,6 +5937,9 @@ class MotorNesting:
         })
         if plantilla.get("poly_borde_retazo") is not None:
             nueva["poly_borde_retazo"] = plantilla.get("poly_borde_retazo")
+        if plantilla.get("plasma_compensado_manual"):
+            nueva["plasma_compensado_manual"] = True
+            nueva["plasma_offset_mm_manual"] = plantilla.get("plasma_offset_mm_manual")
 
     def _es_pieza_overlay(self, nombre):
         n = str(nombre or "")
@@ -6317,14 +6385,30 @@ class MotorNesting:
             marks_placed = affinity.translate(marks_local, px, py)
             marcas = _marks_geom_to_lista(marks_placed) or marcas
 
-        return {
+        colocada = {
             "nombre": str(pieza_orig.get("nombre", "") or ""),
             "poligonos": poligonos_desde_shapely(poly_placed),
             "marcas": marcas,
-            "area": float(pieza_orig.get("area", poly_placed.area) or poly_placed.area),
+            "area": float(poly_placed.area or 0.0),
             "calibre": pieza_orig.get("calibre", ""),
             "material": pieza_orig.get("material", ""),
         }
+        self._heredar_identidad_pieza(colocada, pieza_orig)
+        if self._src_requiere_plasma(pieza_orig, colocada):
+            colocada["plasma_compensada_manual"] = True
+            colocada["plasma_fuente_ya_compensada"] = True
+            if not colocada.get("ruta_plasma"):
+                ruta = str(colocada.get("ruta") or "").strip()
+                if ruta:
+                    try:
+                        from modules.plasma_compensator import ruta_dxf_plasma_compensado
+
+                        cand = ruta_dxf_plasma_compensado(ruta)
+                        if cand.is_file():
+                            colocada["ruta_plasma"] = str(cand)
+                    except Exception:
+                        pass
+        return colocada
 
     def _evaluar_posicion_transfer(
         self,

@@ -57,10 +57,12 @@ ARGB_BTN_1 = "#202A36"
 ARGB_BTN_2 = "#334659"
 ARGB_BTN_3 = "#455E75"
 ARGB_BTN_4 = "#708DA9"
+_PARTS_THUMB_PX = 48
+_PARTS_ROW_H = 56
 
 
 class _NombrePiezaLabel(QLabel):
-    """Nombre truncado con elipsis; clic para ver el nombre completo."""
+    """Nombre truncado con elipsis según el ancho real de la columna."""
 
     def __init__(self, texto: str, parent_row: QFrame, on_select=None, parent=None):
         super().__init__(parent)
@@ -71,20 +73,33 @@ class _NombrePiezaLabel(QLabel):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+        self.setMinimumWidth(80)
         self._refresh()
+
+    def _elide_width(self) -> int:
+        w = int(self.width() or 0)
+        if w < 24:
+            return 280
+        return max(80, w - 8)
 
     def _refresh(self):
         if self._expanded:
             self.setText(self._full)
             self.setWordWrap(True)
             self.setToolTip("Clic para contraer")
-            self._parent_row.setMinimumHeight(max(48, self.sizeHint().height() + 10))
+            self._parent_row.setMinimumHeight(max(_PARTS_ROW_H, self.sizeHint().height() + 10))
+            self._parent_row.setMaximumHeight(16777215)
         else:
             fm = self.fontMetrics()
-            self.setText(fm.elidedText(self._full, Qt.TextElideMode.ElideRight, 200))
+            self.setText(fm.elidedText(self._full, Qt.TextElideMode.ElideRight, self._elide_width()))
             self.setWordWrap(False)
             self.setToolTip(f"{self._full}\n\nClic para ver completo")
-            self._parent_row.setFixedHeight(48)
+            self._parent_row.setFixedHeight(_PARTS_ROW_H)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._expanded:
+            self._refresh()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -105,14 +120,14 @@ class TabParts(QWidget, TimerHost):
         self._row_widgets = {}
 
         self.local_col_config = [
-            {"weight": 3, "min": 150},
+            {"weight": 5, "min": 260},
             {"weight": 2, "min": 90},
             {"weight": 1, "min": 45},
             {"weight": 1, "min": 70},
             {"weight": 1, "min": 65},
             {"weight": 1, "min": 70},
             {"weight": 1, "min": 52},
-            {"weight": 1, "min": 60},
+            {"weight": 1, "min": 72},
         ]
 
         # Estado para lista de largos
@@ -129,7 +144,7 @@ class TabParts(QWidget, TimerHost):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        splitter = make_horizontal_splitter(720)
+        splitter = make_horizontal_splitter(1040)
         frame_tabla = make_card()
         tabla_lay = QVBoxLayout(frame_tabla)
         tabla_lay.setContentsMargins(16, 16, 12, 16)
@@ -267,9 +282,10 @@ class TabParts(QWidget, TimerHost):
         self.visor.set_orientation_lock_hook(self._persistir_bloqueo_orientacion_corte)
         vis_lay.addWidget(self.frame_black_visor, 1)
         splitter.addWidget(frame_visor_bg)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-        finalize_splitter(splitter, min_left=420, min_right=340)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        finalize_splitter(splitter, min_left=640, min_right=280)
+        self._parts_splitter = splitter
         root.addWidget(splitter)
 
     def _apply_parts_grid_columns(self, grid: QGridLayout) -> None:
@@ -336,7 +352,7 @@ class TabParts(QWidget, TimerHost):
             row = QFrame()
             row.setObjectName("PartsRowAlt" if idx % 2 else "PartsRow")
             row.setFrameShape(QFrame.Shape.NoFrame)
-            row.setFixedHeight(48)
+            row.setFixedHeight(_PARTS_ROW_H)
             row.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             row.orig_name = row.objectName()
             row.orig_color = color_fondo
@@ -405,7 +421,7 @@ class TabParts(QWidget, TimerHost):
                 elif i == 7:
                     if thumbnails_async:
                         ph = QLabel("…")
-                        ph.setFixedSize(32, 32)
+                        ph.setFixedSize(_PARTS_THUMB_PX, _PARTS_THUMB_PX)
                         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         ph.setStyleSheet("color:#94A3B8;font-size:9px;background:transparent;")
                         ph.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
@@ -414,10 +430,13 @@ class TabParts(QWidget, TimerHost):
                             thumb_queue.append((ph, str(ruta), mat))
                     else:
                         try:
-                            thumb = generar_thumbnail(ruta, size=(32, 32), material=mat)
+                            thumb = generar_thumbnail(
+                                ruta, size=(_PARTS_THUMB_PX, _PARTS_THUMB_PX), material=mat
+                            )
                             if thumb:
                                 l_t = QLabel()
                                 l_t.setPixmap(thumb)
+                                l_t.setFixedSize(_PARTS_THUMB_PX, _PARTS_THUMB_PX)
                                 l_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
                                 l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
                                 row_lay.addWidget(l_t, 0, i)
@@ -633,7 +652,9 @@ class TabParts(QWidget, TimerHost):
             pix = None
             if ruta and os.path.exists(ruta):
                 try:
-                    pix = generar_thumbnail(ruta, size=(32, 32), material=mat)
+                    pix = generar_thumbnail(
+                        ruta, size=(_PARTS_THUMB_PX, _PARTS_THUMB_PX), material=mat
+                    )
                 except Exception:
                     pix = None
             resultados.append((ph, pix))
@@ -803,6 +824,35 @@ class TabParts(QWidget, TimerHost):
             return None
         return float(compute_plasma_offset_mm(float(thk)))
 
+    def _calibre_de_ruta_parts(self, ruta_dxf):
+        for item in getattr(self.app, "datos_partes_actuales", []) or []:
+            try:
+                _p, _m, _q, cal, _st, ruta = item
+            except Exception:
+                continue
+            if str(ruta or "") == str(ruta_dxf or ""):
+                return cal
+        return None
+
+    def _asegurar_vista_plasma(self, ruta_dxf, calibre=None) -> str:
+        """Regenera el DXF compensado si el sidecar no trae el offset vigente."""
+        from interface.utils_nesting import clave_orientacion_cobre_ruta
+        from modules.plasma_compensator import asegurar_dxf_plasma_compensado
+
+        clave = clave_orientacion_cobre_ruta(ruta_dxf)
+        cal = calibre if calibre is not None else self._calibre_de_ruta_parts(ruta_dxf)
+        off = self._offset_plasma_desde_calibre(cal)
+        mapa = getattr(self.app, "plasma_dxf_por_ruta", None)
+        if mapa is None:
+            self.app.plasma_dxf_por_ruta = {}
+            mapa = self.app.plasma_dxf_por_ruta
+        if off:
+            out, _err = asegurar_dxf_plasma_compensado(ruta_dxf, float(off))
+            if out:
+                mapa[clave] = out
+                return str(out)
+        return str(mapa.get(clave) or ruta_dxf)
+
     def _validar_compensacion_plasma_dxf(self, ruta_dxf, offset_mm: float) -> tuple[bool, str]:
         """Genera DXF compensado (mismo pipeline OUTER+/INNER−) y valida que exista."""
         from modules.plasma_compensator import asegurar_dxf_plasma_compensado
@@ -883,7 +933,6 @@ class TabParts(QWidget, TimerHost):
     def _refrescar_parts_tras_plasma(self, ruta_dxf):
         datos = getattr(self.app, "datos_partes_actuales", []) or []
         self.app.cargar_datos_parts(datos, thumbnails_async=True)
-        from interface.utils_nesting import clave_orientacion_cobre_ruta
 
         for item in datos:
             try:
@@ -895,11 +944,7 @@ class TabParts(QWidget, TimerHost):
             self.visor.set_material(mat)
             vista = ruta
             if self._plasma_guardada(ruta):
-                clave = clave_orientacion_cobre_ruta(ruta)
-                vista = str(
-                    (getattr(self.app, "plasma_dxf_por_ruta", {}) or {}).get(clave)
-                    or ruta
-                )
+                vista = self._asegurar_vista_plasma(ruta, _cal)
             self.visor.renderizar_dxf(vista, plasma_offset_mm=0.0)
             if self._plasma_guardada(ruta):
                 off = float(self._offset_plasma_desde_calibre(_cal) or 0.0)
@@ -1191,32 +1236,7 @@ class TabParts(QWidget, TimerHost):
             rot_vista = self._rotacion_vista_para_ruta(ruta_dxf, material)
             vista_dxf = ruta_dxf
             if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):
-                from interface.utils_nesting import clave_orientacion_cobre_ruta
-
-                clave = clave_orientacion_cobre_ruta(ruta_dxf)
-                vista_dxf = str(
-                    (getattr(self.app, "plasma_dxf_por_ruta", {}) or {}).get(clave)
-                    or ruta_dxf
-                )
-                if not os.path.isfile(vista_dxf):
-                    # Regenera si faltó el archivo compensado.
-                    calibre = None
-                    for item in getattr(self.app, "datos_partes_actuales", []) or []:
-                        try:
-                            _p, _m, _q, cal, _st, ruta = item
-                            if str(ruta or "") == str(ruta_dxf):
-                                calibre = cal
-                                break
-                        except Exception:
-                            continue
-                    off = self._offset_plasma_desde_calibre(calibre)
-                    if off:
-                        from modules.plasma_compensator import asegurar_dxf_plasma_compensado
-
-                        out, _err = asegurar_dxf_plasma_compensado(ruta_dxf, off)
-                        if out:
-                            self.app.plasma_dxf_por_ruta[clave] = out
-                            vista_dxf = out
+                vista_dxf = self._asegurar_vista_plasma(ruta_dxf)
             self.visor.renderizar_dxf(
                 vista_dxf,
                 rotacion_vista_deg=rot_vista,

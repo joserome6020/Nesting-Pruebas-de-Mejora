@@ -53,6 +53,11 @@ def compute_plasma_offset_mm(thickness_in: float) -> float:
     return 0.0625 * 25.4
 
 
+def resolver_dxf_plasma(ruta_origen: str | Path, offset_mm: float) -> tuple[str | None, str]:
+    """DXF compensado al offset actual. Regenera si el sidecar no coincide."""
+    return asegurar_dxf_plasma_compensado(ruta_origen, offset_mm, forzar=False)
+
+
 def aplicar_compensacion_poligono(poly, offset_mm: float):
     """Offset exterior para geometría nesting (mm). None si falla."""
     try:
