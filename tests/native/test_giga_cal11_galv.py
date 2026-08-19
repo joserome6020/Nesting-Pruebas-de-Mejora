@@ -338,6 +338,37 @@ def _u_open_top(w, h, thick, post=50.0):
     ]
 
 
+def test_familia_giga_autodxf_hosts():
+    """AutoDXF GIGA (sin cobre): I VFM hueca es host; HFM maciza no; gutter 2.69\" no.
+
+    BOARD 4 / GIGABOARD5 / BOARD 6 / BOARD 11 / Fluidstack metal: mismos
+    GENE-VFM-20-101/102 (78.35×12.24 / 11.19) y bahías 8.77\" + 3.74\".
+    """
+    from modules.nesting_engine.giga_cal11_galv import _channel_like, _is_vfm_i_host
+
+    inch = 25.4
+    k = 0.150 * inch
+    host101 = Polygon(_u_open_top(78.35 * inch, 12.24 * inch, (12.24 - 8.77) * inch))
+    assert _is_vfm_i_host("GENE-VFM-20-101", host101)
+    assert _is_vfm_i_host("GENE-VFM-30-101", host101)
+    hfm = box(0.0, 0.0, 34.65 * inch, 6.29 * inch)
+    assert not _is_vfm_i_host("GENE-HFM-10-102", hfm)
+    bag = box(0.0, 0.0, 40.63 * inch, 8.77 * inch)
+    strip = box(0.0, 0.0, 37.72 * inch, 3.74 * inch)
+    gutter = box(0.0, 0.0, 75.43 * inch, 2.69 * inch)
+    assert _channel_like(bag, k)
+    assert _channel_like(strip, k)
+    assert not _channel_like(gutter, k)
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    mc, stats = prefill_vfm_void_cargo(
+        [_mk("GENE-VFM-30-101", host101), _mk("GENE-GS-0820-708", gs)],
+        0.150,
+    )
+    assert int(stats.get("filled") or 0) >= 1, stats
+    host_p = next(p for p in mc if "VFM" in str(p.get("nombre") or ""))
+    assert host_p.get("_void_cargo")
+
+
 def _rect_ring(w, h):
     return [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h), (0.0, 0.0)]
 
@@ -565,7 +596,7 @@ def test_prefill_todos_los_vfm_del_pool():
     n_gs_mc = sum(1 for p in mc if "GS" in str(p.get("nombre") or "").upper())
     assert n_gs_mc == 0, n_gs_mc
     assert int(stats.get("filled") or 0) >= 4
-    assert int(stats.get("seed_hosts") or 0) == 5
+    assert int(stats.get("seed_hosts") or 0) == 2
 
 
 def test_cierra_par_vfm_reduce_alto():
@@ -629,6 +660,17 @@ def test_cargo_host_no_colocado_vuelve_a_restos():
     assert any("GS" in str(p.get("nombre") or "") for p in restos)
 
 
+def test_giga_no_simula_dos_alturas():
+    from modules.nesting_engine.giga_cal11_galv import pick_giga_sim_plates, plate_too_small_for_vfm
+
+    a = {"id": "PLC189", "w": 3048.0, "h": 914.4}
+    b = {"id": "PLC150", "w": 3048.0, "h": 1219.2}
+    out = pick_giga_sim_plates([a, b])
+    assert len(out) == 1 and out[0]["id"] == "PLC150"
+    assert plate_too_small_for_vfm(950.0, 90.0)
+    assert not plate_too_small_for_vfm(3048.0, 1219.2)
+
+
 def test_combinado_forzado_en_giga():
     import inspect
 
@@ -647,6 +689,7 @@ if __name__ == "__main__":
     test_es_motor_nativo_no_overlay_lite()
     test_cpp_export_presente()
     test_frames_vfm()
+    test_familia_giga_autodxf_hosts()
     test_pasillo_entre_vfm_recibe_bkt()
     test_pasillo_t_enfrentadas_recibe_gs()
     test_pasillo_denso_llena_varios_gs()
@@ -662,5 +705,6 @@ if __name__ == "__main__":
     test_hfm_entra_bolsa_877()
     test_cierra_par_vfm_reduce_alto()
     test_cargo_host_no_colocado_vuelve_a_restos()
+    test_giga_no_simula_dos_alturas()
     test_combinado_forzado_en_giga()
     print("GIGA_CAL11_GALV PASS")

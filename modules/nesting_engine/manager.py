@@ -4231,6 +4231,19 @@ class MotorNesting:
                     f"area_restante={_area_total_piezas(pendientes_est + accesorios):.0f}"
                 )
 
+            try:
+                from .giga_cal11_galv import pick_giga_sim_plates, should_force_giga_engine
+
+                if should_force_giga_engine(clave) and len(candidatos_sim) > 1:
+                    n_antes = len(candidatos_sim)
+                    candidatos_sim = pick_giga_sim_plates(candidatos_sim)
+                    _dbg_nesting(
+                        f"[GIGA-CAL11] sim_placas {n_antes}→{len(candidatos_sim)} "
+                        f"(solo la más alta; no 36\"+48\")"
+                    )
+            except Exception:
+                pass
+
             mejor_hoja_temp = None
             mejor_score = float('inf')
             mejor_restos_est = []
@@ -4867,22 +4880,6 @@ class MotorNesting:
                         f"pool={len(pool_fill)}"
                     )
                 actualizar_eficiencias_hoja(hoja_ganadora)
-
-            try:
-                from .giga_cal11_galv import fill_vfm_open_channels, should_force_giga_engine
-
-                if should_force_giga_engine(clave):
-                    if not isinstance(pendientes_est, list):
-                        pendientes_est = list(pendientes_est or [])
-                    if not isinstance(accesorios, list):
-                        accesorios = list(accesorios or [])
-                    n0 = len(hoja_ganadora.get("piezas") or [])
-                    fill_vfm_open_channels(hoja_ganadora, pendientes_est)
-                    fill_vfm_open_channels(hoja_ganadora, accesorios)
-                    if len(hoja_ganadora.get("piezas") or []) != n0:
-                        actualizar_eficiencias_hoja(hoja_ganadora)
-            except Exception as giga_ch_ex:
-                _dbg_nesting(f"[GIGA-CAL11] post-compact canal skip: {giga_ch_ex}")
 
             if sin_rtz:
                 _dbg_nesting(

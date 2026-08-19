@@ -47,6 +47,20 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19q — GIGA: no quemar 5 min/placa en pases vacíos
+- Void-first escaneaba 70+ I (~66 s, filled=0). Solo el par de esta hoja.
+- Grilla 96×48 en bahías (~74 s, moved=0). Esquinas+BLF.
+- Combinado 36\"+48\" en serie. Solo la placa más alta.
+- Retazos <12\" sin void/pasillo.
+
+### 2026-08-19p — GIGA: AutoDXF de toda la carpeta TANKS/GIGA
+- Recorrido UNC (sin COBRE): hosts Cal 11 Galv = VFM-20-101/102 en BOARD 4,
+  GIGABOARD5, BOARD 6, BOARD 11 y Fluidstack metal. Misma geometría
+  (78.35×12.24 / 11.19, bahías 8.77" + 3.74", gutter 2.69" ilegal).
+- HFM-10/12 son soleras (~97% AABB), no orificios. EQ/FCU/Cal 14/REV
+  vacíos no son este motor.
+- Fill de bahías/pasillo usa perfil I (no el token `-20`). Candado familia.
+
 ### 2026-08-19o — GIGA: saturar bahía (no 2 azules con aire)
 - Round-robin 1/host dejaba orificios medio vacíos y 304 en el patio.
 - Ahora cada bahía se llena hasta que no cabe más; orificios un poco

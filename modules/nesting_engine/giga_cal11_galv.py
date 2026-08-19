@@ -1,7 +1,8 @@
 """Motor oculto Cal 11 / 0.11811 / GALVANIZADO (GIGA).
 
 No vive en el selector. Si el switch de Configuración Global está ON y el
-grupo es 0.11811_GALVANIZADO, usa giga_cal11_galv. OFF = motor del selector.
+grupo es Cal 11 Galv (0.11811 / 0.1196 Fluidstack), usa giga_cal11_galv.
+Hosts: perfiles I VFM (AutoDXF GIGA metal, no cobre). OFF = motor del selector.
 """
 from __future__ import annotations
 
@@ -69,6 +70,25 @@ def is_giga_cal11_motor_enabled() -> bool:
         return False
 
 
+def plate_too_small_for_vfm(w_mm: float, h_mm: float) -> bool:
+    """Retazos < alto de la I (~12\") no merecen void-first ni pasillo."""
+    return min(float(w_mm or 0.0), float(h_mm or 0.0)) < 280.0
+
+
+def pick_giga_sim_plates(placas: list) -> list:
+    """Una candidata por hoja: la más alta. 36\"+48\" duplicaba ~5 min/placa."""
+    if not placas:
+        return []
+    if len(placas) == 1:
+        return list(placas)
+
+    def _short(p: dict) -> float:
+        return min(float(p.get("w") or 0.0), float(p.get("h") or 0.0))
+
+    best = max(placas, key=_short)
+    return [best]
+
+
 def should_force_giga_engine(clave: str | None = None) -> bool:
     """Switch ON y clave Cal 11 Galv → motor nativo. OFF → Ultra/Lite de siempre."""
     if not is_giga_cal11_motor_enabled():
@@ -99,11 +119,16 @@ def is_frame_piece(pieza: dict | None) -> bool:
 
 
 def _is_vfm_i_host(nombre: str, poly) -> bool:
+    """Perfil I abierto (VFM): metal ≤72% del AABB. HFM/soleras no.
+
+    AutoDXF GIGA (BOARD 4/5/6/11 + Fluidstack metal, sin cobre): solo
+    GENE-VFM-20-101/102; bahías 8.77\" y 3.74\". Sin geometría, el nombre.
+    """
     nom = str(nombre or "").upper()
     if "VFM" not in nom:
         return False
     if poly is None or getattr(poly, "is_empty", True):
-        return "VFM-20" in nom
+        return _is_vfm20_name(nom)
     minx, miny, maxx, maxy = poly.bounds
     bbox_a = max((maxx - minx) * (maxy - miny), 1.0)
     return float(poly.area) / bbox_a <= 0.72
@@ -223,19 +248,6 @@ def _try_strip_place(guest_poly, free, host_metal, placed, kerf_full: float):
                 (maxx - gw, miny),
                 (maxx - gw, maxy - gh),
             ]
-            step_x = max(float(kerf_full) + gw, 8.0)
-            step_y = max(float(kerf_full) + gh, 8.0)
-            y = miny
-            ny = 0
-            while y <= maxy - gh + 0.5 and ny < 48:
-                x = minx
-                nx = 0
-                while x <= maxx - gw + 0.5 and nx < 96:
-                    cands.append((x, y))
-                    x += step_x
-                    nx += 1
-                y += step_y
-                ny += 1
             cands.extend(_blf_positions(part, gw, gh, min(gw, gh) * 0.45))
             seen: set[tuple[float, float]] = set()
             for cx, cy in cands:
@@ -346,8 +358,15 @@ def prefill_vfm_void_cargo(
     if not hosts or not guests:
         return pool, stats
 
+    # Esta hoja C++ pone 1×101+1×102. Escanear las 70+ I restantes
+    # (~1 min de list_host_cavities) y filled=0 por presupuesto.
+    hosts = hosts[:2]
+    stats["seed_hosts"] = len(hosts)
+
     slots: list[dict] = []
     for h in hosts:
+        if time.perf_counter() - t0 > time_budget:
+            break
         cavs = [
             c
             for c in list_host_cavities(h["poly"], open_profile=True)
@@ -877,10 +896,10 @@ def fill_vfm_host_bays_from_sheet(hoja: dict, pool: list | None = None) -> dict[
             break
         if p.get("_void_prefilled"):
             continue
-        if not _is_vfm20_name(p.get("nombre")):
-            continue
         poly = _piece_poly(p)
         if poly is None:
+            continue
+        if not _is_vfm_i_host(str(p.get("nombre") or ""), poly):
             continue
         cavs = [
             c

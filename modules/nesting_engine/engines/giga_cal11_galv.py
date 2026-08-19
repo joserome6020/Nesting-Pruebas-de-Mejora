@@ -38,6 +38,7 @@ class GigaCal11GalvEngine:
         from ..giga_cal11_galv import (
             apply_giga_pasillo_fill,
             expand_giga_void_cargo,
+            plate_too_small_for_vfm,
             prefill_vfm_void_cargo,
             restore_unplaced_void_cargo,
             tabla_kerf_margin,
@@ -46,15 +47,23 @@ class GigaCal11GalvEngine:
         t0 = time.perf_counter()
         kerf, margin = tabla_kerf_margin()
         n_pool = len(request.piezas or [])
+        w_mm = float(request.w_placa or 0)
+        h_mm = float(request.h_placa or 0)
+        skip_void = plate_too_small_for_vfm(w_mm, h_mm)
         print(
-            f"[GIGA-CAL11] pack n={n_pool} void-first+MC "
-            f"{float(request.w_placa):.0f}x{float(request.h_placa):.0f}mm",
+            f"[GIGA-CAL11] pack n={n_pool} "
+            f"{'MC' if skip_void else 'void-first+MC'} "
+            f"{w_mm:.0f}x{h_mm:.0f}mm",
             flush=True,
         )
         try:
-            mc_pool, vf_stats = prefill_vfm_void_cargo(
-                list(request.piezas or []), kerf
-            )
+            if skip_void:
+                mc_pool = list(request.piezas or [])
+                vf_stats = {"filled": 0}
+            else:
+                mc_pool, vf_stats = prefill_vfm_void_cargo(
+                    list(request.piezas or []), kerf
+                )
             hoja, restos = empaquetar_una_hoja_giga_cal11(
                 mc_pool,
                 request.w_placa,
@@ -68,11 +77,16 @@ class GigaCal11GalvEngine:
             )
             hoja = dict(hoja or {})
             restos = list(restos or [])
-            n_exp = expand_giga_void_cargo(hoja, mc_pool)
-            n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
-            fill_stats = apply_giga_pasillo_fill(
-                hoja, engine_id=cls.META.engine_id, pool=restos
-            )
+            if skip_void:
+                n_exp = 0
+                n_back = 0
+                fill_stats = {}
+            else:
+                n_exp = expand_giga_void_cargo(hoja, mc_pool)
+                n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
+                fill_stats = apply_giga_pasillo_fill(
+                    hoja, engine_id=cls.META.engine_id, pool=restos
+                )
             fill_stats = dict(fill_stats)
             fill_stats["void_first"] = int(vf_stats.get("filled") or 0)
             fill_stats["void_expand"] = int(n_exp)
