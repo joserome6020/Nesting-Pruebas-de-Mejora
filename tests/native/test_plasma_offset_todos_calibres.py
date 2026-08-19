@@ -11,7 +11,10 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RAIZ))
 
-from modules.plasma_compensator import compute_plasma_offset_mm  # noqa: E402
+from modules.plasma_compensator import (  # noqa: E402
+    compensate_dxf_for_plasma,
+    compute_plasma_offset_mm,
+)
 
 OFFSET_IN = 0.0625
 OFFSET_MM = OFFSET_IN * 25.4
@@ -32,6 +35,79 @@ def test_regla_unica_en_fuente() -> None:
     assert "> 0.75" not in fn
 
 
+def test_barrenos_inner_encogen_el_mismo_0625() -> None:
+    """CUT_INNER usa −offset: CIRCLE y hueco polilínea pierden 0.0625\" de radio/lado."""
+    import tempfile
+
+    import ezdxf
+
+    off_mm = compute_plasma_offset_mm(0.1875)
+    assert abs(off_mm - OFFSET_MM) < 1e-9
+    d = OFFSET_IN
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        src, dst = root / "src.dxf", root / "out.dxf"
+        doc = ezdxf.new("R2010")
+        doc.header["$INSUNITS"] = 1
+        msp = doc.modelspace()
+        msp.add_lwpolyline(
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)],
+            close=True,
+            dxfattribs={"layer": "CUT_OUTER"},
+        )
+        msp.add_circle((3.0, 3.0), radius=1.0, dxfattribs={"layer": "CUT_INNER"})
+        msp.add_lwpolyline(
+            [(6.0, 2.0), (8.0, 2.0), (8.0, 4.0), (6.0, 4.0)],
+            close=True,
+            dxfattribs={"layer": "CUT_INNER"},
+        )
+        doc.saveas(src)
+
+        st = compensate_dxf_for_plasma(src, dst, offset_mm=off_mm)
+        assert int(st.get("changed") or 0) >= 2, st
+        out = ezdxf.readfile(dst).modelspace()
+
+        circs = [
+            e
+            for e in out
+            if e.dxftype() == "CIRCLE" and str(e.dxf.layer).upper() == "CUT_INNER"
+        ]
+        assert len(circs) == 1, [e.dxftype() for e in out]
+        assert abs(float(circs[0].dxf.radius) - (1.0 - d)) < 1e-6
+
+        holes = [
+            e
+            for e in out
+            if e.dxftype() == "LWPOLYLINE" and str(e.dxf.layer).upper() == "CUT_INNER"
+        ]
+        assert holes, "el hueco polilínea CUT_INNER debe seguir existiendo"
+        xs, ys = [], []
+        for x, y, *_ in holes[0].get_points("xy"):
+            xs.append(float(x))
+            ys.append(float(y))
+        assert abs((max(xs) - min(xs)) - (2.0 - 2.0 * d)) < 1e-4, (min(xs), max(xs))
+        assert abs((max(ys) - min(ys)) - (2.0 - 2.0 * d)) < 1e-4, (min(ys), max(ys))
+
+        outers = [
+            e
+            for e in out
+            if e.dxftype() == "LWPOLYLINE" and str(e.dxf.layer).upper() == "CUT_OUTER"
+        ]
+        ox, oy = [], []
+        for x, y, *_ in outers[0].get_points("xy"):
+            ox.append(float(x))
+            oy.append(float(y))
+        assert abs((max(ox) - min(ox)) - (10.0 + 2.0 * d)) < 1e-4
+        assert abs((max(oy) - min(oy)) - (6.0 + 2.0 * d)) < 1e-4
+
+
+def test_compensador_inner_usa_el_negativo() -> None:
+    src = (RAIZ / "modules" / "plasma_compensator.py").read_text(encoding="utf-8")
+    assert "else -off_dxf" in src
+    assert 'role == "outer"' in src
+
+
 def test_despachador_reusa_la_regla() -> None:
     src = (RAIZ / "despachador_nocturno.py").read_text(encoding="utf-8")
     assert "compute_plasma_offset_mm" in src
@@ -42,5 +118,7 @@ def test_despachador_reusa_la_regla() -> None:
 if __name__ == "__main__":
     test_offset_0625_fino_y_grueso()
     test_regla_unica_en_fuente()
+    test_barrenos_inner_encogen_el_mismo_0625()
+    test_compensador_inner_usa_el_negativo()
     test_despachador_reusa_la_regla()
     print("OK plasma_offset_todos_calibres")
