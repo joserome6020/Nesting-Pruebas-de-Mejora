@@ -172,8 +172,8 @@ def _channel_like(cav, kerf_full: float = 0.150 * 25.4) -> bool:
     area = float(getattr(cav, "area", 0.0) or 0.0)
     legal_short = short - 2.0 * float(kerf_full)
     return (
-        18.0 <= short <= 260.0
-        and long >= 200.0
+        18.0 <= short <= 340.0
+        and long >= 90.0
         and legal_short >= 70.0
         and area >= (5.0 * 25.4 * 25.4)
     )
@@ -206,8 +206,7 @@ def _fits_legal_box(guest_poly, legal) -> bool:
 def _try_strip_place(guest_poly, free, host_metal, placed, kerf_full: float):
     """Primer hueco BLF a lo largo de la tira; pocas poses, no grilla Venom."""
     from shapely.affinity import translate as shp_translate
-
-    from .venom_hole_fill import _guest_variants, _iter_free_parts
+    from .venom_hole_fill import _blf_positions, _guest_variants, _iter_free_parts
 
     need = max(50.0, float(guest_poly.area) * 0.3)
     for angle_deg, centered in _guest_variants(guest_poly):
@@ -237,6 +236,7 @@ def _try_strip_place(guest_poly, free, host_metal, placed, kerf_full: float):
                     nx += 1
                 y += step_y
                 ny += 1
+            cands.extend(_blf_positions(part, gw, gh, min(gw, gh) * 0.45))
             seen: set[tuple[float, float]] = set()
             for cx, cy in cands:
                 key = (round(cx, 1), round(cy, 1))
@@ -289,8 +289,6 @@ def prefill_vfm_void_cargo(
 
     El MC no ve esas bahías; el cargo viaja pegado y se expande tras colocar.
     """
-    from shapely.ops import unary_union
-
     from .venom_hole_fill import (
         _apply_rigid_pose,
         _is_virtual,
@@ -311,7 +309,7 @@ def prefill_vfm_void_cargo(
     pool = [copy.deepcopy(p) for p in piezas]
     kerf_in = float(kerf_in or 0.150)
     kerf_full = max(kerf_in * 25.4, 1.0)
-    time_budget = 12.0
+    time_budget = 16.0
 
     entries: list[dict] = []
     for idx, p in enumerate(pool):
@@ -356,19 +354,15 @@ def prefill_vfm_void_cargo(
             if _channel_like(c, kerf_full)
         ]
         stats["bays"] += len(cavs)
-        regions: list = []
+        bays: list = []
         for cav in cavs:
-            regions.extend(_bay_free_regions(h["poly"], cav, kerf_full))
-        if not regions:
+            bays.extend(_bay_free_regions(h["poly"], cav, kerf_full))
+        if not bays:
             continue
-        try:
-            free = regions[0] if len(regions) == 1 else unary_union(regions)
-        except Exception:
-            free = regions[0]
         slots.append(
             {
                 "h": h,
-                "free": free,
+                "bays": bays,
                 "cargo": list(h["p"].get("_void_cargo") or []),
                 "placed": [],
             }
@@ -378,54 +372,55 @@ def prefill_vfm_void_cargo(
 
     used: set[int] = set()
     filled = 0
-    progress = True
-    while progress:
-        progress = False
+    for st in slots:
         if time.perf_counter() - t0 > time_budget:
             break
-        for st in slots:
+        host_e = st["h"]
+        for bi, free in enumerate(list(st["bays"])):
             if time.perf_counter() - t0 > time_budget:
                 break
-            free = st["free"]
-            if free is None or getattr(free, "is_empty", True):
-                continue
-            host_e = st["h"]
-            pool_g = [
-                e
-                for e in guests
-                if e["idx"] not in used
-                and not e["p"].get("_void_prefilled")
-                and _fits_legal_box(e["poly"], free)
-            ]
-            pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
-            placed_one = False
-            for guest_e in pool_g:
-                hit = _try_strip_place(
-                    guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
-                )
-                if hit is None:
-                    continue
-                angle_deg, test = hit
-                old = guest_e["poly"]
-                _apply_rigid_pose(guest_e["p"], old, test, angle_deg)
-                guest_e["poly"] = test
-                guest_e["p"]["_void_prefilled"] = True
-                guest_e["p"]["_void_parent"] = str(host_e["p"].get("_void_uid") or "")
-                st["cargo"].append(copy.deepcopy(guest_e["p"]))
-                used.add(guest_e["idx"])
+            while free is not None and not getattr(free, "is_empty", True):
+                if time.perf_counter() - t0 > time_budget:
+                    break
+                pool_g = [
+                    e
+                    for e in guests
+                    if e["idx"] not in used
+                    and not e["p"].get("_void_prefilled")
+                    and _fits_legal_box(e["poly"], free)
+                ]
+                pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
+                hit_e = None
+                pose = None
+                for guest_e in pool_g:
+                    hit = _try_strip_place(
+                        guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
+                    )
+                    if hit is None:
+                        continue
+                    hit_e, pose = guest_e, hit
+                    break
+                if hit_e is None or pose is None:
+                    break
+                angle_deg, test = pose
+                old = hit_e["poly"]
+                _apply_rigid_pose(hit_e["p"], old, test, angle_deg)
+                hit_e["poly"] = test
+                hit_e["p"]["_void_prefilled"] = True
+                hit_e["p"]["_void_parent"] = str(host_e["p"].get("_void_uid") or "")
+                st["cargo"].append(copy.deepcopy(hit_e["p"]))
+                used.add(hit_e["idx"])
                 st["placed"].append(test)
                 filled += 1
-                progress = True
-                placed_one = True
                 try:
-                    st["free"] = free.difference(
+                    free = free.difference(
                         test.buffer(kerf_full, resolution=4, join_style=2)
                     )
                 except Exception:
-                    st["free"] = None
-                break
-            if placed_one:
-                host_e["p"]["_void_cargo"] = st["cargo"]
+                    break
+            st["bays"][bi] = free
+        if st["cargo"]:
+            host_e["p"]["_void_cargo"] = st["cargo"]
 
     mc_pool = [p for i, p in enumerate(pool) if i not in used]
     stats["filled"] = filled
@@ -745,6 +740,87 @@ def _pull_from_pool_into_legal(
     return n, legal
 
 
+def _pull_from_sheet_into_legal(
+    hoja: dict,
+    legal,
+    host_metal,
+    host_idx: int,
+    kerf_full: float,
+    t0: float,
+    budget: float,
+) -> tuple[int, Any]:
+    """Hueco que quedó vacío: mueve patio de ESTA hoja (H68 con 304 al lado)."""
+    from .venom_hole_fill import _apply_rigid_pose, _piece_poly
+
+    n = 0
+    piezas = hoja.get("piezas") or []
+    if legal is None or getattr(legal, "is_empty", True):
+        return n, legal
+    placed: list = []
+    for j, pz in enumerate(piezas):
+        gp = _piece_poly(pz)
+        if gp is None:
+            continue
+        placed.append(gp)
+        if j == host_idx:
+            continue
+        try:
+            if float(gp.intersection(legal).area) > 0.55 * float(gp.area):
+                legal = legal.difference(
+                    gp.buffer(kerf_full, resolution=4, join_style=2)
+                )
+        except Exception:
+            pass
+    used: set[int] = set()
+    while legal is not None and not getattr(legal, "is_empty", True):
+        if time.perf_counter() - t0 > budget:
+            break
+        cands: list[tuple[int, Any]] = []
+        for i, pz in enumerate(piezas):
+            if i == host_idx or i in used:
+                continue
+            if pz.get("_void_prefilled") or pz.get("_giga_gap_fill"):
+                continue
+            gp = _piece_poly(pz)
+            if gp is None or _is_vfm_i_host(str(pz.get("nombre") or ""), gp):
+                continue
+            try:
+                if float(gp.intersection(legal).area) > 0.55 * float(gp.area):
+                    continue
+            except Exception:
+                pass
+            if not _fits_legal_box(gp, legal):
+                continue
+            cands.append((i, gp))
+        cands.sort(key=lambda t: float(t[1].area), reverse=True)
+        hit_i = None
+        pose = None
+        for i, gp in cands:
+            hit = _try_strip_place(gp, legal, host_metal, others, kerf_full)
+            if hit is None:
+                continue
+            hit_i, pose = i, hit
+            break
+        if hit_i is None or pose is None:
+            break
+        guest = piezas[hit_i]
+        old = _piece_poly(guest)
+        if old is None:
+            break
+        angle_deg, test = pose
+        _apply_rigid_pose(guest, old, test, angle_deg)
+        guest["_giga_gap_fill"] = True
+        used.add(hit_i)
+        n += 1
+        try:
+            legal = legal.difference(
+                test.buffer(kerf_full, resolution=4, join_style=2)
+            )
+        except Exception:
+            break
+    return n, legal
+
+
 def fill_vfm_facing_gap(hoja: dict, pool: list | None = None) -> dict[str, Any]:
     """Rellena el aire entre dos VFM con invitados del pool (restos), no del patio."""
     stats: dict[str, Any] = {"facing": 0, "pairs": 0, "pockets": 0}
@@ -787,20 +863,16 @@ def fill_vfm_facing_gap(hoja: dict, pool: list | None = None) -> dict[str, Any]:
 
 
 def fill_vfm_host_bays_from_sheet(hoja: dict, pool: list | None = None) -> dict[str, Any]:
-    """Rellena bahías VFM con restos, sin desarmar el patio de la hoja."""
-    from shapely.ops import unary_union
-
+    """Rellena bahías VFM: restos primero, patio solo si el hueco sigue vacío."""
     from .venom_hole_fill import _piece_poly, list_host_cavities
 
     stats: dict[str, Any] = {"bays": 0, "moved": 0}
-    if not isinstance(pool, list) or not pool:
-        return stats
-    piezas = list(hoja.get("piezas") or [])
     kerf_in = float(hoja.get("kerf_usado", 0.150) or 0.150)
     kerf_full = max(kerf_in * 25.4, 1.0)
     t0 = time.perf_counter()
+    live_pool = pool if isinstance(pool, list) else []
 
-    for _ia, p in enumerate(piezas):
+    for ia, p in enumerate(list(hoja.get("piezas") or [])):
         if time.perf_counter() - t0 > 8.0:
             break
         if p.get("_void_prefilled"):
@@ -815,20 +887,17 @@ def fill_vfm_host_bays_from_sheet(hoja: dict, pool: list | None = None) -> dict[
             for c in list_host_cavities(poly, open_profile=True)
             if _channel_like(c, kerf_full)
         ]
-        regions: list = []
-        for cav in cavs:
-            regions.extend(_bay_free_regions(poly, cav, kerf_full))
-        if not regions:
-            continue
-        try:
-            legal = regions[0] if len(regions) == 1 else unary_union(regions)
-        except Exception:
-            legal = regions[0]
         stats["bays"] += len(cavs)
-        n, _legal = _pull_from_pool_into_legal(
-            hoja, pool, legal, poly, kerf_full, t0, 8.0, small_first=False
-        )
-        stats["moved"] += n
+        for cav in cavs:
+            for legal in _bay_free_regions(poly, cav, kerf_full):
+                n, legal = _pull_from_pool_into_legal(
+                    hoja, live_pool, legal, poly, kerf_full, t0, 8.0, small_first=False
+                )
+                stats["moved"] += n
+                n2, _legal = _pull_from_sheet_into_legal(
+                    hoja, legal, poly, ia, kerf_full, t0, 8.0
+                )
+                stats["moved"] += n2
     if stats["moved"] or stats["bays"]:
         print(
             f"[GIGA-CAL11] host_bays moved={stats['moved']} bays={stats['bays']} "

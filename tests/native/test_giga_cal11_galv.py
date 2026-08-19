@@ -535,8 +535,22 @@ def test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala():
     )
 
 
+def test_prefill_satura_bahia_no_una_pieza():
+    """Una bahía 8.77\" debe llenarse (no 1–2 azules con aire arriba)."""
+    inch = 25.4
+    host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    piezas = [_mk("GENE-VFM-20-101", host)] + [
+        _mk("GENE-GS-0820-708", gs) for _ in range(12)
+    ]
+    mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
+    host_p = next(p for p in mc if "VFM" in str(p.get("nombre") or "").upper())
+    cargo = host_p.get("_void_cargo") or []
+    assert len(cargo) >= 8, (len(cargo), stats)
+
+
 def test_prefill_todos_los_vfm_del_pool():
-    """Cada VFM del pool restante recibe cargo; los GS no se dejan para el patio."""
+    """Los GS del pool salen a cargo VFM (no se dejan todos al patio)."""
     inch = 25.4
     host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
     gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
@@ -548,8 +562,8 @@ def test_prefill_todos_los_vfm_del_pool():
     mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
     n_vfm = sum(1 for p in mc if "VFM" in str(p.get("nombre") or "").upper())
     assert n_vfm == 5, n_vfm
-    cargo_n = sum(1 for p in mc if p.get("_void_cargo"))
-    assert cargo_n >= 3, cargo_n
+    n_gs_mc = sum(1 for p in mc if "GS" in str(p.get("nombre") or "").upper())
+    assert n_gs_mc == 0, n_gs_mc
     assert int(stats.get("filled") or 0) >= 4
     assert int(stats.get("seed_hosts") or 0) == 5
 
@@ -643,6 +657,7 @@ if __name__ == "__main__":
     test_vfm_canal_gs_gordo_no_entra()
     test_vfm_bahia_alta_recibe_bkt304_y_gs()
     test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala()
+    test_prefill_satura_bahia_no_una_pieza()
     test_prefill_todos_los_vfm_del_pool()
     test_hfm_entra_bolsa_877()
     test_cierra_par_vfm_reduce_alto()

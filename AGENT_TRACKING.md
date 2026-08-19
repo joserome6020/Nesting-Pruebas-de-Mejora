@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19o — GIGA: saturar bahía (no 2 azules con aire)
+- Round-robin 1/host dejaba orificios medio vacíos y 304 en el patio.
+- Ahora cada bahía se llena hasta que no cabe más; orificios un poco
+  más altos (~13\") también cuentan. Patio solo si el hueco sigue vacío.
+
 ### 2026-08-19n — GIGA: orificios desde el pool, no del patio
 - Prefill round-robin a todos los VFM restantes (no solo 1×101+1×102).
 - Post-MC jala GS/BKT de restos, no desordena líneas ya nesteadas.
