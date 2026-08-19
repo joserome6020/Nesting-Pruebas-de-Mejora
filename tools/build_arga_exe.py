@@ -734,6 +734,10 @@ def ensure_arga_nest_core(
         return existing_pyd, existing_worker
 
     if skip:
+        if existing_pyd is not None and existing_worker is not None:
+            print(f"[OK] --skip-core pyd={existing_pyd.name}")
+            print(f"[OK] --skip-core worker={existing_worker.name}")
+            return existing_pyd, existing_worker
         msg = "[ERROR] --skip-core y faltan arga_nest_core.pyd y/o ArgaNestWorker.exe."
         if allow_missing:
             print(f"[WARN] {msg}")
