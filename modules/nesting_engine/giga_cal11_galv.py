@@ -427,10 +427,12 @@ def prefill_vfm_void_cargo(
                 and not e["p"].get("_void_prefilled")
                 and _fits_legal_box(e["poly"], free)
             ]
-            pool_g.sort(key=lambda e: float(e["poly"].area), reverse=True)
+            pool_g.sort(key=lambda e: float(e["poly"].area))
             hit_e = None
             pose = None
-            for guest_e in pool_g[:32]:
+            for guest_e in pool_g:
+                if time.perf_counter() - t0 > time_budget:
+                    return False
                 hit = _try_strip_place(
                     guest_e["poly"], free, host_e["poly"], st["placed"], kerf_full
                 )
@@ -461,7 +463,9 @@ def prefill_vfm_void_cargo(
 
     # Reparte invitados a TODAS las I (si no, P9 se traga el patio y P11–P24
     # quedan 4 I vacías al 29%).
-    cap_rr = 4
+    n_g = max(1, len(guests))
+    n_h = max(1, len(slots))
+    cap_rr = max(1, (n_g + n_h - 1) // n_h)
     moved = True
     while moved and time.perf_counter() - t0 <= time_budget:
         moved = False
@@ -470,11 +474,6 @@ def prefill_vfm_void_cargo(
                 continue
             if _place_one(st):
                 moved = True
-
-    # El par que sí entra a ESTA hoja: saturar bahías (no 2 azules con aire).
-    for st in slots[:2]:
-        while time.perf_counter() - t0 <= time_budget and _place_one(st):
-            pass
 
     for st in slots:
         if st["cargo"]:
@@ -953,7 +952,7 @@ def fill_vfm_host_bays_from_sheet(hoja: dict, pool: list | None = None) -> dict[
         for cav in cavs:
             for legal in _bay_free_regions(poly, cav, kerf_full):
                 n, legal = _pull_from_pool_into_legal(
-                    hoja, live_pool, legal, poly, kerf_full, t0, 8.0, small_first=False
+                    hoja, live_pool, legal, poly, kerf_full, t0, 8.0, small_first=True
                 )
                 stats["moved"] += n
                 n2, _legal = _pull_from_sheet_into_legal(

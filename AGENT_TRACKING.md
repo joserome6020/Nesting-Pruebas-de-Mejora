@@ -54,6 +54,11 @@ código viejo. Un bug sin candado vuelve.
 - Retazos <12\" sin void/pasillo.
 - Máx. 32 invitados por hueco (no 400 fallos × 70 s). Candado satura 12 GS.
 
+### 2026-08-19s — GIGA: revertir cupo 2 I (H69–H99 al 14%)
+- El hold 1×101+1×102 dejó ~30 placas 120×48 con solo el par.
+- Invitados chicos (GS/RLG) primero en bahía, no HFM que no cabe.
+- Cargo repartido a todas las I (no vaciar el pool en las primeras).
+
 ### 2026-08-19r — GIGA: no más placas de 4 I al 29%
 - Nest real BOARD 6: P11–P24 = 4 I vacías; P9 patio 127 (GS/304).
 - Prefill reparte cargo a todas las I (cavidades en caché) y el MC

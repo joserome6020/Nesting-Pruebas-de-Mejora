@@ -103,7 +103,7 @@ def test_es_motor_nativo_no_overlay_lite():
     assert "empaquetar_una_hoja_giga_cal11" in src
     assert "prefill_vfm_void_cargo" in src
     assert "restore_unplaced_void_cargo" in src
-    assert "partition_vfm_sheet_quota" in src
+    assert "partition_vfm_sheet_quota" not in src
     assert "close_stacked_vfm_pairs" not in src
     assert "pool=restos" in src
     assert "arga_lite" not in src
@@ -581,6 +581,23 @@ def test_prefill_satura_bahia_no_una_pieza():
     assert len(cargo) >= 12, (len(cargo), stats)
 
 
+def test_hfm_no_bloquea_gs_en_bahia():
+    """HFM 34\" cabe en AABB de la bolsa pero no en metal; no debe impedir GS."""
+    inch = 25.4
+    host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
+    hfm = box(0.0, 0.0, 34.65 * inch, 6.29 * inch)
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    piezas = (
+        [_mk("GENE-VFM-20-101", host)]
+        + [_mk("GENE-HFM-10-102", hfm) for _ in range(8)]
+        + [_mk("GENE-GS-0820-708", gs) for _ in range(8)]
+    )
+    mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
+    host_p = next(p for p in mc if "VFM" in str(p.get("nombre") or "").upper())
+    names = [str(g.get("nombre") or "") for g in (host_p.get("_void_cargo") or [])]
+    assert sum("GS" in n for n in names) >= 8, (names, stats)
+
+
 def test_prefill_todos_los_vfm_del_pool():
     """Los GS del pool salen a cargo VFM (no se dejan todos al patio)."""
     inch = 25.4
@@ -605,9 +622,7 @@ def test_prefill_todos_los_vfm_del_pool():
 
 
 def test_extra_i_llevan_cargo_fuera_de_hoja():
-    """Las I que no entran esta hoja se van a restos YA con GS (no placas 29%)."""
-    from modules.nesting_engine.giga_cal11_galv import partition_vfm_sheet_quota
-
+    """4 I y 8 GS: cada I lleva cargo (no dejar las últimas vacías al 14%)."""
     inch = 25.4
     host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
     gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
@@ -617,14 +632,11 @@ def test_extra_i_llevan_cargo_fuera_de_hoja():
         + [_mk("GENE-GS-0820-708", gs) for _ in range(8)]
     )
     mc, stats = prefill_vfm_void_cargo(piezas, 0.150)
-    seed, held = partition_vfm_sheet_quota(mc)
-    n_seed_i = sum(1 for p in seed if "VFM" in str(p.get("nombre") or "").upper())
-    assert n_seed_i == 2, n_seed_i
-    assert len(held) == 2, len(held)
-    cargo_held = sum(len(p.get("_void_cargo") or []) for p in held)
-    cargo_seed = sum(len(p.get("_void_cargo") or []) for p in seed if "VFM" in str(p.get("nombre") or "").upper())
-    assert cargo_held >= 2, (cargo_held, cargo_seed, stats)
-    assert cargo_held + cargo_seed >= 8, (cargo_held, cargo_seed, stats)
+    vfms = [p for p in mc if "VFM" in str(p.get("nombre") or "").upper()]
+    assert len(vfms) == 4
+    n_c = sum(1 for p in vfms if p.get("_void_cargo"))
+    assert n_c == 4, (n_c, stats)
+    assert int(stats.get("filled") or 0) >= 8
 
 
 def test_cierra_par_vfm_reduce_alto():
@@ -729,6 +741,7 @@ if __name__ == "__main__":
     test_vfm_bahia_alta_recibe_bkt304_y_gs()
     test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala()
     test_prefill_satura_bahia_no_una_pieza()
+    test_hfm_no_bloquea_gs_en_bahia()
     test_prefill_todos_los_vfm_del_pool()
     test_extra_i_llevan_cargo_fuera_de_hoja()
     test_hfm_entra_bolsa_877()
