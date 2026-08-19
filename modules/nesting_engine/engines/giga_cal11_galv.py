@@ -71,7 +71,7 @@ class GigaCal11GalvEngine:
             n_exp = expand_giga_void_cargo(hoja, mc_pool)
             n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
             fill_stats = apply_giga_pasillo_fill(
-                hoja, engine_id=cls.META.engine_id
+                hoja, engine_id=cls.META.engine_id, pool=restos
             )
             fill_stats = dict(fill_stats)
             fill_stats["void_first"] = int(vf_stats.get("filled") or 0)

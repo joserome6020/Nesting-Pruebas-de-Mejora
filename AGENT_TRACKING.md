@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19n — GIGA: orificios desde el pool, no del patio
+- Prefill round-robin a todos los VFM restantes (no solo 1×101+1×102).
+- Post-MC jala GS/BKT de restos, no desordena líneas ya nesteadas.
+- Candado: ≥3 VFM con cargo; pasillo usa `pool=`.
+
 ### 2026-08-19m — GIGA: grilla densa + bahías post-MC
 - El fill del pasillo solo probaba 24 poses (paso 50 mm) y dejaba GS/304
   en el patio. Ahora grilla pieza+kerf, y un segundo pase mueve patio a

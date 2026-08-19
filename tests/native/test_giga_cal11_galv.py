@@ -104,6 +104,7 @@ def test_es_motor_nativo_no_overlay_lite():
     assert "prefill_vfm_void_cargo" in src
     assert "restore_unplaced_void_cargo" in src
     assert "close_stacked_vfm_pairs" not in src
+    assert "pool=restos" in src
     assert "arga_lite" not in src
     assert "fallback_engine" not in src
 
@@ -172,6 +173,7 @@ def test_pasillo_t_enfrentadas_recibe_gs():
     y102 = (rail + th) + 8.0
     p102 = shp_translate(t_dn, 0.0, y102)
     gs = box(920.0, 40.0, 920.0 + 3.84 * 25.4, 40.0 + 3.61 * 25.4)
+    gs_p = _mk("GENE-GS-0820-708", gs)
     hoja = {
         "placa_w": 1200.0,
         "placa_h": 500.0,
@@ -180,11 +182,10 @@ def test_pasillo_t_enfrentadas_recibe_gs():
         "piezas": [
             _mk("GENE-VFM-20-101", t_up),
             _mk("GENE-VFM-20-102", p102),
-            _mk("GENE-GS-0820-708", gs),
         ],
     }
     pocket = box(0.0, rail, tx, y102 + th)
-    stats = apply_giga_pasillo_fill(hoja)
+    stats = apply_giga_pasillo_fill(hoja, pool=[gs_p])
     guest = next(p for p in hoja["piezas"] if "GS" in str(p.get("nombre") or ""))
     poly = guest.get("poly")
     assert poly is not None
@@ -234,10 +235,11 @@ def test_pasillo_denso_llena_varios_gs():
         _mk("GENE-VFM-20-101", t_up),
         _mk("GENE-VFM-20-102", p102),
     ]
+    pool = []
     for i in range(16):
         x0 = 1700.0 + (i % 8) * (gw + 8.0)
         y0 = 20.0 + (i // 8) * (gh + 8.0)
-        piezas.append(_mk(f"GENE-GS-0820-708#{i}", box(x0, y0, x0 + gw, y0 + gh)))
+        pool.append(_mk(f"GENE-GS-0820-708#{i}", box(x0, y0, x0 + gw, y0 + gh)))
     hoja = {
         "placa_w": 3048.0,
         "placa_h": 1219.2,
@@ -251,7 +253,7 @@ def test_pasillo_denso_llena_varios_gs():
             box(tx + tw, rail, w, y102 + th),
         ]
     )
-    stats = apply_giga_pasillo_fill(hoja)
+    stats = apply_giga_pasillo_fill(hoja, pool=pool)
     n_in = 0
     for p in hoja["piezas"]:
         if "GS" not in str(p.get("nombre") or ""):
@@ -269,6 +271,7 @@ def test_pasillo_entre_vfm_recibe_bkt():
     rail_a = box(20.0, 20.0, 220.0, 45.0)
     rail_b = box(20.0, 80.0, 220.0, 105.0)
     guest = box(280.0, 50.0, 320.0, 70.0)
+    bkt = _mk("GENE-BKT-299", guest)
     hoja = {
         "placa_w": 400.0,
         "placa_h": 160.0,
@@ -277,12 +280,11 @@ def test_pasillo_entre_vfm_recibe_bkt():
         "piezas": [
             _mk("GENE-VFM-20-101", rail_a),
             _mk("GENE-VFM-20-102", rail_b),
-            _mk("GENE-BKT-299", guest),
         ],
     }
     corridor = box(20.0, 45.0, 220.0, 80.0)
-    stats = apply_giga_pasillo_fill(hoja)
-    bkt = next(p for p in hoja["piezas"] if "BKT" in str(p.get("nombre") or ""))
+    stats = apply_giga_pasillo_fill(hoja, pool=[bkt])
+    placed = next(p for p in hoja["piezas"] if "BKT" in str(p.get("nombre") or ""))
     poly = bkt.get("poly")
     assert poly is not None
     inside = float(poly.intersection(corridor).area) > 0.5 * float(poly.area)
@@ -533,8 +535,8 @@ def test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala():
     )
 
 
-def test_prefill_solo_par_semilla():
-    """Prefill 1×101+1×102; el resto de I sigue en el pool (no placas vacías)."""
+def test_prefill_todos_los_vfm_del_pool():
+    """Cada VFM del pool restante recibe cargo; los GS no se dejan para el patio."""
     inch = 25.4
     host = Polygon(_u_open_top(1990.0, 12.24 * inch, (12.24 - 8.77) * inch))
     gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
@@ -547,8 +549,9 @@ def test_prefill_solo_par_semilla():
     n_vfm = sum(1 for p in mc if "VFM" in str(p.get("nombre") or "").upper())
     assert n_vfm == 5, n_vfm
     cargo_n = sum(1 for p in mc if p.get("_void_cargo"))
-    assert cargo_n <= 2, cargo_n
-    assert int(stats.get("seed_hosts") or 0) == 2
+    assert cargo_n >= 3, cargo_n
+    assert int(stats.get("filled") or 0) >= 4
+    assert int(stats.get("seed_hosts") or 0) == 5
 
 
 def test_cierra_par_vfm_reduce_alto():
@@ -640,7 +643,7 @@ if __name__ == "__main__":
     test_vfm_canal_gs_gordo_no_entra()
     test_vfm_bahia_alta_recibe_bkt304_y_gs()
     test_vfm_h_con_t_recibe_304_en_bolsa_no_gs_en_ala()
-    test_prefill_solo_par_semilla()
+    test_prefill_todos_los_vfm_del_pool()
     test_hfm_entra_bolsa_877()
     test_cierra_par_vfm_reduce_alto()
     test_cargo_host_no_colocado_vuelve_a_restos()
