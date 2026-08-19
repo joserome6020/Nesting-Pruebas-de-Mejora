@@ -120,7 +120,7 @@ def test_compensate_dxf_keyhole_y_version_sidecar():
     msp.add_circle((8, 5), radius=1.5, dxfattribs={"layer": "CUT_INNER"})
     doc.saveas(str(src))
 
-    off = compute_plasma_offset_mm(0.375)  # 0.0125 in → mm
+    off = compute_plasma_offset_mm(0.375)  # 0.0625 in → mm
     st = compensate_dxf_for_plasma(src, dst, offset_mm=off)
     assert int(st.get("changed") or 0) >= 1, st
     assert Path(dst).is_file()

@@ -183,6 +183,10 @@ REGRESIONES = [
         "test_giga_cal11_galv.py",
         "2026-08-19e - Cal 11 Galv: bahía VFM 8.77\" (BKT-304/GS) + canal 3.74\"",
     ),
+    (
+        "test_plasma_offset_todos_calibres.py",
+        "2026-08-19t - offset plasma 0.0625\" por lado en todos los calibres",
+    ),
 ]
 
 

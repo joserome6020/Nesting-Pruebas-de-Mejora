@@ -17,8 +17,8 @@ from modules.nesting_engine.manager import MotorNesting
 
 
 def test_offset_regla():
-    assert abs(compute_plasma_offset_mm(0.25) - 0.0125 * 25.4) < 1e-9
-    assert abs(compute_plasma_offset_mm(1.0) - 0.250 * 25.4) < 1e-9
+    assert abs(compute_plasma_offset_mm(0.25) - 0.0625 * 25.4) < 1e-9
+    assert abs(compute_plasma_offset_mm(1.0) - 0.0625 * 25.4) < 1e-9
 
 
 def test_buffer_aplica():

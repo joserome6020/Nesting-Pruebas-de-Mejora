@@ -893,7 +893,7 @@ def populate_nesting_scene(
                         )
                         off_pieza = float(compute_plasma_offset_mm(float(cal)))
                     except Exception:
-                        off_pieza = 0.0125 * 25.4
+                        off_pieza = 0.0625 * 25.4
                 if compensada and off_pieza > 0.0:
                     dx_mm += 2.0 * off_pieza
                     dy_mm += 2.0 * off_pieza

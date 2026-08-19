@@ -707,16 +707,22 @@ def version_sidecar_path(dxf_path: str | Path) -> Path:
     return p.with_suffix(p.suffix + ".offset_ver")
 
 
-def write_version_sidecar(dxf_path: str | Path, *, backend: str = "") -> None:
+def write_version_sidecar(
+    dxf_path: str | Path, *, backend: str = "", offset_mm: float | None = None
+) -> None:
     path = version_sidecar_path(dxf_path)
     payload = {
         "algo": PLASMA_OFFSET_ALGO_VERSION,
         "backend": backend,
     }
+    if offset_mm is not None:
+        payload["offset_mm"] = float(offset_mm)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def compensated_dxf_is_current(src: str | Path, dst: str | Path) -> bool:
+def compensated_dxf_is_current(
+    src: str | Path, dst: str | Path, *, offset_mm: float | None = None
+) -> bool:
     """True si el DXF compensado existe, es más nuevo que el origen y usa el algo actual."""
     src_p, dst_p = Path(src), Path(dst)
     if not dst_p.is_file() or dst_p.stat().st_size <= 0:
@@ -733,7 +739,18 @@ def compensated_dxf_is_current(src: str | Path, dst: str | Path) -> bool:
         data = json.loads(ver.read_text(encoding="utf-8"))
     except Exception:
         return False
-    return str(data.get("algo") or "") == PLASMA_OFFSET_ALGO_VERSION
+    if str(data.get("algo") or "") != PLASMA_OFFSET_ALGO_VERSION:
+        return False
+    if offset_mm is not None:
+        stored = data.get("offset_mm")
+        if stored is None:
+            return False
+        try:
+            if abs(float(stored) - float(offset_mm)) > 1e-6:
+                return False
+        except (TypeError, ValueError):
+            return False
+    return True
 
 
 def freecad_offset_available() -> bool:

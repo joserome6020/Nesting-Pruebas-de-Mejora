@@ -44,12 +44,13 @@ NESTING_DXF_SEGMENTS = (
 def compute_plasma_offset_mm(thickness_in: float) -> float:
     """
     Regla de compensación plasma (export + PARTS):
-    - > 0.75 in  => 0.250 in
-    - <= 0.75 in => 0.0125 in
-    Convertido a mm.
+    0.0625 in por lado en todos los calibres. Convertido a mm.
+
+    ``thickness_in`` se conserva en la firma (callers / DXF) pero ya no
+    cambia la magnitud: planta pidió el mismo stock en fino y grueso.
     """
-    base_in = 0.250 if float(thickness_in) > 0.75 else 0.0125
-    return base_in * 25.4
+    del thickness_in
+    return 0.0625 * 25.4
 
 
 def aplicar_compensacion_poligono(poly, offset_mm: float):
@@ -156,7 +157,7 @@ def asegurar_dxf_plasma_compensado(
         return None, "Offset plasma inválido."
     dst = ruta_dxf_plasma_compensado(src)
     try:
-        if not forzar and compensated_dxf_is_current(src, dst):
+        if not forzar and compensated_dxf_is_current(src, dst, offset_mm=off):
             return str(dst), ""
         stats = compensate_dxf_for_plasma(src, dst, offset_mm=off)
         if int(stats.get("changed") or 0) <= 0:
@@ -165,7 +166,9 @@ def asegurar_dxf_plasma_compensado(
                 f"targets={stats.get('total_targets')} skipped={stats.get('skipped')} "
                 f"algo={PLASMA_OFFSET_ALGO_VERSION} backend={stats.get('backend')}"
             )
-        write_version_sidecar(dst, backend=str(stats.get("backend") or ""))
+        write_version_sidecar(
+            dst, backend=str(stats.get("backend") or ""), offset_mm=off
+        )
         return str(dst), ""
     except Exception as exc:
         return None, f"Error al compensar DXF:\n{exc}"

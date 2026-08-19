@@ -632,7 +632,9 @@ def procesar_ruta_nesting(
             dbg(f"📦 Espesor inferido desde nombre DXF: {espesor_txt}\"")
 
     thk_mm = espesor_in * 25.4
-    plasma_off = (0.250 if espesor_in > 0.75 else 0.0125) * 25.4
+    from modules.plasma_compensator import compute_plasma_offset_mm
+
+    plasma_off = float(compute_plasma_offset_mm(float(espesor_in)))
 
     dbg(f"📐 Espesor detectado: {espesor_in}\" ({thk_mm} mm)")
     dbg(f"🔥 Offset plasma calculado: {plasma_off} mm")

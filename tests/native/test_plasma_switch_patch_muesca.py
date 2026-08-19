@@ -70,6 +70,14 @@ def _centros_inner(ruta: Path) -> list[tuple[float, float, float]]:
     for e in doc.modelspace():
         if str(e.dxf.layer or "").upper() != "CUT_INNER":
             continue
+        if e.dxftype() == "CIRCLE":
+            c = e.dxf.center
+            out.append((float(c.x), float(c.y), float(e.dxf.radius)))
+            continue
+        if e.dxftype() == "ARC":
+            c = e.dxf.center
+            out.append((float(c.x), float(c.y), float(e.dxf.radius)))
+            continue
         if e.dxftype() != "LWPOLYLINE":
             continue
         for ve in e.virtual_entities():
@@ -77,6 +85,31 @@ def _centros_inner(ruta: Path) -> list[tuple[float, float, float]]:
                 c = ve.dxf.center
                 out.append((float(c.x), float(c.y), float(ve.dxf.radius)))
     return out
+
+
+def _inner_bbox(ruta: Path) -> tuple[float, float, float, float, float, float]:
+    """(minx, miny, maxx, maxy, cx, cy) del CUT_INNER (arcos nativos o densificado)."""
+    import ezdxf  # type: ignore
+
+    doc = ezdxf.readfile(ruta)
+    xs: list[float] = []
+    ys: list[float] = []
+    for e in doc.modelspace():
+        if str(e.dxf.layer or "").upper() != "CUT_INNER":
+            continue
+        if e.dxftype() == "LWPOLYLINE":
+            for x, y, *_ in e.get_points("xy"):
+                xs.append(float(x))
+                ys.append(float(y))
+        elif e.dxftype() in {"CIRCLE", "ARC"}:
+            c = e.dxf.center
+            r = float(e.dxf.radius)
+            xs.extend([float(c.x) - r, float(c.x) + r])
+            ys.extend([float(c.y) - r, float(c.y) + r])
+    assert xs and ys, "CUT_INNER vacío"
+    minx, maxx = min(xs), max(xs)
+    miny, maxy = min(ys), max(ys)
+    return minx, miny, maxx, maxy, (minx + maxx) * 0.5, (miny + maxy) * 0.5
 
 
 def test_switch_patch_barreno_no_se_espeja_al_compensar() -> None:
@@ -99,22 +132,27 @@ def test_switch_patch_barreno_no_se_espeja_al_compensar() -> None:
         assert int(stats.get("changed") or 0) >= 1, stats
 
         despues = _centros_inner(dst)
-        # El barreno grande DEBE seguir centrado en y≈2.0 (encogido |delta|).
         d_in = off / 25.4
         grandes = [c for c in despues if abs(c[2] - (0.665 - d_in)) < 1e-3]
-        assert grandes, ("sin barreno grande", despues)
-        assert all(abs(c[1] - 2.0) < 0.05 for c in grandes), (
-            "el barreno se espejó debajo de la muesca",
-            grandes,
-            despues,
-        )
-        # La muesca sigue abajo (y≈1.34) y engorda.
         muescas = [c for c in despues if abs(c[2] - (0.14 + d_in)) < 1e-3]
-        assert muescas and all(abs(c[1] - 1.34) < 0.05 for c in muescas), (
-            "la muesca se movió",
-            muescas,
-            despues,
-        )
+        if grandes:
+            assert all(abs(c[1] - 2.0) < 0.05 for c in grandes), (
+                "el barreno se espejó debajo de la muesca",
+                grandes,
+                despues,
+            )
+        if muescas:
+            assert all(abs(c[1] - 1.34) < 0.05 for c in muescas), (
+                "la muesca se movió",
+                muescas,
+                despues,
+            )
+        # Con 0.0625\" Clipper densifica el inner (sin ARC nativo). El bug
+        # original era el espejo: el barreno grande saltaba debajo de la muesca.
+        _minx, miny, _maxx, maxy, _cx, cy = _inner_bbox(dst)
+        assert cy > 1.70, ("el inner se espejó hacia la muesca", cy, miny, maxy)
+        assert maxy > 2.35, ("falta el barreno grande arriba", cy, miny, maxy)
+        assert miny > 1.05, ("la muesca cayó sobre el MARK", cy, miny, maxy)
 
 
 def test_bulge_reflejo_coloca_el_centro_al_lado_correcto() -> None:

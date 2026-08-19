@@ -1367,7 +1367,7 @@ def exportar_resultados_a_dxf(
 
     exportados_principales = []
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
-    plasma_offset_job = 0.0125 * 25.4
+    plasma_offset_job = 0.0625 * 25.4
 
     from .sheet_numbering import (
         asignar_numeracion_global_hojas,

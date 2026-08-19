@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-19t — Plasma: 0.0625\" por lado en todos los calibres
+- Compensación unificada: 1/16\" por lado (fino y grueso). Ya no 0.0125\" / 0.250\".
+- Sidecar guarda `offset_mm` para no reusar DXF compensados con la regla vieja.
+- Candado `test_plasma_offset_todos_calibres`. ANS C++ no está en esta PC.
+
 ### 2026-08-19q — GIGA: no quemar 5 min/placa en pases vacíos
 - Void-first escaneaba 70+ I (~66 s, filled=0). Solo el par de esta hoja.
 - Grilla 96×48 en bahías (~74 s, moved=0). Esquinas+BLF.
