@@ -75,6 +75,10 @@ COLOR_TABLE_ROW_B = QColor("#E2E8F0")
 COLOR_TABLE_EDGE = QColor("#CBD5E1")
 COLOR_TABLE_TEXT = QColor("#0F172A")
 
+# Cotas CAD: milésima de pulgada (0.001"). Evita 77.37 vs 77.38 por ruido de bbox.
+CAD_INCH_DECIMALS = 3
+_DIMS_DXF_CACHE: dict[str, tuple[float, float]] = {}
+
 Z_PLATE = 0
 Z_COMP = 6
 Z_PIECE = 10
@@ -709,6 +713,95 @@ def _add_dimension(scene, x1, y1, x2, y2, label, ox=0.0, oy=0.0, dim_labels=None
         )
 
 
+def _fmt_cad_in(val: float) -> str:
+    """Formato único de cotas en pulgadas para la tabla del nest."""
+    return f"{round(float(val), CAD_INCH_DECIMALS):.{CAD_INCH_DECIMALS}f}"
+
+
+def _dims_in_desde_ruta_dxf(ruta: str) -> tuple[float, float] | None:
+    """AABB L×W (in) desde el DXF fuente — misma ruta ⇒ mismas cotas."""
+    import os
+
+    key = os.path.normcase(os.path.normpath(str(ruta or "").strip()))
+    if not key or not os.path.isfile(key):
+        return None
+    cached = _DIMS_DXF_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        from modules.nesting_engine.display_geometry import _cargar_poly_local_dxf
+
+        loaded = _cargar_poly_local_dxf(key)
+        if not loaded:
+            return None
+        poly_local = loaded[0]
+        if poly_local is None or getattr(poly_local, "is_empty", True):
+            return None
+        minx, miny, maxx, maxy = poly_local.bounds
+        dx_in = abs(float(maxx) - float(minx)) / 25.4
+        dy_in = abs(float(maxy) - float(miny)) / 25.4
+        dims = (
+            round(max(dx_in, dy_in), CAD_INCH_DECIMALS),
+            round(min(dx_in, dy_in), CAD_INCH_DECIMALS),
+        )
+        _DIMS_DXF_CACHE[key] = dims
+        if len(_DIMS_DXF_CACHE) > 2048:
+            _DIMS_DXF_CACHE.pop(next(iter(_DIMS_DXF_CACHE)))
+        return dims
+    except Exception:
+        return None
+
+
+def _dims_pieza_tabla_in(p: dict, *, offset_comp: float = 0.0, hoja: dict | None = None) -> tuple[float, float, bool]:
+    """L, W en pulgadas para la tabla. Prefiere DXF fuente (preciso y estable)."""
+    hoja = hoja or {}
+    from_dxf = False
+    try:
+        from modules.nesting_engine.display_geometry import _ruta_dxf_efectiva
+
+        ruta = _ruta_dxf_efectiva(p) or str(p.get("ruta") or "").strip()
+    except Exception:
+        ruta = str(p.get("ruta_plasma") or p.get("ruta") or "").strip()
+    dims = _dims_in_desde_ruta_dxf(ruta) if ruta else None
+    if dims is not None:
+        return dims[0], dims[1], True
+
+    pols = p.get("poligonos") or []
+    if not pols or not pols[0] or len(pols[0]) < 2:
+        return 0.0, 0.0, False
+    xs = [float(t[0]) for t in pols[0]]
+    ys = [float(t[1]) for t in pols[0]]
+    dx_mm = max(xs) - min(xs)
+    dy_mm = max(ys) - min(ys)
+    compensada = bool(p.get("plasma_compensada_manual"))
+    off_pieza = float(p.get("plasma_offset_mm_manual") or offset_comp or 0.0)
+    if compensada and off_pieza <= 0.0:
+        try:
+            from modules.plasma_compensator import compute_plasma_offset_mm
+
+            cal = (
+                p.get("calibre")
+                or hoja.get("placa_cal")
+                or hoja.get("thickness")
+                or 0.25
+            )
+            off_pieza = float(compute_plasma_offset_mm(float(cal)))
+        except Exception:
+            off_pieza = 0.0625 * 25.4
+    if compensada and off_pieza > 0.0 and not bool(
+        p.get("plasma_fuente_ya_compensada") or p.get("ruta_plasma")
+    ):
+        dx_mm += 2.0 * off_pieza
+        dy_mm += 2.0 * off_pieza
+    L_in = max(dx_mm, dy_mm) / 25.4
+    W_in = min(dx_mm, dy_mm) / 25.4
+    return (
+        round(L_in, CAD_INCH_DECIMALS),
+        round(W_in, CAD_INCH_DECIMALS),
+        from_dxf,
+    )
+
+
 def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
     rows = []
     for nom, data in sorted(resumen.items(), key=lambda kv: kv[1]["id"]):
@@ -722,7 +815,14 @@ def _add_table_impl(scene, hoja, resumen, dims_nom, w_mm, h_mm, job_cell: str):
         if len(job_val) > 30:
             job_val = job_val[:27] + "…"
         rows.append(
-            (data["id"], job_val, item, f"{L_in:.2f}", f"{W_in:.2f}", int(data["qty"]))
+            (
+                data["id"],
+                job_val,
+                item,
+                _fmt_cad_in(L_in),
+                _fmt_cad_in(W_in),
+                int(data["qty"]),
+            )
         )
 
     nrows = len(rows)
@@ -865,48 +965,20 @@ def populate_nesting_scene(
                     "job": piece_meta["job"],
                 }
             resumen[nom]["qty"] += 1
-            pols = p.get("poligonos") or []
-            if pols and pols[0] and len(pols[0]) >= 2:
-                xs = [t[0] for t in pols[0]]
-                ys = [t[1] for t in pols[0]]
-                dx_mm = max(xs) - min(xs)
-                dy_mm = max(ys) - min(ys)
-                # El polígono del nest es el perfil SIN compensar. La pieza que
-                # de verdad sale de la mesa crece `offset` por lado, y es la
-                # medida que PARTS reporta; sin esto la tabla decía 42.48 donde
-                # PARTS decía 42.51 y no empataban.
-                off_pieza = float(
-                    p.get("plasma_offset_mm_manual") or offset_comp or 0.0
-                )
-                if compensada and off_pieza <= 0.0:
-                    # La pieza llega marcada como compensada pero sin el mm
-                    # del desfase (se pierde en el empaquetado). Misma regla
-                    # que usa el export: compute_plasma_offset_mm(calibre).
-                    try:
-                        from modules.plasma_compensator import compute_plasma_offset_mm
-
-                        cal = (
-                            p.get("calibre")
-                            or hoja.get("placa_cal")
-                            or hoja.get("thickness")
-                            or 0.25
-                        )
-                        off_pieza = float(compute_plasma_offset_mm(float(cal)))
-                    except Exception:
-                        off_pieza = 0.0625 * 25.4
-                if compensada and off_pieza > 0.0 and not bool(
-                    p.get("plasma_fuente_ya_compensada") or p.get("ruta_plasma")
-                ):
-                    # Solo sumar stock si el polígono aún es el perfil base.
-                    # Tras Mudar/nest plasma el contorno YA viene crecido; sumar
-                    # otra vez dejaba 77.50 donde el DXF/export miden 77.37.
-                    dx_mm += 2.0 * off_pieza
-                    dy_mm += 2.0 * off_pieza
-                L_in = max(dx_mm, dy_mm) / 25.4
-                W_in = min(dx_mm, dy_mm) / 25.4
+            L_in, W_in, from_dxf = _dims_pieza_tabla_in(
+                p, offset_comp=offset_comp, hoja=hoja
+            )
+            if L_in > 0.0 or W_in > 0.0:
                 actual = dims_nom.get(nom, {"L": 0.0, "W": 0.0, "plasma": False})
-                actual["L"] = max(float(actual["L"]), float(L_in))
-                actual["W"] = max(float(actual["W"]), float(W_in))
+                if from_dxf or not actual.get("_from_dxf"):
+                    # DXF fuente gana: misma pieza ⇒ mismas cotas (sin max de ruido).
+                    if from_dxf:
+                        actual["L"] = float(L_in)
+                        actual["W"] = float(W_in)
+                        actual["_from_dxf"] = True
+                    else:
+                        actual["L"] = max(float(actual["L"]), float(L_in))
+                        actual["W"] = max(float(actual["W"]), float(W_in))
                 actual["plasma"] = bool(actual["plasma"]) or compensada
                 dims_nom[nom] = actual
 

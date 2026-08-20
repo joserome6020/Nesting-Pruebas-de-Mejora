@@ -265,6 +265,12 @@ def test_dimensiones_de_tabla_incluyen_la_compensacion():
         "si la pieza llega marcada sin mm de desfase, la tabla debe "
         "recalcularlo con la misma regla del export"
     )
+    assert "CAD_INCH_DECIMALS" in txt and "_fmt_cad_in" in txt, (
+        "cotas L/W de la tabla deben ir a milésima de pulgada (CAD)"
+    )
+    assert "_dims_in_desde_ruta_dxf" in txt, (
+        "misma ruta DXF debe producir las mismas cotas L/W"
+    )
 
 
 if __name__ == "__main__":

@@ -191,6 +191,10 @@ REGRESIONES = [
         "test_plasma_transfer_sigue_compensada.py",
         "2026-08-20a - mudar pieza plasma no dobla L/W (77.37≠77.50)",
     ),
+    (
+        "test_plasma_cotas_cad_precision.py",
+        "2026-08-20b - cotas CAD a 0.001 in; misma ruta DXF ⇒ mismo L×W",
+    ),
 ]
 
 

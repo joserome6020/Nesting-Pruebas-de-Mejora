@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20b — Cotas CAD a milésima de pulgada
+- Tabla nest y PARTS muestran L/W a 0.001\" (ya no 77.37 vs 77.38 por redondeo a 2 decimales).
+- Cotas de tabla preferen AABB del DXF fuente (cacheado); misma ruta ⇒ mismo número.
+- Candado `test_plasma_cotas_cad_precision`. ANS C++ no está en esta PC.
+
 ### 2026-08-20a — Plasma: Mudar no dobla L/W en la tabla
 - 77.37×21.68 ya es el stock compensado; al Mudar la tabla no debe pintar 77.50×21.81.
 - Sellar `plasma_fuente_ya_compensada` en incremental/packer/lote plasma; la tabla no suma 2×offset si hay `ruta_plasma`.

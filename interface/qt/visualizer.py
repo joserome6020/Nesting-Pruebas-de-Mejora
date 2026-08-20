@@ -255,10 +255,10 @@ class VisorDXF:
             lbl.setStyleSheet(
                 f"color:{color};font-size:13px;font-weight:700;background:transparent;"
             )
-        self.lbl_width.setText(f'{ancho_in:.2f}"')
-        self.lbl_height.setText(f'{alto_in:.2f}"')
-        self.lbl_area.setText(f"{area_in2:.2f} in²")
-        self.lbl_perim.setText(f'{perim_in:.2f}"')
+        self.lbl_width.setText(f'{round(ancho_in, 3):.3f}"')
+        self.lbl_height.setText(f'{round(alto_in, 3):.3f}"')
+        self.lbl_area.setText(f"{round(area_in2, 3):.3f} in²")
+        self.lbl_perim.setText(f'{round(perim_in, 3):.3f}"')
         if referencia:
             self.lbl_ref.setText(str(referencia or "-"))
 
@@ -344,7 +344,7 @@ class VisorDXF:
 
     def actualizar_info_extra(self, area_in2=None, referencia=None):
         if area_in2 is not None:
-            self.lbl_area.setText(f"{float(area_in2):.2f} in²")
+            self.lbl_area.setText(f"{round(float(area_in2), 3):.3f} in²")
         if referencia is not None:
             self.lbl_ref.setText(str(referencia or "-"))
 
