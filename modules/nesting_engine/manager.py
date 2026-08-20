@@ -637,15 +637,19 @@ def enriquecer_piezas_hoja_con_fuentes(hoja: dict, piezas_origen: list) -> int:
         p_final["ruta"] = ruta
         p_final["orig_minx"] = p_orig.get("orig_minx", 0.0)
         p_final["orig_miny"] = p_orig.get("orig_miny", 0.0)
-        if p_orig.get("plasma_compensada_manual"):
+        if p_orig.get("plasma_compensada_manual") or p_orig.get(
+            "plasma_fuente_ya_compensada"
+        ):
+            # Pack de Mudar ya trae el contorno final (DXF plasma). Si solo
+            # queda compensada_manual sin fuente_ya, la tabla suma 2×offset otra vez.
             p_final["plasma_compensada_manual"] = True
             p_final["plasma_offset_mm_manual"] = float(
                 p_orig.get("plasma_offset_mm_manual") or 0.0
             )
-            if p_orig.get("plasma_fuente_ya_compensada"):
-                p_final["plasma_fuente_ya_compensada"] = True
             if p_orig.get("ruta_plasma"):
                 p_final["ruta_plasma"] = p_orig.get("ruta_plasma")
+            if p_orig.get("plasma_fuente_ya_compensada") or p_orig.get("ruta_plasma"):
+                p_final["plasma_fuente_ya_compensada"] = True
         if p_orig.get("cu_especial_vertical"):
             p_final["cu_especial_vertical"] = True
 
@@ -2890,6 +2894,9 @@ class MotorNesting:
                 ):
                     continue
                 pz["plasma_compensada_manual"] = True
+                # Lote nestado desde Plasma Compensated: el polígono YA incluye stock.
+                if not pz.get("plasma_fuente_ya_compensada"):
+                    pz["plasma_fuente_ya_compensada"] = True
                 off_pz = float(pz.get("plasma_offset_mm_manual") or 0.0)
                 if off_pz > 0:
                     off = off_pz
@@ -6665,9 +6672,28 @@ class MotorNesting:
             return None
 
         _, var, px, py = mejor
-        pieza_colocada = self._pieza_colocada_incremental(pieza_mover, var, px, py)
+        # Identidad desde el pack (flags plasma ya sellados), no desde la pieza
+        # cruda del nest que a veces llega sin plasma_fuente_ya_compensada.
+        pieza_colocada = self._pieza_colocada_incremental(pack_piece, var, px, py)
         if pieza_colocada is None:
             return None
+        # Conservar nombre/área de la instancia original si el pack los diluyó.
+        if pieza_mover.get("nombre"):
+            pieza_colocada["nombre"] = str(pieza_mover.get("nombre") or "")
+        self._heredar_identidad_pieza(pieza_colocada, pieza_mover)
+        if self._src_requiere_plasma(pack_piece, pieza_colocada) or self._src_requiere_plasma(
+            pieza_mover, pieza_colocada
+        ):
+            pieza_colocada["plasma_compensada_manual"] = True
+            pieza_colocada["plasma_fuente_ya_compensada"] = True
+            if pack_piece.get("plasma_offset_mm_manual") is not None:
+                pieza_colocada["plasma_offset_mm_manual"] = pack_piece.get(
+                    "plasma_offset_mm_manual"
+                )
+            if pack_piece.get("ruta_plasma"):
+                pieza_colocada["ruta_plasma"] = pack_piece.get("ruta_plasma")
+            elif pieza_mover.get("ruta_plasma"):
+                pieza_colocada["ruta_plasma"] = pieza_mover.get("ruta_plasma")
 
         piezas_out = list(hoja_destino.get("piezas") or [])
         piezas_out.append(pieza_colocada)
@@ -6746,6 +6772,11 @@ class MotorNesting:
                 continue
             if zonas and self._piezas_invaden_zonas_rtz(nh, zonas, clearance):
                 continue
+            # El packer solo devuelve poligonos; reinyectar ruta/plasma del batch.
+            try:
+                enriquecer_piezas_hoja_con_fuentes(nh, batch)
+            except Exception:
+                pass
             return nh, []
 
         return None, list(piezas_pack)

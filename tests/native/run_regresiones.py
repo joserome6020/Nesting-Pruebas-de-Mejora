@@ -189,7 +189,7 @@ REGRESIONES = [
     ),
     (
         "test_plasma_transfer_sigue_compensada.py",
-        "2026-08-19u - mudar pieza plasma recarga DXF compensado vigente",
+        "2026-08-20a - mudar pieza plasma no dobla L/W (77.37≠77.50)",
     ),
 ]
 

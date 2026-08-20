@@ -47,6 +47,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20a — Plasma: Mudar no dobla L/W en la tabla
+- 77.37×21.68 ya es el stock compensado; al Mudar la tabla no debe pintar 77.50×21.81.
+- Sellar `plasma_fuente_ya_compensada` en incremental/packer/lote plasma; la tabla no suma 2×offset si hay `ruta_plasma`.
+- Candado muda pieza ya compensada. ANS C++ no está en esta PC.
+
 ### 2026-08-19u — Plasma: visor y Mudar usan el offset vigente
 - PARTS/nest ya no reusan un DXF Plasma Compensated viejo (0.0125\") solo porque el archivo exista.
 - Al mudar, el pack recarga el DXF de 0.0625\" por lado y la pieza colocada conserva ruta + flags plasma (si no, el visor volvía al DXF base).

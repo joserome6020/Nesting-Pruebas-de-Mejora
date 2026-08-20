@@ -895,8 +895,11 @@ def populate_nesting_scene(
                     except Exception:
                         off_pieza = 0.0625 * 25.4
                 if compensada and off_pieza > 0.0 and not bool(
-                    p.get("plasma_fuente_ya_compensada")
+                    p.get("plasma_fuente_ya_compensada") or p.get("ruta_plasma")
                 ):
+                    # Solo sumar stock si el polígono aún es el perfil base.
+                    # Tras Mudar/nest plasma el contorno YA viene crecido; sumar
+                    # otra vez dejaba 77.50 donde el DXF/export miden 77.37.
                     dx_mm += 2.0 * off_pieza
                     dy_mm += 2.0 * off_pieza
                 L_in = max(dx_mm, dy_mm) / 25.4

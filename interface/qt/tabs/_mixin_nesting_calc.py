@@ -2857,6 +2857,7 @@ class NestingCalcMixin:
                 if self._es_pieza_virtual(nom_pz):
                     continue
                 pz["plasma_compensada_manual"] = True
+                pz["plasma_fuente_ya_compensada"] = True
         return nh
 
     def _recalcular_hoja_con_contexto(
@@ -3050,6 +3051,7 @@ class NestingCalcMixin:
                         if self._es_pieza_virtual(nom_pz):
                             continue
                         pz["plasma_compensada_manual"] = True
+                        pz["plasma_fuente_ya_compensada"] = True
         fuente_pack = piezas_a_reprocesar
         if fuente_pack and not renovada_en_pose:
             from modules.nesting_engine.manager import enriquecer_piezas_hoja_con_fuentes
