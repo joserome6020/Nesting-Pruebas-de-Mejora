@@ -6,11 +6,26 @@ import re
 from pathlib import Path
 
 _STEP_REL_DIRS = (
+    # Universal (plano) + cobre
     ("NESTEOS DE COBRE", "STEP"),
+    ("CAMA LASER SIN MINI NEST", "STEP"),
+    ("CAMA LASER 12 KW SIN MINI NEST", "STEP"),
+    ("ROBOT LASER + MINI NEST", "STEP"),
+    ("ROBOT PLASMA", "STEP"),
+    # Legacy Cama A/B (por si quedan exports viejos)
     ("ROBOT LASER + MINI NEST", "STEP", "Cama A"),
     ("ROBOT LASER + MINI NEST", "STEP", "Cama B"),
     ("ROBOT PLASMA", "STEP", "Cama A"),
     ("ROBOT PLASMA", "STEP", "Cama B"),
+)
+
+# Familias DXF convertibles (paridad exporter / STEP_UNIVERSAL_SIN_CAMAS).
+_DXF_FAMILIAS = (
+    "NESTEOS DE COBRE",
+    "CAMA LASER SIN MINI NEST",
+    "CAMA LASER 12 KW SIN MINI NEST",
+    "ROBOT LASER + MINI NEST",
+    "ROBOT PLASMA",
 )
 
 _WO_NAME_RE = re.compile(r"^W\.O\.\s*\d+", re.IGNORECASE)
@@ -194,6 +209,33 @@ def resolver_model_core_files(app, *, modo_servidor: bool) -> tuple[Path | None,
     return None, " | ".join(notas) if notas else "sin MODEL CORE FILES"
 
 
+def dxf_dirs_bajo_export_cad(ruta_export_cad: str | Path) -> list[Path]:
+    """Carpetas DXF de familias convertibles (cobre / robot láser / plasma)."""
+    nest = Path(ruta_export_cad) / "NESTING"
+    dirs: list[Path] = []
+    for fam in _DXF_FAMILIAS:
+        d = nest / fam / "DXF"
+        if d.is_dir():
+            dirs.append(d)
+    return dirs
+
+
+def contar_dxf_nesting(ruta_export_cad: str | Path) -> int:
+    """Cuenta *.dxf en familias convertibles bajo ARGA MODEL CORE/NESTING."""
+    total = 0
+    for d in dxf_dirs_bajo_export_cad(ruta_export_cad):
+        try:
+            total += sum(1 for p in d.glob("*.dxf") if p.is_file())
+        except OSError:
+            continue
+    return total
+
+
+def nesting_dir_de_export_cad(ruta_export_cad: str | Path) -> Path | None:
+    nest = Path(ruta_export_cad) / "NESTING"
+    return nest if nest.is_dir() else None
+
+
 def listar_wo_con_steps(mcf: str | Path, *, limit_por_wo: int = 400) -> list[dict]:
     """
     Lista carpetas W.O. * bajo MODEL CORE FILES que tengan al menos un STEP.
@@ -230,6 +272,144 @@ def listar_wo_con_steps(mcf: str | Path, *, limit_por_wo: int = 400) -> list[dic
         reverse=True,
     )
     return out
+
+
+def listar_wo_con_dxf(mcf: str | Path) -> list[dict]:
+    """
+    Lista W.O. bajo MODEL CORE FILES con DXF de nesting convertibles a STEP.
+    Cada ítem: {nombre, wo_dir, export_cad, nesting, n_dxf, n_steps}
+    """
+    root = Path(mcf)
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    try:
+        hijos = sorted(root.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return out
+    for wo_dir in hijos:
+        if not wo_dir.is_dir() or not _WO_NAME_RE.match(wo_dir.name):
+            continue
+        export_cad = wo_dir / "ARGA MODEL CORE"
+        nesting = nesting_dir_de_export_cad(export_cad)
+        if nesting is None:
+            continue
+        n_dxf = contar_dxf_nesting(export_cad)
+        if n_dxf <= 0:
+            continue
+        n_steps = len(steps_bajo_export_cad(export_cad, limit=500))
+        out.append(
+            {
+                "nombre": wo_dir.name,
+                "wo_dir": wo_dir,
+                "export_cad": export_cad,
+                "nesting": nesting,
+                "n_dxf": n_dxf,
+                "n_steps": n_steps,
+            }
+        )
+    out.sort(key=lambda it: it["nombre"].lower())
+    return out
+
+
+def listar_swo_con_dxf(*, modo_servidor: bool) -> list[dict]:
+    """S.W.O. bajo Máxima Optimización con DXF convertibles (con o sin STEP)."""
+    out: list[dict] = []
+    for root in _raices_maxima_optimizacion(modo_servidor=modo_servidor):
+        try:
+            hijos = sorted(root.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for swo_dir in hijos:
+            if not swo_dir.is_dir() or not _SWO_NAME_RE.match(swo_dir.name):
+                continue
+            export_cad = swo_dir / "ARGA MODEL CORE"
+            nesting = nesting_dir_de_export_cad(export_cad)
+            if nesting is None:
+                continue
+            n_dxf = contar_dxf_nesting(export_cad)
+            if n_dxf <= 0:
+                continue
+            n_steps = len(steps_bajo_export_cad(export_cad, limit=500))
+            out.append(
+                {
+                    "nombre": swo_dir.name,
+                    "wo_dir": swo_dir,
+                    "export_cad": export_cad,
+                    "nesting": nesting,
+                    "n_dxf": n_dxf,
+                    "n_steps": n_steps,
+                    "raiz": root,
+                }
+            )
+    out.sort(key=lambda it: it["nombre"].lower())
+    seen: set[str] = set()
+    uniq: list[dict] = []
+    for it in out:
+        key = it["nombre"].casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+    return uniq
+
+
+def escanear_jobs_con_model_core(*, modo_servidor: bool) -> list[dict]:
+    """
+    Escanea producto/cliente/job con MODEL CORE FILES (local o remoto).
+    No filtra historial: sirven jobs ya nesteados que solo tienen DXF.
+    """
+    if modo_servidor:
+        import config
+
+        raiz = Path(str(config.RUTA_SERVIDOR_RAIZ or ""))
+    else:
+        from interface.qt.export_paths import desktop_nesteos_locales
+
+        raiz = Path(desktop_nesteos_locales())
+
+    jobs: list[dict] = []
+    if not raiz.is_dir():
+        return jobs
+    try:
+        productos = list(raiz.iterdir())
+    except OSError:
+        return jobs
+
+    for producto in productos:
+        if not producto.is_dir():
+            continue
+        # Máxima Optimización vive fuera del árbol producto/cliente.
+        if producto.name.casefold() in {"máxima optimización", "maxima optimizacion"}:
+            continue
+        try:
+            clientes = list(producto.iterdir())
+        except OSError:
+            continue
+        for cliente in clientes:
+            if not cliente.is_dir():
+                continue
+            try:
+                job_dirs = list(cliente.iterdir())
+            except OSError:
+                continue
+            for job in job_dirs:
+                if not job.is_dir():
+                    continue
+                mcf = job / "MODEL CORE FILES"
+                if not mcf.is_dir():
+                    continue
+                jobs.append(
+                    {
+                        "job_name": job.name,
+                        "cliente": cliente.name,
+                        "producto": producto.name,
+                        "ruta_job_root": str(job),
+                        "ruta_mcf": str(mcf),
+                    }
+                )
+    jobs.sort(key=lambda j: (j["cliente"].upper(), j["job_name"].upper()))
+    return jobs
 
 
 def _raices_maxima_optimizacion(*, modo_servidor: bool) -> list[Path]:

@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_step_universal_sin_camas_despachador.py",
+        "2026-08-20m - Crear STEPs/despachador: 1 STEP plano sin Cama A/B ni offsets",
+    ),
+    (
         "test_export_sin_lista_largos.py",
         "2026-08-05a/06b/18p - job/SWO sin CSV/AutoDXF no tumba export; sin rglob TANKS",
     ),

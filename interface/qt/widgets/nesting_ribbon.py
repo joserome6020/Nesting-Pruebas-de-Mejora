@@ -142,6 +142,15 @@ def _pix(kind: str, size: int = 28) -> QPixmap:
         p.drawLine(r.left() + 1, r.top() + 4, r.center().x(), r.top())
         p.drawLine(r.center().x(), r.top(), r.right() - 1, r.top() + 4)
         p.drawLine(r.center().x(), r.top(), r.center().x(), r.bottom() - 4)
+    elif kind == "crear_step":
+        # Caja STEP + signo + (generar)
+        p.drawRect(r.adjusted(1, 5, -8, -5))
+        p.drawLine(r.left() + 1, r.top() + 5, r.center().x() - 4, r.top() + 1)
+        p.drawLine(r.center().x() - 4, r.top() + 1, r.right() - 9, r.top() + 5)
+        p.setPen(QPen(_ACCENT, 1.8))
+        cx, cy = r.right() - 4, r.center().y()
+        p.drawLine(cx - 5, cy, cx + 5, cy)
+        p.drawLine(cx, cy - 5, cx, cy + 5)
     elif kind == "pdf":
         p.drawRoundedRect(r, 2, 2)
         p.drawLine(r.left() + 5, r.top() + 7, r.right() - 5, r.top() + 7)
@@ -428,7 +437,7 @@ def build_nesting_ribbon(tab) -> QFrame:
     tab.btn_reanudar_sync = make_cmd(
         "Reanudar sync",
         icon="export",
-        tip="Reintentar VSM/ContPAQ sin volver a exportar CAD",
+        tip="Reintentar VSM/ContPAQ (requiere contraseña) — no reexporta CAD",
         large=False,
     )
     tab.btn_reanudar_sync.clicked.connect(tab.reanudar_centralizacion_pendiente)
@@ -442,13 +451,20 @@ def build_nesting_ribbon(tab) -> QFrame:
         "Ver STEP", icon="step", tip="Abrir visor STEP", large=False
     )
     tab.btn_ver_step.clicked.connect(tab.abrir_visor_step)
+    tab.btn_crear_steps = make_cmd(
+        "Crear STEPs",
+        icon="crear_step",
+        tip="Generar STEP desde DXF ya exportados (nesteo o ruta)",
+        large=False,
+    )
+    tab.btn_crear_steps.clicked.connect(tab.abrir_crear_steps)
 
     lay.addWidget(
         make_panel(
             "Salida",
             tab.btn_exportar,
             tab.btn_pdf_nesting,
-            [tab.btn_ver_step, tab.btn_reanudar_sync],
+            [tab.btn_ver_step, tab.btn_crear_steps, tab.btn_reanudar_sync],
         )
     )
     lay.addWidget(make_vsep())

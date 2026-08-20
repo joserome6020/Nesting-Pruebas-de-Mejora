@@ -790,7 +790,22 @@ class ExportMixin:
         """
         Reintenta únicamente VSM/ContPAQ/reporte para una exportación ya
         persistida. Nunca ejecuta DXF, STEP, PostgreSQL ni MRL.
+
+        Requiere contraseña DYT (misma que gaps/STEPS) para evitar PO accidentales
+        al reanudar sync de una S.W.O.
         """
+        from interface.qt.dialogs.nesting_modals import _autorizar_edicion_dyt
+
+        if not _autorizar_edicion_dyt(
+            self,
+            titulo="Reanudar sync",
+            mensaje=(
+                "Acceso restringido.\n\n"
+                "Reanudar sync puede disparar VSM/ContPAQ (p. ej. PO de una S.W.O.).\n"
+                "Ingrese la contraseña solo si está seguro de continuar."
+            ),
+        ):
+            return
         job_activo = str(getattr(self.app, "job_activo", "") or "").strip().upper()
         if not job_activo or job_activo in {"JOB", "NESTING"}:
             return QMessageBox.warning(

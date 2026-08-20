@@ -258,19 +258,44 @@ def diff_steps(before: dict, after: dict):
     return sorted(nuevos), sorted(actualizados)
 
 
+def _step_universal_sin_camas() -> bool:
+    """Paridad con config/exporter: 1 STEP por DXF, coords 1:1, sin Cama A/B."""
+    try:
+        import config as _cfg
+
+        return bool(getattr(_cfg, "STEP_UNIVERSAL_SIN_CAMAS", True))
+    except Exception:
+        return True
+
+
 def resolver_destinos_step(step_root: str):
     """
-    Siempre crea y usa:
-    - STEP/Cama A  -> coordenadas de Cama A
-    - STEP/Cama B  -> coordenadas de Cama B
+    Destinos STEP para acero.
 
-    Esto conserva la lógica original del sistema.
+    Modo actual (STEP_UNIVERSAL_SIN_CAMAS=True, default):
+      - STEP/  (plano) → origen NONE, offsets 0 (coords DXF 1:1)
+    Legacy (flag off):
+      - STEP/Cama A → ancla TR + offset robot
+      - STEP/Cama B → ancla BR + offset robot
     """
     step_root = norm_path(step_root)
     if not step_root:
         return []
 
     os.makedirs(step_root, exist_ok=True)
+
+    if _step_universal_sin_camas():
+        return [
+            {
+                "tag": "UNIVERSAL",
+                "dir": step_root,
+                "origen": "NONE",
+                "off_x": 0.0,
+                "off_y": 0.0,
+                "off_z": 0.0,
+                "prefer_verde": True,
+            }
+        ]
 
     cama_a = norm_path(os.path.join(step_root, "Cama A"))
     cama_b = norm_path(os.path.join(step_root, "Cama B"))
@@ -286,6 +311,7 @@ def resolver_destinos_step(step_root: str):
             "off_x": 4235,
             "off_y": -1015,
             "off_z": -700,
+            "prefer_verde": True,
         },
         {
             "tag": "B",
@@ -294,6 +320,7 @@ def resolver_destinos_step(step_root: str):
             "off_x": 4235,
             "off_y": 840,
             "off_z": -700,
+            "prefer_verde": True,
         },
     ]
 
@@ -305,9 +332,12 @@ def clasificar_familia(nombre_carpeta: str):
     if "NESTEOS DE COBRE" in nombre:
         return "COBRE"
 
-    # CAMA LASER acero: solo DXF de corte; no entra al flujo STEP.
+    universal = _step_universal_sin_camas()
+
+    # Overlay universal: CAMA LASER también genera 1 STEP (coords 1:1).
+    # Legacy: CAMA LASER solo DXF de corte.
     if "CAMA LASER" in nombre:
-        return None
+        return "CAMA_LASER" if universal else None
 
     if "ROBOT" not in nombre:
         return None
@@ -336,15 +366,16 @@ def resolver_destinos_step_cobre(step_root: str):
             "off_x": 0.0,
             "off_y": 0.0,
             "off_z": 0.0,
+            "prefer_verde": False,
         }
     ]
 
 
 def descubrir_familias(ruta_nesting: str):
     """
-    Detecta carpetas con conversión STEP dentro de NESTING:
-    NESTEOS DE COBRE, ROBOT LASER + MINI NEST y ROBOT PLASMA.
-    CAMA LASER (acero) exporta solo DXF.
+    Detecta carpetas con conversión STEP dentro de NESTING.
+    Universal: NESTEOS DE COBRE, CAMA LASER, ROBOT LASER, ROBOT PLASMA.
+    Legacy: NESTEOS DE COBRE, ROBOT LASER, ROBOT PLASMA (sin CAMA LASER).
     """
     ruta_nesting = norm_path(ruta_nesting)
     familias = []
@@ -476,6 +507,7 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
         off_x = dest["off_x"]
         off_y = dest["off_y"]
         off_z = dest["off_z"]
+        prefer_verde = bool(dest.get("prefer_verde", False))
 
         # Ruta real del servidor (la que tú quieres conservar)
         dxf_dir_server = dxf_dir
@@ -495,6 +527,7 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
             f"DXF FreeCAD={dxf_dir_fc} | "
             f"STEP FreeCAD={step_dir_fc} | "
             f"origen={origen} | offset=({off_x}, {off_y}, {off_z}) | "
+            f"prefer_verde={prefer_verde} | "
             f"steps_antes={pre_steps} | plasma_offset={offset_mm}"
         )
 
@@ -514,6 +547,7 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
             off_x,
             off_y,
             off_z,
+            prefer_verde=prefer_verde,
             material=material_fc,
         )
 
@@ -599,7 +633,7 @@ def procesar_ruta_nesting(
         dbg(f"DESTINOS STEP => {fam['destinos_step']}")
 
     if not familias:
-        dbg("❌ No se detectó ninguna subcarpeta candidata (NESTEOS DE COBRE / ROBOT LASER / ROBOT PLASMA) dentro de NESTING.")
+        dbg("❌ No se detectó ninguna subcarpeta candidata (NESTEOS DE COBRE / CAMA LASER / ROBOT LASER / ROBOT PLASMA) dentro de NESTING.")
         return {
             "ok": False,
             "familias_detectadas": 0,

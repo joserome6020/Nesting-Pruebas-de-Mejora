@@ -55,6 +55,11 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20p — Release: AutoDXF Cal/SM + Crear STEPs
+- AutoDXF: Cal ANS por SM si empata; si Thickness mal → geo + `[REVISAR SM]`.
+- Crear STEPs en cinta Salida (FreeCAD/despachador) + step_paths sin Cama A/B.
+- Candados: gauge parity + step_universal_sin_camas.
+
 ### 2026-08-20m — Crear STEPs: 1 STEP plano (sin Cama A/B)
 - El despachador heredaba Cama A+B con offsets robot; ANS ya usa
   `STEP_UNIVERSAL_SIN_CAMAS` (1 STEP/DXF, coords 1:1, carpeta STEP plana).

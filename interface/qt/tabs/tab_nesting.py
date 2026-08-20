@@ -324,6 +324,12 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
 
         abrir_visor_step(self)
 
+    def abrir_crear_steps(self):
+        """Recuperar STEPs desde DXF ya exportados (despachador / FreeCAD)."""
+        from interface.qt.dialogs.crear_steps import abrir_crear_steps
+
+        abrir_crear_steps(self)
+
     def _ui(self, fn, *args):
         call_on_main(fn, *args)
 
