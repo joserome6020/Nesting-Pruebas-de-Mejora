@@ -84,9 +84,18 @@ class GigaCal11GalvEngine:
             else:
                 n_exp = expand_giga_void_cargo(hoja, mc_pool)
                 n_back = restore_unplaced_void_cargo(hoja, mc_pool, restos)
+                try:
+                    from ..giga_cal11_galv import close_stacked_vfm_pairs
+
+                    close_stats = close_stacked_vfm_pairs(hoja, kerf)
+                except Exception as _cp_exc:
+                    close_stats = {"error": str(_cp_exc)}
+                    print(f"[GIGA-CAL11] close_pair skip: {_cp_exc}", flush=True)
                 fill_stats = apply_giga_pasillo_fill(
                     hoja, engine_id=cls.META.engine_id, pool=restos
                 )
+                fill_stats = dict(fill_stats)
+                fill_stats["close_pair"] = int(close_stats.get("closed") or 0)
             fill_stats = dict(fill_stats)
             fill_stats["void_first"] = int(vf_stats.get("filled") or 0)
             fill_stats["void_expand"] = int(n_exp)

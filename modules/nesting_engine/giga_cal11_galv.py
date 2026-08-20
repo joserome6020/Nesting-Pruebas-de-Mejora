@@ -168,6 +168,71 @@ def partition_vfm_sheet_quota(piezas: list) -> tuple[list, list]:
     return seed + rest, held
 
 
+def _is_giga_structural_bar(nombre: str | None) -> bool:
+    u = str(nombre or "").upper()
+    tags = ("HFM", "SIHC", "SIVC", "SHC", "WFM", "VS-20", "VS-")
+    return any(t in u for t in tags)
+
+
+def order_giga_pool_python(piezas: list) -> list:
+    """Paridad con packer_giga_cal11.cpp::order_giga_pool (candado / docs).
+
+    Con estructurales: 1 par + barras + chicos + resto I.
+    Sin estructurales y ≥2 pares: torre de todos los pares, luego inyección.
+    """
+    a101: list = []
+    a102: list = []
+    other_i: list = []
+    bars: list = []
+    rest: list = []
+    for p in piezas or []:
+        nom = str(p.get("nombre") or "").upper()
+        if _is_vfm20_name(nom) and "-101" in nom:
+            a101.append(p)
+        elif _is_vfm20_name(nom) and "-102" in nom:
+            a102.append(p)
+        elif _is_vfm20_name(nom):
+            other_i.append(p)
+        elif _is_giga_structural_bar(nom):
+            bars.append(p)
+        else:
+            rest.append(p)
+
+    def _ar(p: dict) -> float:
+        try:
+            return float(p.get("area") or 0.0)
+        except Exception:
+            return 0.0
+
+    other_i.sort(key=_ar, reverse=True)
+    bars.sort(key=_ar, reverse=True)
+    rest.sort(key=_ar, reverse=True)
+    n_pairs = max(len(a101), len(a102))
+    out: list = []
+    if not bars and n_pairs >= 2:
+        for i in range(n_pairs):
+            if i < len(a101):
+                out.append(a101[i])
+            if i < len(a102):
+                out.append(a102[i])
+        out.extend(rest)
+        out.extend(other_i)
+        return out
+    if a101:
+        out.append(a101[0])
+    if a102:
+        out.append(a102[0])
+    out.extend(bars)
+    out.extend(rest)
+    for i in range(1, n_pairs):
+        if i < len(a101):
+            out.append(a101[i])
+        if i < len(a102):
+            out.append(a102[i])
+    out.extend(other_i)
+    return out
+
+
 def restore_unplaced_void_cargo(hoja: dict, mc_pool: list, restos: list) -> int:
     """Todo cargo que no se expandió a la hoja vuelve a restos (nada se pierde)."""
     del hoja

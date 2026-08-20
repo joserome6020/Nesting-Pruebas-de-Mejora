@@ -47,6 +47,13 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20d — GIGA: torres VFM cuando ya no hay estructurales
+- Sin HFM/SIVC/SIHC/VS: el pool ordena todos los pares 101/102 primero
+  (torre) y después inyección de chicos — como captura P10.
+- Con estructurales: se mantiene 1 par + barras + patio (no 4 I al 29%).
+- `close_stacked_vfm_pairs` otra vez en el motor tras el MC.
+- Candados order + pack torre (≥3 VFM en P1 solo-VFM+GS).
+
 ### 2026-08-20c — GIGA Fase B: densificar huecos como Mudar
 - Facing ya no exige pool: jala también del patio de la misma hoja.
 - Barrido denso en tira + hasta 3 pases por hoja (presupuesto ~12 s).

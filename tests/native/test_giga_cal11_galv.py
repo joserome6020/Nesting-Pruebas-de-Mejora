@@ -105,7 +105,7 @@ def test_es_motor_nativo_no_overlay_lite():
     assert "prefill_vfm_void_cargo" in src
     assert "restore_unplaced_void_cargo" in src
     assert "partition_vfm_sheet_quota" not in src
-    assert "close_stacked_vfm_pairs" not in src
+    assert "close_stacked_vfm_pairs" in src
     assert "pool=restos" in src
     assert "arga_lite" not in src
     assert "fallback_engine" not in src
@@ -994,6 +994,83 @@ def test_fase_b_grupo_mueve_gs_de_hoja_pobre():
     assert n_gs == 11, n_gs
 
 
+def test_order_torre_cuando_solo_vfm():
+    """Sin HFM/SIVC: todos los pares 101/102 antes que los GS (torre → inyección)."""
+    from modules.nesting_engine.giga_cal11_galv import order_giga_pool_python
+
+    inch = 25.4
+    p101 = Polygon(_u_open_top(78.35 * inch, 12.24 * inch, (12.24 - 8.77) * inch))
+    p102 = Polygon(_u_open_top(78.35 * inch, 11.19 * inch, (11.19 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+    hfm = box(0.0, 0.0, 34.65 * inch, 6.29 * inch)
+
+    pool_tail = []
+    for i in range(4):
+        pool_tail.append(_mk(f"GENE-VFM-20-101#{i}", p101))
+        pool_tail.append(_mk(f"GENE-VFM-20-102#{i}", p102))
+    pool_tail.extend(_mk(f"GENE-GS-0820-708#{i}", gs) for i in range(12))
+    ordered = order_giga_pool_python(pool_tail)
+    names = [str(p.get("nombre") or "") for p in ordered]
+    # Primeros 8 = 4 pares; GS después.
+    head = names[:8]
+    assert all("VFM-20" in n for n in head), head
+    assert sum(1 for n in head if "-101" in n) == 4
+    assert sum(1 for n in head if "-102" in n) == 4
+    assert all("GS" in n for n in names[8:]), names[8:]
+
+    # Con HFM: solo 1 par al inicio, luego barra, luego GS, luego resto I.
+    pool_mix = [
+        _mk("GENE-VFM-20-101#0", p101),
+        _mk("GENE-VFM-20-102#0", p102),
+        _mk("GENE-VFM-20-101#1", p101),
+        _mk("GENE-VFM-20-102#1", p102),
+        _mk("GENE-HFM-10-102", hfm),
+        _mk("GENE-GS-0820-708#0", gs),
+    ]
+    mix = [str(p.get("nombre") or "") for p in order_giga_pool_python(pool_mix)]
+    assert "VFM-20-101#0" in mix[0] and "VFM-20-102#0" in mix[1], mix[:4]
+    assert "HFM" in mix[2], mix
+    assert "GS" in mix[3], mix
+    assert "VFM-20-101#1" in mix[4], mix
+
+
+def test_pack_torre_vfm_antes_de_inyectar():
+    """Cola solo VFM+GS: la 1ª hoja lleva ≥3 I (torre), no 1 par + patio de GS."""
+    from modules.nesting_engine.engines.giga_cal11_galv import GigaCal11GalvEngine
+    from modules.nesting_engine.engines.types import PackSheetRequest
+
+    if not GigaCal11GalvEngine.is_ready():
+        print("SKIP torre pack (no algorithm_cpp giga)")
+        return
+
+    inch = 25.4
+    p101 = Polygon(_u_open_top(78.35 * inch, 12.24 * inch, (12.24 - 8.77) * inch))
+    p102 = Polygon(_u_open_top(78.35 * inch, 11.19 * inch, (11.19 - 8.77) * inch))
+    gs = box(0.0, 0.0, 3.84 * inch, 3.61 * inch)
+
+    def _p(nombre, poly):
+        d = _mk(nombre, poly)
+        d["rings"] = [list(poly.exterior.coords)]
+        d["calibre"] = "0.11811"
+        d["material"] = "GALVANIZADO"
+        return d
+
+    pool = []
+    for i in range(4):
+        pool.append(_p(f"GENE-VFM-20-101#{i}", p101))
+        pool.append(_p(f"GENE-VFM-20-102#{i}", p102))
+    pool.extend(_p(f"GENE-GS-0820-708#{i}", gs) for i in range(40))
+    res = GigaCal11GalvEngine.empaquetar(
+        PackSheetRequest(piezas=list(pool), w_placa=3048.0, h_placa=1219.2)
+    )
+    placed = list((res.hoja or {}).get("piezas") or [])
+    n_vfm = sum(1 for p in placed if "VFM-20" in str(p.get("nombre") or "").upper())
+    assert n_vfm >= 3, (
+        f"sin torre: solo {n_vfm} VFM en P1 (se esperaba ≥3 antes de inundar GS) "
+        f"n_placed={len(placed)}"
+    )
+
+
 if __name__ == "__main__":
     test_detector_cal11_galv_no_a36()
     test_clave_desde_debug_tag()
@@ -1026,4 +1103,6 @@ if __name__ == "__main__":
     test_planta_giga_no_par_vacio_y_azules_en_bahia()
     test_fase_b_facing_jala_patio_sin_pool()
     test_fase_b_grupo_mueve_gs_de_hoja_pobre()
+    test_order_torre_cuando_solo_vfm()
+    test_pack_torre_vfm_antes_de_inyectar()
     print("GIGA_CAL11_GALV PASS")

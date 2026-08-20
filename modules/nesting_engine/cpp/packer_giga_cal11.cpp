@@ -58,7 +58,8 @@ bool is_long_bar(const PieceIn& p) {
     const std::string u = upper_ascii(p.nombre);
     if (u.find("HFM") != std::string::npos || u.find("SHC") != std::string::npos
         || u.find("SIHC") != std::string::npos || u.find("SIVC") != std::string::npos
-        || u.find("WFM") != std::string::npos) {
+        || u.find("WFM") != std::string::npos || u.find("VS-20") != std::string::npos
+        || u.find("VS-") != std::string::npos) {
         return true;
     }
     return false;
@@ -104,9 +105,24 @@ std::vector<PieceIn> order_giga_pool(const std::vector<PieceIn>& piezas) {
 
     std::vector<PieceIn> out;
     out.reserve(piezas.size());
-    // Un solo par 101/102 al inicio. Si van todos los I primero, llenan el
-    // alto (~48") y el patio queda en ~62%. Las piezas chicas deben llenar
-    // la L (arriba + derecha) antes de meter más I.
+    const size_t n_pairs = std::max(a101.size(), a102.size());
+    // Sin estructurales (HFM/SIVC/…): torre de pares 101/102 primero, luego
+    // inyección de chicos (estilo captura torres). Con estructurales: 1 par
+    // + barras + patio, y el resto de I al final (si no, 4 I llenan el 48").
+    const bool tower_mode = bars.empty() && n_pairs >= 2;
+    if (tower_mode) {
+        for (size_t i = 0; i < n_pairs; ++i) {
+            if (i < a101.size()) {
+                out.push_back(a101[i]);
+            }
+            if (i < a102.size()) {
+                out.push_back(a102[i]);
+            }
+        }
+        out.insert(out.end(), rest.begin(), rest.end());
+        out.insert(out.end(), other_i.begin(), other_i.end());
+        return out;
+    }
     if (!a101.empty()) {
         out.push_back(a101.front());
     }
@@ -115,7 +131,6 @@ std::vector<PieceIn> order_giga_pool(const std::vector<PieceIn>& piezas) {
     }
     out.insert(out.end(), bars.begin(), bars.end());
     out.insert(out.end(), rest.begin(), rest.end());
-    const size_t n_pairs = std::max(a101.size(), a102.size());
     for (size_t i = 1; i < n_pairs; ++i) {
         if (i < a101.size()) {
             out.push_back(a101[i]);
