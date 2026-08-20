@@ -12,8 +12,9 @@ Imports System.Collections.Generic
 ' - Orientacion automatica de cara (A-Side)
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
-' - Espesor: SM vs geometría deben empatar. Si Flat/SM falta o no empata:
-'   igual exporta DXF y marca carpeta [REVISAR SM] para revisión manual.
+' - Espesor: Sheet Metal Thickness es PRIORIDAD (bend deduction / flat).
+'   Geometría solo valida; si no empata → [REVISAR SM] pero Cal = SM.
+'   Sin SM: fallback geometría + [REVISAR SM].
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -153,7 +154,7 @@ Sub Main()
                 sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
             End Try
 
-            ' 4.3) Espesor: SM vs geometría; Cal = medida fiable + snap.
+            ' 4.3) Espesor: SM prioridad (bend deduction); geo solo valida.
             Dim invMaterial As String = SafeMaterialName(smDef, part)
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
             Dim thkTxt As String = "0"
@@ -1092,8 +1093,8 @@ Private Function ResolvePartThicknessInches( _
     ByRef note As String, _
     ByRef warn As String _
 ) As Double
-    ' SM y geometría deben empatar. Con pliegues, SM manda si la geo no empata
-    ' (medir cara↔cara en L/U a menudo toma un largo, p.ej. 3.5" o 2").
+    ' PRIORIDAD ABSOLUTA: Sheet Metal Thickness (bend deduction / flat / K-factor).
+    ' Geometría solo valida: si no empata → AVISO/[REVISAR SM], pero Cal sigue siendo SM.
     note = ""
     warn = ""
     Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
@@ -1104,13 +1105,6 @@ Private Function ResolvePartThicknessInches( _
         smIn = 0.0
     End Try
 
-    Dim bendCount As Integer = 0
-    Try
-        bendCount = smDef.Bends.Count
-    Catch
-        bendCount = 0
-    End Try
-
     Dim geoIn As Double = 0.0
     Dim geoSrc As String = ""
     Try
@@ -1119,45 +1113,29 @@ Private Function ResolvePartThicknessInches( _
         geoIn = 0.0
         geoSrc = ""
     End Try
-
     Dim geoOk As Boolean = (geoIn >= 0.02 AndAlso geoIn <= 4.0)
 
-    If smIn > 0 AndAlso geoOk Then
-        If ThicknessesEmpatan(smIn, geoIn) Then
-            ' Empatan: en placa plana preferir geo (precisa); con pliegues SM.
-            If bendCount > 0 Then
-                note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn) & " [pliegues→SM]"
-                Return smIn
-            End If
-            note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn) & _
-                   If(geoSrc <> "", " [" & geoSrc & "]", "")
-            Return geoIn
-        End If
-
-        ' No empatan: no tomar un "largo" como espesor.
-        If bendCount > 0 OrElse geoIn > (smIn * 1.8 + 0.05) Then
-            warn = "SM=" & FmtInchDecimal(smIn) & " NO empata con geom=" & FmtInchDecimal(geoIn) & _
-                   ". Cal usa Sheet Metal Thickness (geom parece cota, no espesor). " & _
-                   "Revisa Flat Pattern / Thickness en Inventor."
-            note = "SM=" & FmtInchDecimal(smIn) & " (geom descartada=" & FmtInchDecimal(geoIn) & ")"
-            Return smIn
-        End If
-
-        ' Placa plana: SM tipo calibre olvidado vs geo de placa.
-        warn = "SM=" & FmtInchDecimal(smIn) & " NO empata con geom=" & FmtInchDecimal(geoIn) & _
-               ". Cal usa geometría; corrige Sheet Metal Thickness."
-        note = "geom=" & FmtInchDecimal(geoIn) & " (SM=" & FmtInchDecimal(smIn) & " desalineado)"
-        Return geoIn
-    End If
-
     If smIn > 0 Then
-        ' SM válido sin geo (típico con pliegues): OK, no marcar REVISAR.
-        note = "SM=" & FmtInchDecimal(smIn)
+        If geoOk Then
+            If ThicknessesEmpatan(smIn, geoIn) Then
+                note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn) & _
+                       If(geoSrc <> "", " [" & geoSrc & "]", "") & " [prioridad SM]"
+            Else
+                warn = "SM=" & FmtInchDecimal(smIn) & " NO empata con geom=" & FmtInchDecimal(geoIn) & _
+                       ". Cal usa Sheet Metal Thickness (prioridad bend deduction); " & _
+                       "corrige Thickness o geometría en Inventor."
+                note = "SM=" & FmtInchDecimal(smIn) & " (geom=" & FmtInchDecimal(geoIn) & " no empata)"
+            End If
+        Else
+            note = "SM=" & FmtInchDecimal(smIn) & " [prioridad SM]"
+        End If
         Return smIn
     End If
 
-    If geoOk AndAlso bendCount = 0 Then
-        warn = "Sin Sheet Metal Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn)
+    ' Sin SM: último recurso geometría + revisión obligatoria.
+    If geoOk Then
+        warn = "Sin Sheet Metal Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn) & _
+               ". Definir Sheet Metal Defaults (bend deduction)."
         note = "geom=" & FmtInchDecimal(geoIn) & If(geoSrc <> "", " [" & geoSrc & "]", "")
         Return geoIn
     End If

@@ -128,7 +128,8 @@ def test_ilogic_usa_espesor_geometrico_no_solo_sm_param():
     assert "EnsureFlatPatternHealthy" in src
     assert "[REVISAR SM]" in src
     assert "No usar Edit/ExitEdit como prueba" in src
-    assert "OMISO (Sheet Metal / Flat Pattern roto)" not in src
+    assert "prioridad SM" in src or "PRIORIDAD ABSOLUTA" in src
+    assert "bend deduction" in src
     assert 'thkWarn.Contains("NO empata")' in src
 
 
