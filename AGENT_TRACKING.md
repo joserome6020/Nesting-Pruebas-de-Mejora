@@ -55,6 +55,12 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20h — AutoDXF iLogic: no tumbar Inventor + Galv antes de A36
+- Galvanizado se detecta **antes** que A 36 (antes `A 36 GALV` → `A 36`).
+- Sin `Dictionary`/`For Each KeyValuePair`: tablas con arrays fijos.
+- `FormatThicknessForArga` + lectura de espesor en Try/Catch (fallback CAD/`0`).
+- Cadena: Herinox Cal 11 → `0.1196` → DXF `Cal 0.1196` → ANS mismo grupo.
+
 ### 2026-08-20g — AutoDXF 2.0: Cal DXF empatado a Herinox/ANS
 - Antes: iLogic escribía espesor CAD crudo (`0.11811`) → nest separado de
   placas Herinox Cal 11 (`0.1196`).

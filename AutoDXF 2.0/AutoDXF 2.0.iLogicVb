@@ -144,14 +144,20 @@ Sub Main()
 
             ' 4.3) Datos material y espesor
             Dim invMaterial As String = SafeMaterialName(smDef, part)
-            Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
-            Dim thkDb As Double = smDef.Thickness.Value
-            Dim thkIn As Double = uom.ConvertUnits(thkDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
-
-            ' 4.4) Normalizacion canónica para Arga Nesting Suite
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
-            ' Espesor: empatar tabla ANS/Herinox (no dejar 0.11811 vs placas 0.1196).
-            Dim thkTxt As String = FormatThicknessForArga(thkIn, materialName)
+            Dim thkTxt As String = "0"
+            Try
+                Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
+                Dim thkDb As Double = smDef.Thickness.Value
+                Dim thkIn As Double = uom.ConvertUnits(thkDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+                thkTxt = FormatThicknessForArga(thkIn, materialName)
+            Catch exThk As Exception
+                sb.AppendLine("Espesor fallback en " & part.DisplayName & ": " & exThk.Message)
+                thkTxt = "0"
+            End Try
+            If String.IsNullOrWhiteSpace(thkTxt) OrElse thkTxt = "0" Then
+                sb.AppendLine("AVISO: espesor 0 en " & part.DisplayName & " (revisar Sheet Metal Thickness).")
+            End If
 
             ' 4.5) Cantidad
             Dim qty As Integer = CInt(Math.Round(Row.ItemQuantity, 0))
@@ -953,21 +959,20 @@ Private Function NormalizeMaterialAlias(raw As String) As String
 
     If m = "" Then Return ""
 
+    ' Galvanizado ANTES que A 36 genérico (si no, "A 36 GALV" caía en A 36).
+    ' Nombre DXF "Galvanizado" → ANS GALVANIZADO; Herinox match vía A 36 GALV.
+    If m.Contains("GALVAN") OrElse (m.Contains("GALV") AndAlso (m.Contains("A 36") OrElse m.Contains("A36"))) Then
+        Return "Galvanizado"
+    End If
+
     If m.Contains("A 36") OrElse m.Contains("A36") Then Return "A 36"
     If m.Contains("CARBON") OrElse (m.Contains("ACERO") AndAlso m.Contains("CARBONO")) _
        OrElse m.Contains("STEEL, CARBON") OrElse m.Contains("STEEL CARBON") Then
         Return "A 36"
     End If
 
-    ' Galvanizado: nombre que ANS parsea a GALVANIZADO (autodxf_metadata).
-    ' Coincide con placas Herinox vía normalize_material → A 36 GALV.
-    If m.Contains("A 36 GALV") OrElse (m.Contains("GALV") AndAlso m.Contains("A 36")) Then
-        Return "Galvanizado"
-    End If
-    If m.Contains("GALVAN") Then Return "Galvanizado"
-
-    If m.Contains("SSTL") AndAlso m.Contains("304") Then Return "SSTL 304"
-    If m.Contains("INOX") OrElse m.Contains("INOXIDABLE") OrElse m.Contains("STAINLESS") Then
+    If m.Contains("SSTL") AndAlso m.Contains("316") Then Return "SSTL 316"
+    If m.Contains("SSTL") OrElse m.Contains("INOX") OrElse m.Contains("INOXIDABLE") OrElse m.Contains("STAINLESS") Then
         Return "SSTL 304"
     End If
 
@@ -983,72 +988,96 @@ End Function
 
 Private Function FormatThicknessForArga(thkIn As Double, materialName As String) As String
     ' Empata modules/herinox_sync.py + arga_gauge_equivalences.json.
-    Dim snapped As Double = SnapThicknessToArga(thkIn, materialName)
-    Return FmtInchDecimal(snapped)
+    ' Nunca tumbar el export: si el snap falla, usa el decimal CAD formateado.
+    Try
+        If thkIn <= 0 Then Return FmtInchDecimal(0.0)
+        Dim snapped As Double = SnapThicknessToArga(thkIn, materialName)
+        If snapped <= 0 Then snapped = thkIn
+        Return FmtInchDecimal(snapped)
+    Catch
+        Try
+            Return FmtInchDecimal(thkIn)
+        Catch
+            Return "0"
+        End Try
+    End Try
 End Function
 
 Private Function FmtInchDecimal(v As Double) As String
-    Dim txt As String = v.ToString("0.####", CultureInfo.InvariantCulture)
-    If txt.Contains(".") Then
-        txt = txt.TrimEnd("0"c).TrimEnd("."c)
-    End If
-    If txt = "" OrElse txt = "-" Then Return "0"
-    Return txt
+    Try
+        Dim txt As String = v.ToString("0.####", CultureInfo.InvariantCulture)
+        If InStr(txt, ".") > 0 Then
+            Do While Len(txt) > 1 AndAlso Right(txt, 1) = "0"
+                txt = Left(txt, Len(txt) - 1)
+            Loop
+            If Right(txt, 1) = "." Then txt = Left(txt, Len(txt) - 1)
+        End If
+        If txt = "" OrElse txt = "-" Then Return "0"
+        Return txt
+    Catch
+        Return "0"
+    End Try
 End Function
 
 Private Function SnapThicknessToArga(thkIn As Double, materialName As String) As Double
     If thkIn <= 0 Then Return thkIn
 
-    Dim exacts() As Double = {
-        0.1875, 0.188, 0.25, 0.3125, 0.375, 0.5, 0.625, 0.75,
-        1.0, 1.25, 1.5, 1.75, 2.0
-    }
-    For Each e In exacts
-        If Math.Abs(thkIn - e) <= 0.005 Then Return e
+    ' Placas gruesas / fracciones exactas (modo decimal Herinox).
+    Dim exacts(12) As Double
+    exacts(0) = 0.1875 : exacts(1) = 0.188 : exacts(2) = 0.25
+    exacts(3) = 0.3125 : exacts(4) = 0.375 : exacts(5) = 0.5
+    exacts(6) = 0.625 : exacts(7) = 0.75 : exacts(8) = 1.0
+    exacts(9) = 1.25 : exacts(10) = 1.5 : exacts(11) = 1.75 : exacts(12) = 2.0
+    Dim i As Integer
+    For i = 0 To UBound(exacts)
+        If System.Math.Abs(thkIn - exacts(i)) <= 0.005 Then Return exacts(i)
     Next
 
-    Dim table As Dictionary(Of Integer, Double) = GaugeTableForMaterial(materialName)
-    Dim bestG As Integer = -1
+    Dim gauges() As Integer = Nothing
+    Dim inches() As Double = Nothing
+    FillGaugeTableForMaterial(materialName, gauges, inches)
+    If gauges Is Nothing OrElse inches Is Nothing Then Return thkIn
+    If UBound(gauges) < 0 OrElse UBound(inches) < 0 Then Return thkIn
+
+    Dim bestIdx As Integer = -1
     Dim bestD As Double = 1.0E9
-    Dim bestIn As Double = thkIn
-    For Each kv In table
-        Dim d As Double = Math.Abs(kv.Value - thkIn)
+    For i = 0 To UBound(inches)
+        Dim d As Double = System.Math.Abs(inches(i) - thkIn)
         If d < bestD Then
             bestD = d
-            bestG = kv.Key
-            bestIn = kv.Value
+            bestIdx = i
         End If
     Next
     ' Misma tolerancia que ANS (_nearest_steel_gauge ≈ 0.008").
-    If bestG >= 0 AndAlso bestD <= 0.008 Then
-        Return bestIn
+    If bestIdx >= 0 AndAlso bestD <= 0.008 Then
+        Return inches(bestIdx)
     End If
     Return thkIn
 End Function
 
-Private Function GaugeTableForMaterial(materialName As String) As Dictionary(Of Integer, Double)
+Private Sub FillGaugeTableForMaterial(materialName As String, ByRef gauges() As Integer, ByRef inches() As Double)
+    ' Arrays fijos: más seguro en iLogic que Dictionary + For Each KeyValuePair.
     Dim m As String = UCase(Trim(CStr(materialName)))
-    Dim t As New Dictionary(Of Integer, Double)
     If m.Contains("SSTL") OrElse m.Contains("INOX") OrElse m.Contains("STAINLESS") Then
-        ' STAINLESS_GAUGE_TO_INCHES (herinox_sync)
-        t(10) = 0.1406 : t(11) = 0.125 : t(12) = 0.1094 : t(14) = 0.0781
-        t(16) = 0.0625 : t(18) = 0.05 : t(20) = 0.0375
-        Return t
+        gauges = New Integer() {10, 11, 12, 14, 16, 18, 20}
+        inches = New Double() {0.1406, 0.125, 0.1094, 0.0781, 0.0625, 0.05, 0.0375}
+        Exit Sub
     End If
-    If m.Contains("ALUMIN") OrElse m.StartsWith("AL ") Then
-        t(8) = 0.1285 : t(9) = 0.1144 : t(10) = 0.1019 : t(11) = 0.0907
-        t(12) = 0.0808 : t(13) = 0.072 : t(14) = 0.0641 : t(15) = 0.0571
-        t(16) = 0.0508 : t(17) = 0.0453 : t(18) = 0.0403 : t(19) = 0.0359
-        t(20) = 0.032
-        Return t
+    If m.Contains("ALUMIN") OrElse (Len(m) >= 3 AndAlso Left(m, 3) = "AL ") Then
+        gauges = New Integer() {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
+        inches = New Double() {
+            0.1285, 0.1144, 0.1019, 0.0907, 0.0808, 0.072, 0.0641,
+            0.0571, 0.0508, 0.0453, 0.0403, 0.0359, 0.032
+        }
+        Exit Sub
     End If
-    ' STEEL_GAUGE_TO_INCHES (default: A 36 / Galvanizado / carbono)
-    t(3) = 0.2391 : t(4) = 0.2242 : t(5) = 0.2092 : t(6) = 0.1943
-    t(7) = 0.1793 : t(8) = 0.1644 : t(9) = 0.1495 : t(10) = 0.1345
-    t(11) = 0.1196 : t(12) = 0.1046 : t(13) = 0.0897 : t(14) = 0.0747
-    t(15) = 0.0673 : t(16) = 0.0598 : t(18) = 0.0478 : t(20) = 0.0359
-    Return t
-End Function
+    ' STEEL / Galvanizado / A 36 (herinox_sync.STEEL_GAUGE_TO_INCHES)
+    gauges = New Integer() {3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20}
+    inches = New Double() {
+        0.2391, 0.2242, 0.2092, 0.1943, 0.1793, 0.1644, 0.1495, 0.1345,
+        0.1196, 0.1046, 0.0897, 0.0747, 0.0673, 0.0598, 0.0478, 0.0359
+    }
+End Sub
 
 '------------------------------ UTILIDADES BASE ------------------------------
 

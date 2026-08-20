@@ -40,9 +40,15 @@ def test_ilogic_tiene_snap_y_galvanizado():
     )
     assert "FormatThicknessForArga" in src
     assert "SnapThicknessToArga" in src
-    assert "t(11) = 0.1196" in src
+    assert "FillGaugeTableForMaterial" in src
+    assert "0.1196" in src
     assert 'Return "Galvanizado"' in src
+    # Galvanizado antes que A 36 (bug: A 36 GALV caía en A 36).
+    i_galv = src.find("GALVAN")
+    i_a36 = src.find('Return "A 36"', src.find("NormalizeMaterialAlias"))
+    assert i_galv > 0 and i_a36 > 0 and i_galv < i_a36
     assert "FormatThicknessForArga(thkIn, materialName)" in src
+    assert "Nunca tumbar el export" in src or "Catch" in src
 
 
 def test_cad_cal11_planta_snap_a_herinox():
