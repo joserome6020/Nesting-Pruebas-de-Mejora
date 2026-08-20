@@ -45,6 +45,14 @@ código viejo. Un bug sin candado vuelve.
 2. Lite hole-fill: probar en bridas reales (P13 / SP rings); si falta, pull desde restos
 3. Telemetría WO → AI UI default (ya hay `result.runtime` en packs)
 
+## Baseline estable (planta)
+
+- **Commit:** `712f499` — `fix(nest): close_pair solape ya no tumba GIGA (faltan 34)`
+- **Rama:** `feature/amada-copper-export`
+- **Criterio:** nest Cal 11 Galv (GIGA) completa inventario sin EMPAQUE-STOP por
+  solape 101×102; void-first + patio MC + pasillo/Fase B. Tratar como última
+  versión estable de referencia hasta el próximo release explícito.
+
 ## Changelog
 
 ### 2026-08-20f — GIGA: close_pair solape ya no tumba el nest (faltan 34)
