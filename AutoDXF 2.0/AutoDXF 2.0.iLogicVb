@@ -166,7 +166,11 @@ Sub Main()
                     sb.AppendLine("Espesor " & part.DisplayName & ": " & thkNote & " → Cal " & thkTxt)
                 End If
                 If Not String.IsNullOrWhiteSpace(thkWarn) Then
-                    marcarRevisarSm = True
+                    ' Solo marcar carpeta si hay problema real (no empata / sin SM), no por usar SM sano.
+                    If thkWarn.Contains("NO empata") OrElse thkWarn.Contains("Sin Sheet Metal") _
+                       OrElse thkWarn.Contains("sin Sheet Metal") Then
+                        marcarRevisarSm = True
+                    End If
                     sb.AppendLine("AVISO espesor " & part.DisplayName & ": " & thkWarn)
                 End If
             Catch exThk As Exception
@@ -1147,23 +1151,17 @@ Private Function ResolvePartThicknessInches( _
     End If
 
     If smIn > 0 Then
-        If bendCount > 0 OrElse Not geoOk Then
-            note = "SM=" & FmtInchDecimal(smIn)
-            If Not geoOk Then warn = "Sin geometría de espesor fiable; Cal por SM. Verifica Flat Pattern."
-            Return smIn
-        End If
+        ' SM válido sin geo (típico con pliegues): OK, no marcar REVISAR.
+        note = "SM=" & FmtInchDecimal(smIn)
+        Return smIn
     End If
 
     If geoOk AndAlso bendCount = 0 Then
-        warn = "Sin SM Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn)
+        warn = "Sin Sheet Metal Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn)
         note = "geom=" & FmtInchDecimal(geoIn) & If(geoSrc <> "", " [" & geoSrc & "]", "")
         Return geoIn
     End If
 
-    If smIn > 0 Then
-        note = "SM=" & FmtInchDecimal(smIn)
-        Return smIn
-    End If
     Return 0.0
 End Function
 
@@ -1387,7 +1385,8 @@ Private Sub EnsureFlatPattern(smDef As SheetMetalComponentDefinition)
 End Sub
 
 Private Function EnsureFlatPatternHealthy(smDef As SheetMetalComponentDefinition) As Boolean
-    ' False si el Flat Pattern está roto (cruz roja en Inventor) — no inventar Cal.
+    ' False SOLO si Flat Pattern está realmente roto (cruz roja / no computa).
+    ' No usar Edit/ExitEdit como prueba: falla en piezas sanas y marcaba TODO [REVISAR SM].
     Try
         EnsureFlatPattern(smDef)
     Catch
@@ -1397,24 +1396,15 @@ Private Function EnsureFlatPatternHealthy(smDef As SheetMetalComponentDefinition
         If Not smDef.HasFlatPattern Then Return False
         Dim fp As FlatPattern = smDef.FlatPattern
         If fp Is Nothing Then Return False
-        ' HealthStatus: kUpToDateHealth / kOutOfDateHealth OK; kError / kCannotCompute = malo.
         Try
             Dim hs As HealthStatusEnum = fp.HealthStatus
-            If hs = HealthStatusEnum.kDriverLostHealth OrElse _
-               hs = HealthStatusEnum.kCannotComputeHealth OrElse _
+            If hs = HealthStatusEnum.kCannotComputeHealth OrElse _
                hs = HealthStatusEnum.kInErrorHealth OrElse _
                hs = HealthStatusEnum.kDeletedHealth Then
                 Return False
             End If
         Catch
-            ' Algunas builds no exponen HealthStatus igual; seguir con probe.
-        End Try
-        ' Probe: editar/salir flat — si truena, flat inválido.
-        Try
-            fp.Edit()
-            fp.ExitEdit()
-        Catch
-            Return False
+            ' Sin HealthStatus: si HasFlatPattern, asumir OK.
         End Try
         Return True
     Catch

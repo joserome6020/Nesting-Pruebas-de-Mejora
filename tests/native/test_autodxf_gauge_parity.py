@@ -120,17 +120,16 @@ def test_ilogic_mapea_acero_suave_forjado():
 
 
 def test_ilogic_usa_espesor_geometrico_no_solo_sm_param():
-    """Candado: sin SM/flat dudoso → exporta igual y marca [REVISAR SM] (no OMISO)."""
+    """Candado: [REVISAR SM] solo si SM/flat fallan de verdad; no marcar todo."""
     src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
         encoding="utf-8", errors="replace"
     )
     assert "ResolvePartThicknessInches" in src
-    assert "ThicknessesEmpatan" in src
     assert "EnsureFlatPatternHealthy" in src
     assert "[REVISAR SM]" in src
-    assert "marcarRevisarSm" in src
+    assert "No usar Edit/ExitEdit como prueba" in src
     assert "OMISO (Sheet Metal / Flat Pattern roto)" not in src
-    assert "se exporta igual y carpeta [REVISAR SM]" in src
+    assert 'thkWarn.Contains("NO empata")' in src
 
 
 def test_cal16_no_cae_en_0625():
