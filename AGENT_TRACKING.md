@@ -55,6 +55,12 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20i — Todos los calibres: snap CAD→Herinox (materia bruta)
+- No solo Cal 11: steel/inox/al ±offsets CAD → mismo decimal que Herinox.
+- Módulo `arga_gauge_snap` + canonicar en import DXF y al armar clave de nest.
+- AutoDXF: aliases G90/HDG/ZINC/CRS/HRS; exactos ≥3/16 (no 0.0625).
+- Candado ampliado: todos los gauges + Cal 14/16/inox/al.
+
 ### 2026-08-20h — AutoDXF iLogic: no tumbar Inventor + Galv antes de A36
 - Galvanizado se detecta **antes** que A 36 (antes `A 36 GALV` → `A 36`).
 - Sin `Dictionary`/`For Each KeyValuePair`: tablas con arrays fijos.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Candado: arga_gauge_equivalences.json = tablas de modules/herinox_sync.py."""
+"""Candado: arga_gauge_equivalences.json + snap todos los calibres vs herinox_sync."""
 from __future__ import annotations
 
 import json
@@ -9,38 +9,56 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from modules.arga_gauge_snap import (  # noqa: E402
+    EXACT_DECIMALS,
+    assert_all_gauges_snap_stable,
+    snap_thickness_inches,
+)
 from modules.herinox_sync import HerinoxPlateSync  # noqa: E402
 
 
 def main() -> int:
     path = Path(__file__).resolve().parent / "arga_gauge_equivalences.json"
     data = json.loads(path.read_text(encoding="utf-8"))
+    errs: list[str] = []
     checks = (
         ("steel", HerinoxPlateSync.STEEL_GAUGE_TO_INCHES),
         ("stainless", HerinoxPlateSync.STAINLESS_GAUGE_TO_INCHES),
         ("aluminum", HerinoxPlateSync.ALUMINUM_GAUGE_TO_INCHES),
     )
-    errs: list[str] = []
     for key, ans_map in checks:
         js = {int(k): float(v) for k, v in (data.get(key) or {}).items()}
         if js != dict(ans_map):
-            errs.append(f"{key}: JSON≠ANS  json={sorted(js.items())} ans={sorted(ans_map.items())}")
+            errs.append(f"{key}: JSON≠ANS")
 
-    # Snap Cal 11 CAD típico planta → 0.1196
-    steel = HerinoxPlateSync.STEEL_GAUGE_TO_INCHES
-    for cad in (0.11811, 0.118, 0.119, 0.1196):
-        best = min(steel.items(), key=lambda kv: abs(kv[1] - cad))
-        if best[0] != 11 or abs(best[1] - 0.1196) > 1e-9:
-            errs.append(f"snap {cad} → gauge {best}, esperado 11 / 0.1196")
-        if abs(cad - best[1]) > 0.008 and cad != 0.1196:
-            errs.append(f"tol: {cad} no debería estar a >0.008 de Cal 11")
+    js_exact = [float(x) for x in data.get("exact_decimals") or []]
+    if js_exact != list(EXACT_DECIMALS):
+        errs.append(f"exact_decimals JSON≠snap module: {js_exact}")
+
+    try:
+        assert_all_gauges_snap_stable()
+    except AssertionError as exc:
+        errs.append(str(exc))
+
+    # Casos planta multi-calibre
+    samples = (
+        (0.11811, "steel", 0.1196),
+        (0.075, "steel", 0.0747),
+        (0.060, "steel", 0.0598),
+        (0.110, "stainless", 0.1094),
+        (0.091, "aluminum", 0.0907),
+    )
+    for cad, mat, exp in samples:
+        got = snap_thickness_inches(cad, mat)
+        if abs(got - exp) > 1e-9:
+            errs.append(f"snap {cad}/{mat} → {got}, esperado {exp}")
 
     if errs:
         print("FAIL AutoDXF gauge parity:")
         for e in errs:
             print(" ", e)
         return 1
-    print("OK AutoDXF gauge parity vs herinox_sync + Cal 11 -> 0.1196")
+    print("OK AutoDXF gauge parity: all gauges + known CAD snaps")
     return 0
 
 

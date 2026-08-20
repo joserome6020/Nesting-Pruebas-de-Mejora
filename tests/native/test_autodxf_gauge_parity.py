@@ -1,4 +1,4 @@
-"""2026-08-20 - AutoDXF 2.0: Cal DXF = decimal Herinox/ANS (no 0.11811 vs 0.1196)."""
+"""2026-08-20 - AutoDXF/ANS: todo calibre empatado a decimal Herinox (no solo Cal 11)."""
 from __future__ import annotations
 
 import json
@@ -8,15 +8,19 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RAIZ))
 
+from modules.arga_gauge_snap import (  # noqa: E402
+    EXACT_DECIMALS,
+    KNOWN_CAD_SNAPS,
+    assert_all_gauges_snap_stable,
+    fmt_decimal,
+    snap_calibre_token,
+    snap_thickness_inches,
+)
 from modules.herinox_sync import HerinoxPlateSync  # noqa: E402
-
-
-def _snap_steel(thk: float) -> float:
-    tabla = HerinoxPlateSync.STEEL_GAUGE_TO_INCHES
-    best = min(tabla.items(), key=lambda kv: abs(float(kv[1]) - thk))
-    if abs(float(best[1]) - thk) <= 0.008:
-        return float(best[1])
-    return thk
+from interface.autodxf_metadata import (  # noqa: E402
+    combinar_metadata_dxf,
+    normalizar_material_autodxf,
+)
 
 
 def test_json_parity_con_herinox_sync():
@@ -32,9 +36,11 @@ def test_json_parity_con_herinox_sync():
     assert {int(k): float(v) for k, v in data["aluminum"].items()} == dict(
         HerinoxPlateSync.ALUMINUM_GAUGE_TO_INCHES
     )
+    js_exact = [float(x) for x in data.get("exact_decimals") or []]
+    assert js_exact == list(EXACT_DECIMALS)
 
 
-def test_ilogic_tiene_snap_y_galvanizado():
+def test_ilogic_tiene_snap_y_materiales():
     src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
         encoding="utf-8", errors="replace"
     )
@@ -42,25 +48,63 @@ def test_ilogic_tiene_snap_y_galvanizado():
     assert "SnapThicknessToArga" in src
     assert "FillGaugeTableForMaterial" in src
     assert "0.1196" in src
+    assert "0.0747" in src  # Cal 14 steel
+    assert "0.1406" in src  # Cal 10 stainless
+    assert "0.1285" in src  # Cal 8 aluminum
     assert 'Return "Galvanizado"' in src
-    # Galvanizado antes que A 36 (bug: A 36 GALV caía en A 36).
+    assert "G90" in src
     i_galv = src.find("GALVAN")
     i_a36 = src.find('Return "A 36"', src.find("NormalizeMaterialAlias"))
     assert i_galv > 0 and i_a36 > 0 and i_galv < i_a36
     assert "FormatThicknessForArga(thkIn, materialName)" in src
     assert "Nunca tumbar el export" in src or "Catch" in src
+    # Exactos ≥ 3/16; no 0.0625 en lista exacta (rompe Cal 16).
+    assert "0.0625" not in src.split("exacts(")[1].split("FillGaugeTable")[0]
 
 
-def test_cad_cal11_planta_snap_a_herinox():
-    # Inventor suele traer 0.11811; Herinox Cal 11 acero = 0.1196.
-    assert _snap_steel(0.11811) == 0.1196
-    assert _snap_steel(0.118) == 0.1196
-    assert _snap_steel(0.1196) == 0.1196
-    assert _snap_steel(0.25) == 0.25  # placa gruesa exacta (no gauge)
+def test_todos_los_calibres_con_offset_cad():
+    assert_all_gauges_snap_stable()
+
+
+def test_casos_planta_conocidos():
+    for cad, mat, esperado in KNOWN_CAD_SNAPS:
+        got = snap_thickness_inches(cad, mat)
+        assert abs(got - esperado) < 1e-9, (cad, mat, got, esperado)
+        assert snap_calibre_token(fmt_decimal(cad), mat) == fmt_decimal(esperado)
+
+
+def test_calibre_nominal_entero():
+    assert snap_calibre_token("11", "Galvanizado") == "0.1196"
+    assert snap_calibre_token("14", "A 36") == "0.0747"
+    assert snap_calibre_token("16", "A 36") == "0.0598"
+    assert snap_calibre_token("11", "SSTL 304") == "0.125"
+    assert snap_calibre_token("11", "Aluminio") == "0.0907"
+
+
+def test_ans_import_snap_legacy_dxf_name():
+    # DXF viejo con Cal CAD crudo: ANS debe canonicar al leer metadata.
+    _pieza, mat, _qty, cal, _ex = combinar_metadata_dxf(
+        r"C:\job\AutoDXF\Cal 0.11811 Galvanizado\FOO, Galvanizado, QTY 1, Cal 0.11811.dxf",
+        default_material="GALVANIZADO",
+        default_calibre="0.11811",
+    )
+    assert cal == "0.1196"
+    assert normalizar_material_autodxf("Galvanizado") == "GALVANIZADO"
+    assert normalizar_material_autodxf("G90") == "GALVANIZADO"
+    assert normalizar_material_autodxf("A 36 GALV") == "GALVANIZADO"
+
+
+def test_cal16_no_cae_en_0625():
+    assert snap_thickness_inches(0.060, "A 36") == 0.0598
+    assert snap_thickness_inches(0.0598, "GALVANIZADO") == 0.0598
 
 
 if __name__ == "__main__":
     test_json_parity_con_herinox_sync()
-    test_ilogic_tiene_snap_y_galvanizado()
-    test_cad_cal11_planta_snap_a_herinox()
+    test_ilogic_tiene_snap_y_materiales()
+    test_todos_los_calibres_con_offset_cad()
+    test_casos_planta_conocidos()
+    test_calibre_nominal_entero()
+    test_ans_import_snap_legacy_dxf_name()
+    test_cal16_no_cae_en_0625()
     print("AUTODXF_GAUGE_PARITY PASS")

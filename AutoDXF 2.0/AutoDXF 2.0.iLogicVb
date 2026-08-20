@@ -13,7 +13,8 @@ Imports System.Collections.Generic
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
 ' - Calibre en nombre DXF = decimal ANS (herinox_sync / arga_gauge_equivalences.json)
-'   No usar espesor CAD crudo (ej. 0.11811); Cal 11 acero → 0.1196 como Herinox.
+'   Snap TODOS los calibres steel/inox/al (tol 0.008"); no CAD crudo.
+'   Ej. Cal 11 acero 0.11811→0.1196; Cal 14 0.075→0.0747; Cal 16 0.060→0.0598.
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -961,22 +962,32 @@ Private Function NormalizeMaterialAlias(raw As String) As String
 
     ' Galvanizado ANTES que A 36 genérico (si no, "A 36 GALV" caía en A 36).
     ' Nombre DXF "Galvanizado" → ANS GALVANIZADO; Herinox match vía A 36 GALV.
-    If m.Contains("GALVAN") OrElse (m.Contains("GALV") AndAlso (m.Contains("A 36") OrElse m.Contains("A36"))) Then
+    If m.Contains("GALVAN") OrElse m.Contains("G90") OrElse m.Contains("HDG") _
+       OrElse m.Contains("ZINCADO") OrElse m.Contains("GALVANNEAL") _
+       OrElse (m.Contains("GALV") AndAlso (m.Contains("A 36") OrElse m.Contains("A36") OrElse m.Contains("ZINC"))) _
+       OrElse (m.Contains("ZINC") AndAlso Not m.Contains("BRONZE")) Then
         Return "Galvanizado"
     End If
 
-    If m.Contains("A 36") OrElse m.Contains("A36") Then Return "A 36"
+    If m.Contains("A 36") OrElse m.Contains("A36") OrElse m.Contains("ASTM A36") Then Return "A 36"
     If m.Contains("CARBON") OrElse (m.Contains("ACERO") AndAlso m.Contains("CARBONO")) _
-       OrElse m.Contains("STEEL, CARBON") OrElse m.Contains("STEEL CARBON") Then
+       OrElse m.Contains("STEEL, CARBON") OrElse m.Contains("STEEL CARBON") _
+       OrElse m.Contains("MILD STEEL") OrElse m.Contains("HOT ROLLED") OrElse m.Contains("COLD ROLLED") _
+       OrElse m = "CRS" OrElse m = "HRS" OrElse m.Contains(" HR ") OrElse m.StartsWith("HR ") _
+       OrElse m.EndsWith(" HR") OrElse m.Contains("HRPO") Then
         Return "A 36"
     End If
 
     If m.Contains("SSTL") AndAlso m.Contains("316") Then Return "SSTL 316"
-    If m.Contains("SSTL") OrElse m.Contains("INOX") OrElse m.Contains("INOXIDABLE") OrElse m.Contains("STAINLESS") Then
+    If m.Contains("316") AndAlso (m.Contains("SS") OrElse m.Contains("STAINLESS") OrElse m.Contains("INOX")) Then
+        Return "SSTL 316"
+    End If
+    If m.Contains("SSTL") OrElse m.Contains("INOX") OrElse m.Contains("INOXIDABLE") OrElse m.Contains("STAINLESS") _
+       OrElse (m.Contains("304") AndAlso (m.Contains("SS") OrElse m.Contains("STEEL"))) Then
         Return "SSTL 304"
     End If
 
-    If m.Contains("ALUMIN") Then Return "Aluminio"
+    If m.Contains("ALUMIN") OrElse m.StartsWith("AL ") OrElse m = "AL" Then Return "Aluminio"
 
     Return ToTitleCaseSafe(m)
 End Function
@@ -1023,35 +1034,56 @@ Private Function SnapThicknessToArga(thkIn As Double, materialName As String) As
     If thkIn <= 0 Then Return thkIn
 
     ' Placas gruesas / fracciones exactas (modo decimal Herinox).
-    Dim exacts(12) As Double
+    ' Si también hay gauge ≤0.008\", gana el más cercano (Cal 6 no cae en 0.188).
+    Dim exacts(17) As Double
     exacts(0) = 0.1875 : exacts(1) = 0.188 : exacts(2) = 0.25
-    exacts(3) = 0.3125 : exacts(4) = 0.375 : exacts(5) = 0.5
-    exacts(6) = 0.625 : exacts(7) = 0.75 : exacts(8) = 1.0
-    exacts(9) = 1.25 : exacts(10) = 1.5 : exacts(11) = 1.75 : exacts(12) = 2.0
+    exacts(3) = 0.3125 : exacts(4) = 0.375 : exacts(5) = 0.4375
+    exacts(6) = 0.5 : exacts(7) = 0.5625 : exacts(8) = 0.625
+    exacts(9) = 0.6875 : exacts(10) = 0.75 : exacts(11) = 0.875
+    exacts(12) = 1.0 : exacts(13) = 1.125 : exacts(14) = 1.25
+    exacts(15) = 1.5 : exacts(16) = 1.75 : exacts(17) = 2.0
+
+    Dim bestExact As Double = -1.0
+    Dim bestExactD As Double = 1.0E9
     Dim i As Integer
     For i = 0 To UBound(exacts)
-        If System.Math.Abs(thkIn - exacts(i)) <= 0.005 Then Return exacts(i)
+        Dim de As Double = System.Math.Abs(thkIn - exacts(i))
+        If de < bestExactD Then
+            bestExactD = de
+            bestExact = exacts(i)
+        End If
     Next
+    If bestExactD > 0.005 Then
+        bestExact = -1.0
+        bestExactD = 1.0E9
+    End If
 
     Dim gauges() As Integer = Nothing
     Dim inches() As Double = Nothing
     FillGaugeTableForMaterial(materialName, gauges, inches)
-    If gauges Is Nothing OrElse inches Is Nothing Then Return thkIn
-    If UBound(gauges) < 0 OrElse UBound(inches) < 0 Then Return thkIn
-
-    Dim bestIdx As Integer = -1
-    Dim bestD As Double = 1.0E9
-    For i = 0 To UBound(inches)
-        Dim d As Double = System.Math.Abs(inches(i) - thkIn)
-        If d < bestD Then
-            bestD = d
-            bestIdx = i
-        End If
-    Next
-    ' Misma tolerancia que ANS (_nearest_steel_gauge ≈ 0.008").
-    If bestIdx >= 0 AndAlso bestD <= 0.008 Then
-        Return inches(bestIdx)
+    Dim bestGauge As Double = -1.0
+    Dim bestGaugeD As Double = 1.0E9
+    If gauges IsNot Nothing AndAlso inches IsNot Nothing AndAlso UBound(inches) >= 0 Then
+        For i = 0 To UBound(inches)
+            Dim dg As Double = System.Math.Abs(inches(i) - thkIn)
+            If dg < bestGaugeD Then
+                bestGaugeD = dg
+                bestGauge = inches(i)
+            End If
+        Next
     End If
+    ' Misma tolerancia que ANS (_nearest_steel_gauge ≈ 0.008").
+    If bestGaugeD > 0.008 Then
+        bestGauge = -1.0
+        bestGaugeD = 1.0E9
+    End If
+
+    If bestExact >= 0 AndAlso bestGauge >= 0 Then
+        If bestGaugeD <= bestExactD Then Return bestGauge
+        Return bestExact
+    End If
+    If bestGauge >= 0 Then Return bestGauge
+    If bestExact >= 0 Then Return bestExact
     Return thkIn
 End Function
 

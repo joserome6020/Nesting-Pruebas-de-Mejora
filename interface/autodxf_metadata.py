@@ -33,6 +33,19 @@ def normalizar_material_autodxf(texto_material: str, *, default: str = "CARBONO"
     if mat in ("CU", "COPPER") or "COBRE" in mat:
         return "CU"
 
+    # Galv antes que A 36 (misma regla AutoDXF / consulta_herinox_bridge).
+    if (
+        "GALVAN" in mat
+        or "GALVANIZADO" in mat
+        or "G90" in mat
+        or "HDG" in mat
+        or "GALVANNEAL" in mat
+        or "ZINCADO" in mat
+        or ("GALV" in mat and ("A 36" in mat or "A36" in mat or "ZINC" in mat))
+        or ("ZINC" in mat and "BRONZE" not in mat)
+    ):
+        return "GALVANIZADO"
+
     if re.fullmatch(r"A\s*36(?:\s+GALV)?", mat) or mat in ("A36", "A36GALV"):
         return "A 36 GALV" if "GALV" in mat else "A 36"
 
@@ -42,15 +55,14 @@ def normalizar_material_autodxf(texto_material: str, *, default: str = "CARBONO"
         return "CARBONO"
     if "CARBON" in mat or mat == "CARBONO":
         return "CARBONO"
+    if "MILD STEEL" in mat or "HOT ROLLED" in mat or "COLD ROLLED" in mat or "HRPO" in mat:
+        return "CARBONO"
 
-    if "STAINLESS" in mat or "INOX" in mat or "INOXIDABLE" in mat:
+    if "STAINLESS" in mat or "INOX" in mat or "INOXIDABLE" in mat or "SSTL" in mat:
         return "INOXIDABLE"
 
-    if "ALUMINUM" in mat or "ALUMINIO" in mat or mat.startswith("AL "):
+    if "ALUMINUM" in mat or "ALUMINIO" in mat or mat.startswith("AL ") or mat == "AL":
         return "ALUMINIO"
-
-    if "GALVANIZED" in mat or "GALVANIZADO" in mat:
-        return "GALVANIZADO"
 
     return mat
 
@@ -166,6 +178,13 @@ def combinar_metadata_dxf(
         or meta_carpeta.get("calibre")
         or default_calibre
     )
+    # Empatar materia bruta Herinox: Cal CAD crudo → decimal de tabla ANS.
+    try:
+        from modules.arga_gauge_snap import snap_calibre_token
+
+        calibre = snap_calibre_token(str(calibre), str(material)) or calibre
+    except Exception:
+        pass
 
     extras: Dict[str, Any] = {}
     ancho = str(meta_carpeta.get("ancho_largo_in") or "").strip()

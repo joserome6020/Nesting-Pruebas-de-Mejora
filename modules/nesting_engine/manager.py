@@ -3109,7 +3109,14 @@ class MotorNesting:
         
         for i, (pieza, mat, qty, cal, st, ruta) in enumerate(lista_partes):
             notificar(f"Analizando geometría: {pieza}...", (i / total_dxf) * 0.15)
-            clave = f"{str(cal).strip().upper()}_{str(mat).strip().upper()}"
+            cal_canon = str(cal).strip()
+            try:
+                from modules.arga_gauge_snap import snap_calibre_token
+
+                cal_canon = snap_calibre_token(cal_canon, str(mat)) or cal_canon
+            except Exception:
+                pass
+            clave = f"{str(cal_canon).strip().upper()}_{str(mat).strip().upper()}"
             if clave not in grupos:
                 grupos[clave] = []
 
@@ -3135,9 +3142,9 @@ class MotorNesting:
                         compute_plasma_offset_mm,
                     )
 
-                    thk_in = self._parse_thickness_value(cal)
+                    thk_in = self._parse_thickness_value(cal_canon)
                     if thk_in is None:
-                        thk_in = float(self._extraer_numero(cal) or 0.0)
+                        thk_in = float(self._extraer_numero(cal_canon) or 0.0)
                     plasma_off = float(compute_plasma_offset_mm(float(thk_in or 0.0)))
                     if not hasattr(self, "plasma_dxf_por_ruta") or self.plasma_dxf_por_ruta is None:
                         self.plasma_dxf_por_ruta = {}
@@ -3326,7 +3333,7 @@ class MotorNesting:
                     "poly": poly_exact,
                     "marks": marks_exact,
                     "area": poly_exact.area,
-                    "calibre": str(cal).strip(),
+                    "calibre": str(cal_canon).strip(),
                     "material": str(mat).strip(),
                     # Láser / fuente 1:1: siempre el Processed original.
                     "ruta": ruta,

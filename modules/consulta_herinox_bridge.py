@@ -231,11 +231,28 @@ def normalize_material(raw: str) -> str:
     if not m:
         return ""
     # Galvanizado antes que A 36 genérico (A 36 GALV también contiene "A 36").
-    if ("A 36" in m and "GALV" in m) or "GALVAN" in m:
+    if (
+        ("A 36" in m and "GALV" in m)
+        or "GALVAN" in m
+        or "G90" in m
+        or "HDG" in m
+        or "GALVANNEAL" in m
+        or "ZINCADO" in m
+        or ("ZINC" in m and "BRONZE" not in m)
+    ):
         return "A 36 GALV"
     if "A 36" in m or "A36" in m:
         return "A 36"
-    if "CARBON" in m or ("ACERO" in m and "CARBONO" in m) or "STEEL, CARBON" in m or "STEEL CARBON" in m:
+    if (
+        "CARBON" in m
+        or ("ACERO" in m and "CARBONO" in m)
+        or "STEEL, CARBON" in m
+        or "STEEL CARBON" in m
+        or "MILD STEEL" in m
+        or "HOT ROLLED" in m
+        or "COLD ROLLED" in m
+        or "HRPO" in m
+    ):
         return "A 36"
     # Inoxidable: piezas DXF (INOXIDABLE), Herinox (SSTL / SSTL 304) y variantes comunes.
     if "SSTL" in m:
@@ -244,7 +261,7 @@ def normalize_material(raw: str) -> str:
         return "SSTL 304"
     if "INOX" in m or "INOXIDABLE" in m or "STAINLESS" in m:
         return "SSTL 304"
-    if "ALUMIN" in m:
+    if "ALUMIN" in m or m.startswith("AL "):
         return "Aluminio"
     return m.title()
 
