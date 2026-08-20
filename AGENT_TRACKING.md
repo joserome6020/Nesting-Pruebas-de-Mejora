@@ -65,6 +65,10 @@ código viejo. Un bug sin candado vuelve.
 - Reutiliza `despachador_nocturno.procesar_ruta_nesting` (FreeCAD) para acero y cobre.
 - `engine/step_paths`: listar W.O./S.W.O. con DXF convertibles (sin exigir STEP previo).
 
+### 2026-08-20m — AutoDXF: SM Thickness vs geometría deben empatar
+- Compara ambos (±0.01" o 3%). Cal DXF = medida geométrica precisa + snap.
+- Si no empatan: AVISO y Cal por geometría (no por SM default Cal 11).
+
 ### 2026-08-20l — AutoDXF: espesor geométrico real (no SM default Cal 11)
 - Causa: solo leía `smDef.Thickness` → lug 1\" y flanges 0.25/0.375/0.5
   caían en `Cal 0.1196 A 36`.

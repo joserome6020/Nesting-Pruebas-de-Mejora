@@ -120,15 +120,17 @@ def test_ilogic_mapea_acero_suave_forjado():
 
 
 def test_ilogic_usa_espesor_geometrico_no_solo_sm_param():
-    """Candado: lug 1\" / flanges 0.25 no deben salir todos como Cal 0.1196 por SM default."""
+    """Candado: SM vs geometría deben empatar; Cal usa medida precisa + snap."""
     src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
         encoding="utf-8", errors="replace"
     )
     assert "ResolvePartThicknessInches" in src
+    assert "ThicknessesEmpatan" in src
+    assert "THK_EMPATE_ABS_IN" in src
     assert "MeasureGeometricThicknessInches" in src
     assert "MeasureThicknessLargestParallelFaces" in src
-    assert "ResolvePartThicknessInches(smDef, part, thkNote)" in src
-    # Ya no usar solo smDef.Thickness.Value como única fuente en el export.
+    assert "ResolvePartThicknessInches(smDef, part, thkNote, thkWarn)" in src
+    assert "NO empata" in src
     assert "FormatThicknessForArga(thkIn, materialName)" in src
 
 
