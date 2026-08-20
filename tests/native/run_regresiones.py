@@ -195,6 +195,10 @@ REGRESIONES = [
         "test_plasma_cotas_cad_precision.py",
         "2026-08-20b - cotas CAD a 0.001 in; misma ruta DXF ⇒ mismo L×W",
     ),
+    (
+        "test_autodxf_gauge_parity.py",
+        "2026-08-20g - AutoDXF Cal DXF = decimal Herinox/ANS (0.11811→0.1196)",
+    ),
 ]
 
 

@@ -1,0 +1,1224 @@
+Imports Inventor
+Imports System.Windows.Forms
+Imports System.Globalization
+Imports System.IO
+Imports System.Text
+Imports System.Text.RegularExpressions
+Imports System.Collections.Generic
+
+'---------------------------------------------
+' AutoDXF 2.0 Grupo Arga
+' - Exportacion DXF por Flat Pattern
+' - Orientacion automatica de cara (A-Side)
+' - Normalizacion de material/espesor alineada a Arga Nesting Suite
+' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
+' - Calibre en nombre DXF = decimal ANS (herinox_sync / arga_gauge_equivalences.json)
+'   No usar espesor CAD crudo (ej. 0.11811); Cal 11 acero → 0.1196 como Herinox.
+'---------------------------------------------
+
+Public Class HerinoxCatalog
+    Public Available As Boolean = False
+    Public Source As String = "NONE"
+    Public Message As String = ""
+    Public RawMaterials As New List(Of String)
+    Public CanonicalMaterials As New List(Of String)
+End Class
+
+Sub Main()
+
+    ' 0) Verificaciones basicas
+    If ThisApplication.ActiveDocument Is Nothing _
+       OrElse ThisApplication.ActiveDocument.DocumentType <> DocumentTypeEnum.kAssemblyDocumentObject Then
+        MessageBox.Show("Ejecuta esta regla desde un Ensamble (.iam).", "AutoDXF 2.0 Grupo Arga")
+        Exit Sub
+    End If
+
+    Dim asm As AssemblyDocument = CType(ThisApplication.ActiveDocument, AssemblyDocument)
+    If String.IsNullOrEmpty(asm.FullFileName) Then
+        MessageBox.Show("Guarda primero el ensamble.", "AutoDXF 2.0 Grupo Arga")
+        Exit Sub
+    End If
+
+    ' 1) Carpeta raiz
+    Dim rootFolder As String = PickFolder("Elige carpeta destino de DXF y subcarpetas por calibre/material")
+    If String.IsNullOrEmpty(rootFolder) Then Exit Sub
+    Dim exportRoot As String = rootFolder
+    If UCase(System.IO.Path.GetFileName(rootFolder).Trim()) <> "AUTODXF" Then
+        exportRoot = System.IO.Path.Combine(rootFolder, "AutoDXF")
+    End If
+    If Not System.IO.Directory.Exists(exportRoot) Then
+        System.IO.Directory.CreateDirectory(exportRoot)
+    End If
+
+    ' 1.1) Bootstrap automático: ejecuta puente Python para preparar herinox_sync.local.json
+    Dim bridgeLog As String = ""
+    Try
+        Dim asmDir As String = ""
+        Try
+            asmDir = System.IO.Path.GetDirectoryName(asm.FullFileName)
+        Catch
+            asmDir = ""
+        End Try
+        EnsureHerinoxJsonViaPython(asmDir, bridgeLog)
+    Catch ex As Exception
+        bridgeLog = "Bridge Python error: " & ex.Message
+    End Try
+
+    ' 2) Catalogo Herinox (solo normalizacion de nomenclatura)
+    Dim catalog As HerinoxCatalog = TryLoadHerinoxCatalog()
+
+    ' 3) BOM Parts Only
+    Dim BOM As BOM = asm.ComponentDefinition.BOM
+    BOM.PartsOnlyViewEnabled = True
+    Dim BOMView As BOMView = BOM.BOMViews.Item(BOM.BOMViews.Count)
+
+    Dim exported As Integer = 0
+    Dim sb As New System.Text.StringBuilder()
+    Dim nombreAsm As String = System.IO.Path.GetFileNameWithoutExtension(asm.FullFileName)
+    Dim csvDxfPath As String = System.IO.Path.Combine(exportRoot,
+        "CLASIFICACION_DXF_" & nombreAsm & "_" & DateTime.Now.ToString("yyyyMMdd_HHmmss") & ".csv")
+    Dim csvDxf As System.IO.StreamWriter = Nothing
+    Try
+        csvDxf = New System.IO.StreamWriter(csvDxfPath, False, Encoding.UTF8)
+        csvDxf.WriteLine("NombreComponente;Clasificacion")
+    Catch ex As Exception
+        sb.AppendLine("No se pudo crear CSV de clasificación DXF: " & ex.Message)
+        csvDxf = Nothing
+    End Try
+
+    ' 3.1) CSV completo: todas las piezas del ensamble (incluye Almacén, sólidos, gaskets, etc.)
+    Dim csvPartCount As Integer = 0
+    If csvDxf IsNot Nothing Then
+        csvPartCount = WriteCsvClasificacionCompleto(asm, csvDxf, sb)
+    End If
+
+    sb.AppendLine("Herinox Catalogo: " & If(catalog.Available, "OK (" & catalog.Source & ")", "FALLBACK"))
+    If Not String.IsNullOrEmpty(catalog.Message) Then
+        sb.AppendLine("Detalle catalogo: " & catalog.Message)
+    End If
+    If Not String.IsNullOrEmpty(bridgeLog) Then
+        sb.AppendLine("Bridge Python: " & bridgeLog)
+    End If
+
+    ' 4) Recorremos filas
+    For Each Row As BOMRow In BOMView.BOMRows
+        Try
+            Dim def As ComponentDefinition = Row.ComponentDefinitions(1)
+            If Not TypeOf def Is SheetMetalComponentDefinition Then Continue For
+
+            Dim smDef As SheetMetalComponentDefinition = CType(def, SheetMetalComponentDefinition)
+            Dim part As PartDocument = CType(smDef.Document, PartDocument)
+
+            If String.IsNullOrEmpty(part.FullFileName) Then
+                sb.AppendLine("No guardado: " & part.DisplayName)
+                Continue For
+            End If
+
+            ' 4.0) Verificar si el archivo ya estaba abierto
+            Dim wasOpen As Boolean = False
+            For Each doc As Document In ThisApplication.Documents
+                If doc.FullFileName = part.FullFileName Then
+                    wasOpen = True
+                    Exit For
+                End If
+            Next
+
+            If Not wasOpen Then
+                part = ThisApplication.Documents.Open(part.FullFileName, True)
+            End If
+
+            ' 4.1) Garantizar Flat Pattern
+            EnsureFlatPattern(smDef)
+
+            ' 4.2) Seleccion automatica de cara plana para A-Side
+            Try
+                Dim topFace As Face = GetLargestPlanarFace(part)
+                If Not topFace Is Nothing Then
+                    TrySetTopFace(smDef, topFace)
+                Else
+                    sb.AppendLine("No se encontro cara plana para: " & part.DisplayName)
+                End If
+            Catch ex As Exception
+                sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
+            End Try
+
+            ' 4.3) Datos material y espesor
+            Dim invMaterial As String = SafeMaterialName(smDef, part)
+            Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
+            Dim thkDb As Double = smDef.Thickness.Value
+            Dim thkIn As Double = uom.ConvertUnits(thkDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+
+            ' 4.4) Normalizacion canónica para Arga Nesting Suite
+            Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
+            ' Espesor: empatar tabla ANS/Herinox (no dejar 0.11811 vs placas 0.1196).
+            Dim thkTxt As String = FormatThicknessForArga(thkIn, materialName)
+
+            ' 4.5) Cantidad
+            Dim qty As Integer = CInt(Math.Round(Row.ItemQuantity, 0))
+
+            ' 4.6) Subcarpeta por calibre y material canónico
+            Dim subFolder As String = "Cal " & thkTxt & " " & materialName
+            Dim targetFolder As String = System.IO.Path.Combine(exportRoot, SanitizeForPath(subFolder))
+            If Not Directory.Exists(targetFolder) Then
+                Directory.CreateDirectory(targetFolder)
+            End If
+
+            ' 4.7) Nombre archivo canonico
+            Dim baseName As String = System.IO.Path.GetFileNameWithoutExtension(part.DisplayName)
+            Dim fileName As String = baseName & ", " & materialName & ", QTY " & qty.ToString() _
+                                   & ", Cal " & thkTxt & ".dxf"
+            Dim outPath As String = System.IO.Path.Combine(targetFolder, SanitizeForFileName(fileName))
+
+            ' 4.8) Exportar DXF
+            ExportFlatPatternDXF(part, outPath)
+
+            exported += 1
+
+            ' 4.9) Cerrar documento si fue abierto por esta rutina
+            If Not wasOpen Then
+                part.Close(True)
+            End If
+
+        Catch ex As System.Exception
+            sb.AppendLine("Error en fila BOM: " & ex.Message)
+        End Try
+    Next
+
+    If csvDxf IsNot Nothing Then
+        Try
+            csvDxf.Flush()
+            csvDxf.Close()
+        Catch
+        End Try
+        csvDxf = Nothing
+    End If
+
+    ' 5) Mensaje final
+    Dim msg As String = "DXF exportados: " & exported.ToString() & vbCrLf
+    If System.IO.File.Exists(csvDxfPath) Then
+        msg &= "Piezas en CSV (todo el ensamble): " & csvPartCount.ToString() & vbCrLf
+        msg &= "CSV clasificación:" & vbCrLf & csvDxfPath & vbCrLf
+    End If
+    If sb.Length > 0 Then
+        msg &= vbCrLf & "Omisiones/avisos:" & vbCrLf & sb.ToString()
+    End If
+    MessageBox.Show(msg, "AutoDXF 2.0 Grupo Arga")
+End Sub
+
+Private Function WriteCsvClasificacionCompleto(asm As AssemblyDocument, csv As StreamWriter, sb As StringBuilder) As Integer
+    Dim partMap As New Dictionary(Of String, Boolean)(StringComparer.OrdinalIgnoreCase)
+    Dim allOccs As New List(Of ComponentOccurrence)
+    Dim count As Integer = 0
+
+    CollectAllPartOccurrences(asm.ComponentDefinition.Occurrences, allOccs)
+
+    For Each occ As ComponentOccurrence In allOccs
+        Try
+            Dim doc As Document = occ.Definition.Document
+            If Not TypeOf doc Is PartDocument Then Continue For
+
+            Dim part As PartDocument = CType(doc, PartDocument)
+            Dim key As String = ""
+            Try
+                key = part.FullFileName
+            Catch
+            End Try
+            If String.IsNullOrEmpty(key) Then key = part.DisplayName
+            If partMap.ContainsKey(key) Then Continue For
+            partMap(key) = True
+
+            Dim nombre As String = System.IO.Path.GetFileNameWithoutExtension(part.DisplayName)
+            Dim clasificacion As String = GetClasificacionPieza(part)
+            csv.WriteLine(CsvSafeDxf(nombre) & ";" & CsvSafeDxf(clasificacion))
+            count += 1
+        Catch ex As Exception
+            sb.AppendLine("CSV omitido para ocurrencia: " & ex.Message)
+        End Try
+    Next
+
+    csv.Flush()
+    Return count
+End Function
+
+Private Sub CollectAllPartOccurrences(occs As ComponentOccurrences, list As List(Of ComponentOccurrence))
+    For Each o As ComponentOccurrence In occs
+        If o.Suppressed Then Continue For
+        list.Add(o)
+        Try
+            If o.SubOccurrences IsNot Nothing AndAlso o.SubOccurrences.Count > 0 Then
+                CollectAllPartOccurrences(o.SubOccurrences, list)
+            End If
+        Catch
+        End Try
+    Next
+End Sub
+
+Private Function GetClasificacionPieza(part As PartDocument) As String
+    Try
+        Dim customProps As PropertySet = part.PropertySets.Item("Inventor User Defined Properties")
+        Dim prop As [Property] = customProps.Item("Clasificación")
+        If prop.Value IsNot Nothing Then
+            Return prop.Value.ToString().Trim()
+        End If
+    Catch
+    End Try
+    Return ""
+End Function
+
+Private Function CsvSafeDxf(value As String) As String
+    If String.IsNullOrEmpty(value) Then Return ""
+    Return value.Replace(";", ",").Replace(vbCr, " ").Replace(vbLf, " ")
+End Function
+
+'------------------------------ HERINOX ------------------------------
+
+Private Function TryLoadHerinoxCatalog() As HerinoxCatalog
+    Dim cat As New HerinoxCatalog()
+    Try
+        Dim cfg As Dictionary(Of String, String) = ReadHerinoxConfig()
+        Dim rawCsv As String = GetCfg(cfg, "raw_materials_csv", "")
+        Dim canonicalCsv As String = GetCfg(cfg, "canonical_materials_csv", "")
+        Dim cfgPath As String = GetCfg(cfg, "__config_path", "")
+        Dim lookupPaths As String = GetCfg(cfg, "__lookup_paths", "")
+        Dim autoCreated As String = GetCfg(cfg, "__auto_created", "")
+        Dim autoCreateErr As String = GetCfg(cfg, "__auto_create_error", "")
+        Dim bridgeSource As String = GetCfg(cfg, "bridge_source", "")
+        Dim bridgeDetail As String = GetCfg(cfg, "bridge_detail", "")
+
+        Dim rawMats As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        If Not String.IsNullOrEmpty(rawCsv) Then
+            For Each rawPart In rawCsv.Split("|"c)
+                Dim mRaw As String = Trim(rawPart)
+                If mRaw <> "" Then rawMats.Add(mRaw)
+            Next
+        End If
+
+        Dim bridgeMats As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        If Not String.IsNullOrEmpty(canonicalCsv) Then
+            For Each rawPart In canonicalCsv.Split("|"c)
+                Dim m As String = NormalizeMaterialAlias(rawPart)
+                If m <> "" Then bridgeMats.Add(m)
+            Next
+        End If
+
+        ' Si no viene lista canónica, la derivamos de la lista cruda real de Herinox.
+        If bridgeMats.Count = 0 AndAlso rawMats.Count > 0 Then
+            For Each rawName In rawMats
+                Dim nm As String = NormalizeMaterialAlias(rawName)
+                If nm <> "" Then bridgeMats.Add(nm)
+            Next
+        End If
+
+        If bridgeMats.Count > 0 OrElse rawMats.Count > 0 Then
+            cat.Available = True
+            cat.Source = "PY_BRIDGE"
+            cat.RawMaterials = New List(Of String)
+            For Each m In rawMats
+                cat.RawMaterials.Add(m)
+            Next
+            cat.CanonicalMaterials = New List(Of String)
+            For Each m In bridgeMats
+                cat.CanonicalMaterials.Add(m)
+            Next
+            cat.Message = "Catalogo cargado desde herinox_sync.local.json (puente Python)." & vbCrLf & _
+                          "Archivo: " & If(cfgPath <> "", cfgPath, "[NO ENCONTRADO]") & vbCrLf & _
+                          If(bridgeSource <> "", "Bridge source: " & bridgeSource & vbCrLf, "") & _
+                          If(bridgeDetail <> "", "Bridge detail: " & bridgeDetail & vbCrLf, "") & _
+                          "Materiales crudos (DB): " & cat.RawMaterials.Count.ToString() & vbCrLf & _
+                          "Materiales canonicos detectados: " & cat.CanonicalMaterials.Count.ToString()
+            Return cat
+        End If
+
+        cat.Available = False
+        cat.Source = "FALLBACK"
+        cat.Message = "No se pudo cargar catalogo desde herinox_sync.local.json (puente Python)." & vbCrLf & _
+                      "Archivo usado: " & If(cfgPath <> "", cfgPath, "[NO ENCONTRADO]") & vbCrLf & _
+                      "Rutas buscadas: " & If(lookupPaths <> "", lookupPaths, "[SIN RUTAS]") & vbCrLf & _
+                      If(autoCreated = "true", "Se creo automaticamente el archivo de configuracion." & vbCrLf, "") & _
+                      If(autoCreateErr <> "", "Error creando config: " & autoCreateErr & vbCrLf, "") & _
+                      If(bridgeSource <> "", "Bridge source: " & bridgeSource & vbCrLf, "") & _
+                      If(bridgeDetail <> "", "Bridge detail: " & bridgeDetail & vbCrLf, "") & _
+                      "Se usa normalizacion local."
+        Return cat
+
+    Catch ex As Exception
+        cat.Available = False
+        cat.Source = "FALLBACK"
+        cat.Message = "No se pudo leer catalogo del puente Python: " & ex.Message & vbCrLf & _
+                      "Se usa normalizacion local."
+        Return cat
+    End Try
+End Function
+
+Private Sub EnsureHerinoxJsonViaPython(asmDir As String, ByRef logMsg As String)
+    logMsg = ""
+    Dim ruleDir As String = ResolveRuleBaseDir(asmDir)
+    If String.IsNullOrEmpty(ruleDir) Then
+        logMsg = "No se pudo resolver carpeta para puente Python."
+        Exit Sub
+    End If
+
+    Dim pyScript As String = FindBridgeScript(ruleDir, asmDir)
+    If Not System.IO.File.Exists(pyScript) Then
+        logMsg = "No existe Consulta_Herinox.py (ni alias) en rutas esperadas. Base: " & ruleDir
+        Exit Sub
+    End If
+
+    Dim pyDir As String = System.IO.Path.GetDirectoryName(pyScript)
+    Dim targetJson As String = System.IO.Path.Combine(pyDir, "herinox_sync.local.json")
+    Dim pyExeCandidates As New List(Of String)
+    pyExeCandidates.Add("C:\Users\jose_rosales\AppData\Local\Programs\Python\Python314\python.exe")
+    pyExeCandidates.Add("python")
+    pyExeCandidates.Add("py")
+
+    Dim shell As Object = CreateObject("WScript.Shell")
+    For Each pyExeRaw In pyExeCandidates
+        Try
+            Dim pyExe As String = CStr(pyExeRaw)
+            Dim cmd As String = ""
+            If LCase(pyExe) = "py" Then
+                cmd = """" & pyExe & """ -3 """ & pyScript & """ """ & targetJson & """"
+            Else
+                cmd = """" & pyExe & """ """ & pyScript & """ """ & targetJson & """"
+            End If
+
+            Dim proc As Object = shell.Exec(cmd)
+            Do While proc.Status = 0
+                System.Threading.Thread.Sleep(120)
+            Loop
+            Dim rc As Integer = CInt(proc.ExitCode)
+            Dim stdOut As String = ""
+            Dim stdErr As String = ""
+            Try
+                stdOut = CStr(proc.StdOut.ReadAll())
+            Catch
+                stdOut = ""
+            End Try
+            Try
+                stdErr = CStr(proc.StdErr.ReadAll())
+            Catch
+                stdErr = ""
+            End Try
+            If rc = 0 Then
+                logMsg = "OK (" & pyExe & ") -> " & targetJson
+                If Not String.IsNullOrEmpty(stdOut) Then
+                    Dim out1 As String = stdOut.Replace(vbCr, " ").Replace(vbLf, " ").Trim()
+                    If out1.Length > 220 Then out1 = out1.Substring(0, 220) & "..."
+                    logMsg &= " | " & out1
+                End If
+                Exit Sub
+            End If
+            Dim detail As String = (stdErr & " " & stdOut).Replace(vbCr, " ").Replace(vbLf, " ").Trim()
+            If detail.Length > 240 Then detail = detail.Substring(0, 240) & "..."
+            logMsg = "ExitCode " & rc.ToString() & " con " & pyExe & If(detail <> "", " | " & detail, "")
+        Catch ex As Exception
+            logMsg = ex.Message
+        End Try
+    Next
+End Sub
+
+Private Function FindBridgeScript(ruleDir As String, asmDir As String) As String
+    Dim names As New List(Of String)
+    names.Add("Consulta_Herinox.py")
+    names.Add("Consuta_Herinox.py")
+    names.Add("Consuta_Herino.py")
+
+    Dim dirs As New List(Of String)
+    If Not String.IsNullOrEmpty(ruleDir) Then
+        dirs.Add(ruleDir)
+        dirs.Add(System.IO.Path.Combine(ruleDir, "AutoDXF 2.0"))
+    End If
+    If Not String.IsNullOrEmpty(asmDir) Then
+        If Not dirs.Contains(asmDir) Then dirs.Add(asmDir)
+        dirs.Add(System.IO.Path.Combine(asmDir, "AutoDXF 2.0"))
+    End If
+
+    For Each d In dirs
+        Try
+            If String.IsNullOrEmpty(d) OrElse Not System.IO.Directory.Exists(d) Then Continue For
+            For Each n In names
+                Dim p As String = System.IO.Path.Combine(d, n)
+                If System.IO.File.Exists(p) Then
+                    Return p
+                End If
+            Next
+        Catch
+        End Try
+    Next
+
+    ' Búsqueda recursiva corta en base ruleDir/asmDir por nombre esperado.
+    Dim bases As New List(Of String)
+    If Not String.IsNullOrEmpty(ruleDir) Then bases.Add(ruleDir)
+    If Not String.IsNullOrEmpty(asmDir) AndAlso Not bases.Contains(asmDir) Then bases.Add(asmDir)
+    For Each b In bases
+        Try
+            If Not System.IO.Directory.Exists(b) Then Continue For
+            Dim files() As String = System.IO.Directory.GetFiles(b, "*.py", System.IO.SearchOption.AllDirectories)
+            For Each f In files
+                Dim fn As String = UCase(System.IO.Path.GetFileName(f))
+                If fn = "CONSULTA_HERINOX.PY" OrElse fn = "CONSUTA_HERINOX.PY" OrElse fn = "CONSUTA_HERINO.PY" Then
+                    Return f
+                End If
+            Next
+        Catch
+        End Try
+    Next
+    Return ""
+End Function
+
+Private Function ResolveRuleBaseDir(asmDir As String) As String
+    Dim candidates As New List(Of String)
+    Try
+        Dim p As String = ""
+        p = System.IO.Path.GetDirectoryName(ThisDoc.Path)
+        If Not String.IsNullOrEmpty(p) Then candidates.Add(p)
+    Catch
+    End Try
+    If Not String.IsNullOrEmpty(asmDir) Then candidates.Add(asmDir)
+    Try
+        Dim p2 As String = System.Environment.CurrentDirectory
+        If Not String.IsNullOrEmpty(p2) AndAlso Not candidates.Contains(p2) Then candidates.Add(p2)
+    Catch
+    End Try
+
+    ' 1) Si ya existe la regla en el candidato, usamos ese directorio.
+    For Each d In candidates
+        Try
+            If String.IsNullOrEmpty(d) OrElse Not System.IO.Directory.Exists(d) Then Continue For
+            Dim r1 As String = System.IO.Path.Combine(d, "AutoDXF 2.0.iLogicVb")
+            Dim r2 As String = System.IO.Path.Combine(d, "AutoDXF.iLogicVb")
+            If System.IO.File.Exists(r1) OrElse System.IO.File.Exists(r2) Then Return d
+        Catch
+        End Try
+    Next
+
+    ' 2) Buscamos la regla en ubicaciones típicas (Desktop/OneDrive) y usamos su carpeta.
+    Dim roots As New List(Of String)
+    Try
+        Dim desktop As String = System.Environment.GetFolderPath(System.Environment.SpecialFolder.DesktopDirectory)
+        If Not String.IsNullOrEmpty(desktop) Then roots.Add(desktop)
+    Catch
+    End Try
+    Try
+        Dim oneDrive As String = System.Environment.GetEnvironmentVariable("OneDrive")
+        If Not String.IsNullOrEmpty(oneDrive) Then
+            Dim odDesk As String = System.IO.Path.Combine(oneDrive, "Desktop")
+            If System.IO.Directory.Exists(odDesk) Then roots.Add(odDesk)
+        End If
+    Catch
+    End Try
+    Try
+        Dim oneDriveBiz As String = System.Environment.GetEnvironmentVariable("OneDriveCommercial")
+        If Not String.IsNullOrEmpty(oneDriveBiz) Then
+            Dim odbDesk As String = System.IO.Path.Combine(oneDriveBiz, "Desktop")
+            If System.IO.Directory.Exists(odbDesk) Then roots.Add(odbDesk)
+        End If
+    Catch
+    End Try
+    If Not String.IsNullOrEmpty(asmDir) Then
+        Try
+            Dim p As String = asmDir
+            Dim i As Integer = 0
+            While (Not String.IsNullOrEmpty(p)) AndAlso (i < 4)
+                If Not roots.Contains(p) Then roots.Add(p)
+                Dim parent As String = System.IO.Path.GetDirectoryName(p)
+                If String.Equals(parent, p, StringComparison.OrdinalIgnoreCase) Then Exit While
+                p = parent
+                i += 1
+            End While
+        Catch
+        End Try
+    End If
+
+    For Each root In roots
+        Dim foundRule As String = TryFindFileRecursive(root, "AutoDXF 2.0.iLogicVb", 5)
+        If String.IsNullOrEmpty(foundRule) Then
+            foundRule = TryFindFileRecursive(root, "AutoDXF.iLogicVb", 5)
+        End If
+        If Not String.IsNullOrEmpty(foundRule) Then
+            Try
+                Dim dirRule As String = System.IO.Path.GetDirectoryName(foundRule)
+                If Not String.IsNullOrEmpty(dirRule) Then Return dirRule
+            Catch
+            End Try
+        End If
+    Next
+
+    ' 3) Último fallback a carpeta de ensamble.
+    Return asmDir
+End Function
+
+Private Function TryFindFileRecursive(root As String, fileName As String, maxDepth As Integer) As String
+    If String.IsNullOrEmpty(root) Then Return ""
+    If Not System.IO.Directory.Exists(root) Then Return ""
+    Try
+        Dim direct As String = System.IO.Path.Combine(root, fileName)
+        If System.IO.File.Exists(direct) Then Return direct
+    Catch
+    End Try
+    If maxDepth <= 0 Then Return ""
+
+    Try
+        Dim files() As String = System.IO.Directory.GetFiles(root, fileName, SearchOption.TopDirectoryOnly)
+        If files IsNot Nothing AndAlso files.Length > 0 Then
+            Return files(0)
+        End If
+    Catch
+    End Try
+
+    Dim subs() As String = Nothing
+    Try
+        subs = System.IO.Directory.GetDirectories(root, "*", SearchOption.TopDirectoryOnly)
+    Catch
+        subs = Nothing
+    End Try
+    If subs Is Nothing Then Return ""
+
+    For Each d In subs
+        Dim found As String = TryFindFileRecursive(d, fileName, maxDepth - 1)
+        If Not String.IsNullOrEmpty(found) Then Return found
+    Next
+    Return ""
+End Function
+
+Private Function HerinoxLogin(baseUrl As String, email As String, password As String, timeoutSec As Integer) As String
+    Dim url As String = baseUrl & "/api/auth/login"
+    Dim payload As String = "{""email"":""" & JsonEscape(email) & """,""password"":""" & JsonEscape(password) & """}"
+    Dim raw As String = HttpJsonRequest(url, "POST", payload, "", timeoutSec)
+    Dim token As String = JsonGetString(raw, "token")
+    If String.IsNullOrEmpty(token) Then
+        Throw New Exception("Login sin token.")
+    End If
+    Return token
+End Function
+
+Private Function HerinoxFetchPlateMaterials(baseUrl As String, token As String, timeoutSec As Integer) As List(Of String)
+    Dim url As String = baseUrl & "/api/plates"
+    Dim raw As String = HttpJsonRequest(url, "GET", "", token, timeoutSec)
+    Dim out As New List(Of String)
+    If String.IsNullOrEmpty(raw) Then Return out
+
+    Dim rx As New Regex("""material""\s*:\s*""(?<m>[^""]*)""", RegexOptions.IgnoreCase)
+    Dim seen As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+    For Each mt As Match In rx.Matches(raw)
+        Dim m As String = mt.Groups("m").Value.Trim()
+        If m <> "" AndAlso Not seen.Contains(m) Then
+            seen.Add(m)
+            out.Add(m)
+        End If
+    Next
+    Return out
+End Function
+
+Private Function TryLoadMaterialCatalogFromDb(host As String, port As String, dbName As String, userName As String, password As String, ByRef errMsg As String) As List(Of String)
+    Dim matsNpgsql As List(Of String) = TryLoadMaterialCatalogFromDbWithNpgsql(host, port, dbName, userName, password, errMsg)
+    If matsNpgsql IsNot Nothing AndAlso matsNpgsql.Count > 0 Then
+        Return matsNpgsql
+    End If
+
+    Dim materials As New List(Of String)
+    Dim conn As Object = Nothing
+    Dim rs As Object = Nothing
+    If String.IsNullOrEmpty(errMsg) Then errMsg = ""
+
+    Dim connCandidates As New List(Of String)
+    ' OLE DB directos (si existen en la estación)
+    connCandidates.Add("Provider=PostgreSQL OLE DB Provider;Data Source=" & host & ";Location=" & dbName & ";User ID=" & userName & ";Password=" & password & ";Port=" & port & ";")
+    connCandidates.Add("Provider=PostgreSQL.1;Data Source=" & host & ";Location=" & dbName & ";User ID=" & userName & ";Password=" & password & ";Port=" & port & ";")
+    ' ODBC DSN-less
+    connCandidates.Add("Driver={PostgreSQL Unicode(x64)};Server=" & host & ";Port=" & port & ";Database=" & dbName & ";Uid=" & userName & ";Pwd=" & password & ";")
+    connCandidates.Add("Driver={PostgreSQL Unicode};Server=" & host & ";Port=" & port & ";Database=" & dbName & ";Uid=" & userName & ";Pwd=" & password & ";")
+    connCandidates.Add("Driver={PostgreSQL ANSI(x64)};Server=" & host & ";Port=" & port & ";Database=" & dbName & ";Uid=" & userName & ";Pwd=" & password & ";")
+    connCandidates.Add("Driver={PostgreSQL ANSI};Server=" & host & ";Port=" & port & ";Database=" & dbName & ";Uid=" & userName & ";Pwd=" & password & ";")
+
+    Dim sql As String = _
+        "SELECT DISTINCT p.""material"" " & _
+        "FROM ""Plate"" p " & _
+        "WHERE p.""material"" IS NOT NULL " & _
+        "  AND TRIM(p.""material"") <> '' " & _
+        "  AND p.""codigo"" IS NOT NULL " & _
+        "  AND TRIM(p.""codigo"") <> '' " & _
+        "  AND COALESCE(p.""inventoryType"", 'PLATE') IN ('PLATE','PLACA','LAMINA');"
+
+    For Each cs In connCandidates
+        Try
+            conn = CreateObject("ADODB.Connection")
+            conn.CommandTimeout = 6
+            conn.ConnectionTimeout = 6
+            conn.Open(cs)
+
+            rs = CreateObject("ADODB.Recordset")
+            rs.Open(sql, conn)
+            Do While Not rs.EOF
+                Dim v As String = ""
+                Try
+                    v = CStr(rs.Fields(0).Value).Trim()
+                Catch
+                    v = ""
+                End Try
+                If v <> "" AndAlso Not materials.Contains(v) Then
+                    materials.Add(v)
+                End If
+                rs.MoveNext()
+            Loop
+            rs.Close()
+            conn.Close()
+            Return materials
+        Catch ex As Exception
+            Try
+                If rs IsNot Nothing Then rs.Close()
+            Catch
+            End Try
+            Try
+                If conn IsNot Nothing Then conn.Close()
+            Catch
+            End Try
+            errMsg = ex.Message
+            ' intenta siguiente driver
+        End Try
+    Next
+
+    If errMsg = "" Then
+        errMsg = "No se encontro un driver ODBC/OLE DB PostgreSQL compatible o no hubo respuesta del servidor."
+    End If
+    Return New List(Of String)()
+End Function
+
+Private Function TryLoadMaterialCatalogFromDbWithNpgsql(host As String, port As String, dbName As String, userName As String, password As String, ByRef errMsg As String) As List(Of String)
+    Dim out As New List(Of String)
+    Try
+        Dim tConn As Type = Type.GetType("Npgsql.NpgsqlConnection, Npgsql", False)
+        Dim tCmd As Type = Type.GetType("Npgsql.NpgsqlCommand, Npgsql", False)
+        If tConn Is Nothing OrElse tCmd Is Nothing Then
+            Return out
+        End If
+
+        Dim connStr As String = "Host=" & host & ";Port=" & port & ";Database=" & dbName & ";Username=" & userName & ";Password=" & password & ";Timeout=6;Command Timeout=6;"
+        Dim conn As Object = Activator.CreateInstance(tConn, New Object() {connStr})
+        conn.Open()
+
+        Dim sql As String = _
+            "SELECT DISTINCT p.""material"" " & _
+            "FROM ""Plate"" p " & _
+            "WHERE p.""material"" IS NOT NULL " & _
+            "  AND TRIM(p.""material"") <> '' " & _
+            "  AND p.""codigo"" IS NOT NULL " & _
+            "  AND TRIM(p.""codigo"") <> '' " & _
+            "  AND COALESCE(p.""inventoryType"", 'PLATE') IN ('PLATE','PLACA','LAMINA');"
+
+        Dim cmd As Object = Activator.CreateInstance(tCmd, New Object() {sql, conn})
+        Dim rdr As Object = cmd.ExecuteReader()
+        Dim seen As New HashSet(Of String)(StringComparer.OrdinalIgnoreCase)
+        Do While rdr.Read()
+            Dim m As String = ""
+            Try
+                m = CStr(rdr.GetValue(0)).Trim()
+            Catch
+                m = ""
+            End Try
+            If m <> "" AndAlso Not seen.Contains(m) Then
+                seen.Add(m)
+                out.Add(m)
+            End If
+        Loop
+        Try
+            rdr.Close()
+        Catch
+        End Try
+        Try
+            conn.Close()
+        Catch
+        End Try
+        Return out
+    Catch ex As Exception
+        errMsg = "Npgsql: " & ex.Message
+        Return New List(Of String)()
+    End Try
+End Function
+
+Private Function HttpJsonRequest(url As String, method As String, body As String, token As String, timeoutSec As Integer) As String
+    Dim xhr As Object = Nothing
+    Try
+        xhr = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+    Catch
+        xhr = CreateObject("MSXML2.XMLHTTP")
+    End Try
+
+    If xhr Is Nothing Then
+        Throw New Exception("No se pudo crear cliente HTTP COM.")
+    End If
+
+    Dim m As String = UCase(Trim(method))
+    xhr.Open(m, url, False)
+    Try
+        xhr.setTimeouts(timeoutSec * 1000, timeoutSec * 1000, timeoutSec * 1000, timeoutSec * 1000)
+    Catch
+        ' Algunos proveedores COM no exponen setTimeouts; se ignora sin romper.
+    End Try
+    xhr.setRequestHeader("Content-Type", "application/json")
+    If Not String.IsNullOrEmpty(token) Then
+        xhr.setRequestHeader("Authorization", "Bearer " & token)
+    End If
+
+    If m = "POST" Then
+        xhr.send(body)
+    Else
+        xhr.send()
+    End If
+
+    Dim statusCode As Integer = 0
+    Try
+        statusCode = CInt(xhr.status)
+    Catch
+        statusCode = 0
+    End Try
+    Dim respText As String = ""
+    Try
+        respText = CStr(xhr.responseText)
+    Catch
+        respText = ""
+    End Try
+
+    If statusCode < 200 OrElse statusCode >= 300 Then
+        Throw New Exception("HTTP " & statusCode.ToString() & ": " & respText)
+    End If
+    Return respText
+End Function
+
+Private Function ReadHerinoxConfig() As Dictionary(Of String, String)
+    Dim out As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+
+    ' Busca config junto a esta regla y en carpeta del ensamble.
+    Dim asmDir As String = ""
+    Try
+        asmDir = System.IO.Path.GetDirectoryName(ThisDoc.Document.FullFileName)
+    Catch
+        asmDir = ""
+    End Try
+    Dim thisRuleDir As String = ResolveRuleBaseDir(asmDir)
+
+    Dim candidates As New List(Of String)
+    If Not String.IsNullOrEmpty(thisRuleDir) Then candidates.Add(System.IO.Path.Combine(thisRuleDir, "herinox_sync.local.json"))
+    If Not String.IsNullOrEmpty(asmDir) Then candidates.Add(System.IO.Path.Combine(asmDir, "herinox_sync.local.json"))
+    out("__lookup_paths") = String.Join(" | ", candidates.ToArray())
+
+    Dim cfgPath As String = ""
+    For Each p In candidates
+        If System.IO.File.Exists(p) Then
+            cfgPath = p
+            Exit For
+        End If
+    Next
+
+    If String.IsNullOrEmpty(cfgPath) Then
+        Dim createAt As String = ""
+        If Not String.IsNullOrEmpty(thisRuleDir) Then
+            createAt = System.IO.Path.Combine(thisRuleDir, "herinox_sync.local.json")
+        ElseIf Not String.IsNullOrEmpty(asmDir) Then
+            createAt = System.IO.Path.Combine(asmDir, "herinox_sync.local.json")
+        End If
+
+        If Not String.IsNullOrEmpty(createAt) Then
+            Try
+                Dim parentDir As String = System.IO.Path.GetDirectoryName(createAt)
+                If Not String.IsNullOrEmpty(parentDir) AndAlso Not System.IO.Directory.Exists(parentDir) Then
+                    System.IO.Directory.CreateDirectory(parentDir)
+                End If
+                If Not System.IO.File.Exists(createAt) Then
+                    System.IO.File.WriteAllText(createAt, BuildHerinoxConfigTemplate(), Encoding.UTF8)
+                    out("__auto_created") = "true"
+                End If
+                out("__config_path") = createAt
+            Catch ex As Exception
+                out("__config_path") = ""
+                out("__auto_create_error") = ex.Message
+            End Try
+        Else
+            out("__config_path") = ""
+        End If
+        Return out
+    End If
+    out("__config_path") = cfgPath
+
+    Dim raw As String = System.IO.File.ReadAllText(cfgPath)
+    out("raw_materials_csv") = JsonGetString(raw, "raw_materials_csv")
+    out("canonical_materials_csv") = JsonGetString(raw, "canonical_materials_csv")
+    out("raw_materials_count") = JsonGetString(raw, "raw_materials_count")
+    out("canonical_materials_count") = JsonGetString(raw, "canonical_materials_count")
+    out("bridge_source") = JsonGetString(raw, "bridge_source")
+    out("bridge_detail") = JsonGetString(raw, "bridge_detail")
+    out("bridge_updated_at") = JsonGetString(raw, "bridge_updated_at")
+    out("enabled") = JsonGetString(raw, "enabled")
+    out("api_base_url") = JsonGetString(raw, "api_base_url")
+    out("email") = JsonGetString(raw, "email")
+    out("password") = JsonGetString(raw, "password")
+    out("timeout_seconds") = JsonGetString(raw, "timeout_seconds")
+    out("db_host") = JsonGetString(raw, "db_host")
+    out("db_port") = JsonGetString(raw, "db_port")
+    out("db_name") = JsonGetString(raw, "db_name")
+    out("db_user") = JsonGetString(raw, "db_user")
+    out("db_password") = JsonGetString(raw, "db_password")
+    Return out
+End Function
+
+Private Function BuildHerinoxConfigTemplate() As String
+    Dim sb As New StringBuilder()
+    sb.AppendLine("{")
+    sb.AppendLine("  ""enabled"": true,")
+    sb.AppendLine("  ""raw_materials_csv"": ""A 36|A 36 GALV|SSTL 304|Aluminio"",")
+    sb.AppendLine("  ""canonical_materials_csv"": ""A 36|A 36 GALV|SSTL 304|Aluminio"",")
+    sb.AppendLine("  ""raw_materials_count"": 4,")
+    sb.AppendLine("  ""canonical_materials_count"": 4,")
+    sb.AppendLine("  ""bridge_source"": ""TEMPLATE"",")
+    sb.AppendLine("  ""bridge_detail"": ""Template local; se recomienda ejecutar Consulta_Herinox.py"",")
+    sb.AppendLine("  ""_nota"": ""Auto-creado por AutoDXF 2.0 para consumo de catalogo canonico.""")
+    sb.AppendLine("}")
+    Return sb.ToString()
+End Function
+
+Private Function MaskEmail(email As String) As String
+    Dim e As String = If(email, "").Trim()
+    If e = "" Then Return "[VACIO]"
+    Dim atPos As Integer = e.IndexOf("@"c)
+    If atPos <= 1 Then Return "***" & e.Substring(Math.Max(0, atPos))
+    Dim namePart As String = e.Substring(0, atPos)
+    Dim domainPart As String = e.Substring(atPos)
+    Return namePart.Substring(0, 1) & "***" & domainPart
+End Function
+
+'------------------------------ NORMALIZACION ------------------------------
+
+Private Function NormalizeMaterialForArga(invMaterial As String, cat As HerinoxCatalog) As String
+    Dim norm As String = NormalizeMaterialAlias(invMaterial)
+    If String.IsNullOrEmpty(norm) Then norm = "A 36"
+
+    ' 1) Intentar correlación contra nombres REALES de Herinox (crudos en DB).
+    If cat IsNot Nothing AndAlso cat.Available AndAlso cat.RawMaterials IsNot Nothing AndAlso cat.RawMaterials.Count > 0 Then
+        Dim rawMatch As String = TryMatchRawCatalogMaterial(invMaterial, cat.RawMaterials)
+        If Not String.IsNullOrEmpty(rawMatch) Then
+            Dim fromRaw As String = NormalizeMaterialAlias(rawMatch)
+            If Not String.IsNullOrEmpty(fromRaw) Then
+                norm = fromRaw
+            End If
+        End If
+    End If
+
+    ' Si el catalogo Herinox esta disponible y contiene variante exacta, usarla.
+    If cat IsNot Nothing AndAlso cat.Available AndAlso cat.CanonicalMaterials IsNot Nothing Then
+        For Each m In cat.CanonicalMaterials
+            If String.Equals(m.Trim(), norm.Trim(), StringComparison.OrdinalIgnoreCase) Then
+                Return m
+            End If
+        Next
+    End If
+    Return norm
+End Function
+
+Private Function TryMatchRawCatalogMaterial(invMaterial As String, rawMaterials As List(Of String)) As String
+    If rawMaterials Is Nothing OrElse rawMaterials.Count = 0 Then Return ""
+    Dim invKey As String = NormalizeLooseText(invMaterial)
+    If invKey = "" Then Return ""
+
+    For Each rawName In rawMaterials
+        Dim rawKey As String = NormalizeLooseText(rawName)
+        If rawKey = "" Then Continue For
+        If String.Equals(invKey, rawKey, StringComparison.OrdinalIgnoreCase) Then
+            Return rawName
+        End If
+    Next
+
+    ' Fallback flexible por inclusión (ej. "Steel, Carbono ASTM A36" vs "Steel Carbon").
+    For Each rawName In rawMaterials
+        Dim rawKey As String = NormalizeLooseText(rawName)
+        If rawKey = "" Then Continue For
+        If invKey.Contains(rawKey) OrElse rawKey.Contains(invKey) Then
+            Return rawName
+        End If
+    Next
+    Return ""
+End Function
+
+Private Function NormalizeLooseText(raw As String) As String
+    Dim t As String = UCase(Trim(CStr(raw)))
+    t = Replace(t, "_", " ")
+    t = Regex.Replace(t, "[^A-Z0-9]+", " ")
+    t = Regex.Replace(t, "\s+", " ").Trim()
+    Return t
+End Function
+
+Private Function NormalizeMaterialAlias(raw As String) As String
+    Dim m As String = UCase(Trim(CStr(raw)))
+    m = Replace(m, "_", " ")
+    m = Regex.Replace(m, "\s+", " ")
+
+    If m = "" Then Return ""
+
+    If m.Contains("A 36") OrElse m.Contains("A36") Then Return "A 36"
+    If m.Contains("CARBON") OrElse (m.Contains("ACERO") AndAlso m.Contains("CARBONO")) _
+       OrElse m.Contains("STEEL, CARBON") OrElse m.Contains("STEEL CARBON") Then
+        Return "A 36"
+    End If
+
+    ' Galvanizado: nombre que ANS parsea a GALVANIZADO (autodxf_metadata).
+    ' Coincide con placas Herinox vía normalize_material → A 36 GALV.
+    If m.Contains("A 36 GALV") OrElse (m.Contains("GALV") AndAlso m.Contains("A 36")) Then
+        Return "Galvanizado"
+    End If
+    If m.Contains("GALVAN") Then Return "Galvanizado"
+
+    If m.Contains("SSTL") AndAlso m.Contains("304") Then Return "SSTL 304"
+    If m.Contains("INOX") OrElse m.Contains("INOXIDABLE") OrElse m.Contains("STAINLESS") Then
+        Return "SSTL 304"
+    End If
+
+    If m.Contains("ALUMIN") Then Return "Aluminio"
+
+    Return ToTitleCaseSafe(m)
+End Function
+
+Private Function FormatThickness(v As Double) As String
+    ' Compat: formateo crudo. Preferir FormatThicknessForArga en export.
+    Return FmtInchDecimal(v)
+End Function
+
+Private Function FormatThicknessForArga(thkIn As Double, materialName As String) As String
+    ' Empata modules/herinox_sync.py + arga_gauge_equivalences.json.
+    Dim snapped As Double = SnapThicknessToArga(thkIn, materialName)
+    Return FmtInchDecimal(snapped)
+End Function
+
+Private Function FmtInchDecimal(v As Double) As String
+    Dim txt As String = v.ToString("0.####", CultureInfo.InvariantCulture)
+    If txt.Contains(".") Then
+        txt = txt.TrimEnd("0"c).TrimEnd("."c)
+    End If
+    If txt = "" OrElse txt = "-" Then Return "0"
+    Return txt
+End Function
+
+Private Function SnapThicknessToArga(thkIn As Double, materialName As String) As Double
+    If thkIn <= 0 Then Return thkIn
+
+    Dim exacts() As Double = {
+        0.1875, 0.188, 0.25, 0.3125, 0.375, 0.5, 0.625, 0.75,
+        1.0, 1.25, 1.5, 1.75, 2.0
+    }
+    For Each e In exacts
+        If Math.Abs(thkIn - e) <= 0.005 Then Return e
+    Next
+
+    Dim table As Dictionary(Of Integer, Double) = GaugeTableForMaterial(materialName)
+    Dim bestG As Integer = -1
+    Dim bestD As Double = 1.0E9
+    Dim bestIn As Double = thkIn
+    For Each kv In table
+        Dim d As Double = Math.Abs(kv.Value - thkIn)
+        If d < bestD Then
+            bestD = d
+            bestG = kv.Key
+            bestIn = kv.Value
+        End If
+    Next
+    ' Misma tolerancia que ANS (_nearest_steel_gauge ≈ 0.008").
+    If bestG >= 0 AndAlso bestD <= 0.008 Then
+        Return bestIn
+    End If
+    Return thkIn
+End Function
+
+Private Function GaugeTableForMaterial(materialName As String) As Dictionary(Of Integer, Double)
+    Dim m As String = UCase(Trim(CStr(materialName)))
+    Dim t As New Dictionary(Of Integer, Double)
+    If m.Contains("SSTL") OrElse m.Contains("INOX") OrElse m.Contains("STAINLESS") Then
+        ' STAINLESS_GAUGE_TO_INCHES (herinox_sync)
+        t(10) = 0.1406 : t(11) = 0.125 : t(12) = 0.1094 : t(14) = 0.0781
+        t(16) = 0.0625 : t(18) = 0.05 : t(20) = 0.0375
+        Return t
+    End If
+    If m.Contains("ALUMIN") OrElse m.StartsWith("AL ") Then
+        t(8) = 0.1285 : t(9) = 0.1144 : t(10) = 0.1019 : t(11) = 0.0907
+        t(12) = 0.0808 : t(13) = 0.072 : t(14) = 0.0641 : t(15) = 0.0571
+        t(16) = 0.0508 : t(17) = 0.0453 : t(18) = 0.0403 : t(19) = 0.0359
+        t(20) = 0.032
+        Return t
+    End If
+    ' STEEL_GAUGE_TO_INCHES (default: A 36 / Galvanizado / carbono)
+    t(3) = 0.2391 : t(4) = 0.2242 : t(5) = 0.2092 : t(6) = 0.1943
+    t(7) = 0.1793 : t(8) = 0.1644 : t(9) = 0.1495 : t(10) = 0.1345
+    t(11) = 0.1196 : t(12) = 0.1046 : t(13) = 0.0897 : t(14) = 0.0747
+    t(15) = 0.0673 : t(16) = 0.0598 : t(18) = 0.0478 : t(20) = 0.0359
+    Return t
+End Function
+
+'------------------------------ UTILIDADES BASE ------------------------------
+
+Private Function PickFolder(ByVal descr As String) As String
+    Dim dlg As New FolderBrowserDialog()
+    dlg.Description = descr
+    dlg.ShowNewFolderButton = True
+    If dlg.ShowDialog() = DialogResult.OK Then
+        Return dlg.SelectedPath
+    End If
+    Return ""
+End Function
+
+Private Sub EnsureFlatPattern(smDef As SheetMetalComponentDefinition)
+    If Not smDef.HasFlatPattern Then
+        smDef.Unfold()
+        smDef.FlatPattern.ExitEdit()
+    End If
+End Sub
+
+Private Sub TrySetTopFace(smDef As SheetMetalComponentDefinition, Face As Face)
+    Try
+        smDef.FlatPattern.Edit()
+        CallByName(smDef.FlatPattern, "SetASideFace", CallType.Method, Face)
+        smDef.FlatPattern.ExitEdit()
+        Exit Sub
+    Catch
+        Try
+            smDef.FlatPattern.Edit()
+            CallByName(smDef.FlatPattern, "SetTopFace", CallType.Method, Face)
+            smDef.FlatPattern.ExitEdit()
+            Exit Sub
+        Catch
+            Try
+                CallByName(smDef, "SetASideFace", CallType.Method, Face)
+                Exit Sub
+            Catch
+                ' Ignorar
+            End Try
+        End Try
+    End Try
+End Sub
+
+Private Sub ExportFlatPatternDXF(pDoc As PartDocument, dxfFullname As String)
+    Dim smDef As SheetMetalComponentDefinition = CType(pDoc.ComponentDefinition, SheetMetalComponentDefinition)
+    EnsureFlatPattern(smDef)
+    Dim fp As FlatPattern = smDef.FlatPattern
+    Dim fmt As String = "FLAT PATTERN DXF?AcadVersion=2000"
+
+    Try
+        fp.DataIO.WriteDataToFile(fmt, dxfFullname)
+    Catch ex As System.Exception
+        Dim addin As TranslatorAddIn = CType(ThisApplication.ApplicationAddIns.ItemById("{C24E3AC4-122E-11D5-8E91-0010B541CD80}"), TranslatorAddIn)
+        Dim ctx As TranslationContext = ThisApplication.TransientObjects.CreateTranslationContext()
+        ctx.Type = IOMechanismEnum.kFileBrowseIOMechanism
+        Dim opts As NameValueMap = ThisApplication.TransientObjects.CreateNameValueMap()
+        Dim data As DataMedium = ThisApplication.TransientObjects.CreateDataMedium()
+        data.FileName = dxfFullname
+        If addin.HasSaveCopyAsOptions(pDoc, ctx, opts) Then
+            ' opts.Value("Export_Acad_IniFile") = "C:\Ruta\a\DXFEXPORT.ini"
+        End If
+        addin.SaveCopyAs(pDoc, ctx, opts, data)
+    End Try
+End Sub
+
+Private Function SafeMaterialName(smDef As SheetMetalComponentDefinition, pDoc As PartDocument) As String
+    Dim name As String = ""
+    Try
+        name = smDef.Material.Name
+    Catch
+        Try
+            name = CStr(pDoc.PropertySets.Item("Design Tracking Properties").Item("Material").Value)
+        Catch
+        End Try
+    End Try
+    If String.IsNullOrWhiteSpace(name) Then name = "Material"
+    Return name
+End Function
+
+Private Function GetLargestPlanarFace(part As PartDocument) As Face
+    Dim largestArea As Double = 0
+    Dim largestFace As Face = Nothing
+
+    Dim surfBodies As SurfaceBodies = part.ComponentDefinition.SurfaceBodies
+    For Each body As SurfaceBody In surfBodies
+        For Each face As Face In body.Faces
+            If Face.SurfaceType = SurfaceTypeEnum.kPlaneSurface Then
+                Dim area As Double = Face.Evaluator.Area
+                If area > largestArea Then
+                    largestArea = area
+                    largestFace = Face
+                End If
+            End If
+        Next
+    Next
+    Return largestFace
+End Function
+
+'------------------------------ HELPERS ------------------------------
+
+Private Function JsonEscape(s As String) As String
+    Dim t As String = If(s, "")
+    t = t.Replace("\", "\\")
+    t = t.Replace("""", "\""")
+    Return t
+End Function
+
+Private Function JsonGetString(raw As String, key As String) As String
+    Try
+        If String.IsNullOrEmpty(raw) Then Return ""
+        Dim pattern As String = """" & Regex.Escape(key) & """\s*:\s*(?:""(?<v>[^""]*)""|(?<n>[-+]?\d+(\.\d+)?)|(?<b>true|false))"
+        Dim m As Match = Regex.Match(raw, pattern, RegexOptions.IgnoreCase)
+        If Not m.Success Then Return ""
+        If m.Groups("v").Success Then Return m.Groups("v").Value
+        If m.Groups("n").Success Then Return m.Groups("n").Value
+        If m.Groups("b").Success Then Return m.Groups("b").Value
+    Catch
+    End Try
+    Return ""
+End Function
+
+Private Function GetCfg(cfg As Dictionary(Of String, String), key As String, defVal As String) As String
+    If cfg Is Nothing Then Return defVal
+    If cfg.ContainsKey(key) Then
+        Dim v As String = cfg(key)
+        If Not String.IsNullOrEmpty(v) Then Return v
+    End If
+    Return defVal
+End Function
+
+Private Function SafeInt(s As String, defVal As Integer) As Integer
+    Try
+        Return CInt(Math.Round(CDbl(s), 0))
+    Catch
+        Return defVal
+    End Try
+End Function
+
+Private Function ToTitleCaseSafe(raw As String) As String
+    Try
+        Dim ti As TextInfo = CultureInfo.InvariantCulture.TextInfo
+        Return ti.ToTitleCase(LCase(raw))
+    Catch
+        Return raw
+    End Try
+End Function
+
+Private Function SanitizeForPath(s As String) As String
+    Dim t As String = If(s, "")
+    Dim bad() As Char = System.IO.Path.GetInvalidPathChars()
+    For Each c As Char In bad
+        t = t.Replace(c, "_"c)
+    Next
+    t = t.Replace(":", " -")
+    t = t.Replace("?", "")
+    t = t.Replace("*", "")
+    t = t.Replace("""", "")
+    t = t.Replace("<", "")
+    t = t.Replace(">", "")
+    t = t.Replace("|", "")
+    t = Regex.Replace(t, "\s+", " ").Trim()
+    Return t
+End Function
+
+Private Function SanitizeForFileName(s As String) As String
+    Dim t As String = If(s, "")
+    Dim bad() As Char = System.IO.Path.GetInvalidFileNameChars()
+    For Each c As Char In bad
+        t = t.Replace(c, "_"c)
+    Next
+    t = Regex.Replace(t, "\s+", " ").Trim()
+    Return t
+End Function

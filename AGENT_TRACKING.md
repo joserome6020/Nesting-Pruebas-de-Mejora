@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20g — AutoDXF 2.0: Cal DXF empatado a Herinox/ANS
+- Antes: iLogic escribía espesor CAD crudo (`0.11811`) → nest separado de
+  placas Herinox Cal 11 (`0.1196`).
+- Ahora: `FormatThicknessForArga` usa la misma tabla que `herinox_sync`;
+  Galvanizado en nombre (ANS `GALVANIZADO`). JSON
+  `AutoDXF 2.0/arga_gauge_equivalences.json` + candado
+  `test_autodxf_gauge_parity.py`.
+
 ### 2026-08-20f — GIGA: close_pair solape ya no tumba el nest (faltan 34)
 - Causa real (log 10:59): `close_stacked_vfm_pairs` dejaba solape 101×102;
   `reparar_separacion_minima_hoja` ignoraba `solape_metal` (expulsadas=0);
