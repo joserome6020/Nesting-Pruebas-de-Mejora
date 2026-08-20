@@ -75,8 +75,17 @@ def plate_too_small_for_vfm(w_mm: float, h_mm: float) -> bool:
     return min(float(w_mm or 0.0), float(h_mm or 0.0)) < 280.0
 
 
-def pick_giga_sim_plates(placas: list) -> list:
-    """Una candidata por hoja: la más alta. 36\"+48\" duplicaba ~5 min/placa."""
+def pick_giga_sim_plates(
+    placas: list,
+    *,
+    format_used: dict | None = None,
+    format_limits: dict | None = None,
+) -> list:
+    """Una candidata por hoja: la más alta *disponible* (stock + alto VFM).
+
+    Antes solo devolvía la más alta; si esa ya estaba al límite Herinox el
+    nest paraba con piezas pendientes (EMPAQUE-STOP-PARCIAL / faltan N).
+    """
     if not placas:
         return []
     if len(placas) == 1:
@@ -85,8 +94,28 @@ def pick_giga_sim_plates(placas: list) -> list:
     def _short(p: dict) -> float:
         return min(float(p.get("w") or 0.0), float(p.get("h") or 0.0))
 
-    best = max(placas, key=_short)
-    return [best]
+    def _fmt_key(p: dict) -> tuple:
+        # Evitar import circular con manager.
+        w = float(p.get("w") or 0.0)
+        h = float(p.get("h") or 0.0)
+        a, b = (w, h) if w >= h else (h, w)
+        return (round(a, 1), round(b, 1))
+
+    ranked = sorted(placas, key=_short, reverse=True)
+    used = format_used if isinstance(format_used, dict) else {}
+    limits = format_limits if isinstance(format_limits, dict) else {}
+    for p in ranked:
+        w = float(p.get("w") or 0.0)
+        h = float(p.get("h") or 0.0)
+        if plate_too_small_for_vfm(w, h):
+            continue
+        fk = _fmt_key(p)
+        lim = limits.get(fk)
+        if lim is not None and int(used.get(fk, 0)) >= int(lim):
+            continue
+        return [p]
+    # Ninguna libre con alto VFM: última opción la más alta (el caller reportará stop).
+    return [ranked[0]]
 
 
 def should_force_giga_engine(clave: str | None = None) -> bool:
@@ -209,13 +238,21 @@ def order_giga_pool_python(piezas: list) -> list:
     rest.sort(key=_ar, reverse=True)
     n_pairs = max(len(a101), len(a102))
     out: list = []
+    # Torre: máx. 2 pares por hoja (~48\"). El resto de I va después de la
+    # inyección para no tumbar el nest ni dejar GS sin placa.
     if not bars and n_pairs >= 2:
-        for i in range(n_pairs):
+        tower_n = min(2, n_pairs)
+        for i in range(tower_n):
             if i < len(a101):
                 out.append(a101[i])
             if i < len(a102):
                 out.append(a102[i])
         out.extend(rest)
+        for i in range(tower_n, n_pairs):
+            if i < len(a101):
+                out.append(a101[i])
+            if i < len(a102):
+                out.append(a102[i])
         out.extend(other_i)
         return out
     if a101:

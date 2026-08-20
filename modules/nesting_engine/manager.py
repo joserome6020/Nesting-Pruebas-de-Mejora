@@ -853,6 +853,20 @@ def _area_total_piezas(piezas) -> float:
 def _es_cola_de_grupo(pendientes_est, accesorios) -> bool:
     """True cuando el material restante es poco vs una placa estándar."""
     restantes = list(pendientes_est or []) + list(accesorios or [])
+    if not restantes:
+        return False
+    # Cal 11 Galv: si aún hay VFM-20, NO tratar como cola chica (si no, el
+    # ordenador favorece placas cortas y el 101 de 78\" no entra → STOP).
+    try:
+        from .giga_cal11_galv import should_force_giga_engine
+
+        if should_force_giga_engine():
+            for p in restantes:
+                nom = str(p.get("nombre") or "").upper()
+                if "VFM-20" in nom or ("VFM" in nom and ("-101" in nom or "-102" in nom)):
+                    return False
+    except Exception:
+        pass
     if len(restantes) <= 8:
         return True
     areas = [float(p.get("area", 0) or 0) for p in restantes]
@@ -4237,10 +4251,14 @@ class MotorNesting:
 
                 if should_force_giga_engine(clave) and len(candidatos_sim) > 1:
                     n_antes = len(candidatos_sim)
-                    candidatos_sim = pick_giga_sim_plates(candidatos_sim)
+                    candidatos_sim = pick_giga_sim_plates(
+                        candidatos_sim,
+                        format_used=format_used_grupo,
+                        format_limits=format_limits_grupo,
+                    )
                     _dbg_nesting(
                         f"[GIGA-CAL11] sim_placas {n_antes}→{len(candidatos_sim)} "
-                        f"(solo la más alta; no 36\"+48\")"
+                        f"(alta disponible; no 36\"+48\")"
                     )
             except Exception:
                 pass
@@ -4588,6 +4606,57 @@ class MotorNesting:
                     mejor_precio = float(refined["precio"])
 
             reset_ultra_sim_bounded(sim_bound_token)
+
+            if not mejor_hoja_temp:
+                # GIGA + VFM pendientes: reintentar con placas altas (no cola chica).
+                try:
+                    from .giga_cal11_galv import (
+                        pick_giga_sim_plates,
+                        plate_too_small_for_vfm,
+                        should_force_giga_engine,
+                    )
+
+                    still_vfm = any(
+                        "VFM-20" in str(p.get("nombre") or "").upper()
+                        or (
+                            "VFM" in str(p.get("nombre") or "").upper()
+                            and (
+                                "-101" in str(p.get("nombre") or "").upper()
+                                or "-102" in str(p.get("nombre") or "").upper()
+                            )
+                        )
+                        for p in list(pendientes_est or []) + list(accesorios or [])
+                    )
+                    if should_force_giga_engine(clave) and still_vfm:
+                        retry_cands = [
+                            p
+                            for p in placas_simulacion_validas
+                            if not plate_too_small_for_vfm(
+                                float(p.get("w") or 0.0), float(p.get("h") or 0.0)
+                            )
+                        ]
+                        retry_cands = pick_giga_sim_plates(
+                            retry_cands or placas_simulacion_validas,
+                            format_used=format_used_grupo,
+                            format_limits=format_limits_grupo,
+                        )
+                        _dbg_nesting(
+                            f"[GIGA-CAL11] retry-placa VFM pendientes | "
+                            f"cands={len(retry_cands)}"
+                        )
+                        for cand in retry_cands:
+                            res = _eval_candidato(cand)
+                            if res and res.get("hoja") and (res["hoja"].get("piezas") or []):
+                                mejor_score = res["score"]
+                                mejor_hoja_temp = res["hoja"]
+                                mejor_restos_est = res["restos_est"]
+                                mejor_restos_acc = res["restos_acc"]
+                                mejor_placa = res["placa"]
+                                mejor_restos_total = int(res["restos_total"])
+                                mejor_precio = float(res["precio"])
+                                break
+                except Exception as _giga_retry_exc:
+                    _dbg_nesting(f"[GIGA-CAL11] retry-placa skip: {_giga_retry_exc}")
 
             if not mejor_hoja_temp:
                 # Diagnóstico: distinguir stock / selección / packer

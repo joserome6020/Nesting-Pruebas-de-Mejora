@@ -106,12 +106,13 @@ std::vector<PieceIn> order_giga_pool(const std::vector<PieceIn>& piezas) {
     std::vector<PieceIn> out;
     out.reserve(piezas.size());
     const size_t n_pairs = std::max(a101.size(), a102.size());
-    // Sin estructurales (HFM/SIVC/…): torre de pares 101/102 primero, luego
-    // inyección de chicos (estilo captura torres). Con estructurales: 1 par
-    // + barras + patio, y el resto de I al final (si no, 4 I llenan el 48").
+    // Sin estructurales: torre de hasta 2 pares (cabe en 48"), luego chicos,
+    // luego el resto de I. Meter TODOS los pares primero dejaba cola VFM/GS
+    // sin placa (EMPAQUE-STOP / faltan N).
     const bool tower_mode = bars.empty() && n_pairs >= 2;
     if (tower_mode) {
-        for (size_t i = 0; i < n_pairs; ++i) {
+        const size_t tower_n = std::min(n_pairs, size_t(2));
+        for (size_t i = 0; i < tower_n; ++i) {
             if (i < a101.size()) {
                 out.push_back(a101[i]);
             }
@@ -120,6 +121,14 @@ std::vector<PieceIn> order_giga_pool(const std::vector<PieceIn>& piezas) {
             }
         }
         out.insert(out.end(), rest.begin(), rest.end());
+        for (size_t i = tower_n; i < n_pairs; ++i) {
+            if (i < a101.size()) {
+                out.push_back(a101[i]);
+            }
+            if (i < a102.size()) {
+                out.push_back(a102[i]);
+            }
+        }
         out.insert(out.end(), other_i.begin(), other_i.end());
         return out;
     }

@@ -47,9 +47,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20e — GIGA: no cortar nest con VFM/GS pendientes (faltan N)
+- Causa: cola “placa chica” + torre de *todos* los pares → STOP parcial e
+  inventario incompleto (poka 34 faltantes).
+- Torre acotada a 2 pares/hoja; resto de I después de inyección.
+- Con VFM pendientes no se activa cola de placas cortas; retry placa alta.
+- Candados order/cola/pick. Recompilar `algorithm_cpp`.
+
 ### 2026-08-20d — GIGA: torres VFM cuando ya no hay estructurales
-- Sin HFM/SIVC/SIHC/VS: el pool ordena todos los pares 101/102 primero
-  (torre) y después inyección de chicos — como captura P10.
+- Sin HFM/SIVC/SIHC/VS: el pool ordena pares 101/102 primero (torre) y
+  después inyección de chicos — como captura P10.
 - Con estructurales: se mantiene 1 par + barras + patio (no 4 I al 29%).
 - `close_stacked_vfm_pairs` otra vez en el motor tras el MC.
 - Candados order + pack torre (≥3 VFM en P1 solo-VFM+GS).

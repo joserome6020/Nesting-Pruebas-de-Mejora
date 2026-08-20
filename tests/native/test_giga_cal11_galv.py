@@ -710,6 +710,13 @@ def test_giga_no_simula_dos_alturas():
     assert len(out) == 1 and out[0]["id"] == "PLC150"
     assert plate_too_small_for_vfm(950.0, 90.0)
     assert not plate_too_small_for_vfm(3048.0, 1219.2)
+    key48 = (round(3048.0, 1), round(1219.2, 1))
+    out2 = pick_giga_sim_plates(
+        [a, b],
+        format_used={key48: 6},
+        format_limits={key48: 6},
+    )
+    assert len(out2) == 1 and out2[0]["id"] == "PLC189"
 
 
 def test_combinado_forzado_en_giga():
@@ -995,7 +1002,7 @@ def test_fase_b_grupo_mueve_gs_de_hoja_pobre():
 
 
 def test_order_torre_cuando_solo_vfm():
-    """Sin HFM/SIVC: todos los pares 101/102 antes que los GS (torre → inyección)."""
+    """Sin HFM/SIVC: 2 pares (torre) antes que GS; resto de I después."""
     from modules.nesting_engine.giga_cal11_galv import order_giga_pool_python
 
     inch = 25.4
@@ -1011,12 +1018,13 @@ def test_order_torre_cuando_solo_vfm():
     pool_tail.extend(_mk(f"GENE-GS-0820-708#{i}", gs) for i in range(12))
     ordered = order_giga_pool_python(pool_tail)
     names = [str(p.get("nombre") or "") for p in ordered]
-    # Primeros 8 = 4 pares; GS después.
-    head = names[:8]
+    # Torre = 2 pares (4 I) antes de GS; el resto de I después.
+    head = names[:4]
     assert all("VFM-20" in n for n in head), head
-    assert sum(1 for n in head if "-101" in n) == 4
-    assert sum(1 for n in head if "-102" in n) == 4
-    assert all("GS" in n for n in names[8:]), names[8:]
+    assert sum(1 for n in head if "-101" in n) == 2
+    assert sum(1 for n in head if "-102" in n) == 2
+    assert "GS" in names[4], names[4:8]
+    assert any("VFM-20" in n for n in names[5:]), names
 
     # Con HFM: solo 1 par al inicio, luego barra, luego GS, luego resto I.
     pool_mix = [
@@ -1032,6 +1040,28 @@ def test_order_torre_cuando_solo_vfm():
     assert "HFM" in mix[2], mix
     assert "GS" in mix[3], mix
     assert "VFM-20-101#1" in mix[4], mix
+
+
+def test_cola_giga_no_achica_placa_con_vfm():
+    """Con VFM pendientes, no activar cola de placas cortas (causa faltan N)."""
+    import os
+
+    from modules.nesting_engine.manager import _es_cola_de_grupo
+    from modules.nesting_engine.nest_engine_context import (
+        reset_pack_group_clave,
+        set_pack_group_clave,
+    )
+
+    os.environ["ARGA_GIGA_CAL11_GALV"] = "1"
+    tok = set_pack_group_clave("0.11811_GALVANIZADO")
+    try:
+        est = [_mk("GENE-VFM-20-101", box(0, 0, 1990, 310))]
+        acc = [_mk("GENE-GS-0820-708", box(0, 0, 100, 90)) for _ in range(5)]
+        assert _es_cola_de_grupo(est, acc) is False
+        assert _es_cola_de_grupo([], acc) is True  # solo GS chicos: sí cola
+    finally:
+        reset_pack_group_clave(tok)
+        os.environ["ARGA_GIGA_CAL11_GALV"] = "0"
 
 
 def test_pack_torre_vfm_antes_de_inyectar():
@@ -1104,5 +1134,6 @@ if __name__ == "__main__":
     test_fase_b_facing_jala_patio_sin_pool()
     test_fase_b_grupo_mueve_gs_de_hoja_pobre()
     test_order_torre_cuando_solo_vfm()
+    test_cola_giga_no_achica_placa_con_vfm()
     test_pack_torre_vfm_antes_de_inyectar()
     print("GIGA_CAL11_GALV PASS")
