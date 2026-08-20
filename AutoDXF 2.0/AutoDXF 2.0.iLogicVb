@@ -12,8 +12,8 @@ Imports System.Collections.Generic
 ' - Orientacion automatica de cara (A-Side)
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
-' - Espesor: SM Thickness vs geometría deben empatar. Flat Pattern roto = OMISO
-'   (no inventar Cal 3.5/2 desde cotas). Cal = medida fiable + snap Herinox.
+' - Espesor: SM vs geometría deben empatar. Si Flat/SM falta o no empata:
+'   igual exporta DXF y marca carpeta [REVISAR SM] para revisión manual.
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -127,17 +127,18 @@ Sub Main()
                 part = ThisApplication.Documents.Open(part.FullFileName, True)
             End If
 
-            ' 4.1) Garantizar Flat Pattern sano (si falla, el ingeniero debe corregir SM).
+            ' 4.1) Flat Pattern: intentar sanear; si falla NO se excluye — se marca carpeta.
             Dim flatOk As Boolean = EnsureFlatPatternHealthy(smDef)
+            Dim marcarRevisarSm As Boolean = False
             If Not flatOk Then
+                marcarRevisarSm = True
                 sb.AppendLine( _
-                    "OMISO (Sheet Metal / Flat Pattern roto): " & part.DisplayName & _
-                    " — corrige Sheet Metal Defaults + Flat Pattern en Inventor; " & _
-                    "no se exporta DXF ni se inventa Cal (evita 3.5/2 falsos).")
-                If Not wasOpen Then
-                    Try : part.Close(True) : Catch : End Try
-                End If
-                Continue For
+                    "AVISO (Sheet Metal / Flat Pattern): " & part.DisplayName & _
+                    " — Flat no sano; se exporta igual y carpeta [REVISAR SM] para corregir en Inventor.")
+                Try
+                    EnsureFlatPattern(smDef)
+                Catch
+                End Try
             End If
 
             ' 4.2) Seleccion automatica de cara plana para A-Side
@@ -152,38 +153,43 @@ Sub Main()
                 sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
             End Try
 
-            ' 4.3) Espesor: SM vs geometría deben empatar; Cal = medida fiable + snap.
+            ' 4.3) Espesor: SM vs geometría; Cal = medida fiable + snap.
             Dim invMaterial As String = SafeMaterialName(smDef, part)
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
             Dim thkTxt As String = "0"
+            Dim thkWarn As String = ""
             Try
                 Dim thkNote As String = ""
-                Dim thkWarn As String = ""
                 Dim thkIn As Double = ResolvePartThicknessInches(smDef, part, thkNote, thkWarn)
                 thkTxt = FormatThicknessForArga(thkIn, materialName)
                 If Not String.IsNullOrWhiteSpace(thkNote) Then
                     sb.AppendLine("Espesor " & part.DisplayName & ": " & thkNote & " → Cal " & thkTxt)
                 End If
                 If Not String.IsNullOrWhiteSpace(thkWarn) Then
+                    marcarRevisarSm = True
                     sb.AppendLine("AVISO espesor " & part.DisplayName & ": " & thkWarn)
                 End If
             Catch exThk As Exception
+                marcarRevisarSm = True
                 sb.AppendLine("Espesor fallback en " & part.DisplayName & ": " & exThk.Message)
                 thkTxt = "0"
             End Try
             If String.IsNullOrWhiteSpace(thkTxt) OrElse thkTxt = "0" Then
-                sb.AppendLine("OMISO espesor 0: " & part.DisplayName & " (revisar Sheet Metal Thickness).")
-                If Not wasOpen Then
-                    Try : part.Close(True) : Catch : End Try
-                End If
-                Continue For
+                marcarRevisarSm = True
+                thkTxt = "0"
+                sb.AppendLine( _
+                    "AVISO espesor 0: " & part.DisplayName & _
+                    " — sin Sheet Metal Thickness usable; carpeta [REVISAR SM] / Cal 0.")
             End If
 
             ' 4.5) Cantidad
             Dim qty As Integer = CInt(Math.Round(Row.ItemQuantity, 0))
 
-            ' 4.6) Subcarpeta por calibre y material canónico
+            ' 4.6) Subcarpeta: si falta/no empata SM → señal [REVISAR SM]
             Dim subFolder As String = "Cal " & thkTxt & " " & materialName
+            If marcarRevisarSm Then
+                subFolder = subFolder & " [REVISAR SM]"
+            End If
             Dim targetFolder As String = System.IO.Path.Combine(exportRoot, SanitizeForPath(subFolder))
             If Not Directory.Exists(targetFolder) Then
                 Directory.CreateDirectory(targetFolder)
@@ -193,12 +199,24 @@ Sub Main()
             Dim baseName As String = System.IO.Path.GetFileNameWithoutExtension(part.DisplayName)
             Dim fileName As String = baseName & ", " & materialName & ", QTY " & qty.ToString() _
                                    & ", Cal " & thkTxt & ".dxf"
+            If marcarRevisarSm Then
+                fileName = baseName & ", " & materialName & ", QTY " & qty.ToString() _
+                         & ", Cal " & thkTxt & ", REVISAR SM.dxf"
+            End If
             Dim outPath As String = System.IO.Path.Combine(targetFolder, SanitizeForFileName(fileName))
 
-            ' 4.8) Exportar DXF
-            ExportFlatPatternDXF(part, outPath)
-
-            exported += 1
+            ' 4.8) Exportar DXF (aunque Flat esté dudoso; si truena, AVISO y sigue)
+            Try
+                ExportFlatPatternDXF(part, outPath)
+                exported += 1
+                If marcarRevisarSm Then
+                    sb.AppendLine("Exportado con [REVISAR SM]: " & part.DisplayName & " → " & subFolder)
+                End If
+            Catch exExp As Exception
+                sb.AppendLine( _
+                    "AVISO export DXF " & part.DisplayName & ": " & exExp.Message & _
+                    " — revisar Sheet Metal / Flat Pattern en Inventor.")
+            End Try
 
             ' 4.9) Cerrar documento si fue abierto por esta rutina
             If Not wasOpen Then

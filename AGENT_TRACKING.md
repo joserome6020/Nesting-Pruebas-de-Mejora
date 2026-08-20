@@ -71,6 +71,10 @@ código viejo. Un bug sin candado vuelve.
 - Reutiliza `despachador_nocturno.procesar_ruta_nesting` (FreeCAD) para acero y cobre.
 - `engine/step_paths`: listar W.O./S.W.O. con DXF convertibles (sin exigir STEP previo).
 
+### 2026-08-20o — AutoDXF: sin SM/flat → exporta + carpeta [REVISAR SM]
+- Ya no OMISO/excluye: DXF sale igual; carpeta/archivo marcados `[REVISAR SM]`
+  para que ingeniería corrija Sheet Metal sin perder el flat.
+
 ### 2026-08-20n — AutoDXF: Flat Pattern roto = OMISO (no Cal inventado)
 - CBOX Cal 3.5 / segmentos Cal 2: geometría tomaba cotas con SM/flat roto.
 - Ahora: Flat Pattern unhealthy → no exporta; pliegues sin empatar → SM.

@@ -120,16 +120,17 @@ def test_ilogic_mapea_acero_suave_forjado():
 
 
 def test_ilogic_usa_espesor_geometrico_no_solo_sm_param():
-    """Candado: SM vs geo; Flat Pattern roto = OMISO (no Cal inventado)."""
+    """Candado: sin SM/flat dudoso → exporta igual y marca [REVISAR SM] (no OMISO)."""
     src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
         encoding="utf-8", errors="replace"
     )
     assert "ResolvePartThicknessInches" in src
     assert "ThicknessesEmpatan" in src
     assert "EnsureFlatPatternHealthy" in src
-    assert "OMISO (Sheet Metal / Flat Pattern roto)" in src
-    assert "geom descartada" in src or "geom parece cota" in src
-    assert "ResolvePartThicknessInches(smDef, part, thkNote, thkWarn)" in src
+    assert "[REVISAR SM]" in src
+    assert "marcarRevisarSm" in src
+    assert "OMISO (Sheet Metal / Flat Pattern roto)" not in src
+    assert "se exporta igual y carpeta [REVISAR SM]" in src
 
 
 def test_cal16_no_cae_en_0625():
