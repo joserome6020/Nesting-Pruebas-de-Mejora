@@ -564,7 +564,8 @@ def abrir_modal_configuracion(parent):
     giga_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(giga_tit)
     giga_hint = QLabel(
-        "ON usa el motor nativo solo en 0.11811_GALVANIZADO (nest y renest). "
+        "ON usa el motor nativo en cualquier grupo Cal 11 galvanizado "
+        "(0.1196 / 0.11811 / gauge 11 + GALV; nest y renest). "
         "OFF deja el ANS como siempre: motor del selector, Ultra/Lite, sin ese packer."
     )
     giga_hint.setWordWrap(True)

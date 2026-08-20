@@ -55,6 +55,10 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20j — GIGA motor: cualquier Cal 11 Galv (no solo 0.11811)
+- Detector + UI: 0.1196 / 0.11811 / gauge 11 + GALV activan el motor.
+- Texto del switch ya no dice “solo 0.11811_GALVANIZADO”.
+
 ### 2026-08-20i — Todos los calibres: snap CAD→Herinox (materia bruta)
 - No solo Cal 11: steel/inox/al ±offsets CAD → mismo decimal que Herinox.
 - Módulo `arga_gauge_snap` + canonicar en import DXF y al armar clave de nest.

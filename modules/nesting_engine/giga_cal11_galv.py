@@ -1,8 +1,8 @@
-"""Motor oculto Cal 11 / 0.11811 / GALVANIZADO (GIGA).
+"""Motor oculto Cal 11 Galvanizado (GIGA).
 
 No vive en el selector. Si el switch de Configuración Global está ON y el
-grupo es Cal 11 Galv (0.11811 / 0.1196 Fluidstack), usa giga_cal11_galv.
-Hosts: perfiles I VFM (AutoDXF GIGA metal, no cobre). OFF = motor del selector.
+grupo es cualquier Cal 11 Galv (0.1196 Herinox, 0.11811 CAD, gauge 11 + GALV),
+usa giga_cal11_galv. Hosts: perfiles I VFM. OFF = motor del selector.
 """
 from __future__ import annotations
 
@@ -17,22 +17,23 @@ from .nest_engine_context import (
 )
 
 ENGINE_ID = ENGINE_GIGA_CAL11_GALV
-CLAVE_CANON = "0.11811_GALVANIZADO"
+CLAVE_CANON = "0.1196_GALVANIZADO"  # decimal Herinox Cal 11; legacy 0.11811 también match
 FRAME_TAGS = ("VFM", "HFM", "WFM", "VTN", "WFN")
 
-# Cal 11 planta: 0.11811; también 0.118 / 0.1196 / gauge 11.
-_CAL11_THICK = (0.11811, 0.118, 0.1196, 0.119)
-_CAL11_TOKENS = ("0.11811", "0.118", "0.1196", "0.119")
+# Cal 11: Herinox 0.1196; CAD planta 0.11811 / 0.118 / 0.119; gauge nominal 11.
+_CAL11_THICK = (0.1196, 0.11811, 0.118, 0.119)
+_CAL11_TOKENS = ("0.1196", "0.11811", "0.118", "0.119")
 
 
 def is_giga_cal11_galv_clave(clave: str | None) -> bool:
-    """True para el grupo Cal 11 galvanizado (GIGA), no A36 del mismo espesor."""
+    """True para cualquier grupo Cal 11 galvanizado (no solo un decimal fijo)."""
     s = str(clave or "").strip().upper().replace("  ", " ")
     if not s:
         return False
     if "GALV" not in s:
         return False
-    if s == CLAVE_CANON.upper() or s.startswith("0.11811_GALV"):
+    # Legacy y canónico Herinox.
+    if s.startswith("0.11811_GALV") or s.startswith("0.1196_GALV"):
         return True
     cal, _, mat = s.partition("_")
     cal = cal.strip()
@@ -47,7 +48,22 @@ def is_giga_cal11_galv_clave(clave: str | None) -> bool:
         thk = float(cal)
     except Exception:
         return False
-    return any(abs(thk - t) <= 0.0035 for t in _CAL11_THICK)
+    if any(abs(thk - t) <= 0.0035 for t in _CAL11_THICK):
+        return True
+    # Defensa: mismo gauge nominal que Herinox Cal 11 (tol ANS 0.008").
+    try:
+        from modules.herinox_sync import HerinoxPlateSync
+
+        best_g = None
+        best_d = 1e9
+        for g, inches in HerinoxPlateSync.STEEL_GAUGE_TO_INCHES.items():
+            d = abs(float(inches) - thk)
+            if d < best_d:
+                best_d = d
+                best_g = int(g)
+        return best_g == 11 and best_d <= 0.008
+    except Exception:
+        return False
 
 
 def clave_desde_debug_tag(tag: str | None) -> str:

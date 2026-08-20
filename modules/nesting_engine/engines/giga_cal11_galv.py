@@ -11,8 +11,8 @@ class GigaCal11GalvEngine:
         engine_id="giga_cal11_galv",
         display_name="GIGA Cal 11 Galv",
         description=(
-            "Motor nativo 0.11811_GALVANIZADO: void-first VFM + MC mixto. "
-            "No seleccionable."
+            "Motor nativo Cal 11 Galvanizado (cualquier decimal Cal 11 + GALV): "
+            "void-first VFM + MC mixto. No seleccionable."
         ),
         phase=0,
         status="ready",

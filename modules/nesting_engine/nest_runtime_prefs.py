@@ -124,7 +124,7 @@ def is_cu_force_dxf_step_enabled(prefs: dict[str, Any] | None = None) -> bool:
 
 
 def is_giga_cal11_galv_enabled(prefs: dict[str, Any] | None = None) -> bool:
-    """True = 0.11811_GALVANIZADO usa el motor nativo giga_cal11_galv."""
+    """True = cualquier Cal 11 Galv usa el motor nativo giga_cal11_galv."""
     data = prefs if isinstance(prefs, dict) else load_nest_runtime_prefs()
     return bool(data.get("giga_cal11_galv"))
 

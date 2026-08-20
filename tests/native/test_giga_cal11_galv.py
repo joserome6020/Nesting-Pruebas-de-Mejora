@@ -37,9 +37,13 @@ def _switch_giga(on: bool) -> None:
 
 def test_detector_cal11_galv_no_a36():
     assert is_giga_cal11_galv_clave("0.11811_GALVANIZADO")
+    assert is_giga_cal11_galv_clave("0.1196_GALVANIZADO")  # decimal Herinox
     assert is_giga_cal11_galv_clave("0.118_GALVANIZADO")
+    assert is_giga_cal11_galv_clave("0.119_GALVANIZADO")
     assert is_giga_cal11_galv_clave("11_GALVANIZADO")
+    assert is_giga_cal11_galv_clave("0.1196_A 36 GALV")
     assert not is_giga_cal11_galv_clave("0.11811_A 36")
+    assert not is_giga_cal11_galv_clave("0.1196_A 36")
     assert not is_giga_cal11_galv_clave("0.0747_A 36")
     assert not is_giga_cal11_galv_clave("0.0747_GALVANIZADO")
     assert not is_giga_cal11_galv_clave("0.188_GALVANIZADO")
@@ -70,8 +74,11 @@ def test_renest_no_pregunta_motor():
     assert engine_id_for_group("0.11811_GALVANIZADO", "svgnest_ultra") == "svgnest_ultra"
     _switch_giga(True)
     assert engine_id_for_renest("0.11811_GALVANIZADO") == ENGINE_ID
+    assert engine_id_for_renest("0.1196_GALVANIZADO") == ENGINE_ID
+    assert engine_id_for_renest("0.1196_A 36 GALV") == ENGINE_ID
     assert engine_id_for_renest("0.0747_A 36") is None
     assert engine_id_for_group("0.11811_GALVANIZADO", "svgnest_ultra") == ENGINE_ID
+    assert engine_id_for_group("0.1196_GALVANIZADO", "svgnest_ultra") == ENGINE_ID
     assert engine_id_for_group("0.0747_A 36", "svgnest_ultra") == "svgnest_ultra"
     _switch_giga(False)
 
