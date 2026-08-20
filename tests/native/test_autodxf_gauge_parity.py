@@ -120,15 +120,15 @@ def test_ilogic_mapea_acero_suave_forjado():
 
 
 def test_ilogic_usa_espesor_geometrico_no_solo_sm_param():
-    """Candado: Cal=SM; [REVISAR SM] solo sin SM real (no por SM≠geom)."""
+    """Candado: SM≠geom → Cal por geo + [REVISAR SM]; SM≈geo → Cal SM limpio."""
     src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
         encoding="utf-8", errors="replace"
     )
     assert "ResolvePartThicknessInches" in src
     assert "[REVISAR SM]" in src
-    assert "sinSmReal" in src
-    assert "solo sin SM real" in src
-    assert "bend deduction" in src
+    assert "marcarRevisarSm" in src
+    assert "SM Thickness=" in src or "≠ pieza geom=" in src
+    assert "Cal ANS=" in src or "corrige Sheet Metal Defaults" in src
 
 
 def test_cal16_no_cae_en_0625():

@@ -12,9 +12,11 @@ Imports System.Collections.Generic
 ' - Orientacion automatica de cara (A-Side)
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
-' - Espesor: Cal = Sheet Metal Thickness (prioridad bend deduction).
-'   [REVISAR SM] SOLO si no hay SM usable (entonces Cal por geometría).
-'   Si SM≠geom: AVISO en log, carpeta limpia (SM manda).
+' - Espesor / Cal carpeta ANS:
+'   * Si hay SM y empata con geometría → Cal = SM (OK).
+'   * Si hay SM pero NO empata → Cal = geometría (nest correcto) + [REVISAR SM]
+'     (el Thickness en Inventor está mal; hay que corregirlo por bend deduction).
+'   * Si no hay SM → Cal = geometría + [REVISAR SM].
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -128,13 +130,13 @@ Sub Main()
                 part = ThisApplication.Documents.Open(part.FullFileName, True)
             End If
 
-            ' 4.1) Flat Pattern: intentar sanear (aviso si falla; no marca carpeta por sí solo).
+            ' 4.1) Flat Pattern: intentar sanear (aviso si falla).
             Dim flatOk As Boolean = EnsureFlatPatternHealthy(smDef)
             Dim marcarRevisarSm As Boolean = False
             If Not flatOk Then
                 sb.AppendLine( _
                     "AVISO (Flat Pattern): " & part.DisplayName & _
-                    " — Flat dudoso; Cal sigue por Sheet Metal Thickness si existe.")
+                    " — Flat dudoso; revisar en Inventor.")
                 Try
                     EnsureFlatPattern(smDef)
                 Catch
@@ -153,15 +155,14 @@ Sub Main()
                 sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
             End Try
 
-            ' 4.3) Cal = SM si existe. [REVISAR SM] solo sin SM real.
+            ' 4.3) Cal para ANS: SM si empata; si SM≠pieza → geo + [REVISAR SM].
             Dim invMaterial As String = SafeMaterialName(smDef, part)
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
             Dim thkTxt As String = "0"
             Dim thkWarn As String = ""
-            Dim sinSmReal As Boolean = False
             Try
                 Dim thkNote As String = ""
-                Dim thkIn As Double = ResolvePartThicknessInches(smDef, part, thkNote, thkWarn, sinSmReal)
+                Dim thkIn As Double = ResolvePartThicknessInches(smDef, part, thkNote, thkWarn, marcarRevisarSm)
                 thkTxt = FormatThicknessForArga(thkIn, materialName)
                 If Not String.IsNullOrWhiteSpace(thkNote) Then
                     sb.AppendLine("Espesor " & part.DisplayName & ": " & thkNote & " → Cal " & thkTxt)
@@ -169,25 +170,21 @@ Sub Main()
                 If Not String.IsNullOrWhiteSpace(thkWarn) Then
                     sb.AppendLine("AVISO espesor " & part.DisplayName & ": " & thkWarn)
                 End If
-                If sinSmReal Then marcarRevisarSm = True
             Catch exThk As Exception
                 marcarRevisarSm = True
-                sinSmReal = True
                 sb.AppendLine("Espesor fallback en " & part.DisplayName & ": " & exThk.Message)
                 thkTxt = "0"
             End Try
             If String.IsNullOrWhiteSpace(thkTxt) OrElse thkTxt = "0" Then
                 marcarRevisarSm = True
                 thkTxt = "0"
-                sb.AppendLine( _
-                    "AVISO: " & part.DisplayName & _
-                    " — sin Sheet Metal Thickness; carpeta [REVISAR SM].")
+                sb.AppendLine("AVISO: " & part.DisplayName & " — espesor 0; carpeta [REVISAR SM].")
             End If
 
             ' 4.5) Cantidad
             Dim qty As Integer = CInt(Math.Round(Row.ItemQuantity, 0))
 
-            ' 4.6) [REVISAR SM] solo sin SM real (no por SM≠geom).
+            ' 4.6) [REVISAR SM] = Thickness SM mal/ausente (Cal ya va por medida real si se pudo).
             Dim subFolder As String = "Cal " & thkTxt & " " & materialName
             If marcarRevisarSm Then
                 subFolder = subFolder & " [REVISAR SM]"
@@ -207,12 +204,13 @@ Sub Main()
             End If
             Dim outPath As String = System.IO.Path.Combine(targetFolder, SanitizeForFileName(fileName))
 
-            ' 4.8) Exportar DXF
+            ' 4.8) Exportar DXF (el flat de Inventor sigue usando el SM del IPT).
             Try
                 ExportFlatPatternDXF(part, outPath)
                 exported += 1
                 If marcarRevisarSm Then
-                    sb.AppendLine("Exportado SIN SM → [REVISAR SM]: " & part.DisplayName & " → " & subFolder)
+                    sb.AppendLine("Exportado [REVISAR SM]: " & part.DisplayName & " → " & subFolder & _
+                                  " (corrige Sheet Metal Thickness en Inventor).")
                 End If
             Catch exExp As Exception
                 sb.AppendLine( _
@@ -1089,14 +1087,15 @@ Private Function ResolvePartThicknessInches( _
     part As PartDocument, _
     ByRef note As String, _
     ByRef warn As String, _
-    ByRef sinSmReal As Boolean _
+    ByRef marcarRevisarSm As Boolean _
 ) As Double
-    ' Cal = Sheet Metal Thickness si existe (bend deduction).
-    ' Geometría solo si NO hay SM → entonces sinSmReal=True ([REVISAR SM]).
-    ' SM≠geom: solo AVISO en log; no marca carpeta.
+    ' Cal carpeta ANS = espesor real de placa.
+    ' SM Thickness: si empata con geometría → Cal=SM.
+    ' Si SM existe pero NO empata → Cal=geometría + [REVISAR SM] (Thickness mal en IPT).
+    ' Si no hay SM → Cal=geometría + [REVISAR SM].
     note = ""
     warn = ""
-    sinSmReal = False
+    marcarRevisarSm = False
     Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
     Dim smIn As Double = 0.0
     Try
@@ -1115,19 +1114,28 @@ Private Function ResolvePartThicknessInches( _
     End Try
     Dim geoOk As Boolean = (geoIn >= 0.02 AndAlso geoIn <= 4.0)
 
-    If smIn > 0 Then
-        If geoOk AndAlso Not ThicknessesEmpatan(smIn, geoIn) Then
-            warn = "SM=" & FmtInchDecimal(smIn) & " ≠ geom=" & FmtInchDecimal(geoIn) & _
-                   " (info). Cal = Sheet Metal Thickness."
+    If smIn > 0 AndAlso geoOk Then
+        If ThicknessesEmpatan(smIn, geoIn) Then
+            note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn)
+            Return smIn
         End If
+        ' SM mal (ej. default Cal 11): nest con geo; marcar para corregir Thickness.
+        marcarRevisarSm = True
+        warn = "SM Thickness=" & FmtInchDecimal(smIn) & " ≠ pieza geom=" & FmtInchDecimal(geoIn) & _
+               ". Cal ANS=" & FmtInchDecimal(geoIn) & " [REVISAR SM]; corrige Sheet Metal Defaults."
+        note = "geom=" & FmtInchDecimal(geoIn) & " (SM IPT=" & FmtInchDecimal(smIn) & ")"
+        Return geoIn
+    End If
+
+    If smIn > 0 Then
+        ' Hay SM, sin geo fiable → Cal SM (bend deduction); sin marca.
         note = "SM=" & FmtInchDecimal(smIn)
         Return smIn
     End If
 
-    ' Sin SM real → geometría + marcar revisión.
-    sinSmReal = True
+    marcarRevisarSm = True
     If geoOk Then
-        warn = "Sin Sheet Metal Thickness usable; Cal por geometría=" & FmtInchDecimal(geoIn)
+        warn = "Sin Sheet Metal Thickness; Cal por geometría=" & FmtInchDecimal(geoIn)
         note = "geom=" & FmtInchDecimal(geoIn) & If(geoSrc <> "", " [" & geoSrc & "]", "")
         Return geoIn
     End If
