@@ -55,6 +55,12 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20m — Crear STEPs: 1 STEP plano (sin Cama A/B)
+- El despachador heredaba Cama A+B con offsets robot; ANS ya usa
+  `STEP_UNIVERSAL_SIN_CAMAS` (1 STEP/DXF, coords 1:1, carpeta STEP plana).
+- `despachador_nocturno` + Crear STEPs alineados; candado
+  `test_step_universal_sin_camas_despachador.py`.
+
 ### 2026-08-20l — Reanudar sync con contraseña DYT361
 - Evita PO/ContPAQ accidentales en S.W.O.: pide la misma clave operativa
   (gaps/STEPS) antes de reintentar VSM/ContPAQ/reporte.
@@ -64,6 +70,10 @@ código viejo. Un bug sin candado vuelve.
   y *Desde ruta* (carpeta NESTING, como despachador nocturno).
 - Reutiliza `despachador_nocturno.procesar_ruta_nesting` (FreeCAD) para acero y cobre.
 - `engine/step_paths`: listar W.O./S.W.O. con DXF convertibles (sin exigir STEP previo).
+
+### 2026-08-20n — AutoDXF: Flat Pattern roto = OMISO (no Cal inventado)
+- CBOX Cal 3.5 / segmentos Cal 2: geometría tomaba cotas con SM/flat roto.
+- Ahora: Flat Pattern unhealthy → no exporta; pliegues sin empatar → SM.
 
 ### 2026-08-20m — AutoDXF: SM Thickness vs geometría deben empatar
 - Compara ambos (±0.01" o 3%). Cal DXF = medida geométrica precisa + snap.

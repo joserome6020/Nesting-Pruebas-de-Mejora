@@ -12,8 +12,8 @@ Imports System.Collections.Generic
 ' - Orientacion automatica de cara (A-Side)
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
-' - Espesor: comparar Sheet Metal Thickness vs geometría (deben empatar ±0.01"
-'   o 3%). El Cal del DXF sale de la medida geométrica precisa + snap Herinox.
+' - Espesor: SM Thickness vs geometría deben empatar. Flat Pattern roto = OMISO
+'   (no inventar Cal 3.5/2 desde cotas). Cal = medida fiable + snap Herinox.
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -127,8 +127,18 @@ Sub Main()
                 part = ThisApplication.Documents.Open(part.FullFileName, True)
             End If
 
-            ' 4.1) Garantizar Flat Pattern
-            EnsureFlatPattern(smDef)
+            ' 4.1) Garantizar Flat Pattern sano (si falla, el ingeniero debe corregir SM).
+            Dim flatOk As Boolean = EnsureFlatPatternHealthy(smDef)
+            If Not flatOk Then
+                sb.AppendLine( _
+                    "OMISO (Sheet Metal / Flat Pattern roto): " & part.DisplayName & _
+                    " — corrige Sheet Metal Defaults + Flat Pattern en Inventor; " & _
+                    "no se exporta DXF ni se inventa Cal (evita 3.5/2 falsos).")
+                If Not wasOpen Then
+                    Try : part.Close(True) : Catch : End Try
+                End If
+                Continue For
+            End If
 
             ' 4.2) Seleccion automatica de cara plana para A-Side
             Try
@@ -142,8 +152,7 @@ Sub Main()
                 sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
             End Try
 
-            ' 4.3) Espesor: comparar SM Thickness vs geometría (deben empatar);
-            '      el Cal DXF usa la medida geométrica precisa + snap Herinox/ANS.
+            ' 4.3) Espesor: SM vs geometría deben empatar; Cal = medida fiable + snap.
             Dim invMaterial As String = SafeMaterialName(smDef, part)
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
             Dim thkTxt As String = "0"
@@ -163,7 +172,11 @@ Sub Main()
                 thkTxt = "0"
             End Try
             If String.IsNullOrWhiteSpace(thkTxt) OrElse thkTxt = "0" Then
-                sb.AppendLine("AVISO: espesor 0 en " & part.DisplayName & " (revisar geometría / Sheet Metal Thickness).")
+                sb.AppendLine("OMISO espesor 0: " & part.DisplayName & " (revisar Sheet Metal Thickness).")
+                If Not wasOpen Then
+                    Try : part.Close(True) : Catch : End Try
+                End If
+                Continue For
             End If
 
             ' 4.5) Cantidad
@@ -1057,7 +1070,8 @@ Private Function ResolvePartThicknessInches( _
     ByRef note As String, _
     ByRef warn As String _
 ) As Double
-    ' Compara ambos. Cal DXF = medida geométrica precisa cuando existe; SM debe empatar.
+    ' SM y geometría deben empatar. Con pliegues, SM manda si la geo no empata
+    ' (medir cara↔cara en L/U a menudo toma un largo, p.ej. 3.5" o 2").
     note = ""
     warn = ""
     Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
@@ -1066,6 +1080,13 @@ Private Function ResolvePartThicknessInches( _
         smIn = uom.ConvertUnits(smDef.Thickness.Value, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
     Catch
         smIn = 0.0
+    End Try
+
+    Dim bendCount As Integer = 0
+    Try
+        bendCount = smDef.Bends.Count
+    Catch
+        bendCount = 0
     End Try
 
     Dim geoIn As Double = 0.0
@@ -1077,35 +1098,54 @@ Private Function ResolvePartThicknessInches( _
         geoSrc = ""
     End Try
 
-    ' --- Ambos disponibles: deben empatar; Cal usa geometría (más precisa). ---
-    If smIn > 0 AndAlso geoIn >= 0.02 AndAlso geoIn <= 4.0 Then
+    Dim geoOk As Boolean = (geoIn >= 0.02 AndAlso geoIn <= 4.0)
+
+    If smIn > 0 AndAlso geoOk Then
         If ThicknessesEmpatan(smIn, geoIn) Then
+            ' Empatan: en placa plana preferir geo (precisa); con pliegues SM.
+            If bendCount > 0 Then
+                note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn) & " [pliegues→SM]"
+                Return smIn
+            End If
             note = "OK SM=" & FmtInchDecimal(smIn) & " ≈ geom=" & FmtInchDecimal(geoIn) & _
                    If(geoSrc <> "", " [" & geoSrc & "]", "")
             Return geoIn
         End If
+
+        ' No empatan: no tomar un "largo" como espesor.
+        If bendCount > 0 OrElse geoIn > (smIn * 1.8 + 0.05) Then
+            warn = "SM=" & FmtInchDecimal(smIn) & " NO empata con geom=" & FmtInchDecimal(geoIn) & _
+                   ". Cal usa Sheet Metal Thickness (geom parece cota, no espesor). " & _
+                   "Revisa Flat Pattern / Thickness en Inventor."
+            note = "SM=" & FmtInchDecimal(smIn) & " (geom descartada=" & FmtInchDecimal(geoIn) & ")"
+            Return smIn
+        End If
+
+        ' Placa plana: SM tipo calibre olvidado vs geo de placa.
         warn = "SM=" & FmtInchDecimal(smIn) & " NO empata con geom=" & FmtInchDecimal(geoIn) & _
-               " (tol ±" & FmtInchDecimal(THK_EMPATE_ABS_IN) & """ o 3%). " & _
-               "Cal usa geometría precisa; corrige Sheet Metal Thickness en Inventor."
+               ". Cal usa geometría; corrige Sheet Metal Thickness."
         note = "geom=" & FmtInchDecimal(geoIn) & " (SM=" & FmtInchDecimal(smIn) & " desalineado)"
         Return geoIn
     End If
 
-    ' --- Solo geometría ---
-    If geoIn >= 0.02 AndAlso geoIn <= 4.0 Then
-        warn = "Sin Sheet Metal Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn)
+    If smIn > 0 Then
+        If bendCount > 0 OrElse Not geoOk Then
+            note = "SM=" & FmtInchDecimal(smIn)
+            If Not geoOk Then warn = "Sin geometría de espesor fiable; Cal por SM. Verifica Flat Pattern."
+            Return smIn
+        End If
+    End If
+
+    If geoOk AndAlso bendCount = 0 Then
+        warn = "Sin SM Thickness usable; Cal solo por geometría=" & FmtInchDecimal(geoIn)
         note = "geom=" & FmtInchDecimal(geoIn) & If(geoSrc <> "", " [" & geoSrc & "]", "")
         Return geoIn
     End If
 
-    ' --- Solo SM (p.ej. plegado donde no se midió cara) ---
     If smIn > 0 Then
-        warn = "Sin espesor geométrico fiable; Cal solo por SM=" & FmtInchDecimal(smIn) & _
-               ". Revisar que el parámetro coincida con la placa real."
         note = "SM=" & FmtInchDecimal(smIn)
         Return smIn
     End If
-
     Return 0.0
 End Function
 
@@ -1327,6 +1367,42 @@ Private Sub EnsureFlatPattern(smDef As SheetMetalComponentDefinition)
         smDef.FlatPattern.ExitEdit()
     End If
 End Sub
+
+Private Function EnsureFlatPatternHealthy(smDef As SheetMetalComponentDefinition) As Boolean
+    ' False si el Flat Pattern está roto (cruz roja en Inventor) — no inventar Cal.
+    Try
+        EnsureFlatPattern(smDef)
+    Catch
+        Return False
+    End Try
+    Try
+        If Not smDef.HasFlatPattern Then Return False
+        Dim fp As FlatPattern = smDef.FlatPattern
+        If fp Is Nothing Then Return False
+        ' HealthStatus: kUpToDateHealth / kOutOfDateHealth OK; kError / kCannotCompute = malo.
+        Try
+            Dim hs As HealthStatusEnum = fp.HealthStatus
+            If hs = HealthStatusEnum.kDriverLostHealth OrElse _
+               hs = HealthStatusEnum.kCannotComputeHealth OrElse _
+               hs = HealthStatusEnum.kInErrorHealth OrElse _
+               hs = HealthStatusEnum.kDeletedHealth Then
+                Return False
+            End If
+        Catch
+            ' Algunas builds no exponen HealthStatus igual; seguir con probe.
+        End Try
+        ' Probe: editar/salir flat — si truena, flat inválido.
+        Try
+            fp.Edit()
+            fp.ExitEdit()
+        Catch
+            Return False
+        End Try
+        Return True
+    Catch
+        Return False
+    End Try
+End Function
 
 Private Sub TrySetTopFace(smDef As SheetMetalComponentDefinition, Face As Face)
     Try
