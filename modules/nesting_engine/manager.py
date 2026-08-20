@@ -2267,13 +2267,48 @@ def _safe_empaquetar_una_hoja_mc(
                                 restos = list(restos or []) + _piezas_expulsadas_a_pool(
                                     expulsadas
                                 )
-                            msg = (
-                                f"[POKA-KERF-REPAIR] {debug_tag} | parcial "
-                                f"expulsadas={len(expulsadas)} quedan={len(hoja.get('piezas') or [])} "
-                                f"| was={detail_gap}"
+                            # Si sigue solape_metal (p.ej. close_pair GIGA), expulsar
+                            # hasta integridad OK — no devolver hoja que SIM rechaza.
+                            ok_gap2, det_gap2 = validar_separacion_minima_hoja(
+                                hoja,
+                                float(kerf_override or 0.0),
+                                margin_in=float(margin_override or 0.0),
+                                w_placa=float(w_placa or 0.0),
+                                h_placa=float(h_placa or 0.0),
                             )
-                            print(msg, flush=True)
-                            _dbg_nesting(msg)
+                            if (
+                                not ok_gap2
+                                and not es_renest
+                                and str(det_gap2 or "").startswith("solape_metal")
+                            ):
+                                ok3, det3, exp3 = reparar_separacion_minima_hoja(
+                                    hoja,
+                                    float(kerf_override or 0.0),
+                                    margin_in=float(margin_override or 0.0),
+                                    w_placa=float(w_placa or 0.0),
+                                    h_placa=float(h_placa or 0.0),
+                                    permitir_expulsar=True,
+                                    max_rounds=80,
+                                )
+                                if exp3:
+                                    restos = list(restos or []) + _piezas_expulsadas_a_pool(
+                                        exp3
+                                    )
+                                msg = (
+                                    f"[POKA-KERF-REPAIR] {debug_tag} | solape-force "
+                                    f"ok={ok3} expulsadas={len(exp3)} "
+                                    f"quedan={len(hoja.get('piezas') or [])} | was={det_gap2}"
+                                )
+                                print(msg, flush=True)
+                                _dbg_nesting(msg)
+                            else:
+                                msg = (
+                                    f"[POKA-KERF-REPAIR] {debug_tag} | parcial "
+                                    f"expulsadas={len(expulsadas)} quedan={len(hoja.get('piezas') or [])} "
+                                    f"| was={detail_gap}"
+                                )
+                                print(msg, flush=True)
+                                _dbg_nesting(msg)
                         else:
                             msg = (
                                 f"[POKA-KERF-FAIL] {debug_tag} | kerf={kerf_override} "
@@ -4628,6 +4663,8 @@ class MotorNesting:
                         for p in list(pendientes_est or []) + list(accesorios or [])
                     )
                     if should_force_giga_engine(clave) and still_vfm:
+                        # Probar TODAS las placas altas válidas (pick_giga solo
+                        # deja 1; si esa falla por solape/repair el nest paraba).
                         retry_cands = [
                             p
                             for p in placas_simulacion_validas
@@ -4635,16 +4672,29 @@ class MotorNesting:
                                 float(p.get("w") or 0.0), float(p.get("h") or 0.0)
                             )
                         ]
-                        retry_cands = pick_giga_sim_plates(
-                            retry_cands or placas_simulacion_validas,
+                        if not retry_cands:
+                            retry_cands = list(placas_simulacion_validas)
+                        # Preferir la más alta primero, luego el resto.
+                        prefer = pick_giga_sim_plates(
+                            retry_cands,
                             format_used=format_used_grupo,
                             format_limits=format_limits_grupo,
                         )
+                        ordered = list(prefer)
+                        for p in sorted(
+                            retry_cands,
+                            key=lambda x: min(
+                                float(x.get("w") or 0.0), float(x.get("h") or 0.0)
+                            ),
+                            reverse=True,
+                        ):
+                            if p not in ordered:
+                                ordered.append(p)
                         _dbg_nesting(
                             f"[GIGA-CAL11] retry-placa VFM pendientes | "
-                            f"cands={len(retry_cands)}"
+                            f"cands={len(ordered)}"
                         )
-                        for cand in retry_cands:
+                        for cand in ordered:
                             res = _eval_candidato(cand)
                             if res and res.get("hoja") and (res["hoja"].get("piezas") or []):
                                 mejor_score = res["score"]

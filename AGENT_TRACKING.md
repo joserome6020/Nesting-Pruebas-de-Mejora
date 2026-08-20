@@ -47,6 +47,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20f — GIGA: close_pair solape ya no tumba el nest (faltan 34)
+- Causa real (log 10:59): `close_stacked_vfm_pairs` dejaba solape 101×102;
+  `reparar_separacion_minima_hoja` ignoraba `solape_metal` (expulsadas=0);
+  SIM integrity rechazaba la hoja → EMPAQUE-STOP con 34 pendientes.
+- close_pair: verificar post-apply y revertir si solape/gap < kerf.
+- Repair: expulsar/reubicar también en `solape_metal`; force-strip en safe-empaque.
+- Retry GIGA prueba todas las placas altas, no solo la pick_giga.
+- Candados: close sin solape; repair expulsa solape VFM. ANS C++ no en esta PC.
+
 ### 2026-08-20e — GIGA: no cortar nest con VFM/GS pendientes (faltan N)
 - Causa: cola “placa chica” + torre de *todos* los pares → STOP parcial e
   inventario incompleto (poka 34 faltantes).

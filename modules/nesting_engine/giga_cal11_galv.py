@@ -687,7 +687,7 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
             if op is None:
                 continue
             try:
-                if float(test.intersection(op).area) > 1.0:
+                if float(test.intersection(op).area) > 25.0:
                     return True
                 if float(test.distance(op)) + 1e-3 < kerf_mm:
                     return True
@@ -706,7 +706,7 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
             inter = float(a.intersection(b).area)
         except Exception:
             inter = 1.0
-        if inter > 0.5 or _blocked(b, skip):
+        if inter > 25.0 or _blocked(b, skip):
             lo, hi = 0.0, d0 - kerf_mm
             best = None
             for _ in range(18):
@@ -716,14 +716,18 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
                     inter2 = float(a.intersection(t).area)
                 except Exception:
                     inter2 = 1.0
-                ok = inter2 <= 0.5 and (not _blocked(t, skip)) and float(a.distance(t)) + 1e-3 >= kerf_mm - 0.2
+                ok = (
+                    inter2 <= 25.0
+                    and (not _blocked(t, skip))
+                    and float(a.distance(t)) + 1e-3 >= kerf_mm - 0.05
+                )
                 if ok:
                     best = t
                     lo = mid
                 else:
                     hi = mid
             return best
-        if float(a.distance(b)) + 1e-3 < kerf_mm - 0.2:
+        if float(a.distance(b)) + 1e-3 < kerf_mm - 0.05:
             return None
         return b
 
@@ -771,13 +775,43 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
         if saved < 3.0:
             used2.add(i2)
             continue
+        # Snapshot: si el apply deja solape/gap < kerf, revertir (causaba
+        # EMPAQUE-STOP: integridad rechaza la hoja y quedan N piezas).
+        snap_keys = ("poly", "poly_exact", "poligonos", "marcas", "shift_x", "shift_y")
+        snap = {k: copy.deepcopy(p2.get(k)) for k in snap_keys}
         _apply_rigid_pose(p2, b0, b_new, ang)
+        b_after = _piece_poly(p2)
+        bad = b_after is None
+        if not bad:
+            try:
+                inter_a = float(a.intersection(b_after).area)
+            except Exception:
+                inter_a = 99.0
+            # Mismo umbral que poka-yoke (25 mm²); close no puede dejar metal cruzado.
+            if inter_a > 25.0:
+                bad = True
+            elif float(a.distance(b_after)) + 1e-3 < kerf_mm - 0.05:
+                bad = True
+            elif _blocked(b_after, skip):
+                bad = True
+        if bad:
+            for k, v in snap.items():
+                if v is None and k not in p2:
+                    continue
+                if v is None:
+                    p2.pop(k, None)
+                else:
+                    p2[k] = v
+            stats["reverted"] = int(stats.get("reverted") or 0) + 1
+            used2.add(i2)
+            continue
         used2.add(i2)
         stats["closed"] += 1
         stats["saved_in"] = round(stats["saved_in"] + saved / 25.4, 3)
-    if stats["closed"]:
+    if stats["closed"] or stats.get("reverted"):
         print(
             f"[GIGA-CAL11] close_pair closed={stats['closed']} "
+            f"reverted={int(stats.get('reverted') or 0)} "
             f"saved={stats['saved_in']:.2f}in",
             flush=True,
         )

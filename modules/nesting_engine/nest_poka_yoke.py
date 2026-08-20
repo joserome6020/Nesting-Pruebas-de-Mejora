@@ -285,6 +285,40 @@ def _indices_par_gap_insuficiente(
     return best[1], best[2]
 
 
+def _indices_par_solape_metal(hoja: dict, *, min_area_mm2: float = 25.0) -> tuple[int, int] | None:
+    """Par con mayor solape de metal (índices reales en hoja['piezas'])."""
+    try:
+        from .sheet_integrity import _es_pieza_real_nombre
+    except Exception:
+        return None
+    piezas = list((hoja or {}).get("piezas") or [])
+    items: list[tuple[int, Any]] = []
+    for idx, p in enumerate(piezas):
+        nom = str((p or {}).get("nombre") or "")
+        if not _es_pieza_real_nombre(nom):
+            continue
+        poly = _poly_pieza_reparacion(p)
+        if poly is None:
+            continue
+        items.append((idx, poly))
+    best: tuple[float, int, int] | None = None
+    for a in range(len(items)):
+        ia, pa = items[a]
+        for b in range(a + 1, len(items)):
+            ib, pb = items[b]
+            try:
+                inter = float(pa.intersection(pb).area)
+            except Exception:
+                continue
+            if inter <= float(min_area_mm2):
+                continue
+            if best is None or inter > best[0]:
+                best = (inter, ia, ib)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
 def _plate_slack_in_dir(poly, ux: float, uy: float, w: float, h: float, margin_mm: float) -> float:
     """Cuánto se puede trasladar ``poly`` en (ux, uy) sin romper placa→pieza."""
     if poly is None or w <= 0 or h <= 0 or margin_mm <= 0:
@@ -885,11 +919,19 @@ def reparar_separacion_minima_hoja(
         if str(detail).startswith("margen_placa"):
             # El nest ya debía respetar 0.250"; no empujar post-facto.
             return False, detail, expulsadas
-        if not str(detail).startswith("gap_insuficiente"):
+        det_l = str(detail or "")
+        es_solape = det_l.startswith("solape_metal")
+        es_gap = det_l.startswith("gap_insuficiente")
+        # Antes: solape_metal salía sin expulsar → hoja inválida → SIM None →
+        # EMPAQUE-STOP-PARCIAL con piezas pendientes (GIGA close_pair VFM 101×102).
+        if not (es_solape or es_gap):
             return False, detail, expulsadas
 
         min_gap_mm = max(0.0, (float(kerf_eff) - float(tol_in)) * 25.4)
-        par = _indices_par_gap_insuficiente(hoja, min_gap_mm)
+        if es_solape:
+            par = _indices_par_solape_metal(hoja)
+        else:
+            par = _indices_par_gap_insuficiente(hoja, min_gap_mm)
         piezas = list(hoja.get("piezas") or [])
         if par is None:
             return False, detail, expulsadas
@@ -898,7 +940,7 @@ def reparar_separacion_minima_hoja(
             return False, detail, expulsadas
         pa, pb = piezas[ia], piezas[ib]
 
-        if _intentar_separar_par_kerf(
+        if not es_solape and _intentar_separar_par_kerf(
             hoja,
             ia,
             ib,

@@ -659,6 +659,57 @@ def test_cierra_par_vfm_reduce_alto():
     h1 = h1[3] - h1[1]
     assert st.get("closed", 0) >= 1, st
     assert h1 < h0 - 5.0, (h0, h1, st)
+    # Candado planta 2026-08-20: close_pair no puede dejar solape 101×102
+    # (antes → POKA parcial expulsadas=0 → SIM integrity fail → faltan 34).
+    inter = float(p101["poly"].intersection(p102["poly"]).area)
+    assert inter <= 25.0, (inter, st)
+    assert float(p101["poly"].distance(p102["poly"])) + 1e-3 >= kerf - 0.05, st
+
+
+def test_reparar_expulsa_solape_metal_vfm():
+    """solape_metal debe expulsar (antes salía sin tocar → EMPAQUE-STOP)."""
+    from shapely.affinity import translate as shp_translate
+
+    from modules.nesting_engine.nest_poka_yoke import (
+        reparar_separacion_minima_hoja,
+        validar_separacion_minima_hoja,
+    )
+
+    host = _h_with_t()
+    margin_mm = 0.250 * 25.4
+    # Dentro de placa con margin; solape deliberado entre sí (log 10:59).
+    p101 = _mk("GENE-VFM-20-101", shp_translate(host, margin_mm + 5.0, margin_mm + 5.0))
+    p102 = _mk(
+        "GENE-VFM-20-102",
+        shp_translate(host, margin_mm + 10.0, margin_mm + 13.0),
+    )
+    hoja = {
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "piezas": [p101, p102],
+    }
+    ok0, det0 = validar_separacion_minima_hoja(
+        hoja, 0.150, margin_in=0.250, w_placa=3048.0, h_placa=1219.2
+    )
+    assert not ok0 and "solape_metal" in str(det0), (ok0, det0)
+    ok, det, exp = reparar_separacion_minima_hoja(
+        hoja,
+        0.150,
+        margin_in=0.250,
+        w_placa=3048.0,
+        h_placa=1219.2,
+        permitir_expulsar=True,
+    )
+    assert len(exp) >= 1, (ok, det, exp)
+    assert len(hoja.get("piezas") or []) >= 1
+    # Tras expulsar el solape, no debe quedar solape_metal (margin OK).
+    ok2, det2 = validar_separacion_minima_hoja(
+        hoja, 0.150, margin_in=0.250, w_placa=3048.0, h_placa=1219.2
+    )
+    assert ok2, (ok2, det2, ok, det)
+    assert ok, (ok, det)
 
 
 def test_hfm_entra_bolsa_877():
@@ -1127,6 +1178,7 @@ if __name__ == "__main__":
     test_extra_i_llevan_cargo_fuera_de_hoja()
     test_hfm_entra_bolsa_877()
     test_cierra_par_vfm_reduce_alto()
+    test_reparar_expulsa_solape_metal_vfm()
     test_cargo_host_no_colocado_vuelve_a_restos()
     test_giga_no_simula_dos_alturas()
     test_combinado_forzado_en_giga()
