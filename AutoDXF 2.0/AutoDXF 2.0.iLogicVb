@@ -12,9 +12,9 @@ Imports System.Collections.Generic
 ' - Orientacion automatica de cara (A-Side)
 ' - Normalizacion de material/espesor alineada a Arga Nesting Suite
 ' - Catalogo de referencia desde react-Herinox (sin logica de stock/ranking)
-' - Calibre en nombre DXF = decimal ANS (herinox_sync / arga_gauge_equivalences.json)
-'   Snap TODOS los calibres steel/inox/al (tol 0.008"); no CAD crudo.
-'   Ej. Cal 11 acero 0.11811→0.1196; Cal 14 0.075→0.0747; Cal 16 0.060→0.0598.
+' - Calibre = espesor REAL de la pieza (geometría en placa plana si discrepa del
+'   parámetro Sheet Metal Thickness; ese param a menudo queda en Cal 11 default).
+'   Luego snap a decimal Herinox/ANS (arga_gauge_equivalences.json).
 '---------------------------------------------
 
 Public Class HerinoxCatalog
@@ -143,21 +143,23 @@ Sub Main()
                 sb.AppendLine("Error al definir cara A-Side en: " & part.DisplayName & " - " & ex.Message)
             End Try
 
-            ' 4.3) Datos material y espesor
+            ' 4.3) Datos material y espesor REAL (no solo el parámetro SM default)
             Dim invMaterial As String = SafeMaterialName(smDef, part)
             Dim materialName As String = NormalizeMaterialForArga(invMaterial, catalog)
             Dim thkTxt As String = "0"
             Try
-                Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
-                Dim thkDb As Double = smDef.Thickness.Value
-                Dim thkIn As Double = uom.ConvertUnits(thkDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+                Dim thkNote As String = ""
+                Dim thkIn As Double = ResolvePartThicknessInches(smDef, part, thkNote)
                 thkTxt = FormatThicknessForArga(thkIn, materialName)
+                If Not String.IsNullOrWhiteSpace(thkNote) AndAlso thkNote.Contains("geom=") Then
+                    sb.AppendLine("Espesor " & part.DisplayName & ": " & thkNote & " → Cal " & thkTxt)
+                End If
             Catch exThk As Exception
                 sb.AppendLine("Espesor fallback en " & part.DisplayName & ": " & exThk.Message)
                 thkTxt = "0"
             End Try
             If String.IsNullOrWhiteSpace(thkTxt) OrElse thkTxt = "0" Then
-                sb.AppendLine("AVISO: espesor 0 en " & part.DisplayName & " (revisar Sheet Metal Thickness).")
+                sb.AppendLine("AVISO: espesor 0 en " & part.DisplayName & " (revisar geometría / Sheet Metal Thickness).")
             End If
 
             ' 4.5) Cantidad
@@ -1029,6 +1031,136 @@ End Function
 Private Function FormatThickness(v As Double) As String
     ' Compat: formateo crudo. Preferir FormatThicknessForArga en export.
     Return FmtInchDecimal(v)
+End Function
+
+Private Function ResolvePartThicknessInches(smDef As SheetMetalComponentDefinition, part As PartDocument, ByRef note As String) As Double
+    ' Verdad de nest/compra: geometría de placa si el parámetro SM quedó en default (Cal 11).
+    note = ""
+    Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
+    Dim smIn As Double = 0.0
+    Try
+        smIn = uom.ConvertUnits(smDef.Thickness.Value, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+    Catch
+        smIn = 0.0
+    End Try
+
+    Dim bendCount As Integer = 0
+    Try
+        bendCount = smDef.Bends.Count
+    Catch
+        bendCount = 0
+    End Try
+
+    Dim geoIn As Double = 0.0
+    Try
+        geoIn = MeasureGeometricThicknessInches(part)
+    Catch
+        geoIn = 0.0
+    End Try
+
+    If geoIn >= 0.02 AndAlso geoIn <= 4.0 Then
+        ' Placa plana: discrepancia SM vs geometría → usar geometría (lug 1", flanges 0.25…).
+        If bendCount = 0 AndAlso smIn > 0 AndAlso System.Math.Abs(geoIn - smIn) > 0.01 Then
+            note = "geom=" & FmtInchDecimal(geoIn) & " (SM param=" & FmtInchDecimal(smIn) & ")"
+            Return geoIn
+        End If
+        If smIn <= 0 Then
+            note = "geom=" & FmtInchDecimal(geoIn)
+            Return geoIn
+        End If
+        ' SM tipo calibre fino pero cuerpo claramente más grueso (default olvidado).
+        If bendCount = 0 AndAlso smIn < 0.2 AndAlso geoIn >= 0.18 AndAlso (geoIn / smIn) >= 1.5 Then
+            note = "geom=" & FmtInchDecimal(geoIn) & " (SM param sospechoso=" & FmtInchDecimal(smIn) & ")"
+            Return geoIn
+        End If
+    End If
+
+    If smIn > 0 Then
+        note = "SM=" & FmtInchDecimal(smIn)
+        Return smIn
+    End If
+    If geoIn > 0 Then
+        note = "geom=" & FmtInchDecimal(geoIn)
+        Return geoIn
+    End If
+    Return 0.0
+End Function
+
+Private Function MeasureGeometricThicknessInches(part As PartDocument) As Double
+    Dim uom As UnitsOfMeasure = part.UnitsOfMeasure
+    Dim faceThk As Double = MeasureThicknessLargestParallelFaces(part, uom)
+    If faceThk >= 0.02 AndAlso faceThk <= 4.0 Then Return faceThk
+
+    Dim boxThk As Double = MeasureMinBodyExtentInches(part, uom)
+    If boxThk >= 0.02 AndAlso boxThk <= 4.0 Then Return boxThk
+    Return 0.0
+End Function
+
+Private Function MeasureThicknessLargestParallelFaces(part As PartDocument, uom As UnitsOfMeasure) As Double
+    Try
+        Dim faceA As Face = GetLargestPlanarFace(part)
+        If faceA Is Nothing Then Return 0.0
+        Dim plnA As Plane = CType(faceA.Geometry, Plane)
+        Dim nA As UnitVector = plnA.Normal
+        Dim pA As Point = plnA.RootPoint
+
+        Dim areaA As Double = faceA.Evaluator.Area
+        Dim bestDistDb As Double = 0.0
+        Dim found As Boolean = False
+        Dim bodies As SurfaceBodies = part.ComponentDefinition.SurfaceBodies
+        For Each body As SurfaceBody In bodies
+            For Each faceB As Face In body.Faces
+                If faceB Is faceA Then Continue For
+                If faceB.SurfaceType <> SurfaceTypeEnum.kPlaneSurface Then Continue For
+                ' Cara opuesta comparable (evita nervios / chaflanes chicos).
+                If faceB.Evaluator.Area < (areaA * 0.35) Then Continue For
+                Dim plnB As Plane = CType(faceB.Geometry, Plane)
+                Dim nB As UnitVector = plnB.Normal
+                Dim dot As Double = nA.X * nB.X + nA.Y * nB.Y + nA.Z * nB.Z
+                ' Paralelas opuestas (caras de la placa).
+                If dot > -0.98 Then Continue For
+                Dim pB As Point = plnB.RootPoint
+                Dim dx As Double = pB.X - pA.X
+                Dim dy As Double = pB.Y - pA.Y
+                Dim dz As Double = pB.Z - pA.Z
+                Dim distDb As Double = System.Math.Abs(dx * nA.X + dy * nA.Y + dz * nA.Z)
+                If distDb < 0.0001 Then Continue For
+                If (Not found) OrElse distDb < bestDistDb Then
+                    bestDistDb = distDb
+                    found = True
+                End If
+            Next
+        Next
+        If Not found Then Return 0.0
+        Return uom.ConvertUnits(bestDistDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+    Catch
+        Return 0.0
+    End Try
+End Function
+
+Private Function MeasureMinBodyExtentInches(part As PartDocument, uom As UnitsOfMeasure) As Double
+    Try
+        Dim minIn As Double = 1.0E9
+        Dim any As Boolean = False
+        Dim bodies As SurfaceBodies = part.ComponentDefinition.SurfaceBodies
+        For Each body As SurfaceBody In bodies
+            Dim box As Box = body.RangeBox
+            Dim dx As Double = System.Math.Abs(box.MaxPoint.X - box.MinPoint.X)
+            Dim dy As Double = System.Math.Abs(box.MaxPoint.Y - box.MinPoint.Y)
+            Dim dz As Double = System.Math.Abs(box.MaxPoint.Z - box.MinPoint.Z)
+            Dim mDb As Double = dx
+            If dy < mDb Then mDb = dy
+            If dz < mDb Then mDb = dz
+            Dim mIn As Double = uom.ConvertUnits(mDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kInchLengthUnits)
+            If mIn > 0 AndAlso mIn < minIn Then
+                minIn = mIn
+                any = True
+            End If
+        Next
+        If any Then Return minIn
+    Catch
+    End Try
+    Return 0.0
 End Function
 
 Private Function FormatThicknessForArga(thkIn As Double, materialName As String) As String

@@ -55,11 +55,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20l — Reanudar sync con contraseña DYT361
+- Evita PO/ContPAQ accidentales en S.W.O.: pide la misma clave operativa
+  (gaps/STEPS) antes de reintentar VSM/ContPAQ/reporte.
+
 ### 2026-08-20k — Crear STEPs desde DXF (cinta Salida)
 - Botón **Crear STEPs** bajo Ver STEP: modos *Desde nesteo* (cliente→job→W.O./S.W.O.)
   y *Desde ruta* (carpeta NESTING, como despachador nocturno).
 - Reutiliza `despachador_nocturno.procesar_ruta_nesting` (FreeCAD) para acero y cobre.
 - `engine/step_paths`: listar W.O./S.W.O. con DXF convertibles (sin exigir STEP previo).
+
+### 2026-08-20l — AutoDXF: espesor geométrico real (no SM default Cal 11)
+- Causa: solo leía `smDef.Thickness` → lug 1\" y flanges 0.25/0.375/0.5
+  caían en `Cal 0.1196 A 36`.
+- Ahora: placa plana mide caras paralelas / bbox; si discrepa del param SM,
+  usa geometría y luego snap Herinox.
 
 ### 2026-08-20k — AutoDXF: Acero Suave/Forjado/Genérico → A 36
 - Inventor librería ES no está en Herinox; salían carpetas `Cal 0.1196 Acero, Suave`.
