@@ -226,8 +226,13 @@ _CREDENTIAL_KEYS = (
 
 
 def normalize_material(raw: str) -> str:
+    import unicodedata
+
     m = (raw or "").strip().upper().replace("_", " ")
     m = re.sub(r"\s+", " ", m)
+    m = "".join(
+        c for c in unicodedata.normalize("NFD", m) if unicodedata.category(c) != "Mn"
+    )
     if not m:
         return ""
     # Galvanizado antes que A 36 genérico (A 36 GALV también contiene "A 36").

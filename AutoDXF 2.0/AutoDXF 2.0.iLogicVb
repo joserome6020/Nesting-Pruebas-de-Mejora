@@ -969,6 +969,10 @@ Private Function NormalizeMaterialAlias(raw As String) As String
     Dim m As String = UCase(Trim(CStr(raw)))
     m = Replace(m, "_", " ")
     m = Regex.Replace(m, "\s+", " ")
+    ' Quitar acentos (Genérico → GENERICO) para empatar Herinox.
+    m = Replace(m, "Á", "A") : m = Replace(m, "É", "E") : m = Replace(m, "Í", "I")
+    m = Replace(m, "Ó", "O") : m = Replace(m, "Ú", "U") : m = Replace(m, "Ü", "U")
+    m = Replace(m, "Ñ", "N")
 
     If m = "" Then Return ""
 

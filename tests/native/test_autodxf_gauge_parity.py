@@ -53,8 +53,10 @@ def test_ilogic_tiene_snap_y_materiales():
     assert "0.1285" in src  # Cal 8 aluminum
     assert 'Return "Galvanizado"' in src
     assert "G90" in src
-    i_galv = src.find("GALVAN")
-    i_a36 = src.find('Return "A 36"', src.find("NormalizeMaterialAlias"))
+    alias_fn = src.find("Private Function NormalizeMaterialAlias")
+    assert alias_fn > 0
+    i_galv = src.find("GALVAN", alias_fn)
+    i_a36 = src.find('Return "A 36"', alias_fn)
     assert i_galv > 0 and i_a36 > 0 and i_galv < i_a36
     assert "FormatThicknessForArga(thkIn, materialName)" in src
     assert "Nunca tumbar el export" in src or "Catch" in src

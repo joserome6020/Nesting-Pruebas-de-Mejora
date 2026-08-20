@@ -24,9 +24,14 @@ RE_CAL_TOKEN = re.compile(
 
 
 def normalizar_material_autodxf(texto_material: str, *, default: str = "CARBONO") -> str:
+    import unicodedata
+
     mat = str(texto_material or "").strip().upper()
     mat = mat.replace("_", " ")
     mat = re.sub(r"\s+", " ", mat)
+    mat = "".join(
+        c for c in unicodedata.normalize("NFD", mat) if unicodedata.category(c) != "Mn"
+    )
     if not mat:
         return default
 
