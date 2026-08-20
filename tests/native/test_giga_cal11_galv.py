@@ -821,6 +821,179 @@ def test_planta_giga_no_par_vacio_y_azules_en_bahia():
     )
 
 
+def test_fase_b_facing_jala_patio_sin_pool():
+    """H61: pasillo con aire + GS en patio de la misma hoja → las mete (Mudar local)."""
+    from shapely.affinity import translate as shp_translate
+    from shapely.ops import unary_union
+
+    from modules.nesting_engine.giga_cal11_galv import fill_vfm_facing_gap
+
+    w, rail, tw, th, tx = 1990.0, 40.0, 90.0, 140.0, 950.0
+    t_up = Polygon(
+        [
+            (0.0, 0.0),
+            (w, 0.0),
+            (w, rail),
+            (tx + tw, rail),
+            (tx + tw, rail + th),
+            (tx, rail + th),
+            (tx, rail),
+            (0.0, rail),
+            (0.0, 0.0),
+        ]
+    )
+    t_dn = Polygon(
+        [
+            (0.0, th),
+            (tx, th),
+            (tx, 0.0),
+            (tx + tw, 0.0),
+            (tx + tw, th),
+            (w, th),
+            (w, th + rail),
+            (0.0, th + rail),
+            (0.0, th),
+        ]
+    )
+    y102 = (rail + th) + 10.0
+    p102 = shp_translate(t_dn, 0.0, y102)
+    gw, gh = 3.84 * 25.4, 3.61 * 25.4
+    piezas = [
+        _mk("GENE-VFM-20-101", t_up),
+        _mk("GENE-VFM-20-102", p102),
+    ]
+    # 9 GS en el patio (derecha), como las que Mudar metió a mano.
+    for i in range(9):
+        x0 = 2100.0 + (i % 3) * (gw + 10.0)
+        y0 = 40.0 + (i // 3) * (gh + 10.0)
+        piezas.append(_mk(f"GENE-GS-0820-708#{i}", box(x0, y0, x0 + gw, y0 + gh)))
+    hoja = {
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "piezas": piezas,
+        "area_usada": 0.0,
+    }
+    pocket = unary_union(
+        [
+            box(0.0, rail, tx, y102 + th),
+            box(tx + tw, rail, w, y102 + th),
+        ]
+    )
+    stats = fill_vfm_facing_gap(hoja, pool=[])
+    assert int(stats.get("from_sheet") or 0) >= 6, stats
+    n_in = 0
+    for p in hoja["piezas"]:
+        if "GS" not in str(p.get("nombre") or ""):
+            continue
+        poly = p.get("poly")
+        if poly is None:
+            continue
+        if float(poly.intersection(pocket).area) > 0.5 * float(poly.area):
+            n_in += 1
+    assert n_in >= 6, f"patio no entró al pasillo: in={n_in} stats={stats}"
+
+
+def test_fase_b_grupo_mueve_gs_de_hoja_pobre():
+    """Mudar automático: GS en hoja pobre → pasillo de hoja con sandwich VFM."""
+    from shapely.affinity import translate as shp_translate
+    from shapely.ops import unary_union
+
+    from modules.nesting_engine.giga_cal11_galv import densify_giga_group_phase_b
+
+    w, rail, tw, th, tx = 1990.0, 40.0, 90.0, 140.0, 950.0
+    t_up = Polygon(
+        [
+            (0.0, 0.0),
+            (w, 0.0),
+            (w, rail),
+            (tx + tw, rail),
+            (tx + tw, rail + th),
+            (tx, rail + th),
+            (tx, rail),
+            (0.0, rail),
+            (0.0, 0.0),
+        ]
+    )
+    t_dn = Polygon(
+        [
+            (0.0, th),
+            (tx, th),
+            (tx, 0.0),
+            (tx + tw, 0.0),
+            (tx + tw, th),
+            (w, th),
+            (w, th + rail),
+            (0.0, th + rail),
+            (0.0, th),
+        ]
+    )
+    y102 = (rail + th) + 10.0
+    p102 = shp_translate(t_dn, 0.0, y102)
+    gw, gh = 3.84 * 25.4, 3.61 * 25.4
+    # H61-like: sandwich con solo 2 GS ya dentro (subcargado).
+    good = {
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "area_usada": 0.0,
+        "piezas": [
+            _mk("GENE-VFM-20-101", t_up),
+            _mk("GENE-VFM-20-102", p102),
+            _mk("GENE-GS-0820-708#a", box(20.0, rail + 5.0, 20.0 + gw, rail + 5.0 + gh)),
+            _mk(
+                "GENE-GS-0820-708#b",
+                box(20.0 + gw + 8.0, rail + 5.0, 20.0 + 2 * gw + 8.0, rail + 5.0 + gh),
+            ),
+        ],
+    }
+    # Hoja pobre tipo 29%: par VFM + 9 GS en patio.
+    poor_pcs = [
+        _mk("GENE-VFM-20-101#p", shp_translate(t_up, 0.0, 0.0)),
+        _mk("GENE-VFM-20-102#p", shp_translate(p102, 0.0, 0.0)),
+    ]
+    for i in range(9):
+        x0 = 2100.0 + (i % 3) * (gw + 10.0)
+        y0 = 40.0 + (i // 3) * (gh + 10.0)
+        poor_pcs.append(_mk(f"GENE-GS-0820-708#d{i}", box(x0, y0, x0 + gw, y0 + gh)))
+    poor = {
+        "placa_w": 3048.0,
+        "placa_h": 1219.2,
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "area_usada": 0.0,
+        "piezas": poor_pcs,
+    }
+    pocket = unary_union(
+        [
+            box(0.0, rail, tx, y102 + th),
+            box(tx + tw, rail, w, y102 + th),
+        ]
+    )
+    stats = densify_giga_group_phase_b([good, poor], budget_s=30.0)
+    assert int(stats.get("cross_moved") or 0) >= 6, stats
+    n_in = 0
+    for p in good["piezas"]:
+        if "GS" not in str(p.get("nombre") or ""):
+            continue
+        poly = p.get("poly")
+        if poly is None:
+            continue
+        if float(poly.intersection(pocket).area) > 0.5 * float(poly.area):
+            n_in += 1
+    assert n_in >= 8, f"H61-style: solo {n_in} GS en pasillo tras phase_b stats={stats}"
+    # Inventario: total GS no se pierde.
+    n_gs = sum(
+        1
+        for h in (good, poor)
+        for p in (h.get("piezas") or [])
+        if "GS" in str(p.get("nombre") or "")
+    )
+    assert n_gs == 11, n_gs
+
+
 if __name__ == "__main__":
     test_detector_cal11_galv_no_a36()
     test_clave_desde_debug_tag()
@@ -851,4 +1024,6 @@ if __name__ == "__main__":
     test_giga_no_simula_dos_alturas()
     test_combinado_forzado_en_giga()
     test_planta_giga_no_par_vacio_y_azules_en_bahia()
+    test_fase_b_facing_jala_patio_sin_pool()
+    test_fase_b_grupo_mueve_gs_de_hoja_pobre()
     print("GIGA_CAL11_GALV PASS")

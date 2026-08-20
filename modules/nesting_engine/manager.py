@@ -5266,6 +5266,17 @@ class MotorNesting:
             num_placa_actual += 1
 
         if hojas_finales:
+            try:
+                from .giga_cal11_galv import (
+                    densify_giga_group_phase_b,
+                    should_force_giga_engine,
+                )
+
+                if should_force_giga_engine(clave):
+                    densify_giga_group_phase_b(hojas_finales, budget_s=90.0)
+            except Exception as _giga_pb_exc:
+                _dbg_nesting(f"[GIGA-CAL11] phase_b grupo skip: {_giga_pb_exc}")
+
             if _es_motor_arga_force():
                 hojas_finales, costo_total_lote = _post_proceso_arga_seguro(
                     piezas,

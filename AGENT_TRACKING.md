@@ -47,6 +47,13 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20c — GIGA Fase B: densificar huecos como Mudar
+- Facing ya no exige pool: jala también del patio de la misma hoja.
+- Barrido denso en tira + hasta 3 pases por hoja (presupuesto ~12 s).
+- Pase global al cerrar el grupo: mueve GS/BKT de hojas pobres a pasillos
+  VFM abiertos (equivalente a Mudar masivo, tope 90 s).
+- Candados: patio→pasillo sin pool; cross-sheet H61-style (≥6 GS).
+
 ### 2026-08-20b — Cotas CAD a milésima de pulgada
 - Tabla nest y PARTS muestran L/W a 0.001\" (ya no 77.37 vs 77.38 por redondeo a 2 decimales).
 - Cotas de tabla preferen AABB del DXF fuente (cacheado); misma ruta ⇒ mismo número.
