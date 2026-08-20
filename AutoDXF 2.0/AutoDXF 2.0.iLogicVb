@@ -908,9 +908,17 @@ Private Function NormalizeMaterialForArga(invMaterial As String, cat As HerinoxC
                 norm = fromRaw
             End If
         End If
+        ' También probar el alias ya canónico contra crudos (ej. "A 36").
+        If String.Equals(norm, NormalizeMaterialAlias(invMaterial), StringComparison.OrdinalIgnoreCase) Then
+            Dim raw2 As String = TryMatchRawCatalogMaterial(norm, cat.RawMaterials)
+            If Not String.IsNullOrEmpty(raw2) Then
+                Dim from2 As String = NormalizeMaterialAlias(raw2)
+                If Not String.IsNullOrEmpty(from2) Then norm = from2
+            End If
+        End If
     End If
 
-    ' Si el catalogo Herinox esta disponible y contiene variante exacta, usarla.
+    ' 2) Si el catalogo tiene la variante canónica exacta, usarla.
     If cat IsNot Nothing AndAlso cat.Available AndAlso cat.CanonicalMaterials IsNot Nothing Then
         For Each m In cat.CanonicalMaterials
             If String.Equals(m.Trim(), norm.Trim(), StringComparison.OrdinalIgnoreCase) Then
@@ -918,7 +926,11 @@ Private Function NormalizeMaterialForArga(invMaterial As String, cat As HerinoxC
             End If
         Next
     End If
-    Return norm
+
+    ' 3) Nunca dejar nombres de librería Inventor (Acero Suave/Forjado/Genérico).
+    Dim known As String = NormalizeMaterialAlias(norm)
+    If Not String.IsNullOrEmpty(known) Then Return known
+    Return "A 36"
 End Function
 
 Private Function TryMatchRawCatalogMaterial(invMaterial As String, rawMaterials As List(Of String)) As String
@@ -970,11 +982,29 @@ Private Function NormalizeMaterialAlias(raw As String) As String
     End If
 
     If m.Contains("A 36") OrElse m.Contains("A36") OrElse m.Contains("ASTM A36") Then Return "A 36"
+
+    ' Inventor ES: "Acero, Suave" / "Acero, Forjado" / Genérico — no están en Herinox.
+    ' Empatar a A 36 (materia bruta carbono) para nest ANS.
+    If m.Contains("SUAVE") OrElse m.Contains("FORJAD") OrElse m.Contains("MILD") _
+       OrElse m.Contains("FORGED") OrElse m.Contains("GENERIC") OrElse m.Contains("GENERICO") _
+       OrElse m = "DEFAULT" OrElse m.Contains("DEFAULT") Then
+        Return "A 36"
+    End If
+
     If m.Contains("CARBON") OrElse (m.Contains("ACERO") AndAlso m.Contains("CARBONO")) _
        OrElse m.Contains("STEEL, CARBON") OrElse m.Contains("STEEL CARBON") _
        OrElse m.Contains("MILD STEEL") OrElse m.Contains("HOT ROLLED") OrElse m.Contains("COLD ROLLED") _
        OrElse m = "CRS" OrElse m = "HRS" OrElse m.Contains(" HR ") OrElse m.StartsWith("HR ") _
        OrElse m.EndsWith(" HR") OrElse m.Contains("HRPO") Then
+        Return "A 36"
+    End If
+
+    ' Cualquier "Acero…" de librería Inventor (no inox/al) → A 36.
+    If m.Contains("ACERO") AndAlso Not (m.Contains("INOX") OrElse m.Contains("STAINLESS") OrElse m.Contains("ALUMIN")) Then
+        Return "A 36"
+    End If
+    If (m.Contains("STEEL") AndAlso Not (m.Contains("STAINLESS") OrElse m.Contains("INOX") OrElse m.Contains("ALUMIN"))) _
+       AndAlso Not m.Contains("TOOL") Then
         Return "A 36"
     End If
 

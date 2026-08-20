@@ -57,6 +57,18 @@ def normalizar_material_autodxf(texto_material: str, *, default: str = "CARBONO"
         return "CARBONO"
     if "MILD STEEL" in mat or "HOT ROLLED" in mat or "COLD ROLLED" in mat or "HRPO" in mat:
         return "CARBONO"
+    if "SUAVE" in mat or "FORJAD" in mat or "FORGED" in mat or "GENERIC" in mat or "GENERICO" in mat:
+        return "CARBONO"
+    if "ACERO" in mat and "INOX" not in mat and "STAINLESS" not in mat and "ALUMIN" not in mat:
+        return "CARBONO"
+    if (
+        "STEEL" in mat
+        and "STAINLESS" not in mat
+        and "INOX" not in mat
+        and "ALUMIN" not in mat
+        and "TOOL" not in mat
+    ):
+        return "CARBONO"
 
     if "STAINLESS" in mat or "INOX" in mat or "INOXIDABLE" in mat or "SSTL" in mat:
         return "INOXIDABLE"

@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20k — Crear STEPs desde DXF (cinta Salida)
+- Botón **Crear STEPs** bajo Ver STEP: modos *Desde nesteo* (cliente→job→W.O./S.W.O.)
+  y *Desde ruta* (carpeta NESTING, como despachador nocturno).
+- Reutiliza `despachador_nocturno.procesar_ruta_nesting` (FreeCAD) para acero y cobre.
+- `engine/step_paths`: listar W.O./S.W.O. con DXF convertibles (sin exigir STEP previo).
+
+### 2026-08-20k — AutoDXF: Acero Suave/Forjado/Genérico → A 36
+- Inventor librería ES no está en Herinox; salían carpetas `Cal 0.1196 Acero, Suave`.
+- Alias + ANS: Suave/Forjado/Genérico/Acero… → A 36 / CARBONO.
+
 ### 2026-08-20j — GIGA motor: cualquier Cal 11 Galv (no solo 0.11811)
 - Detector + UI: 0.1196 / 0.11811 / gauge 11 + GALV activan el motor.
 - Texto del switch ya no dice “solo 0.11811_GALVANIZADO”.

@@ -252,6 +252,24 @@ def normalize_material(raw: str) -> str:
         or "HOT ROLLED" in m
         or "COLD ROLLED" in m
         or "HRPO" in m
+        or "SUAVE" in m
+        or "FORJAD" in m
+        or "FORGED" in m
+        or "GENERIC" in m
+        or "GENERICO" in m
+        or (
+            "ACERO" in m
+            and "INOX" not in m
+            and "STAINLESS" not in m
+            and "ALUMIN" not in m
+        )
+        or (
+            "STEEL" in m
+            and "STAINLESS" not in m
+            and "INOX" not in m
+            and "ALUMIN" not in m
+            and "TOOL" not in m
+        )
     ):
         return "A 36"
     # Inoxidable: piezas DXF (INOXIDABLE), Herinox (SSTL / SSTL 304) y variantes comunes.

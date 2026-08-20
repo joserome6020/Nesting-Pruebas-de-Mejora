@@ -94,6 +94,29 @@ def test_ans_import_snap_legacy_dxf_name():
     assert normalizar_material_autodxf("A 36 GALV") == "GALVANIZADO"
 
 
+def test_inventor_acero_suave_forjado_a_carbono():
+    # Librería Inventor ES no está en Herinox; debe empatar a carbono/A36.
+    assert normalizar_material_autodxf("Acero, Suave") == "CARBONO"
+    assert normalizar_material_autodxf("Acero, Forjado") == "CARBONO"
+    assert normalizar_material_autodxf("Genérico") == "CARBONO"
+    assert normalizar_material_autodxf("Generic") == "CARBONO"
+    from modules.consulta_herinox_bridge import normalize_material
+
+    assert normalize_material("Acero, Suave") == "A 36"
+    assert normalize_material("Acero, Forjado") == "A 36"
+    assert normalize_material("Genérico") == "A 36"
+
+
+def test_ilogic_mapea_acero_suave_forjado():
+    src = (RAIZ / "AutoDXF 2.0" / "AutoDXF 2.0.iLogicVb").read_text(
+        encoding="utf-8", errors="replace"
+    )
+    assert "SUAVE" in src and "FORJAD" in src
+    assert 'Return "A 36"' in src
+    # Catch-all Acero… → A 36 antes de ToTitleCase.
+    assert "m.Contains(\"ACERO\")" in src or 'm.Contains("ACERO")' in src
+
+
 def test_cal16_no_cae_en_0625():
     assert snap_thickness_inches(0.060, "A 36") == 0.0598
     assert snap_thickness_inches(0.0598, "GALVANIZADO") == 0.0598
@@ -106,5 +129,7 @@ if __name__ == "__main__":
     test_casos_planta_conocidos()
     test_calibre_nominal_entero()
     test_ans_import_snap_legacy_dxf_name()
+    test_inventor_acero_suave_forjado_a_carbono()
+    test_ilogic_mapea_acero_suave_forjado()
     test_cal16_no_cae_en_0625()
     print("AUTODXF_GAUGE_PARITY PASS")
