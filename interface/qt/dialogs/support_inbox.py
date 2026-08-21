@@ -86,30 +86,56 @@ def _build_body(*, category: str, description: str, app_context: dict) -> str:
 
 
 def open_outlook_draft(*, subject: str, body: str, attachments: list[Path]) -> None:
-    """Abre un borrador de Outlook desktop con adjuntos."""
+    """Abre un borrador de Outlook desktop con adjuntos.
+
+    Preferencia: COM vía win32com (sin ventana PowerShell). Fallback: PS1
+    oculto (-WindowStyle Hidden -Sta) para no dejar consola colgada.
+    """
     outbox = _outbox_dir()
     body_path = outbox / "body.txt"
     body_path.write_text(body, encoding="utf-8")
-    attach_paths: list[str] = []
+    attach_paths: list[Path] = []
     for src in attachments:
         dst = outbox / src.name
         if src.resolve() != dst.resolve():
             dst.write_bytes(src.read_bytes())
-        attach_paths.append(str(dst))
+        attach_paths.append(dst)
+
+    # 1) COM directo (sin PowerShell visible).
+    try:
+        import win32com.client  # type: ignore
+
+        outlook = win32com.client.Dispatch("Outlook.Application")
+        mail = outlook.CreateItem(0)
+        mail.To = DESTINATARIO_EMAIL
+        mail.Subject = subject
+        mail.Body = body
+        for path in attach_paths:
+            mail.Attachments.Add(str(path))
+        mail.Display(True)
+        return
+    except Exception:
+        pass
+
+    # 2) Fallback PowerShell oculto + STA (COM Outlook).
     meta = {
         "to": DESTINATARIO_EMAIL,
         "subject": subject,
         "body_path": str(body_path),
-        "attachments": attach_paths,
+        "attachments": [str(p) for p in attach_paths],
     }
     meta_path = outbox / "draft.json"
     meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    def _ps_quote(value: str) -> str:
+        return "'" + str(value).replace("'", "''") + "'"
+
     script_path = outbox / "open_draft.ps1"
     script_path.write_text(
         "\n".join(
             [
                 "$ErrorActionPreference = 'Stop'",
-                f"$meta = Get-Content -LiteralPath '{meta_path}' -Raw -Encoding UTF8 | ConvertFrom-Json",
+                f"$meta = Get-Content -LiteralPath {_ps_quote(str(meta_path))} -Raw -Encoding UTF8 | ConvertFrom-Json",
                 "$body = Get-Content -LiteralPath $meta.body_path -Raw -Encoding UTF8",
                 "$outlook = New-Object -ComObject Outlook.Application",
                 "$mail = $outlook.CreateItem(0)",
@@ -119,7 +145,7 @@ def open_outlook_draft(*, subject: str, body: str, attachments: list[Path]) -> N
                 "foreach ($path in @($meta.attachments)) {",
                 "  if ($path) { [void]$mail.Attachments.Add($path) }",
                 "}",
-                "$mail.Display()",
+                "$mail.Display($true)",
             ]
         ),
         encoding="utf-8",
@@ -128,6 +154,9 @@ def open_outlook_draft(*, subject: str, body: str, attachments: list[Path]) -> N
         [
             "powershell",
             "-NoProfile",
+            "-WindowStyle",
+            "Hidden",
+            "-Sta",
             "-ExecutionPolicy",
             "Bypass",
             "-File",
@@ -135,8 +164,9 @@ def open_outlook_draft(*, subject: str, body: str, attachments: list[Path]) -> N
         ],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=90,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip() or f"código {completed.returncode}"

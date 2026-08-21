@@ -28,6 +28,8 @@ obligatorio es:
   es otra versión/commit: cada build genera su propio tag
   `v{version}-{commit_short}`.
 - Considerar el release cerrado sin URL pública / UNC usable por el updater.
+- Construir con el ANS abierto o publicar un zip con smoke/checklist a medias
+  (ver `release-complete-packaging.mdc`).
 
 ## Excepciones
 

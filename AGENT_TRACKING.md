@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-21d — Release completo + Crear STEPs/buzón en el .exe
+- Regla: cerrar ANS antes de `--release`; smoke 100% o repetir
+  (`.cursor/rules/release-complete-packaging.mdc`).
+- Crear STEPs: empaquetar `CAD (OCCT)/engine` (`--paths` + hidden-import
+  `engine.step_paths`) — fallaba ModuleNotFound al elegir ruta en frozen.
+- Buzón: Outlook vía win32com o PowerShell oculto (`-WindowStyle Hidden -Sta`);
+  ya no deja consola PS abierta.
+- Candado: `test_release_engine_step_paths_packaged.py`.
+
 ### 2026-08-21c — FreeCAD STEP: barra % por carpeta
 - Causa: FreeCAD no reporta avance; el diálogo quedaba en STEP 0/N aunque
   ya hubiera `.step` en disco (solo `mensaje=` sin `step_done`).

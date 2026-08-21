@@ -154,6 +154,12 @@ HIDDEN_IMPORTS = (
     "interface.qt.dialogs.nest_sim_lab",
     "interface.qt.dialogs.nest_sim_timeline",
     "interface.qt.dialogs.support_inbox",
+    # CAD (OCCT)/engine — Crear STEPs / Ver STEP (sys.path runtime + frozen)
+    "engine",
+    "engine.step_paths",
+    "engine.dxf_to_step",
+    "engine.occt_runtime",
+    "engine.step_io",
     "interface.qt.widgets.herinox_switch",
     "interface.qt.widgets.largos_tira_canvas",
     "interface.qt.widgets.largos_perfil_draw",
@@ -210,6 +216,7 @@ COLLECT_SUBMODULES = (
     "modules.dxf_export",
     "modules.dxf_mark",
     "interface.qt",
+    "engine",
 )
 
 # Archivos que deben existir antes de empaquetar (ARGA NESTING SUITE actual).
@@ -224,6 +231,8 @@ CRITICAL_SUITE_FILES = (
     ROOT / "interface" / "qt" / "dialogs" / "step_viewer.py",
     ROOT / "interface" / "qt" / "dialogs" / "crear_steps.py",
     ROOT / "interface" / "qt" / "dialogs" / "support_inbox.py",
+    ROOT / "CAD (OCCT)" / "engine" / "__init__.py",
+    ROOT / "CAD (OCCT)" / "engine" / "step_paths.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_tira_canvas.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_perfil_draw.py",
     ROOT / "interface" / "qt" / "widgets" / "herinox_switch.py",
@@ -256,7 +265,11 @@ SMOKE_IMPORT_MODULES = (
     "interface.largos_nesting_service",
     "interface.qt.dialogs.largos_nesting_modal",
     "interface.qt.dialogs.support_inbox",
+    "interface.qt.dialogs.crear_steps",
+    "interface.qt.dialogs.step_viewer",
     "interface.qt.widgets.largos_perfil_draw",
+    "engine",
+    "engine.step_paths",
     "modules.win_dll_bootstrap",
     "modules.nesting_engine.algorithm_bridge",
     "modules.nesting_engine.arga_nest_core_bridge",
@@ -481,7 +494,7 @@ def ensure_build_dependencies():
 
 
 def _ensure_build_import_path():
-    for p in (ROOT, ROOT / "interface"):
+    for p in (ROOT, ROOT / "interface", ROOT / "CAD (OCCT)"):
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
 
@@ -603,6 +616,55 @@ def _needs_nest_core_rebuild(*, force_core: bool, skip_core: bool) -> bool:
         print("[INFO] Fuentes ArgaNestCore más recientes que el .pyd; se recompilará.")
         return True
     return False
+
+
+def ensure_ans_closed_for_release() -> None:
+    """Impide --release con ANS / FreeCAD abiertos (bloquean .pyd y dejan zip incompleto)."""
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        # Fallback sin psutil: tasklist + filtrado grosero.
+        out = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        blob = (out.stdout or "").lower()
+        hits = []
+        for needle in (
+            "arga nesting suite.exe",
+            "freecad.exe",
+            "freecadcmd.exe",
+        ):
+            if needle in blob:
+                hits.append(needle)
+        # main.py: solo avisar si hay python con cmdline (no fiable vía tasklist)
+        if hits:
+            raise RuntimeError(
+                "Cierra el ANS / FreeCAD antes del Release. Procesos detectados: "
+                + ", ".join(hits)
+            )
+        print("[OK] ANS cerrado (chequeo tasklist; psutil no disponible).")
+        return
+
+    blockers: list[str] = []
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            cmd = " ".join(proc.info.get("cmdline") or []).lower()
+        except (psutil.Error, TypeError):
+            continue
+        if name in {"arga nesting suite.exe", "freecad.exe", "freecadcmd.exe"}:
+            blockers.append(f"{name} pid={proc.info.get('pid')}")
+            continue
+        if "main.py" in cmd and "new arga nesting suite" in cmd.replace("/", "\\"):
+            blockers.append(f"python main.py pid={proc.info.get('pid')}")
+    if blockers:
+        raise RuntimeError(
+            "Cierra el ANS / FreeCAD antes del Release:\n  - " + "\n  - ".join(blockers)
+        )
+    print("[OK] ANS cerrado (ningún proceso Suite/FreeCAD activo).")
 
 
 def validate_suite_manifest():
@@ -821,6 +883,7 @@ def _pyinstaller_data_args() -> list[str]:
         (MACRO, "."),
         (ROOT / "modules", "modules"),
         (ROOT / "interface", "interface"),
+        (ROOT / "CAD (OCCT)" / "engine", "engine"),
         (ROOT / "assets", "assets"),
         (ROOT / "_config", "_config"),
         # Plantillas dentro del bundle (canónicas para bootstrap del data_dir).
@@ -974,6 +1037,8 @@ def build_exe(
         str(ROOT / "interface"),
         "--paths",
         str(ROOT / "modules"),
+        "--paths",
+        str(ROOT / "CAD (OCCT)"),
     ]
     cmd += _pyinstaller_collect_args()
     cmd += _pyinstaller_data_args()
@@ -2002,6 +2067,8 @@ def main():
         return
 
     validate_suite_manifest()
+    if args.release:
+        ensure_ans_closed_for_release()
 
     if not args.skip_deps:
         ensure_build_dependencies()

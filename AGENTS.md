@@ -28,6 +28,11 @@
     (`python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
     o el UNC indicado) y devolver la URL del tag nuevo. No dejar el zip solo
     en `dist/releases/`. Ver `.cursor/rules/release-publish.mdc`.
+10c. **Release = ANS cerrado + empaquetado 100%:** cerrar el Suite antes del
+    build; smoke sin `--skip-smoke` debe cubrir módulos de runtime (p. ej.
+    `engine.step_paths` / Crear STEPs, buzón). Si falta algo en el bundle,
+    arreglar `tools/build_arga_exe.py` y **repetir** hasta checklist OK.
+    Ver `.cursor/rules/release-complete-packaging.mdc`.
 11. **Tras corregir un bug: commit local + push remoto obligatorio** en
     `New Arga Nesting Suite` (GitHub). No dejes el fix solo en disco: otras PCs
     y builds se actualizan desde el remoto. Incluye el candado, `AGENTS.md` /
