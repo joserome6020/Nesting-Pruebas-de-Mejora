@@ -259,6 +259,22 @@ def _pendientes_cad(
     return pending
 
 
+def contar_cad_vigentes(
+    dxf_files: list[str],
+    out_folder: str,
+    export_format: str = "step",
+) -> int:
+    """Cuántos CAD (STEP/IGES) ya están vigentes respecto a su DXF fuente.
+
+    FreeCAD no reporta avance al ANS; el progreso de UI se deriva de esta
+    inspección de carpeta (igual idea que SKIP_EXISTING / reanudación).
+    """
+    total = len(dxf_files or [])
+    if total <= 0:
+        return 0
+    return max(0, total - len(_pendientes_cad(dxf_files, out_folder, export_format)))
+
+
 def _pendientes_step(dxf_files: list[str], step_folder: str) -> list[str]:
     return _pendientes_cad(dxf_files, step_folder, "step")
 
@@ -291,6 +307,8 @@ def ejecutar_macro_freecad(
     material: str = "",
     export_format: str = "step",
     dxf_filter=None,
+    progress_cb=None,
+    step_done_base: int = 0,
 ) -> bool:
     cad_fmt = str(export_format or "step").strip().lower()
     cad_ext = _cad_extension(cad_fmt)
@@ -508,9 +526,27 @@ def ejecutar_macro_freecad(
         if callable(dxf_filter):
             candidatos = [p for p in candidatos if dxf_filter(p)]
         n_candidatos = len(candidatos)
-        ya_vigentes = n_candidatos - len(_pendientes_cad(candidatos, step_resuelta, cad_fmt))
+        ya_vigentes = contar_cad_vigentes(candidatos, step_resuelta, cad_fmt)
         if ya_vigentes:
             _log(f"{cad_label} vigentes (se omiten): {ya_vigentes}/{n_candidatos}\n")
+
+        def _report_ui(extra: str = "") -> None:
+            if not callable(progress_cb):
+                return
+            hechos = contar_cad_vigentes(candidatos, step_resuelta, cad_fmt)
+            msg = (
+                f"FreeCAD {cad_label}: {hechos}/{n_candidatos}"
+                + (f" — {extra}" if extra else "")
+            )
+            try:
+                progress_cb(
+                    mensaje=msg,
+                    step_done=int(step_done_base) + int(hechos),
+                )
+            except Exception:
+                pass
+
+        _report_ui("iniciando")
 
         macro_append = ya_vigentes > 0 or os.path.isfile(
             env_base.get("FREECAD_LOG_PATH", "")
@@ -547,6 +583,7 @@ def ejecutar_macro_freecad(
                 )
                 if slim_note:
                     _log(f"  slim: {slim_note}\n")
+                _report_ui(f"{nombre}…")
                 ok_one, detalle = _run_single_dxf(
                     dxf_path,
                     env_base,
@@ -560,6 +597,7 @@ def ejecutar_macro_freecad(
                     _log(f"  -> FAIL: {detalle}\n")
                     if dxf_path not in fallidos:
                         fallidos.append(dxf_path)
+                _report_ui(nombre)
 
         pending_final = _pendientes_cad(candidatos, step_resuelta, cad_fmt)
         after_snapshot = snapshot_cad(step_resuelta)

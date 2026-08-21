@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_freecad_step_progress_folder.py",
+        "2026-08-21c - FreeCAD STEP: barra % por conteo de .step vigentes en carpeta",
+    ),
+    (
         "test_crear_steps_occt_line_arc.py",
         "2026-08-21b - Crear STEPs OCCT une LINE/ARC nest; DXF 1:1 intacto (S.W.O 27)",
     ),

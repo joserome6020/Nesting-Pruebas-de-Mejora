@@ -55,6 +55,13 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-21c — FreeCAD STEP: barra % por carpeta
+- Causa: FreeCAD no reporta avance; el diálogo quedaba en STEP 0/N aunque
+  ya hubiera `.step` en disco (solo `mensaje=` sin `step_done`).
+- Fix: `contar_cad_vigentes` + `progress_cb` tras cada DXF en
+  `freecad_runner`; `lanzar_freecad_robotica` acumula `step_done_base`.
+- Candado: `test_freecad_step_progress_folder.py`.
+
 ### 2026-08-21b — Crear STEPs: OCCT join LINE/ARC (S.W.O 27)
 - Causa: FreeCAD SKIP OUTER:0 con DXF nest 1:1 (LINE/ARC/CIRCLE en CUT_*).
 - Fix: despachador/Crear STEPs usa OCCT por defecto (une bordes en memoria;

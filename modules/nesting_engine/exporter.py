@@ -1049,13 +1049,18 @@ def lanzar_freecad_robotica(
     resultados = []
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
 
-    def _notify(msg: str):
+    def _notify(msg: str, *, step_done: int | None = None):
         if not callable(progress_cb):
             return
         try:
-            progress_cb(mensaje=msg)
+            if step_done is None:
+                progress_cb(mensaje=msg)
+            else:
+                progress_cb(mensaje=msg, step_done=int(step_done))
         except Exception:
             pass
+
+    step_acc = [0]
 
     def _convertir(
         etiqueta,
@@ -1091,12 +1096,16 @@ def lanzar_freecad_robotica(
         if not candidatos:
             print(f"[{cad_label}][SKIP] {etiqueta}: sin DXF aplicables en {dxf_dir}")
             resultados.append((etiqueta, True, dxf_dir))
-            _notify(f"FreeCAD [{etiqueta}]: sin DXF")
+            _notify(f"FreeCAD [{etiqueta}]: sin DXF", step_done=step_acc[0])
             return
 
         os.makedirs(out_dir, exist_ok=True)
         print(f"[{cad_label}] {etiqueta}: {len(candidatos)} DXF -> {out_dir}")
-        _notify(f"FreeCAD STEP [{etiqueta}]: {len(candidatos)} DXF…")
+        base = int(step_acc[0])
+        _notify(
+            f"FreeCAD STEP [{etiqueta}]: {len(candidatos)} DXF…",
+            step_done=base,
+        )
         ok = ejecutar_macro_freecad(
             dxf_dir,
             out_dir,
@@ -1108,9 +1117,16 @@ def lanzar_freecad_robotica(
             material=material,
             export_format=export_format,
             dxf_filter=dxf_filter,
+            progress_cb=progress_cb,
+            step_done_base=base,
         )
+        # Acumula el cupo de este lote (totales UI = suma de carpetas del export).
+        step_acc[0] = base + len(candidatos)
         resultados.append((etiqueta, ok, dxf_dir))
-        _notify(f"FreeCAD STEP [{etiqueta}]: {'OK' if ok else 'WARN'}")
+        _notify(
+            f"FreeCAD STEP [{etiqueta}]: {'OK' if ok else 'WARN'}",
+            step_done=step_acc[0],
+        )
         if not ok:
             print(
                 f"[{cad_label}][WARN] {etiqueta}: FreeCAD no generó {cad_label} "
