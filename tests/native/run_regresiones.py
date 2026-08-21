@@ -203,6 +203,10 @@ REGRESIONES = [
         "test_autodxf_gauge_parity.py",
         "2026-08-20g - AutoDXF Cal DXF = decimal Herinox/ANS (0.11811→0.1196)",
     ),
+    (
+        "test_parts_catalog_editable.py",
+        "2026-08-20q - PARTS Material/Calibre editables empatan catálogo nest",
+    ),
 ]
 
 

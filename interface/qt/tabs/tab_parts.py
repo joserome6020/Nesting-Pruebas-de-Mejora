@@ -13,6 +13,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QGridLayout,
@@ -30,6 +31,13 @@ from PySide6.QtWidgets import (
 )
 
 from interface.material_colors import fila_fondo_material
+from interface.parts_catalog import (
+    canonizar_calibre,
+    canonizar_material,
+    list_calibres_ans,
+    list_materiales_ans,
+    mutar_pieza_en_listas,
+)
 from interface.qt.thread_bridge import call_on_main
 from interface.qt.visualizer import VisorDXF, generar_thumbnail
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
@@ -48,6 +56,7 @@ from interface.qt.theme import (
     COLOR_GRIS_MED,
     COLOR_TEXTO_SUBTITULO,
     COLOR_TEXTO_TITULO,
+    apply_herinox_combo,
     apply_push_button,
 )
 
@@ -59,6 +68,7 @@ ARGB_BTN_3 = "#455E75"
 ARGB_BTN_4 = "#708DA9"
 _PARTS_THUMB_PX = 48
 _PARTS_ROW_H = 56
+_COLOR_EDICION_MAT_CAL = "#2563EB"
 
 
 class _NombrePiezaLabel(QLabel):
@@ -118,6 +128,8 @@ class TabParts(QWidget, TimerHost):
         TimerHost.__init__(self)
         self.app = app_principal
         self._row_widgets = {}
+        # Primera lectura AutoDXF por ruta → detectar ediciones manuales.
+        self._origen_mat_cal_por_ruta: dict[str, tuple[str, str]] = {}
 
         self.local_col_config = [
             {"weight": 5, "min": 260},
@@ -365,14 +377,27 @@ class TabParts(QWidget, TimerHost):
             es_plasma = bool(ruta) and not es_cu and self._plasma_guardada(ruta)
             if es_plasma:
                 valores[5] = "PLASMA"
+            mat_combo = None
+            cal_combo = None
+            chk = None
+            lbl_estado = None
             for i, conf in enumerate(self.local_col_config):
                 if i < 6:
                     if i == 0:
                         lbl = _NombrePiezaLabel(
                             pieza,
                             row,
-                            on_select=lambda r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m),
+                            on_select=lambda r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                                r, f, p, self._material_actual_fila(r, m)
+                            ),
                         )
+                        row_lay.addWidget(lbl, 0, i)
+                    elif i == 1 and ruta:
+                        mat_combo = self._crear_combo_material(mat, ruta, row, pieza)
+                        row_lay.addWidget(mat_combo, 0, i)
+                    elif i == 4 and ruta:
+                        cal_combo = self._crear_combo_calibre(cal, mat, ruta, row, pieza)
+                        row_lay.addWidget(cal_combo, 0, i)
                     else:
                         lbl = QLabel(valores[i])
                         if i == 5 and es_plasma:
@@ -380,42 +405,21 @@ class TabParts(QWidget, TimerHost):
                         else:
                             lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
                         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
-                    row_lay.addWidget(lbl, 0, i)
+                        lbl.mousePressEvent = (
+                            lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                                r, f, p, self._material_actual_fila(r, m)
+                            )
+                        )
+                        row_lay.addWidget(lbl, 0, i)
+                        if i == 5:
+                            lbl_estado = lbl
                 elif i == 6:
                     chk_wrap = QWidget()
                     chk_lay = QHBoxLayout(chk_wrap)
                     chk_lay.setContentsMargins(0, 0, 0, 0)
                     chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     chk = QCheckBox()
-                    if es_cu and ruta:
-                        chk.setEnabled(True)
-                        chk.setVisible(True)
-                        chk.setToolTip(
-                            "Amada 5\": AMADA/VERTICAL + AMADA/FIXTURA (sin gap)"
-                        )
-                        chk.setChecked(self._cu_especial_guardada(ruta))
-                        chk.toggled.connect(
-                            lambda checked, r=ruta, c=chk: self._persistir_cu_especial(
-                                r, checked, checkbox=c
-                            )
-                        )
-                    elif ruta and not es_cu:
-                        chk.setEnabled(True)
-                        chk.setVisible(True)
-                        chk.setToolTip(
-                            "Plasma: compensar esta pieza y nestearla en placas solo-plasma"
-                        )
-                        chk.setChecked(self._plasma_guardada(ruta))
-                        chk.toggled.connect(
-                            lambda checked, r=ruta, calibre=cal, c=chk: self._persistir_plasma(
-                                r, calibre, checked, checkbox=c
-                            )
-                        )
-                    else:
-                        chk.setEnabled(False)
-                        chk.setVisible(False)
-                        chk.setToolTip("")
+                    self._configurar_esp_checkbox(chk, ruta, mat, cal)
                     chk_lay.addWidget(chk)
                     row_lay.addWidget(chk_wrap, 0, i)
                 elif i == 7:
@@ -424,7 +428,11 @@ class TabParts(QWidget, TimerHost):
                         ph.setFixedSize(_PARTS_THUMB_PX, _PARTS_THUMB_PX)
                         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         ph.setStyleSheet("color:#94A3B8;font-size:9px;background:transparent;")
-                        ph.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
+                        ph.mousePressEvent = (
+                            lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                                r, f, p, self._material_actual_fila(r, m)
+                            )
+                        )
                         row_lay.addWidget(ph, 0, i)
                         if ruta:
                             thumb_queue.append((ph, str(ruta), mat))
@@ -438,19 +446,334 @@ class TabParts(QWidget, TimerHost):
                                 l_t.setPixmap(thumb)
                                 l_t.setFixedSize(_PARTS_THUMB_PX, _PARTS_THUMB_PX)
                                 l_t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                                l_t.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
+                                l_t.mousePressEvent = (
+                                    lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                                        r, f, p, self._material_actual_fila(r, m)
+                                    )
+                                )
                                 row_lay.addWidget(l_t, 0, i)
                         except Exception:
                             pass
 
-            row.mousePressEvent = lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(r, f, p, m)
+            if ruta:
+                ruta_s = str(ruta)
+                if ruta_s not in self._origen_mat_cal_por_ruta:
+                    self._origen_mat_cal_por_ruta[ruta_s] = (
+                        str(mat or "").strip(),
+                        str(cal or "").strip(),
+                    )
+                self._row_widgets[ruta_s] = {
+                    "row": row,
+                    "pieza": pieza,
+                    "mat_combo": mat_combo,
+                    "cal_combo": cal_combo,
+                    "chk": chk,
+                    "lbl_estado": lbl_estado,
+                }
+                self._actualizar_marca_edicion(ruta_s)
+
+            row.mousePressEvent = (
+                lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                    r, f, p, self._material_actual_fila(r, m)
+                )
+            )
             scroll_add_widget(self.lista_scroll, row)
+
+        # Quitar orígenes de piezas que ya no están en la lista.
+        vivas = set(self._row_widgets.keys())
+        for k in list(self._origen_mat_cal_por_ruta.keys()):
+            if k not in vivas:
+                self._origen_mat_cal_por_ruta.pop(k, None)
 
         if thumbnails_async and thumb_queue:
             self._iniciar_thumbnails_async(thumb_queue)
         self._actualizar_lbl_piezas_nestear(datos)
         self._iniciar_auditoria_dxf_async(datos)
         QTimer.singleShot(0, self._sync_parts_header_scrollbar)
+
+    def _plate_rows_catalog(self) -> list:
+        rows: list = []
+        for attr in ("datos_placas_empresa", "datos_placas_proveedor"):
+            chunk = getattr(self.app, attr, None) or []
+            if chunk:
+                rows.extend(chunk)
+        if rows:
+            return rows
+        try:
+            pm = getattr(self.app, "plates_manager", None)
+            if pm is not None:
+                emp, prov = pm.obtener_datos_placas_divididos()
+                return list(emp or []) + list(prov or [])
+        except Exception:
+            pass
+        return []
+
+    def _material_actual_fila(self, ruta: str, fallback: str = "") -> str:
+        info = (self._row_widgets or {}).get(str(ruta or "")) or {}
+        combo = info.get("mat_combo")
+        if combo is not None:
+            txt = str(combo.currentText() or "").strip()
+            if txt:
+                return txt
+        return str(fallback or "")
+
+    def _calibre_actual_fila(self, ruta: str, fallback: str = "") -> str:
+        info = (self._row_widgets or {}).get(str(ruta or "")) or {}
+        combo = info.get("cal_combo")
+        if combo is not None:
+            txt = str(combo.currentText() or "").strip()
+            if txt:
+                return txt
+        return str(fallback or "")
+
+    @staticmethod
+    def _llenar_combo(combo: QComboBox, opciones: list[str], actual: str) -> None:
+        combo.blockSignals(True)
+        combo.clear()
+        seen: set[str] = set()
+        cur = str(actual or "").strip()
+        items: list[str] = []
+        if cur:
+            items.append(cur)
+            seen.add(cur)
+        for opt in opciones or []:
+            txt = str(opt or "").strip()
+            if not txt or txt in seen:
+                continue
+            items.append(txt)
+            seen.add(txt)
+        combo.addItems(items)
+        if cur:
+            idx = combo.findText(cur)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _norm_cmp_mat_cal(valor: str) -> str:
+        return str(valor or "").strip().upper().replace(",", ".")
+
+    def _aplicar_marca_edicion_combo(self, combo: QComboBox | None, editado: bool) -> None:
+        if combo is None:
+            return
+        if editado:
+            combo.setStyleSheet(
+                "QComboBox{"
+                f"border:1px solid {COLOR_BORDE};"
+                f"border-bottom:2px solid {_COLOR_EDICION_MAT_CAL};"
+                "border-radius:8px;"
+                "padding:4px 8px;"
+                "font-weight:600;"
+                f"color:{COLOR_TEXTO_TITULO};"
+                "background:#FFFFFF;"
+                "}"
+                "QComboBox:hover{"
+                f"border:1px solid {_COLOR_EDICION_MAT_CAL};"
+                f"border-bottom:2px solid {_COLOR_EDICION_MAT_CAL};"
+                "}"
+            )
+            tip = str(combo.toolTip() or "")
+            if "modificado manualmente" not in tip.lower():
+                combo.setToolTip("Modificado manualmente (Material/Calibre)")
+        else:
+            combo.setStyleSheet("")
+            apply_herinox_combo(combo)
+            tip = str(combo.toolTip() or "")
+            if "modificado manualmente" in tip.lower():
+                combo.setToolTip("")
+
+    def _actualizar_marca_edicion(self, ruta: str) -> None:
+        ruta_s = str(ruta or "")
+        if not ruta_s:
+            return
+        info = (self._row_widgets or {}).get(ruta_s) or {}
+        origen = self._origen_mat_cal_por_ruta.get(ruta_s)
+        if not origen:
+            return
+        mat0, cal0 = origen
+        mat_now = self._material_actual_fila(ruta_s, "")
+        cal_now = self._calibre_actual_fila(ruta_s, "")
+        mat_edit = self._norm_cmp_mat_cal(mat_now) != self._norm_cmp_mat_cal(mat0)
+        cal_edit = self._norm_cmp_mat_cal(cal_now) != self._norm_cmp_mat_cal(cal0)
+        self._aplicar_marca_edicion_combo(info.get("mat_combo"), mat_edit)
+        self._aplicar_marca_edicion_combo(info.get("cal_combo"), cal_edit)
+
+    def _crear_combo_material(self, mat, ruta, row, pieza) -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(False)
+        combo.setMaxVisibleItems(16)
+        apply_herinox_combo(combo)
+        mat_raw = str(mat or "").strip()
+        mat_canon = canonizar_material(mat_raw, default=mat_raw or "CARBONO")
+        opts = list_materiales_ans(self._plate_rows_catalog())
+        if mat_canon and mat_canon not in opts:
+            opts = [mat_canon] + opts
+        self._llenar_combo(combo, opts, mat_raw or mat_canon)
+        combo.activated.connect(
+            lambda _i, r=ruta, f=row, p=pieza: self._on_material_editado(r, f, p)
+        )
+        return combo
+
+    def _crear_combo_calibre(self, cal, mat, ruta, row, pieza) -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(False)
+        combo.setMaxVisibleItems(20)
+        apply_herinox_combo(combo)
+        mat_canon = canonizar_material(mat, default=str(mat or "").strip() or "CARBONO")
+        cal_raw = str(cal or "").strip()
+        opts = list_calibres_ans(mat_canon, self._plate_rows_catalog())
+        self._llenar_combo(combo, opts, cal_raw)
+        combo.activated.connect(
+            lambda _i, r=ruta, f=row, p=pieza: self._on_calibre_editado(r, f, p)
+        )
+        return combo
+
+    def _configurar_esp_checkbox(self, chk: QCheckBox, ruta, mat, cal) -> None:
+        try:
+            chk.toggled.disconnect()
+        except Exception:
+            pass
+        es_cu = self._es_material_cobre(mat)
+        if es_cu and ruta:
+            chk.setEnabled(True)
+            chk.setVisible(True)
+            chk.setToolTip('Amada 5": AMADA/VERTICAL + AMADA/FIXTURA (sin gap)')
+            chk.blockSignals(True)
+            chk.setChecked(self._cu_especial_guardada(ruta))
+            chk.blockSignals(False)
+            chk.toggled.connect(
+                lambda checked, r=ruta, c=chk: self._persistir_cu_especial(
+                    r, checked, checkbox=c
+                )
+            )
+        elif ruta and not es_cu:
+            chk.setEnabled(True)
+            chk.setVisible(True)
+            chk.setToolTip(
+                "Plasma: compensar esta pieza y nestearla en placas solo-plasma"
+            )
+            chk.blockSignals(True)
+            chk.setChecked(self._plasma_guardada(ruta))
+            chk.blockSignals(False)
+            chk.toggled.connect(
+                lambda checked, r=ruta, c=chk: self._persistir_plasma(
+                    r,
+                    self._calibre_actual_fila(r, cal),
+                    checked,
+                    checkbox=c,
+                )
+            )
+        else:
+            chk.setEnabled(False)
+            chk.setVisible(False)
+            chk.setToolTip("")
+            chk.blockSignals(True)
+            chk.setChecked(False)
+            chk.blockSignals(False)
+
+    def _listas_partes_mutables(self) -> list:
+        out = []
+        for attr in ("datos_partes_actuales", "editable_inputs_actuales"):
+            datos = getattr(self.app, attr, None)
+            if isinstance(datos, list):
+                out.append(datos)
+        by_lote = getattr(self.app, "editable_inputs_by_lote", None)
+        if isinstance(by_lote, list):
+            for lote in by_lote:
+                if isinstance(lote, list):
+                    out.append(lote)
+        return out
+
+    def _on_material_editado(self, ruta, row, pieza):
+        if not ruta:
+            return
+        info = (self._row_widgets or {}).get(str(ruta)) or {}
+        mat_combo = info.get("mat_combo")
+        cal_combo = info.get("cal_combo")
+        if mat_combo is None:
+            return
+        mat_new = canonizar_material(
+            mat_combo.currentText(),
+            default=str(mat_combo.currentText() or "").strip() or "CARBONO",
+        )
+        cal_prev = self._calibre_actual_fila(ruta, "")
+        cal_new = canonizar_calibre(cal_prev, mat_new) if cal_prev else cal_prev
+
+        mutar_pieza_en_listas(
+            *self._listas_partes_mutables(),
+            ruta=str(ruta),
+            material=mat_new,
+            calibre=cal_new or None,
+        )
+
+        if mat_combo.currentText() != mat_new:
+            self._llenar_combo(
+                mat_combo,
+                list_materiales_ans(self._plate_rows_catalog()),
+                mat_new,
+            )
+        if cal_combo is not None:
+            self._llenar_combo(
+                cal_combo,
+                list_calibres_ans(mat_new, self._plate_rows_catalog()),
+                cal_new or cal_prev,
+            )
+
+        color_fondo = fila_fondo_material(mat_new, 0)
+        try:
+            row.orig_color = color_fondo
+        except Exception:
+            pass
+
+        chk = info.get("chk")
+        if chk is not None:
+            self._configurar_esp_checkbox(chk, ruta, mat_new, cal_new or cal_prev)
+
+        lbl_estado = info.get("lbl_estado")
+        if lbl_estado is not None:
+            es_cu = self._es_material_cobre(mat_new)
+            es_plasma = (not es_cu) and self._plasma_guardada(ruta)
+            if es_plasma:
+                lbl_estado.setText("PLASMA")
+                lbl_estado.setStyleSheet("color:#2563EB;font-weight:700;")
+            else:
+                lbl_estado.setText("LISTO")
+                lbl_estado.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+
+        self.seleccionar_fila(ruta, row, pieza, mat_new)
+        self._actualizar_marca_edicion(str(ruta))
+        self._actualizar_lbl_piezas_nestear(
+            getattr(self.app, "datos_partes_actuales", []) or []
+        )
+
+    def _on_calibre_editado(self, ruta, row, pieza):
+        if not ruta:
+            return
+        info = (self._row_widgets or {}).get(str(ruta)) or {}
+        cal_combo = info.get("cal_combo")
+        if cal_combo is None:
+            return
+        mat = self._material_actual_fila(ruta, "")
+        cal_new = canonizar_calibre(cal_combo.currentText(), mat) or str(
+            cal_combo.currentText() or ""
+        ).strip()
+        mutar_pieza_en_listas(
+            *self._listas_partes_mutables(),
+            ruta=str(ruta),
+            calibre=cal_new,
+        )
+        if cal_combo.currentText() != cal_new:
+            self._llenar_combo(
+                cal_combo,
+                list_calibres_ans(mat, self._plate_rows_catalog()),
+                cal_new,
+            )
+        chk = info.get("chk")
+        if chk is not None and chk.isChecked() and not self._es_material_cobre(mat):
+            # Recalcular compensación plasma con el nuevo calibre.
+            self._persistir_plasma(ruta, cal_new, True, checkbox=chk)
+        self.seleccionar_fila(ruta, row, pieza, mat)
+        self._actualizar_marca_edicion(str(ruta))
 
     def _iniciar_auditoria_dxf_async(self, datos):
         self._dxf_audit_token = int(getattr(self, "_dxf_audit_token", 0)) + 1
@@ -1593,6 +1916,8 @@ class TabParts(QWidget, TimerHost):
         if err:
             QMessageBox.critical(self, "Error", f"Error al reprocesar AutoDXF:\n{err}")
             return
+        # Nueva lectura AutoDXF: resetear marcas de edición manual.
+        self._origen_mat_cal_por_ruta.clear()
         vista_files = getattr(self.app, "vista_files", None)
         if vista_files is None or not payload:
             QMessageBox.critical(self, "Error", "No se pudo completar el reproceso.")

@@ -157,6 +157,7 @@ HIDDEN_IMPORTS = (
     "interface.qt.widgets.nesting_ribbon",
     # Soporte UI / metadatos
     "interface.autodxf_metadata",
+    "interface.parts_catalog",
     "interface.material_colors",
     # Motor nesting + placas
     "modules.nesting_engine",

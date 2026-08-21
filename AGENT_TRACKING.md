@@ -55,6 +55,12 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-20q — PARTS: Material y Calibre editables
+- Combos en tabla Piezas con catálogo ANS (`parts_catalog`: materiales
+  canónicos + calibres Herinox/`arga_gauge_snap` + stock).
+- Persistencia en `datos_partes_actuales` / `editable_inputs_*` (sin renombrar DXF).
+- Candado: `test_parts_catalog_editable.py`.
+
 ### 2026-08-20p — Release: AutoDXF Cal/SM + Crear STEPs
 - AutoDXF: Cal ANS por SM si empata; si Thickness mal → geo + `[REVISAR SM]`.
 - Crear STEPs en cinta Salida (FreeCAD/despachador) + step_paths sin Cama A/B.
