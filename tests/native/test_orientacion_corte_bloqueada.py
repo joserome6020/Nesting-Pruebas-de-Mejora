@@ -189,6 +189,47 @@ def test_bloqueo_persiste_con_dxf_compensado():
     assert bloqueadas.get(clave_orientacion_pieza(otra, mapa_plasma)) is None
 
 
+def test_pieza_pack_desde_fuente_respeta_bloqueo_orien():
+    """Renest calibre/placa debe hornear BLOQUEAR ORIEN (no solo nest completo)."""
+    from shapely.geometry import box
+
+    class _App:
+        orientacion_corte_bloqueada_por_ruta = {}
+        orientacion_corte_por_ruta = {}
+        plasma_compensada_por_ruta = {}
+
+    class _Tab:
+        def __init__(self):
+            self.app = _App()
+
+    # Reusar la lógica real del mixin sin Qt.
+    from interface.qt.tabs._mixin_nesting_calc import NestingCalcMixin
+
+    tab = _Tab()
+    ruta = r"C:\PARTS\Metal\62140-1359-P01.dxf"
+    clave = clave_orientacion_cobre_ruta(ruta)
+    tab.app.orientacion_corte_bloqueada_por_ruta[clave] = True
+    tab.app.orientacion_corte_por_ruta[clave] = 90
+
+    poly = box(0.0, 0.0, 100.0, 40.0)  # L=100, A=40 → tras 90° queda 40×100
+    src = {
+        "nombre": "62140-1359-P01",
+        "ruta": ruta,
+        "material": "A 36",
+        "calibre": "0.105",
+        "poly_base": poly,
+        "marks_base": None,
+        "area_base": float(poly.area),
+    }
+    item = NestingCalcMixin._pieza_pack_desde_fuente(tab, src)
+    assert item.get("grain_locked") is True
+    assert list(item.get("allowed_rotations") or []) == [0]
+    assert int(item.get("orientacion_corte_deg") or 0) == 90
+    minx, miny, maxx, maxy = item["poly"].bounds
+    assert abs((maxx - minx) - 40.0) < 1e-6
+    assert abs((maxy - miny) - 100.0) < 1e-6
+
+
 def test_tooltip_de_panel_oscuro_tiene_contraste():
     """Sobre panel oscuro el tooltip debe declarar fondo oscuro + letra clara."""
     from interface.qt.theme import TOOLTIP_OSCURO_QSS

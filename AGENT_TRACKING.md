@@ -55,6 +55,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-21b — Crear STEPs: OCCT join LINE/ARC (S.W.O 27)
+- Causa: FreeCAD SKIP OUTER:0 con DXF nest 1:1 (LINE/ARC/CIRCLE en CUT_*).
+- Fix: despachador/Crear STEPs usa OCCT por defecto (une bordes en memoria;
+  **no reescribe DXF**). Override: `ARGA_CREAR_STEPS_MOTOR=freecad`.
+- Candado: `test_crear_steps_occt_line_arc.py`.
+
+### 2026-08-21a — Complemento feedstock STEP (MVP)
+- Switch Config Global `step_feedstock_enabled` (OFF default) → 3er botón en FILES.
+- Busca `.stp/.step` dentro de `AutoDXF/` (raíz o `STEP/`); escribe DXF en
+  `AutoDXF/FROM_STEP/` (capas `IV_*`); carga PARTS sin mezclar DXF Inventor.
+- OCCT: solo placas planas de espesor constante (sin unfold de doblez aún).
+- Candado: `test_step_feedstock_mvp.py`.
+
 ### 2026-08-20q — PARTS: Material y Calibre editables
 - Combos en tabla Piezas con catálogo ANS (`parts_catalog`: materiales
   canónicos + calibres Herinox/`arga_gauge_snap` + stock).

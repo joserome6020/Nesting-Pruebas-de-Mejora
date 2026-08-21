@@ -1538,6 +1538,13 @@ class TabParts(QWidget, TimerHost):
         else:
             self.app.orientacion_corte_bloqueada_por_ruta.pop(clave, None)
             self.app.orientacion_corte_por_ruta.pop(clave, None)
+        # Propagar al motor ya (renest calibre/placa no debe depender de un nest completo).
+        try:
+            tab_n = getattr(self.app, "tab_nesting", None)
+            if tab_n is not None and hasattr(tab_n, "_sync_orientacion_cobre_al_motor"):
+                tab_n._sync_orientacion_cobre_al_motor()
+        except Exception:
+            pass
 
     def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
         inner = self.lista_scroll.widget()

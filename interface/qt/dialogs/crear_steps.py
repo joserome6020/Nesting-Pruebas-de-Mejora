@@ -4,8 +4,8 @@ Dos modos:
   - Desde nesteo: Local/Remoto → cliente → job → W.O. (o S.W.O.)
   - Desde ruta: selector de carpeta NESTING (igual que despachador_nocturno)
 
-Motor: FreeCAD / generador_verde — misma tubería que el despachador nocturno
-para acero (ROBOT LASER / PLASMA + Cama A/B) y cobre (NESTEOS DE COBRE).
+Motor: OCCT (join LINE/ARC en memoria → STEP). No reescribe los DXF de nest
+(exactitud 1:1). Misma tubería que el despachador nocturno / export 3D ANS.
 """
 from __future__ import annotations
 
@@ -470,11 +470,11 @@ def _pedir_ruta_nesting(parent) -> Path | None:
 
 
 def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
-    """Lanza procesar_ruta_nesting en hilo (FreeCAD / despachador)."""
+    """Lanza procesar_ruta_nesting en hilo (OCCT por defecto)."""
     ruta = os.path.normpath(str(ruta_nesting))
     app = getattr(parent, "app", None)
     if app is not None and hasattr(app, "abrir_ventana_carga"):
-        app.abrir_ventana_carga("Generando STEPs (FreeCAD)…")
+        app.abrir_ventana_carga("Generando STEPs (OCCT)…")
 
     def _worker():
         err = None
@@ -516,7 +516,7 @@ def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
                     f"No se completó la conversión 3D.\n\n"
                     f"Familias: {n_fam}  ·  con DXF: {n_dxf_fam}\n"
                     f"STEP detectados: {n_step}\n\n"
-                    f"Revisa el log del despachador / FreeCAD.\n{ruta}",
+                    f"Revisa el log del despachador / OCCT.\n{ruta}",
                 )
 
         call_on_main(_done)
@@ -557,7 +557,7 @@ def abrir_crear_steps(tab) -> None:
         "Modo actual: 1 STEP por DXF (carpeta STEP plana), coords 1:1 "
         "sin Cama A/B ni offsets — igual que Exportar 3D del ANS.\n"
         "Familias: CAMA LASER, ROBOT LASER/PLASMA, NESTEOS DE COBRE.\n"
-        "Motor: FreeCAD (generador_verde).\n\n"
+        "Motor: OCCT (une LINE/ARC en memoria; no altera los DXF).\n\n"
         "¿Continuar?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.Yes,

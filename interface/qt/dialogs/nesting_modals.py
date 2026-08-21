@@ -607,6 +607,60 @@ def abrir_modal_configuracion(parent):
 
     switch_giga.toggled.connect(_toggle_giga)
 
+    sep_step_feed = QFrame()
+    sep_step_feed.setFrameShape(QFrame.Shape.HLine)
+    sep_step_feed.setStyleSheet("color:#CBD5E1;")
+    lay.addWidget(sep_step_feed)
+
+    step_feed_enabled = [bool(runtime_prefs.get("step_feedstock_enabled"))]
+    step_feed_tit = QLabel("FEEDSTOCK STEP — complemento local (experimental)")
+    step_feed_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(step_feed_tit)
+    step_feed_hint = QLabel(
+        "ON muestra en FILES el botón «PROCESAR STEP DEL JOB». "
+        "Busca .stp/.step dentro de AutoDXF (raíz o carpeta STEP/), "
+        "genera DXF planos en AutoDXF/FROM_STEP/ y los carga a PARTS. "
+        "No reemplaza AutoDXF/Inventor: es plan B cuando solo hay STEP."
+    )
+    step_feed_hint.setWordWrap(True)
+    step_feed_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(step_feed_hint)
+    step_feed_row = QHBoxLayout()
+    step_feed_row.addWidget(QLabel("Feedstock desde STEP:"))
+    switch_step_feed = HerinoxSwitch(
+        label_on="STEP FEEDSTOCK ON",
+        label_off="SOLO AUTODXF",
+        checked=step_feed_enabled[0],
+    )
+    step_feed_row.addWidget(switch_step_feed)
+    step_feed_row.addStretch(1)
+    lay.addLayout(step_feed_row)
+    lbl_step_feed = QLabel(
+        "Complemento activo: FILES mostrará el 3er botón de STEP."
+        if step_feed_enabled[0]
+        else "Apagado: FILES sin botón STEP (flujo AutoDXF normal)."
+    )
+    lbl_step_feed.setWordWrap(True)
+    lbl_step_feed.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(lbl_step_feed)
+
+    def _toggle_step_feed(activo: bool):
+        if activo and not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Feedstock STEP",
+            mensaje="Ingrese la contraseña para activar el complemento feedstock STEP.",
+        ):
+            switch_step_feed.setChecked(False)
+            return
+        step_feed_enabled[0] = bool(activo)
+        lbl_step_feed.setText(
+            "Complemento activo: FILES mostrará el 3er botón de STEP."
+            if activo
+            else "Apagado: FILES sin botón STEP (flujo AutoDXF normal)."
+        )
+
+    switch_step_feed.toggled.connect(_toggle_step_feed)
+
     sep = QFrame()
     sep.setFrameShape(QFrame.Shape.HLine)
     sep.setStyleSheet("color:#CBD5E1;")
@@ -663,6 +717,7 @@ def abrir_modal_configuracion(parent):
                     "prefer": "auto" if spark_enabled[0] else "local",
                     "cu_force_dxf_step": bool(cu_force_enabled[0]),
                     "giga_cal11_galv": bool(giga_enabled[0]),
+                    "step_feedstock_enabled": bool(step_feed_enabled[0]),
                     "spark": {
                         "host": ent_spark_host.text().strip() or "192.168.2.35",
                         "port": spark_port,
@@ -674,6 +729,15 @@ def abrir_modal_configuracion(parent):
                     },
                 }
             )
+            try:
+                app = getattr(parent, "app", None) or parent
+                vista_files = getattr(app, "vista_files", None)
+                if vista_files is not None and hasattr(
+                    vista_files, "refrescar_step_feedstock_ui"
+                ):
+                    vista_files.refrescar_step_feedstock_ui()
+            except Exception:
+                pass
 
             dlg.accept()
         except Exception:

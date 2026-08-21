@@ -202,7 +202,13 @@ def norm_path(p: str) -> str:
 def dbg(msg: str):
     os.makedirs(DEBUG_DIR, exist_ok=True)
     linea = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(linea)
+    try:
+        print(linea)
+    except UnicodeEncodeError:
+        try:
+            print(linea.encode("ascii", "replace").decode("ascii"))
+        except Exception:
+            pass
     with open(DEBUG_LOG, "a", encoding="utf-8") as f:
         f.write(linea + "\n")
 
@@ -415,15 +421,21 @@ def inferir_espesor_desde_dxf(familias):
     """
     Intenta inferir el espesor desde nombres como:
     NESTING_0.25_CARBONO_HOJA_01.dxf
+    SWO-027_0.1875_SWO-027-H1.dxf
     """
-    patron = re.compile(r"NESTING_([0-9]+(?:\.[0-9]+)?)_", re.IGNORECASE)
+    patrones = (
+        re.compile(r"NESTING_([0-9]+(?:\.[0-9]+)?)_", re.IGNORECASE),
+        re.compile(r"SWO[-\s]*\d+[_\s-]+([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE),
+    )
 
     for fam in familias:
         dxf_dir = norm_path(fam["dxf_dir"])
         for archivo in glob.glob(os.path.join(dxf_dir, "*.dxf")):
             nombre = os.path.basename(archivo)
-            m = patron.search(nombre)
-            if m:
+            for patron in patrones:
+                m = patron.search(nombre)
+                if not m:
+                    continue
                 try:
                     valor = float(m.group(1))
                     return valor, m.group(1)
@@ -472,13 +484,139 @@ def elegir_modo_operacion():
     return dlg.modo or "CANCELADO"
 
 
+def _usar_occt_para_crear_steps() -> bool:
+    """
+    Crear STEPs / despachador: motor OCCT por defecto.
+
+    Los DXF de nest ANS son LINE/ARC/CIRCLE 1:1 (exactitud plasma/láser). FreeCAD
+    a menudo no une esos bordes en wires cerrados → SKIP OUTER:0. OCCT hace el
+    join en memoria al convertir a STEP; no reescribe ni altera el DXF en disco.
+    Override legacy: ARGA_CREAR_STEPS_MOTOR=freecad
+    """
+    motor = (os.environ.get("ARGA_CREAR_STEPS_MOTOR") or "occt").strip().lower()
+    return motor not in ("freecad", "fc", "verde", "free-cad")
+
+
+def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
+    """
+    DXF → STEP con OCCT (join de LINE/ARC en memoria). Misma carpeta STEP.
+    No modifica los DXF. El offset plasma del nest ya viene en el DXF exportado;
+    no se reaplica aquí (evita doble kerf).
+    """
+    nombre = familia["nombre"]
+    tipo = familia["tipo"]
+    dxf_dir = norm_path(familia["dxf_dir"])
+    destinos_step = familia["destinos_step"]
+    resultados = []
+
+    dxf_count = contar_archivos(dxf_dir, "*.dxf")
+    dbg(f"[{nombre}] tipo={tipo} | DXF detectados={dxf_count} | motor=OCCT")
+    if dxf_count == 0:
+        dbg(f"[{nombre}] ℹ️ No hay DXF para procesar.")
+        return resultados
+    if not destinos_step:
+        dbg(f"[{nombre}] ❌ No hay destinos STEP definidos.")
+        return resultados
+
+    if float(plasma_off_mm or 0.0) > 1e-9 and str(tipo).upper() == "PLASMA":
+        dbg(
+            f"[{nombre}] ℹ️ Offset plasma nest={plasma_off_mm} mm ya embebido en DXF; "
+            "OCCT no lo vuelve a aplicar."
+        )
+
+    try:
+        from modules.nesting_engine.occt_step_export import _ensure_cad_engine
+    except Exception as exc:
+        dbg(f"[{nombre}] ❌ No se pudo cargar motor OCCT: {exc}")
+        return [(f"{nombre}_OCCT", False)]
+
+    export_fn, _robot_fn, thk_from_name = _ensure_cad_engine()
+    material = "CU" if str(tipo).upper() == "COBRE" else "STEEL"
+
+    for dest in destinos_step:
+        tag = dest["tag"]
+        step_dir = norm_path(dest["dir"])
+        origen = dest.get("origen") or "NONE"
+        off_x = float(dest.get("off_x") or 0.0)
+        off_y = float(dest.get("off_y") or 0.0)
+        off_z = float(dest.get("off_z") or 0.0)
+        os.makedirs(step_dir, exist_ok=True)
+
+        before_snapshot = snapshot_steps(step_dir)
+        pares = listar_dxf_y_step_esperado(dxf_dir, step_dir)
+        dbg(
+            f"[{nombre}] OCCT destino {tag} | DXF={dxf_dir} | STEP={step_dir} | "
+            f"origen={origen} | offset=({off_x}, {off_y}, {off_z}) | pares={len(pares)}"
+        )
+
+        ok_all = True
+        for dxf_path, step_path in pares:
+            nombre_dxf = os.path.basename(dxf_path)
+            thk = float(thk_from_name(nombre_dxf, default_mm=float(thk_mm)))
+            dbg(
+                f"[{nombre}] [{tag}] OCCT {nombre_dxf} -> {os.path.basename(step_path)} "
+                f"(thk={thk:.4f} mm)"
+            )
+            try:
+                export_fn(
+                    dxf_path,
+                    step_path,
+                    thk_mm=thk,
+                    material=material,
+                    off_x=off_x,
+                    off_y=off_y,
+                    off_z=off_z,
+                    origen=None if str(origen).upper() in ("NONE", "", "NULL") else origen,
+                    mark_mode="ENGRAVE_ONESHOT",
+                    include_plate=False,
+                )
+                if not os.path.isfile(step_path) or os.path.getsize(step_path) < 64:
+                    raise RuntimeError(f"STEP vacio o ausente: {step_path}")
+                try:
+                    dbg(f"[{nombre}] [{tag}] OK -> {step_path}")
+                except Exception:
+                    pass
+            except Exception as exc:
+                # Si el STEP ya quedó escrito, no tumbar por fallo de log/consola.
+                if os.path.isfile(step_path) and os.path.getsize(step_path) >= 64:
+                    try:
+                        dbg(f"[{nombre}] [{tag}] OK (STEP escrito; aviso: {exc})")
+                    except Exception:
+                        pass
+                else:
+                    ok_all = False
+                    try:
+                        dbg(f"[{nombre}] [{tag}] ERR {nombre_dxf}: {exc}")
+                    except Exception:
+                        pass
+
+        after_snapshot = snapshot_steps(step_dir)
+        nuevos, actualizados = diff_steps(before_snapshot, after_snapshot)
+        dbg(
+            f"[{nombre}] Resultado OCCT {tag} => ok={ok_all} | "
+            f"nuevos={len(nuevos)} | actualizados={len(actualizados)}"
+        )
+        for path in nuevos:
+            dbg(f"[{nombre}] [{tag}] STEP NUEVO -> {path}")
+        for path in actualizados:
+            dbg(f"[{nombre}] [{tag}] STEP ACTUALIZADO -> {path}")
+        if not nuevos and not actualizados:
+            dbg(f"[{nombre}] [{tag}] ⚠️ No se detectaron STEP nuevos/actualizados en: {step_dir}")
+        resultados.append((f"{nombre}_{tag}", ok_all))
+
+    return resultados
+
+
 def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
     """
-    Ejecuta FreeCAD para una familia detectada y logea:
-    - cada DXF encontrado
-    - el STEP esperado por cada DXF
-    - los STEP nuevos/actualizados tras cada corrida
+    DXF → STEP para una familia (Cama Laser / Robot / Cobre / Plasma).
+
+    Por defecto usa OCCT (une LINE/ARC en memoria; no altera DXF en disco).
+    FreeCAD queda como override ``ARGA_CREAR_STEPS_MOTOR=freecad``.
     """
+    if _usar_occt_para_crear_steps():
+        return _procesar_familia_occt(familia, thk_mm, plasma_off_mm)
+
     nombre = familia["nombre"]
     tipo = familia["tipo"]
     dxf_dir = norm_path(familia["dxf_dir"])
@@ -487,7 +625,7 @@ def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
     resultados = []
 
     dxf_count = contar_archivos(dxf_dir, "*.dxf")
-    dbg(f"[{nombre}] tipo={tipo} | DXF detectados={dxf_count}")
+    dbg(f"[{nombre}] tipo={tipo} | DXF detectados={dxf_count} | motor=FreeCAD")
 
     if dxf_count == 0:
         dbg(f"[{nombre}] ℹ️ No hay DXF para procesar.")

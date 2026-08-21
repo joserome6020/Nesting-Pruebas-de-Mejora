@@ -1627,6 +1627,38 @@ class NestingCalcMixin:
             mx, my, _, _ = comp.bounds
             poly = affinity.translate(comp, -mx, -my)
 
+        # BLOQUEAR ORIEN (PARTS): hornear rotación y fijar grain_locked.
+        # Sin esto, renest calibre/placa reconstruía el DXF en 0° y el motor
+        # podía girar la pieza otra vez (solo el nest completo respetaba el candado).
+        rot_lock_deg = 0
+        orient_bloqueada = False
+        if clave_ruta and not es_material_cobre(material):
+            orient_bloqueada = bool(
+                (getattr(self.app, "orientacion_corte_bloqueada_por_ruta", None) or {}).get(
+                    clave_ruta, False
+                )
+            )
+            if orient_bloqueada:
+                rot_lock_deg = int(
+                    (getattr(self.app, "orientacion_corte_por_ruta", None) or {}).get(
+                        clave_ruta, 0
+                    )
+                    or 0
+                ) % 360
+                if rot_lock_deg:
+                    from shapely import affinity as _aff
+
+                    cx, cy = poly.centroid.x, poly.centroid.y
+                    poly = _aff.rotate(poly, rot_lock_deg, origin=(cx, cy), use_radians=False)
+                    if marks is not None and not getattr(marks, "is_empty", True):
+                        marks = _aff.rotate(
+                            marks, rot_lock_deg, origin=(cx, cy), use_radians=False
+                        )
+                    minx, miny, _, _ = poly.bounds
+                    poly = _aff.translate(poly, -minx, -miny)
+                    if marks is not None and not getattr(marks, "is_empty", True):
+                        marks = _aff.translate(marks, -minx, -miny)
+
         item = {
             "nombre": src["nombre"],
             "poly": copy.deepcopy(poly),
@@ -1637,6 +1669,11 @@ class NestingCalcMixin:
             "material": material,
             "ruta": ruta,
         }
+        if orient_bloqueada:
+            item["grain_locked"] = True
+            item["allowed_rotations"] = [0]
+            item["orientacion_corte_bloqueada"] = True
+            item["orientacion_corte_deg"] = int(rot_lock_deg) % 360
         if compensar:
             item["plasma_compensada_manual"] = True
             item["plasma_offset_mm_manual"] = float(offset_mm)
@@ -2009,6 +2046,9 @@ class NestingCalcMixin:
                 f"Esperadas: {total_esperado} · Generadas: {len(piezas_pack)}.\n"
                 "Revise PARTS y rutas DXF antes de renestear.",
             )
+
+        # PARTS → motor: bloqueo de orientación debe vivir también en renest parcial.
+        self._sync_orientacion_cobre_al_motor()
 
         # Stock del calibre ANTES de confirmar / gastar renesteo.
         partes_grupo = []
@@ -3509,6 +3549,8 @@ class NestingCalcMixin:
         else:
             titulo_carga = "Renesteando placa..."
         ultra_renest = (not compensar_plasma) and self._es_engine_svgnest_ultra(engine_id)
+        # PARTS → motor: mismo candado de orientación que nest completo / calibre.
+        self._sync_orientacion_cobre_al_motor()
         self._abrir_carga_renest(titulo_carga, engine_id=engine_id)
 
         bloque_objetivo = bloque_previo

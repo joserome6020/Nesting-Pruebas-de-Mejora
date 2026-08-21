@@ -20,6 +20,14 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_crear_steps_occt_line_arc.py",
+        "2026-08-21b - Crear STEPs OCCT une LINE/ARC nest; DXF 1:1 intacto (S.W.O 27)",
+    ),
+    (
+        "test_step_feedstock_mvp.py",
+        "2026-08-21 - complemento STEP→DXF en AutoDXF/FROM_STEP (prefs + discover + placa)",
+    ),
+    (
         "test_step_universal_sin_camas_despachador.py",
         "2026-08-20m - Crear STEPs/despachador: 1 STEP plano sin Cama A/B ni offsets",
     ),

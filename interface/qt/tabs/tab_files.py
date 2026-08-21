@@ -12,6 +12,7 @@ import concurrent.futures
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -82,6 +83,19 @@ class TabFiles(QWidget):
         self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
         lay.addWidget(self.btn_swo_web, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        self.btn_step_feedstock = QPushButton("PROCESAR STEP DEL JOB\n(COMPLEMENTO LOCAL)")
+        self.btn_step_feedstock.setFixedSize(450, 72)
+        apply_push_button(
+            self.btn_step_feedstock, "#0F766E", hover="#0D9488", font_size=14, padding="10px 18px"
+        )
+        self.btn_step_feedstock.setToolTip(
+            "Busca .stp/.step dentro de AutoDXF del job activo, genera DXF en "
+            "AutoDXF/FROM_STEP/ (placas planas MVP) y los carga a PARTS. "
+            "No reemplaza Inventor/AutoDXF."
+        )
+        self.btn_step_feedstock.clicked.connect(self.ejecutar_step_feedstock)
+        lay.addWidget(self.btn_step_feedstock, alignment=Qt.AlignmentFlag.AlignCenter)
+
         self.btn_historial = QPushButton("GESTIONAR HISTORIAL\n(JOBS YA IMPORTADOS)")
         self.btn_historial.setFixedSize(450, 56)
         apply_push_button(self.btn_historial, "#FFFFFF", font_size=12, padding="8px 16px")
@@ -143,6 +157,19 @@ class TabFiles(QWidget):
         outer.addStretch()
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         outer.addStretch()
+        self.refrescar_step_feedstock_ui()
+
+    def refrescar_step_feedstock_ui(self) -> None:
+        """Muestra/oculta el 3er botón según Configuración Global."""
+        try:
+            from modules.nesting_engine.nest_runtime_prefs import is_step_feedstock_enabled
+
+            on = bool(is_step_feedstock_enabled())
+        except Exception:
+            on = False
+        btn = getattr(self, "btn_step_feedstock", None)
+        if btn is not None:
+            btn.setVisible(on)
 
     def _refresh_engine_status_label(self, engine_id: str) -> None:
         from modules.nesting_engine.engine_registry import get_engine_meta
@@ -209,7 +236,15 @@ class TabFiles(QWidget):
         base = str(carpeta_base or "").strip()
         if not base or not os.path.isdir(base):
             return out
-        excluidas = {"processed files", "procesados", "nesting", "__pycache__"}
+        # from_step / step: salida o materia del complemento STEP (no mezclar con Inventor).
+        excluidas = {
+            "processed files",
+            "procesados",
+            "nesting",
+            "__pycache__",
+            "from_step",
+            "step",
+        }
         for root, dirs, files in os.walk(base):
             dirs[:] = [d for d in dirs if d.strip().lower() not in excluidas]
             for f in files:
@@ -402,6 +437,213 @@ class TabFiles(QWidget):
         self.btn_nest_scan.setText("ESCANEANDO...")
         apply_push_button(self.btn_nest_scan, "#E2E8F0", font_size=16, padding="12px 20px")
         threading.Thread(target=self.thread_escaneo, daemon=True).start()
+
+    def ejecutar_step_feedstock(self):
+        """Complemento: STEP dentro de AutoDXF → FROM_STEP DXF → PARTS."""
+        try:
+            from modules.nesting_engine.nest_runtime_prefs import is_step_feedstock_enabled
+
+            if not is_step_feedstock_enabled():
+                QMessageBox.information(
+                    self,
+                    "Feedstock STEP",
+                    "Activa el switch en Configuración Global para usar este complemento.",
+                )
+                self.refrescar_step_feedstock_ui()
+                return
+        except Exception:
+            pass
+
+        autodxf = self._resolver_autodxf_desde_datos_actuales()
+        step_override = None
+        if not autodxf:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Seleccionar STEP dentro de AutoDXF (o carpeta del job)",
+                "",
+                "STEP (*.stp *.step);;Todos (*.*)",
+            )
+            if not path:
+                QMessageBox.information(
+                    self,
+                    "Feedstock STEP",
+                    "Cancelado. También puedes importar el job primero y dejar el "
+                    ".stp en AutoDXF/ o AutoDXF/STEP/.",
+                )
+                return
+            step_override = path
+            autodxf = self._inferir_autodxf_desde_step(path)
+            if not autodxf:
+                QMessageBox.warning(
+                    self,
+                    "Feedstock STEP",
+                    "El STEP debe estar dentro de una carpeta AutoDXF "
+                    "(…/MODEL CORE FILES/AutoDXF/…).",
+                )
+                return
+
+        self.btn_step_feedstock.setEnabled(False)
+        self.btn_step_feedstock.setText("PROCESANDO STEP…")
+        apply_push_button(
+            self.btn_step_feedstock, "#E2E8F0", font_size=14, padding="10px 18px"
+        )
+        if hasattr(self.app, "abrir_ventana_carga"):
+            self.app.abrir_ventana_carga("Procesando STEP → DXF…")
+        threading.Thread(
+            target=self._thread_step_feedstock,
+            args=(autodxf, step_override),
+            daemon=True,
+        ).start()
+
+    def _inferir_autodxf_desde_step(self, step_path: str) -> str | None:
+        try:
+            actual = os.path.normpath(str(step_path))
+            if os.path.isfile(actual):
+                actual = os.path.dirname(actual)
+            while actual and actual not in (actual[:1], os.path.dirname(actual)):
+                if os.path.basename(actual).strip().lower() == "autodxf":
+                    return actual
+                actual = os.path.dirname(actual)
+        except Exception:
+            pass
+        return None
+
+    def _thread_step_feedstock(self, carpeta_autodxf: str, step_override=None):
+        err = None
+        payload = None
+        try:
+            payload = self._preparar_step_feedstock(carpeta_autodxf, step_override)
+        except Exception as e:
+            err = str(e)
+        self._ui(self._finalizar_step_feedstock, payload, err)
+
+    def _preparar_step_feedstock(self, carpeta_autodxf: str, step_override=None) -> dict:
+        from modules.tank_step_feedstock import (
+            FROM_STEP_DIRNAME,
+            process_autodxf_step_feedstock,
+        )
+
+        def _progress(msg, pct):
+            if hasattr(self.app, "actualizar_progreso"):
+                self.app.actualizar_progreso(msg, pct)
+
+        result = process_autodxf_step_feedstock(
+            carpeta_autodxf,
+            step_path=step_override,
+            progress_cb=_progress,
+        )
+        if not result.ok:
+            raise RuntimeError(result.message or "No se pudo procesar el STEP.")
+
+        from_step = os.path.join(carpeta_autodxf, FROM_STEP_DIRNAME)
+        job_name = self._infer_job_desde_autodxf(carpeta_autodxf) or str(
+            getattr(self.app, "job_activo", "") or ""
+        ).strip()
+        multiplicador = self._leer_multiplicador_desde_job_data(carpeta_autodxf, job_name)
+
+        # Procesar solo FROM_STEP (no mezclar con DXF Inventor).
+        rutas_dxf = sorted(
+            set(self._listar_dxfs_recursivo_incluir_from_step(from_step)),
+            key=self._normalizar_ruta,
+        )
+        if not rutas_dxf:
+            raise RuntimeError(
+                "El STEP se procesó pero no hay DXF en FROM_STEP.\n" + result.message
+            )
+
+        carpeta_procesados = os.path.join(from_step, "Processed Files")
+        os.makedirs(carpeta_procesados, exist_ok=True)
+        items_procesados, nombres_usados = [], set()
+        meta_pdf = {}
+        total = len(rutas_dxf)
+        for idx, ruta_in in enumerate(rutas_dxf, start=1):
+            _progress(f"Validando DXF STEP {idx}/{total}…", idx / max(1, total))
+            arch = os.path.basename(ruta_in)
+            ruta_out_real = os.path.join(
+                carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados)
+            )
+            try:
+                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
+                if (not ok_proc) or (not os.path.exists(ruta_out_real)):
+                    shutil.copy2(ruta_in, ruta_out_real)
+                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
+                try:
+                    qty_final = str(int(qty_str) * multiplicador)
+                except Exception:
+                    qty_final = qty_str
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                meta_pdf[ruta_norm] = {"job": job_name, "item": pieza}
+                items_procesados.append((pieza, mat, qty_final, cal, "LISTO", ruta_out_real))
+            except Exception:
+                try:
+                    if not os.path.exists(ruta_out_real):
+                        shutil.copy2(ruta_in, ruta_out_real)
+                except Exception:
+                    pass
+                ruta_norm = self._normalizar_ruta(ruta_out_real)
+                meta_pdf[ruta_norm] = {"job": job_name, "item": os.path.splitext(arch)[0]}
+                items_procesados.append(
+                    (arch, "?", str(multiplicador), "?", "LISTO", ruta_out_real)
+                )
+
+        return {
+            "items": items_procesados,
+            "meta_pdf": meta_pdf,
+            "job_name": job_name,
+            "multiplicador": multiplicador,
+            "summary": result.message,
+            "step_name": result.step_path.name if result.step_path else "",
+            "n_exports": len(result.exports),
+            "n_skipped": len(result.report.skipped) if result.report else 0,
+        }
+
+    def _listar_dxfs_recursivo_incluir_from_step(self, carpeta_base):
+        """Lista DXF bajo FROM_STEP (excluye solo Processed Files internos)."""
+        out = []
+        base = str(carpeta_base or "").strip()
+        if not base or not os.path.isdir(base):
+            return out
+        excluidas = {"processed files", "procesados", "nesting", "__pycache__"}
+        for root, dirs, files in os.walk(base):
+            dirs[:] = [d for d in dirs if d.strip().lower() not in excluidas]
+            for f in files:
+                if str(f).lower().endswith(".dxf"):
+                    out.append(os.path.join(root, f))
+        return out
+
+    def _finalizar_step_feedstock(self, payload, err=None):
+        if hasattr(self.app, "cerrar_ventana_carga"):
+            self.app.cerrar_ventana_carga()
+        self.btn_step_feedstock.setEnabled(True)
+        self.btn_step_feedstock.setText("PROCESAR STEP DEL JOB\n(COMPLEMENTO LOCAL)")
+        apply_push_button(
+            self.btn_step_feedstock, "#0F766E", hover="#0D9488", font_size=14, padding="10px 18px"
+        )
+        self.refrescar_step_feedstock_ui()
+        if err:
+            QMessageBox.critical(self, "Feedstock STEP", f"Error al procesar STEP:\n{err}")
+            return
+        if not payload:
+            QMessageBox.critical(self, "Feedstock STEP", "No se pudo completar el proceso.")
+            return
+        self.app.job_activo = payload["job_name"]
+        self.app.multiplicador_tanques = payload["multiplicador"]
+        self.app.meta_pdf_por_ruta = payload["meta_pdf"]
+        self.app.cargar_datos_parts(payload["items"])
+        self.app.ir_a_tab("PARTS")
+        extra = ""
+        if payload.get("n_skipped"):
+            extra = (
+                f"\n\nOmitidos (no placa plana / con doblez): {payload['n_skipped']}. "
+                "El MVP solo aplana sólidos de espesor constante."
+            )
+        QMessageBox.information(
+            self,
+            "Feedstock STEP",
+            f"{payload.get('summary') or 'Listo.'}\n"
+            f"Piezas cargadas a PARTS: {len(payload.get('items') or [])}."
+            f"{extra}",
+        )
 
     def thread_escaneo(self):
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
