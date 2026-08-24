@@ -4,8 +4,8 @@ Dos modos:
   - Desde nesteo: Local/Remoto → cliente → job → W.O. (o S.W.O.)
   - Desde ruta: selector de carpeta NESTING (igual que despachador_nocturno)
 
-Motor: OCCT (join LINE/ARC en memoria → STEP). No reescribe los DXF de nest
-(exactitud 1:1). Misma tubería que el despachador nocturno / export 3D ANS.
+Motor: OCCT (Arga) — une LINE/ARC en memoria, acero + cobre, ENGRAVE_ONESHOT.
+Override legacy solo vía env ARGA_CREAR_STEPS_MOTOR=freecad.
 """
 from __future__ import annotations
 
@@ -469,12 +469,16 @@ def _pedir_ruta_nesting(parent) -> Path | None:
     return p
 
 
-def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
-    """Lanza procesar_ruta_nesting en hilo (OCCT por defecto)."""
+def _ejecutar_conversion(parent, ruta_nesting: Path, *, motor_3d: str = "occt") -> None:
+    """Lanza procesar_ruta_nesting en hilo con el motor elegido."""
     ruta = os.path.normpath(str(ruta_nesting))
+    motor = str(motor_3d or "occt").strip().lower()
+    if motor not in ("occt", "freecad"):
+        motor = "occt"
+    label = "FreeCAD" if motor == "freecad" else "OCCT"
     app = getattr(parent, "app", None)
     if app is not None and hasattr(app, "abrir_ventana_carga"):
-        app.abrir_ventana_carga("Generando STEPs (OCCT)…")
+        app.abrir_ventana_carga(f"Generando STEPs ({label})…")
 
     def _worker():
         err = None
@@ -482,7 +486,11 @@ def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
         try:
             from despachador_nocturno import procesar_ruta_nesting
 
-            resumen = procesar_ruta_nesting(ruta, actualizar_bd=False)
+            resumen = procesar_ruta_nesting(
+                ruta,
+                actualizar_bd=False,
+                motor_3d=motor,
+            )
         except Exception as e:
             err = str(e)
 
@@ -493,7 +501,7 @@ def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
                 QMessageBox.critical(
                     parent,
                     "Crear STEPs",
-                    f"Error al generar STEPs:\n{err}\n\nCarpeta:\n{ruta}",
+                    f"Error al generar STEPs ({label}):\n{err}\n\nCarpeta:\n{ruta}",
                 )
                 return
             ok = bool(resumen and resumen.get("ok"))
@@ -504,19 +512,25 @@ def _ejecutar_conversion(parent, ruta_nesting: Path) -> None:
                 QMessageBox.information(
                     parent,
                     "Crear STEPs",
-                    f"STEPs generados correctamente.\n\n"
+                    f"STEPs generados correctamente ({label}).\n\n"
                     f"Familias: {n_fam}  ·  con DXF: {n_dxf_fam}\n"
                     f"STEP totales: {n_step}\n\n"
                     f"{ruta}",
                 )
             else:
+                hint = ""
+                if motor == "freecad" and n_step == 0:
+                    hint = (
+                        "\n\nSi FreeCAD sigue en OUTER:0, revisa freecad_macro.log "
+                        "en STEP/_logs (join LINE/ARC y ruta TEMP)."
+                    )
                 QMessageBox.warning(
                     parent,
                     "Crear STEPs",
-                    f"No se completó la conversión 3D.\n\n"
+                    f"No se completó la conversión 3D ({label}).\n\n"
                     f"Familias: {n_fam}  ·  con DXF: {n_dxf_fam}\n"
                     f"STEP detectados: {n_step}\n\n"
-                    f"Revisa el log del despachador / OCCT.\n{ruta}",
+                    f"Revisa el log del despachador / {label}.\n{ruta}{hint}",
                 )
 
         call_on_main(_done)
@@ -549,15 +563,23 @@ def abrir_crear_steps(tab) -> None:
     if ruta_nesting is None:
         return
 
+    from modules.nesting_engine.step_export_prefs import motor_3d_crear_steps
+
+    motor = motor_3d_crear_steps()
+    motor_txt = (
+        "FreeCAD (legacy; ARGA_CREAR_STEPS_MOTOR=freecad)"
+        if motor == "freecad"
+        else "OCCT / Arga (une LINE/ARC en memoria; no altera DXF)"
+    )
     conf = QMessageBox.question(
         tab,
         "Crear STEPs",
         "Se generarán STEP de todos los DXF convertibles en:\n\n"
         f"{ruta_nesting}\n\n"
-        "Modo actual: 1 STEP por DXF (carpeta STEP plana), coords 1:1 "
+        "Modo: 1 STEP por DXF (carpeta STEP plana), coords 1:1 "
         "sin Cama A/B ni offsets — igual que Exportar 3D del ANS.\n"
         "Familias: CAMA LASER, ROBOT LASER/PLASMA, NESTEOS DE COBRE.\n"
-        "Motor: OCCT (une LINE/ARC en memoria; no altera los DXF).\n\n"
+        f"Motor: {motor_txt}\n\n"
         "¿Continuar?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.Yes,
@@ -565,4 +587,4 @@ def abrir_crear_steps(tab) -> None:
     if conf != QMessageBox.StandardButton.Yes:
         return
 
-    _ejecutar_conversion(tab, ruta_nesting)
+    _ejecutar_conversion(tab, ruta_nesting, motor_3d=motor)

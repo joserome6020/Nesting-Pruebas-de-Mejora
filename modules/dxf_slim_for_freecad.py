@@ -130,10 +130,21 @@ def prepare_dxf_for_freecad(
     if not os.path.isfile(dxf_path):
         return dxf_path, None, "DXF no encontrado"
 
+    notes: list[str] = []
+    try:
+        from modules.dxf_join_for_freecad import maybe_join_nest_dxf_for_freecad
+
+        dxf_path, join_note = maybe_join_nest_dxf_for_freecad(dxf_path, cache_dir)
+        if join_note and not join_note.startswith("join omitido: ya tiene"):
+            notes.append(join_note)
+    except Exception as exc:
+        notes.append(f"join omitido: {exc}")
+
     try:
         import ezdxf
     except ImportError:
-        return dxf_path, None, "ezdxf no disponible"
+        note = "; ".join(notes) if notes else "ezdxf no disponible"
+        return dxf_path, None, note
 
     os.makedirs(cache_dir, exist_ok=True)
     slim_path, mark_json = _slim_paths(dxf_path, cache_dir)
@@ -147,17 +158,23 @@ def prepare_dxf_for_freecad(
     geom_entities = sum(1 for e in msp if not _is_mark_entity(e))
     mark_count, segments, unhandled = _collect_mark_segments(msp)
     if mark_count < int(mark_threshold):
-        return dxf_path, None, f"sin slim ({mark_count} marcas)"
+        note = "; ".join(notes) if notes else f"sin slim ({mark_count} marcas)"
+        return dxf_path, None, note
 
     # Sin slim si no podemos serializar todas las marcas (paridad 1:1 obligatoria).
     if unhandled:
         kinds = ", ".join(sorted(set(unhandled)))
-        return dxf_path, None, f"sin slim: marcas no soportadas ({kinds})"
+        note = "; ".join(notes + [f"sin slim: marcas no soportadas ({kinds})"])
+        return dxf_path, None, note
     if mark_count > 0 and not segments:
-        return dxf_path, None, "sin slim: no se pudieron extraer segmentos MARK"
+        note = "; ".join(notes + ["sin slim: no se pudieron extraer segmentos MARK"])
+        return dxf_path, None, note
 
     if not _needs_regen(dxf_path, slim_path, mark_json):
-        return slim_path, mark_json, f"slim cache 1:1 ({mark_count} marcas -> {len(segments)} segmentos)"
+        note = "; ".join(
+            notes + [f"slim cache 1:1 ({mark_count} marcas -> {len(segments)} segmentos)"]
+        )
+        return slim_path, mark_json, note
 
     for entity in list(msp):
         if _is_mark_entity(entity):
@@ -178,9 +195,13 @@ def prepare_dxf_for_freecad(
 
     remain = sum(1 for _ in msp)
     if remain != geom_entities:
-        return dxf_path, None, "sin slim: geometría alterada al quitar MARK"
-    note = (
-        f"slim 1:1: {mark_count} marcas -> {len(segments)} segmentos JSON, "
-        f"{remain} entidades geom sin cambio ({os.path.getsize(slim_path) // 1024} KB)"
+        note = "; ".join(notes + ["sin slim: geometría alterada al quitar MARK"])
+        return dxf_path, None, note
+    note = "; ".join(
+        notes
+        + [
+            f"slim 1:1: {mark_count} marcas -> {len(segments)} segmentos JSON, "
+            f"{remain} entidades geom sin cambio ({os.path.getsize(slim_path) // 1024} KB)"
+        ]
     )
     return slim_path, mark_json, note

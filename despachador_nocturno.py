@@ -484,16 +484,21 @@ def elegir_modo_operacion():
     return dlg.modo or "CANCELADO"
 
 
-def _usar_occt_para_crear_steps() -> bool:
+def _usar_occt_para_crear_steps(motor: str | None = None) -> bool:
     """
     Crear STEPs / despachador: motor OCCT por defecto.
 
     Los DXF de nest ANS son LINE/ARC/CIRCLE 1:1 (exactitud plasma/láser). FreeCAD
     a menudo no une esos bordes en wires cerrados → SKIP OUTER:0. OCCT hace el
     join en memoria al convertir a STEP; no reescribe ni altera el DXF en disco.
-    Override legacy: ARGA_CREAR_STEPS_MOTOR=freecad
+
+    ``motor`` (UI Crear STEPs / export) gana sobre el env.
+    Override legacy sin UI: ARGA_CREAR_STEPS_MOTOR=freecad
     """
-    motor = (os.environ.get("ARGA_CREAR_STEPS_MOTOR") or "occt").strip().lower()
+    if motor is None or not str(motor).strip():
+        motor = (os.environ.get("ARGA_CREAR_STEPS_MOTOR") or "occt").strip().lower()
+    else:
+        motor = str(motor).strip().lower()
     return motor not in ("freecad", "fc", "verde", "free-cad")
 
 
@@ -607,14 +612,20 @@ def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
     return resultados
 
 
-def procesar_familia(familia: dict, thk_mm: float, plasma_off_mm: float):
+def procesar_familia(
+    familia: dict,
+    thk_mm: float,
+    plasma_off_mm: float,
+    *,
+    motor_3d: str | None = None,
+):
     """
     DXF → STEP para una familia (Cama Laser / Robot / Cobre / Plasma).
 
     Por defecto usa OCCT (une LINE/ARC en memoria; no altera DXF en disco).
-    FreeCAD queda como override ``ARGA_CREAR_STEPS_MOTOR=freecad``.
+    FreeCAD: ``motor_3d='freecad'`` o env ``ARGA_CREAR_STEPS_MOTOR=freecad``.
     """
-    if _usar_occt_para_crear_steps():
+    if _usar_occt_para_crear_steps(motor_3d):
         return _procesar_familia_occt(familia, thk_mm, plasma_off_mm)
 
     nombre = familia["nombre"]
@@ -739,17 +750,22 @@ def procesar_ruta_nesting(
     ruta_bd: str | None = None,
     cursor=None,
     conexion=None,
+    motor_3d: str | None = None,
 ):
     """
     Procesa una sola carpeta NESTING.
     Puede venir:
     - desde la BD (modo normal)
     - o directo desde selección manual (modo manual)
+
+    ``motor_3d``: 'occt' | 'freecad' | None (env / default OCCT).
     """
     ruta_nesting = norm_path(ruta_nesting)
 
     dbg("------------------------------------------------------")
     dbg(f"📂 Procesando NESTING: {ruta_nesting}")
+    motor_eff = (motor_3d or os.environ.get("ARGA_CREAR_STEPS_MOTOR") or "occt").strip().lower()
+    dbg(f"🔧 Motor 3D: {motor_eff}")
 
     if not os.path.isdir(ruta_nesting):
         dbg(f"❌ La ruta NESTING no existe o no es accesible: {ruta_nesting}")
@@ -818,7 +834,7 @@ def procesar_ruta_nesting(
         dxf_count = contar_archivos(fam["dxf_dir"], "*.dxf")
         if dxf_count > 0:
             familias_con_dxf += 1
-        resultados.extend(procesar_familia(fam, thk_mm, plasma_off))
+        resultados.extend(procesar_familia(fam, thk_mm, plasma_off, motor_3d=motor_3d))
 
     if buscar_manifest_en_nesting is not None:
         manifest = buscar_manifest_en_nesting(ruta_nesting)

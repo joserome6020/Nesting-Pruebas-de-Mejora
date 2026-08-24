@@ -254,18 +254,25 @@ def _is_iges_export() -> bool:
 
 def _cad_base_from_dxf_name(name: str) -> str:
     step_base = name
-    idx = name.upper().find("W.O.")
+    for prefix in ("_joined_", "_slim_"):
+        if step_base.startswith(prefix):
+            step_base = step_base[len(prefix) :]
+            break
+    idx = step_base.upper().find("W.O.")
     if idx != -1:
-        step_base = name[idx:].strip()
+        step_base = step_base[idx:].strip()
     return step_base
 
 _NESTING_THK_IN_RE = re.compile(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+_SWO_THK_IN_RE = re.compile(r"SWO[-\s]*\d+[_\s-]+([0-9]*\.?[0-9]+)", re.IGNORECASE)
 
 
 def _thk_mm_from_dxf_name(path_or_name: str, default_mm: float) -> float:
-    """Calibre desde NESTING_<pulgadas>_… → mm (fallback default_mm)."""
+    """Calibre desde NESTING_<pulgadas>_… o SWO-NNN_<pulgadas>_… → mm."""
     name = os.path.basename(str(path_or_name or ""))
     m = _NESTING_THK_IN_RE.search(name)
+    if not m:
+        m = _SWO_THK_IN_RE.search(name)
     if not m:
         return float(default_mm)
     try:
@@ -705,7 +712,10 @@ LAYER_LIBRARY = [
         "mark": {"MARK", "ETCH", "TEXT"},
         "plate": {"PLATE"},
         "mixed_contour": set(),
-        "predicate": lambda layers: any("CUT_CU" in str(l).upper() for l in layers),
+        "predicate": lambda layers: (
+            any(str(l).upper().strip() == "CUT_CU" for l in layers)
+            and not any(str(l).upper().strip() == "CUT_OUTER" for l in layers)
+        ),
     },
     {
         "name": "ARGA_NESTING_STD",
@@ -742,6 +752,13 @@ def _label_matches_any(lbl, keys):
             if lbl == ku or ku in tokens:
                 return True
         else:
+            # CUT_CU no debe empatar CUT_OUTER (substring legacy).
+            if ku == "CUT_CU":
+                if lbl == "CUT_CU" or "CUT_CU" in tokens:
+                    return True
+                continue
+            if lbl == ku or ku in tokens:
+                return True
             if ku in lbl:
                 return True
     return False
@@ -790,9 +807,10 @@ def _resolver_perfil_desde_labels(labels, doc=None):
                 return prof
 
     has_cut_cu = any(_label_matches_any(lbl, {"CUT_CU"}) for lbl in labels)
+    has_cut_outer = any(_label_matches_any(lbl, {"CUT_OUTER"}) for lbl in labels)
     if has_cut_cu and doc is not None:
         has_cut_cu = _layer_has_geometry(doc, "CUT_CU")
-    if has_cut_cu:
+    if has_cut_cu and not has_cut_outer:
         for prof in LAYER_LIBRARY:
             if prof["name"] == "ARGA_COBRE_LARGOS":
                 return prof

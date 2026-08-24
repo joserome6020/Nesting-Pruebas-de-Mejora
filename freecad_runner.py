@@ -3,18 +3,23 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
 import config
 
 _NESTING_THK_IN_RE = re.compile(r"NESTING[_\s-]*([0-9]*\.?[0-9]+)", re.IGNORECASE)
+_SWO_THK_IN_RE = re.compile(r"SWO[-\s]*\d+[_\s-]+([0-9]*\.?[0-9]+)", re.IGNORECASE)
 _MM_PER_IN = 25.4
 
 
 def thickness_mm_from_dxf_name(name: str, default_mm: float = 6.35) -> float:
-    """Espesor en mm desde NESTING_<pulgadas>_…; fallback a default_mm."""
-    m = _NESTING_THK_IN_RE.search(str(name or ""))
+    """Espesor en mm desde NESTING_<pulgadas>_… o SWO-NNN_<pulgadas>_…; fallback a default_mm."""
+    text = str(name or "")
+    m = _NESTING_THK_IN_RE.search(text)
+    if not m:
+        m = _SWO_THK_IN_RE.search(text)
     if not m:
         return float(default_mm)
     try:
@@ -25,6 +30,25 @@ def thickness_mm_from_dxf_name(name: str, default_mm: float = 6.35) -> float:
 
 def _norm_path(p: str) -> str:
     return os.path.normpath(str(p or "").strip())
+
+
+def _ensure_freecad_import_path(path: str) -> str:
+    """Copia a TEMP si la ruta es larga o OneDrive (importDXF de FreeCAD es frágil)."""
+    path = _norm_path(path)
+    if not path or not os.path.isfile(path):
+        return path
+    needs_copy = len(path) > 220 or "onedrive" in path.lower()
+    if not needs_copy:
+        return path
+    cache = _norm_path(os.path.join(tempfile.gettempdir(), "arga_fc_import"))
+    os.makedirs(cache, exist_ok=True)
+    dst = _norm_path(os.path.join(cache, os.path.basename(path)))
+    try:
+        if (not os.path.isfile(dst)) or os.path.getmtime(dst) < os.path.getmtime(path):
+            shutil.copy2(path, dst)
+        return dst
+    except Exception:
+        return path
 
 
 def _equivalente_ruta_mapeada(p: str) -> str:
@@ -197,6 +221,10 @@ def _resolve_macro_script(*, prefer_verde: bool = False) -> str | None:
 
 def _cad_base_from_dxf(dxf_path: str) -> str:
     name = os.path.splitext(os.path.basename(dxf_path))[0]
+    for prefix in ("_joined_", "_slim_"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
     idx = name.upper().find("W.O.")
     if idx != -1:
         return name[idx:].strip()
@@ -398,6 +426,8 @@ def ejecutar_macro_freecad(
         ) -> tuple[bool, str]:
             env = dict(env_base)
             import_path, mark_json, slim_note = _prepare_import_paths(dxf_path)
+            import_path = _ensure_freecad_import_path(import_path)
+            # SINGLE = DXF original (nombre STEP); IMPORT = slim/join/temp (solo lectura FreeCAD).
             env["FREECAD_DXF_SINGLE"] = dxf_path
             env["FREECAD_DXF_IMPORT"] = import_path
             # Calibre por archivo: NESTING_<in>_… (no reutilizar el THK del lote).

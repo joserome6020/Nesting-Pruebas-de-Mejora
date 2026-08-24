@@ -531,11 +531,11 @@ def _validar_steps_tras_export(
     *,
     log_fn=None,
     cu_formato_por_dxf: dict[str, str] | None = None,
-    motor_3d: str = "freecad",
+    motor_3d: str = "occt",
 ) -> dict[str, dict[str, int]]:
     """Falla el export si había DXF de cobre/láser y no se generó el STEP esperado."""
     _log = log_fn or (lambda _msg: None)
-    motor = str(motor_3d or "freecad").strip().lower()
+    motor = str(motor_3d or "occt").strip().lower()
     motor_label = "Arga Nesting Suite (OCCT)" if motor in ("occt", "arga", "nans") else "FreeCAD"
     universal = step_universal_sin_camas_activo()
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
@@ -1264,7 +1264,7 @@ def exportar_resultados_a_dxf(
     es_swo: bool = False,
     swo_id: str | None = None,
     datos_partes=None,
-    motor_3d: str = "freecad",
+    motor_3d: str = "occt",
     progress_cb=None,
 ):
     from .dxf_export_log import log, log_section, log_sheet_plan
@@ -1282,11 +1282,11 @@ def exportar_resultados_a_dxf(
     job_root_dir = os.path.join(out_dir, nest_folder)
     es_swo_export = _es_export_swo(base_name, wo_label, es_swo=es_swo)
     swo_ref = str(swo_id or base_name or "").strip()
-    motor = str(motor_3d or "freecad").strip().lower()
+    motor = str(motor_3d or "occt").strip().lower()
     if motor in ("arga", "nans", "arga nesting", "arga_nesting"):
         motor = "occt"
     if motor not in ("freecad", "occt"):
-        motor = "freecad"
+        motor = "occt"
 
     n_dxf_est, n_step_est = estimar_conteos_export(resultados, generar_step=bool(generar_step))
     dxf_done = 0

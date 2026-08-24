@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-24 — STEP: OCCT único en UI (FreeCAD solo env legacy)
+- **Crear STEPs** y **Exportar DXF+3D** ya no preguntan motor; siempre **OCCT (Arga)**.
+- Paridad acero/cobre: `collect_dxf_nest`, ENGRAVE_ONESHOT, cobre XCAF, STEP universal sin camas.
+- Escape hatch debug: `ARGA_CREAR_STEPS_MOTOR=freecad` / `ARGA_EXPORT_3D_MOTOR=freecad`.
+- Candado actualizado: `test_crear_steps_motor_choice.py`.
+
+### 2026-08-21e — Crear STEPs: elegir FreeCAD u OCCT
+- Misma pregunta que Exportar 3D (`FreeCAD` / `OCCT (Arga)`).
+- `procesar_ruta_nesting(..., motor_3d=)` propaga la elección.
+- Default del diálogo: OCCT (recomendado nests 1:1).
+- Candado: `test_crear_steps_motor_choice.py`.
+
 ### 2026-08-21d — Release completo + Crear STEPs/buzón en el .exe
 - Regla: cerrar ANS antes de `--release`; smoke 100% o repetir
   (`.cursor/rules/release-complete-packaging.mdc`).

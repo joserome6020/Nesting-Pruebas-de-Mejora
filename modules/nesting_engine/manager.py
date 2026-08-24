@@ -7540,7 +7540,7 @@ class MotorNesting:
         es_swo=False,
         swo_id=None,
         datos_partes=None,
-        motor_3d="freecad",
+        motor_3d="occt",
         progress_cb=None,
     ):
         """Redirige la orden de la interfaz gráfica hacia el archivo exporter.py"""

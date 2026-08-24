@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_crear_steps_motor_choice.py",
+        "2026-08-24 - Crear STEPs / Export 3D: OCCT único en UI (FreeCAD solo env legacy)",
+    ),
+    (
         "test_release_engine_step_paths_packaged.py",
         "2026-08-21d - Crear STEPs: engine.step_paths empaquetado en Release (CAD OCCT)",
     ),

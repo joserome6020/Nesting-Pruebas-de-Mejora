@@ -351,38 +351,6 @@ class ExportMixin:
             return None
         return clicked == btn_si
 
-    def _preguntar_motor_3d_export(self):
-        """
-        Motor STEP tras 'SI, generar 3D'.
-        Returns: 'freecad' | 'occt' | None (cancelar toda la exportación).
-
-        FreeCAD = generador_verde (producción clásica).
-        Arga Nesting Suite / OCCT = motor embebido CAD (OCCT), sin FreeCAD.
-        """
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("Motor 3D (STEP)")
-        box.setText("¿Con qué motor generar los archivos STEP?")
-        box.setInformativeText(
-            "FreeCAD: producción clásica (generador_verde).\n\n"
-            "Arga Nesting Suite (OCCT): motor embebido — no usa FreeCAD.\n\n"
-            "El visor 3D OCCT funciona con STEPs de cualquiera de los dos."
-        )
-        btn_fc = box.addButton("FreeCAD", QMessageBox.ButtonRole.YesRole)
-        btn_occt = box.addButton("OCCT (Arga)", QMessageBox.ButtonRole.ActionRole)
-        btn_cancel = box.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
-        for btn, min_w in ((btn_fc, 120), (btn_occt, 140), (btn_cancel, 104)):
-            btn.setMinimumWidth(min_w)
-            btn.setMinimumHeight(34)
-        box.setDefaultButton(btn_occt)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked is None or clicked == btn_cancel:
-            return None
-        if clicked == btn_occt:
-            return "occt"
-        return "freecad"
-
     def _validar_lote_exportado(
         self,
         exportados: list[str] | tuple[str, ...] | None,
@@ -965,27 +933,14 @@ class ExportMixin:
             return
         print(f"[DEBUG] Respuesta 3D: {respuesta_3d} (True=Yes, False=No, None=Cancelado)")
 
-        motor_3d = "freecad"
-        if respuesta_3d:
-            # ANS C++: preferir OCCT por defecto (opt-out ARGA_EXPORT_3D_MOTOR=freecad)
-            prefer = str(os.environ.get("ARGA_EXPORT_3D_MOTOR", "occt")).strip().lower()
-            if prefer in ("occt", "arga", "nans") and str(
-                os.environ.get("ARGA_EXPORT_3D_ASK", "1")
-            ).strip().lower() in ("0", "false", "no", "off"):
-                motor_3d = "occt"
-                print("[ANS-CPP] Motor 3D forzado OCCT (ARGA_EXPORT_3D_ASK=0)", flush=True)
-            else:
-                elegido = self._preguntar_motor_3d_export()
-                if elegido is None:
-                    return
-                motor_3d = elegido
-                # Si el usuario elige FreeCAD pero el core/OCCT está listo, dejar traza
-                if motor_3d == "freecad" and prefer in ("occt", "arga", "nans"):
-                    print(
-                        "[ANS-CPP] Hint: default recomendado es OCCT "
-                        "(ARGA_EXPORT_3D_MOTOR=occt)",
-                        flush=True,
-                    )
+        from modules.nesting_engine.step_export_prefs import motor_3d_export
+
+        motor_3d = motor_3d_export() if respuesta_3d else "occt"
+        if respuesta_3d and motor_3d == "freecad":
+            print(
+                "[EXPORT] Motor 3D legacy FreeCAD (ARGA_EXPORT_3D_MOTOR=freecad)",
+                flush=True,
+            )
         print(f"[DEBUG] Motor 3D: {motor_3d}")
 
         # Totales estimados (todos los lotes) para la pantalla dual
@@ -1003,15 +958,14 @@ class ExportMixin:
             print(f"[EXPORT][WARN] No se pudo estimar conteos: {exc_est}")
             n_dxf_tot, n_step_tot = 0, 0
 
-        titulo_export = (
-            "Exportando DXF / STEP — Arga Nesting Suite"
-            if motor_3d == "occt" and respuesta_3d
-            else (
-                "Exportando DXF / STEP — FreeCAD"
-                if respuesta_3d
-                else "Exportando DXF…"
+        if respuesta_3d:
+            titulo_export = (
+                "Exportando DXF / STEP — Arga Nesting Suite (OCCT)"
+                if motor_3d == "occt"
+                else "Exportando DXF / STEP — FreeCAD (legacy)"
             )
-        )
+        else:
+            titulo_export = "Exportando DXF…"
         if hasattr(self.app, "abrir_ventana_carga_export"):
             self.app.abrir_ventana_carga_export(
                 titulo_export,
@@ -1252,7 +1206,7 @@ class ExportMixin:
                         es_swo=es_swo_flag,
                         swo_id=job_activo if es_swo_flag else None,
                         datos_partes=getattr(self.app, "datos_partes_actuales", None),
-                        motor_3d=motor_3d if respuesta_3d else "freecad",
+                        motor_3d=motor_3d if respuesta_3d else "occt",
                         progress_cb=_progress_lote,
                     )
                     self._validar_lote_exportado(

@@ -122,3 +122,26 @@ def env_override_all_off() -> bool:
     """ARGA_STEP_FOLDERS=0 desactiva todos (debug)."""
     v = (os.environ.get("ARGA_STEP_FOLDERS") or "").strip().lower()
     return v in ("0", "none", "off", "false")
+
+
+_LEGACY_FREECAD_MOTOR_ALIASES = frozenset({"freecad", "fc", "verde", "free-cad"})
+
+
+def motor_3d_crear_steps() -> str:
+    """Motor DXF→STEP (Crear STEPs / despachador). Default OCCT."""
+    v = (os.environ.get("ARGA_CREAR_STEPS_MOTOR") or "occt").strip().lower()
+    if v in ("arga", "nans", "arga_nesting"):
+        return "occt"
+    if v in _LEGACY_FREECAD_MOTOR_ALIASES:
+        return "freecad"
+    return "occt"
+
+
+def motor_3d_export() -> str:
+    """Motor DXF→STEP al exportar DXF+3D. Default OCCT."""
+    v = (os.environ.get("ARGA_EXPORT_3D_MOTOR") or "occt").strip().lower()
+    if v in ("arga", "nans", "arga_nesting"):
+        return "occt"
+    if v in _LEGACY_FREECAD_MOTOR_ALIASES:
+        return "freecad"
+    return "occt"
