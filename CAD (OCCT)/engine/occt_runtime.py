@@ -261,7 +261,7 @@ def write_step_xcaf(
     if not writer.Transfer(doc, STEPControl_AsIs):
         raise RuntimeError(f"STEPCAF Transfer falló: {path}")
 
-    fd, tmp_name = tempfile.mkstemp(prefix="arga_occt_", suffix=".step", dir=str(path.parent))
+    fd, tmp_name = tempfile.mkstemp(prefix="arga_occt_", suffix=".step")
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
@@ -270,7 +270,12 @@ def write_step_xcaf(
             raise RuntimeError(f"STEPCAF Write falló (status={int(status)}): {path}")
         if not tmp_path.is_file() or tmp_path.stat().st_size <= 0:
             raise RuntimeError(f"STEP vacío o no creado: {path}")
-        os.replace(str(tmp_path), str(path))
+        # Escribir siempre en disco local y copiar al destino (UNC/red).
+        # Evita dumps XCAF lentísimos directo al share.
+        import shutil
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(tmp_path), str(path))
     finally:
         if tmp_path.exists():
             try:

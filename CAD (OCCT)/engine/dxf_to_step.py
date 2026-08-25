@@ -274,6 +274,87 @@ def _bbox_xy(shape) -> tuple[float, float, float, float] | None:
     return float(xmin), float(ymin), float(xmax), float(ymax)
 
 
+def _point_in_wire(x: float, y: float, wire, *, tol: float = 1e-4) -> bool:
+    """True si (x,y) está dentro o sobre el wire cerrado (cara plana Z=0)."""
+    if wire is None:
+        return False
+    try:
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.BRepTopAdaptor import BRepTopAdaptor_FClass2d
+        from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+        from OCP.gp import gp_Pnt2d
+
+        face_mk = BRepBuilderAPI_MakeFace(wire, True)
+        if not face_mk.IsDone():
+            return False
+        cls = BRepTopAdaptor_FClass2d(face_mk.Face(), float(tol))
+        state = cls.Perform(gp_Pnt2d(float(x), float(y)))
+        return state in (TopAbs_IN, TopAbs_ON)
+    except Exception:
+        return False
+
+
+def _wire_bbox_xy(wire) -> tuple[float, float, float, float] | None:
+    return _bbox_xy(wire)
+
+
+def _inner_belongs_to_outer(inner_wire, outer_wire, *, margin: float = 0.5) -> bool:
+    """
+    Agujero solo aplica a la pieza cuyo contorno lo contiene.
+    Prioridad: centro del bbox del inner dentro del wire outer.
+    Fallback: bbox del inner completamente dentro del bbox outer.
+    """
+    ib = _wire_bbox_xy(inner_wire)
+    if ib is None:
+        return False
+    cx = 0.5 * (ib[0] + ib[2])
+    cy = 0.5 * (ib[1] + ib[3])
+    if _point_in_wire(cx, cy, outer_wire):
+        return True
+    ob = _wire_bbox_xy(outer_wire)
+    if ob is None:
+        return False
+    return (
+        ib[0] >= ob[0] - margin
+        and ib[1] >= ob[1] - margin
+        and ib[2] <= ob[2] + margin
+        and ib[3] <= ob[3] + margin
+    )
+
+
+def _apply_inners_to_outer(body, outer_wire, inner_wires, *, thk_mm: float):
+    """
+    Boolean CUT de agujeros propios de esta pieza.
+    Si el cut destruye el sólido (0 solids), se conserva el body original.
+    """
+    if body is None:
+        return None
+    if not inner_wires:
+        return body
+    own = [w for w in inner_wires if _inner_belongs_to_outer(w, outer_wire)]
+    if not own:
+        return body
+    tools = []
+    for w in own:
+        sol = _extrude_wire(w, thk_mm)
+        if sol is not None:
+            tools.append(sol)
+    if not tools:
+        return body
+    tool = tools[0] if len(tools) == 1 else _compound(tools)
+    cut_res = _cut(body, tool)
+    if cut_res is None:
+        return body
+    sols = _list_solids(cut_res)
+    if not sols:
+        # Bug histórico: tool global de TODOS los inners borraba piezas chicas.
+        return body
+    best = max(sols, key=_shape_volume)
+    if _shape_volume(best) <= 1e-6:
+        return body
+    return best
+
+
 def _seg_hits_bbox(
     seg: tuple[float, float, float, float],
     bb: tuple[float, float, float, float],
@@ -673,6 +754,32 @@ def _stitch_edges_to_closed_wires(edges: list, *, tol: float = 1e-3) -> list:
     return out
 
 
+
+def _mark_segs_from_text_entity(entity) -> list[tuple[float, float, float, float]]:
+    """Stroke TEXT/MTEXT/ATTRIB on MARK-like layers into line segments for ENGRAVE."""
+    segs: list[tuple[float, float, float, float]] = []
+    try:
+        from ezdxf.addons.text2path import make_paths_from_entity
+    except Exception:
+        return segs
+    try:
+        paths = make_paths_from_entity(entity)
+    except Exception:
+        return segs
+    for path in paths or []:
+        try:
+            pts = list(path.flattening(0.35))
+        except Exception:
+            continue
+        for i in range(len(pts) - 1):
+            x1, y1 = float(pts[i].x), float(pts[i].y)
+            x2, y2 = float(pts[i + 1].x), float(pts[i + 1].y)
+            if abs(x2 - x1) < 1e-9 and abs(y2 - y1) < 1e-9:
+                continue
+            segs.append((x1, y1, x2, y2))
+    return segs
+
+
 def collect_dxf_nest(dxf_path: str | Path) -> DxfNestGeometry:
     """
     Clasifica capas como freecad_batch_dxf_to_step:
@@ -783,15 +890,52 @@ def collect_dxf_nest(dxf_path: str | Path) -> DxfNestGeometry:
             elif is_outer:
                 outer_edges.append(edge)
 
-        elif dt == "CIRCLE" and is_inner:
+        elif dt == "CIRCLE":
             from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
             from OCP.GC import GC_MakeCircle
             from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
 
             cx, cy = float(e.dxf.center.x), float(e.dxf.center.y)
             r = float(e.dxf.radius)
-            circ = GC_MakeCircle(gp_Ax2(gp_Pnt(cx, cy, 0.0), gp_Dir(0, 0, 1)), r).Value()
-            inners.append(BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circ).Edge()).Wire())
+            if r <= 1e-9:
+                continue
+            if is_mark:
+                # Aproximar círculo MARK como polígono de segmentos.
+                n = max(12, int(360.0 / 12.0))
+                for i in range(n):
+                    t0 = math.radians(360.0 * i / n)
+                    t1 = math.radians(360.0 * (i + 1) / n)
+                    marks.append(
+                        (
+                            cx + r * math.cos(t0),
+                            cy + r * math.sin(t0),
+                            cx + r * math.cos(t1),
+                            cy + r * math.sin(t1),
+                        )
+                    )
+                continue
+            if is_plate:
+                continue
+            try:
+                circ = GC_MakeCircle(
+                    gp_Ax2(gp_Pnt(cx, cy, 0.0), gp_Dir(0, 0, 1)), r
+                ).Value()
+                wire = BRepBuilderAPI_MakeWire(
+                    BRepBuilderAPI_MakeEdge(circ).Edge()
+                ).Wire()
+            except Exception:
+                continue
+            if is_inner:
+                inners.append(wire)
+            elif is_outer:
+                outers.append(wire)
+
+
+        elif dt in ("TEXT", "MTEXT", "ATTRIB"):
+            if not is_mark:
+                continue
+            marks.extend(_mark_segs_from_text_entity(e))
+            continue
 
     # Nesteos acero: LINE/ARC de CUT_* → wires cerrados
     outers.extend(_stitch_edges_to_closed_wires(outer_edges, tol=1e-3))
@@ -863,25 +1007,20 @@ def build_freecad_like_shapes(
         mode = "ENGRAVE"
 
     outer_solids = []
+    outer_wires_ok = []
     for w in geom.outer_wires:
         sol = _extrude_wire(w, thk_mm)
         if sol is not None:
             outer_solids.append(sol)
+            outer_wires_ok.append(w)
 
-    inner_solids = []
-    for w in geom.inner_wires:
-        sol = _extrude_wire(w, thk_mm)
-        if sol is not None:
-            inner_solids.append(sol)
-
-    if inner_solids:
-        tool = _compound(inner_solids)
-        final_parts = []
-        for body in outer_solids:
-            cut_res = _cut(body, tool)
-            final_parts.append(cut_res if cut_res is not None else body)
-    else:
-        final_parts = list(outer_solids)
+    final_parts = []
+    for body, owire in zip(outer_solids, outer_wires_ok):
+        final_parts.append(
+            _apply_inners_to_outer(
+                body, owire, geom.inner_wires, thk_mm=thk_mm
+            )
+        )
 
     segs = list(geom.mark_segs)
     solids: list[Any] = []
@@ -892,11 +1031,12 @@ def build_freecad_like_shapes(
             got, engrave_note = _engrave_marks_oneshot_multibody(
                 base_parts, segs, thk_mm=thk_mm, off_z=0.0
             )
-            if got is not None:
+            if got is not None and len(got) == len(base_parts):
                 solids = got
             else:
                 # Fallback: 1 boolean por pieza (sigue siendo un solo compound de ranuras/pieza)
-                engrave_note = f"fallback_piece_oneshot ({engrave_note})"
+                why = engrave_note if got is None else f"oneshot_count {len(got)}!={len(base_parts)}"
+                engrave_note = f"fallback_piece_oneshot ({why})"
                 for sh in base_parts:
                     bb = _bbox_xy(sh)
                     piece_segs = (
@@ -966,7 +1106,7 @@ def export_dxf_to_step_freecad_batch(
     out_step: str | Path,
     *,
     thk_mm: float,
-    material: str = "CU",
+    material: str = "STEEL",
     off_x: float = 0.0,
     off_y: float = 0.0,
     off_z: float = 0.0,
@@ -1013,6 +1153,14 @@ def export_dxf_to_step_freecad_batch(
     )
     if parts is None and not solids:
         raise RuntimeError("No se generaron sólidos de CUT_OUTER")
+
+    n_outer = len(geom.outer_wires)
+    n_solid = len([s for s in solids if s is not None])
+    if n_outer > 0 and n_solid != n_outer:
+        raise RuntimeError(
+            f"STEP incompleto: CUT_OUTER={n_outer} sólidos={n_solid} "
+            f"(DXF={Path(dxf_path).name}). No se publica STEP a medias."
+        )
 
     shapes_for_compound: list[Any] = []
 

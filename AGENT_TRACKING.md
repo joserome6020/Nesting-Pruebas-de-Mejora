@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-25 — OCCT STEP: piezas completas + acero + marcaje estable
+- Bug: `CUT_INNER` global borraba piezas chicas (H4 9→5 sólidos). Ahora cada agujero solo aplica a su `CUT_OUTER`.
+- Bug: `CUT_OUTER` como CIRCLE (H9) no se leía → 0 sólidos.
+- Bug: default `material=CU` pintaba acero de cobre. Default = `STEEL` (CU solo cobre).
+- Marcaje: TEXT→stroke; modo producción = `ENGRAVE` por lotes (no ONESHOT que se cuelga horas).
+- I/O: STEP se escribe en `%TEMP%` local y se copia al UNC (no dump XCAF en red).
+- Poka-yoke: si `solids != outers` → RuntimeError (no publica STEP a medias).
+- Candado: `tests/native/test_occt_inner_per_piece.py`.
+
 ### 2026-08-24 — STEP: OCCT único en UI (FreeCAD solo env legacy)
 - **Crear STEPs** y **Exportar DXF+3D** ya no preguntan motor; siempre **OCCT (Arga)**.
 - Paridad acero/cobre: `collect_dxf_nest`, ENGRAVE_ONESHOT, cobre XCAF, STEP universal sin camas.

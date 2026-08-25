@@ -572,7 +572,9 @@ def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
                     off_y=off_y,
                     off_z=off_z,
                     origen=None if str(origen).upper() in ("NONE", "", "NULL") else origen,
-                    mark_mode="ENGRAVE_ONESHOT",
+                    # ENGRAVE por lotes (chunk 100): estable con 1k–3k MARK.
+                    # PIECE_ONESHOT / ONESHOT se cuelga o tarda horas en nests densos.
+                    mark_mode="ENGRAVE",
                     include_plate=False,
                 )
                 if not os.path.isfile(step_path) or os.path.getsize(step_path) < 64:
