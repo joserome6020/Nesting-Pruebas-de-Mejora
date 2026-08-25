@@ -1,4 +1,8 @@
-"""Conversión DXF→STEP vía motor OCCT (Arga Nesting Suite), paridad de rutas FreeCAD."""
+"""Conversión DXF→STEP vía motor OCCT (Arga Nesting Suite), paridad de rutas FreeCAD.
+
+I/O estable: DXF en UNC/red se stagea a %TEMP% dentro de collect_dxf_nest;
+el STEP se escribe en TEMP y se copia al destino (write_step_xcaf).
+"""
 from __future__ import annotations
 
 import os

@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_dxf_local_staging.py",
+        "2026-08-25 - DXF UNC/red → %TEMP% antes de ezdxf/OCCT (Crear STEPs estable)",
+    ),
+    (
         "test_occt_inner_per_piece.py",
         "2026-08-25 - OCCT: CUT_INNER solo de su pieza (H4 9 outers no bajar a 5)",
     ),

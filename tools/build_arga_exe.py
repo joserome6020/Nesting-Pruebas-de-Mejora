@@ -159,6 +159,7 @@ HIDDEN_IMPORTS = (
     "engine.step_paths",
     "engine.dxf_to_step",
     "engine.occt_runtime",
+    "engine.local_staging",
     "engine.step_io",
     "interface.qt.widgets.herinox_switch",
     "interface.qt.widgets.largos_tira_canvas",

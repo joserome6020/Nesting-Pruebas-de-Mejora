@@ -55,6 +55,13 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-25b — Crear STEPs: DXF también stagea a %TEMP%
+- Flujo estable: UNC/unidad de red → copia DXF a `%TEMP%` → ezdxf+OCCT local →
+  STEP en `%TEMP%` → copia al servidor → limpia temps.
+- `engine/local_staging.py` + `collect_dxf_nest` (cubre Crear STEPs / despachador / OCCT).
+- Override: `ARGA_STAGE_DXF=0` off · `=1` fuerza stage aunque el path sea local.
+- Candado: `tests/native/test_dxf_local_staging.py`.
+
 ### 2026-08-25 — OCCT STEP: piezas completas + acero + marcaje estable
 - Bug: `CUT_INNER` global borraba piezas chicas (H4 9→5 sólidos). Ahora cada agujero solo aplica a su `CUT_OUTER`.
 - Bug: `CUT_OUTER` como CIRCLE (H9) no se leía → 0 sólidos.

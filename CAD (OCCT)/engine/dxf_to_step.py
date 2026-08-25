@@ -787,7 +787,17 @@ def collect_dxf_nest(dxf_path: str | Path) -> DxfNestGeometry:
       CUT_INNER → agujeros
       MARK / ETCH / TEXT → marcaje (no es corte)
       PLATE → contorno de placa (referencia; NO es pieza de corte)
+
+    Si el DXF está en UNC / unidad de red, se copia primero a %TEMP%
+    (ezdxf+OCCT locales) y se limpia al terminar. Ver local_staging.py.
     """
+    from .local_staging import staged_local_dxf
+
+    with staged_local_dxf(dxf_path) as local_dxf:
+        return _collect_dxf_nest_local(local_dxf)
+
+
+def _collect_dxf_nest_local(dxf_path: str | Path) -> DxfNestGeometry:
     ensure_ocp()
     doc = ezdxf.readfile(str(dxf_path))
     outers: list = []
