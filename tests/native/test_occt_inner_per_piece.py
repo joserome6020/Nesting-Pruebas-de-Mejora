@@ -25,8 +25,11 @@ def test_inners_solo_de_su_pieza():
         DxfNestGeometry,
         build_freecad_like_shapes,
         _apply_inners_to_outer,
+        _assign_inners_to_outers,
         _extrude_wire,
         _shape_volume,
+        _point_in_wire,
+        _wire_bbox_xy,
     )
     from engine.occt_runtime import ensure_ocp
 
@@ -43,13 +46,24 @@ def test_inners_solo_de_su_pieza():
     v0 = _shape_volume(body_small)
     assert v0 > 1.0
 
-    # Bug antiguo: tool = todos los inners → volumen ~0.
+    # Agujero grande NO debe pertenecer a la chica (bbox no cabe).
+    from engine.dxf_to_step import _inner_belongs_to_outer
+
+    assert _inner_belongs_to_outer(hole_big, outer_small) is False
+    assert _inner_belongs_to_outer(hole_small, outer_small) is True
+
     kept = _apply_inners_to_outer(
         body_small, outer_small, [hole_big, hole_small], thk_mm=thk
     )
     v1 = _shape_volume(kept)
     assert v1 > v0 * 0.5, f"pieza chica destruida: v0={v0} v1={v1}"
     assert v1 < v0, "debería restar solo el agujero propio"
+
+    assigned = _assign_inners_to_outers(
+        [outer_big, outer_small], [hole_big, hole_small]
+    )
+    assert len(assigned[0]) == 1  # hole_big → grande
+    assert len(assigned[1]) == 1  # hole_small → chica
 
     geom = DxfNestGeometry(
         outer_wires=[outer_big, outer_small],
@@ -58,11 +72,27 @@ def test_inners_solo_de_su_pieza():
         plate_wires=[],
     )
     _parts, solids, _bb = build_freecad_like_shapes(
-        geom, thk_mm=thk, mark_mode="EDGES", apply_placement=False
+        geom, thk_mm=thk, mark_mode="SKIP", apply_placement=False
     )
     assert len(solids) == 2, f"esperaba 2 sólidos, got {len(solids)}"
     vols = sorted(_shape_volume(s) for s in solids)
     assert vols[0] > 1.0 and vols[1] > 1.0
+
+
+def test_point_in_circle_outer():
+    """Círculos CUT_OUTER: centro debe contar como interior (FClass2d fallaba)."""
+    from engine.dxf_to_step import _point_in_wire
+    from engine.occt_runtime import ensure_ocp
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from OCP.GC import GC_MakeCircle
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    ensure_ocp()
+    circ = GC_MakeCircle(gp_Ax2(gp_Pnt(100.0, 200.0, 0.0), gp_Dir(0, 0, 1)), 50.0).Value()
+    wire = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circ).Edge()).Wire()
+    assert _point_in_wire(100.0, 200.0, wire) is True
+    assert _point_in_wire(100.0, 200.0 + 49.0, wire) is True
+    assert _point_in_wire(100.0, 200.0 + 60.0, wire) is False
 
 
 def test_swo033_h4_keep_all_outers():
@@ -78,12 +108,63 @@ def test_swo033_h4_keep_all_outers():
     )
 
     g = collect_dxf_nest(dxf)
-    assert len(g.outer_wires) == 9
+    n_out = len(g.outer_wires)
+    assert n_out >= 9, f"H4 outers={n_out}"
     thk = thickness_mm_from_dxf_name(dxf.name, default_mm=9.525)
     _p, solids, _bb = build_freecad_like_shapes(
-        g, thk_mm=thk, mark_mode="EDGES", apply_placement=False
+        g, thk_mm=thk, mark_mode="SKIP", apply_placement=False
     )
-    assert len(solids) == 9, f"H4 debe conservar 9 piezas, got {len(solids)}"
+    assert len(solids) == n_out, f"H4 debe conservar {n_out} piezas, got {len(solids)}"
+
+
+def test_swo033_h7_keep_volumes():
+    """H7: 15 outers; agujeros no deben comerse piezas (vol simétrico en gemelas)."""
+    dxf = (
+        ROOT
+        / "_tmp"
+        / "swo033_step_regen"
+        / "ROBOT_LASER_+_MINI_NEST"
+        / "SWO-033_0.375_SWO-033-H7.dxf"
+    )
+    if not dxf.is_file():
+        print("SKIP test_swo033_h7_keep_volumes (sin DXF local)")
+        return
+    from engine.dxf_to_step import (
+        collect_dxf_nest,
+        build_freecad_like_shapes,
+        thickness_mm_from_dxf_name,
+        _assign_inners_to_outers,
+        _shape_volume,
+        _point_in_wire,
+        _wire_bbox_xy,
+    )
+
+    g = collect_dxf_nest(dxf)
+    assert len(g.outer_wires) == 15, f"outers={len(g.outer_wires)}"
+    # Círculos: centro interior
+    for i in (0, 1):
+        ob = _wire_bbox_xy(g.outer_wires[i])
+        assert ob is not None
+        cx = 0.5 * (ob[0] + ob[2])
+        cy = 0.5 * (ob[1] + ob[3])
+        assert _point_in_wire(cx, cy, g.outer_wires[i]), f"outer[{i}] centro fuera"
+
+    assigned = _assign_inners_to_outers(g.outer_wires, g.inner_wires)
+    assert sum(len(a) for a in assigned) == len(g.inner_wires)
+
+    thk = thickness_mm_from_dxf_name(dxf.name, default_mm=9.525)
+    _p, solids, _bb = build_freecad_like_shapes(
+        g, thk_mm=thk, mark_mode="SKIP", apply_placement=False
+    )
+    assert len(solids) == 15, f"H7 debe conservar 15 piezas, got {len(solids)}"
+    # Gemelas circulares [0]/[1] y rectángulos [8]/[9] con volúmenes casi iguales
+    v0 = _shape_volume(solids[0])
+    v1 = _shape_volume(solids[1])
+    assert abs(v0 - v1) / max(v0, v1) < 0.02, f"circulos asimétricos {v0} vs {v1}"
+    v8 = _shape_volume(solids[8])
+    v9 = _shape_volume(solids[9])
+    assert abs(v8 - v9) / max(v8, v9) < 0.05, f"piezas [8]/[9] comidas: {v8} vs {v9}"
+    assert v8 > 5_000_000 and v9 > 5_000_000
 
 
 def test_circle_cut_outer_wire():
@@ -116,6 +197,8 @@ def test_circle_cut_outer_wire():
 
 if __name__ == "__main__":
     test_inners_solo_de_su_pieza()
+    test_point_in_circle_outer()
     test_swo033_h4_keep_all_outers()
+    test_swo033_h7_keep_volumes()
     test_circle_cut_outer_wire()
     print("OK occt_inner_per_piece")

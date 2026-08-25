@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-25c — OCCT: agujeros ya no se comen piezas (H7)
+- Causa real: `FClass2d` en círculos/`CUT_OUTER` reportaba OUT hasta el centro;
+  el fallback por bbox aplicaba `CUT_INNER` ajenos y destruía sólidos (H7 pieza
+  gemela 6.8M→1.8M). Inventor veía nests incompletos.
+- Fix: point-in por polígono muestreado + asignación al outer más chico con
+  bbox del agujero contenido; cut con guardia -50%/multi-sólido.
+- Candado: `test_swo033_h7_keep_volumes` + `test_point_in_circle_outer`.
+- Regen detenido; reabrir ANS y regenerar STEPs con el fix.
+
 ### 2026-08-25b — Crear STEPs: DXF también stagea a %TEMP%
 - Flujo estable: UNC/unidad de red → copia DXF a `%TEMP%` → ezdxf+OCCT local →
   STEP en `%TEMP%` → copia al servidor → limpia temps.

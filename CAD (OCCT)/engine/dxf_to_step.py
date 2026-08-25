@@ -274,66 +274,195 @@ def _bbox_xy(shape) -> tuple[float, float, float, float] | None:
     return float(xmin), float(ymin), float(xmax), float(ymax)
 
 
+def _wire_sample_xy(wire, *, deflection: float = 0.35) -> list[tuple[float, float]]:
+    """Muestrea el wire en XY (nests siempre planos Z≈0)."""
+    if wire is None:
+        return []
+    try:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GCPnts import GCPnts_QuasiUniformDeflection
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+
+        pts: list[tuple[float, float]] = []
+        ex = TopExp_Explorer(wire, TopAbs_EDGE)
+        while ex.More():
+            edge = TopoDS.Edge_s(ex.Current())
+            curve = BRepAdaptor_Curve(edge)
+            disc = GCPnts_QuasiUniformDeflection(curve, float(deflection))
+            if disc.IsDone() and disc.NbPoints() >= 2:
+                for i in range(1, disc.NbPoints() + 1):
+                    p = disc.Value(i)
+                    pts.append((float(p.X()), float(p.Y())))
+            else:
+                p0 = curve.Value(curve.FirstParameter())
+                p1 = curve.Value(curve.LastParameter())
+                pts.append((float(p0.X()), float(p0.Y())))
+                pts.append((float(p1.X()), float(p1.Y())))
+            ex.Next()
+        if len(pts) >= 2:
+            if abs(pts[0][0] - pts[-1][0]) > 1e-7 or abs(pts[0][1] - pts[-1][1]) > 1e-7:
+                pts.append(pts[0])
+        return pts
+    except Exception:
+        return []
+
+
+def _point_in_polygon(
+    x: float, y: float, poly: list[tuple[float, float]], *, tol: float = 1e-4
+) -> bool:
+    """Ray casting; borde cuenta como interior."""
+    if len(poly) < 3:
+        return False
+    # On-vertex / on-edge
+    for i in range(len(poly) - 1):
+        x1, y1 = poly[i]
+        x2, y2 = poly[i + 1]
+        dx, dy = x2 - x1, y2 - y1
+        len2 = dx * dx + dy * dy
+        if len2 <= 1e-18:
+            if abs(x - x1) <= tol and abs(y - y1) <= tol:
+                return True
+            continue
+        t = ((x - x1) * dx + (y - y1) * dy) / len2
+        if 0.0 <= t <= 1.0:
+            px = x1 + t * dx
+            py = y1 + t * dy
+            if abs(px - x) <= tol and abs(py - y) <= tol:
+                return True
+    inside = False
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if abs(yi - yj) > 1e-18:
+            intersects = ((yi > y) != (yj > y)) and (
+                x < (xj - xi) * (y - yi) / (yj - yi) + xi
+            )
+            if intersects:
+                inside = not inside
+        j = i
+    return inside
+
+
 def _point_in_wire(x: float, y: float, wire, *, tol: float = 1e-4) -> bool:
-    """True si (x,y) está dentro o sobre el wire cerrado (cara plana Z=0)."""
+    """
+    True si (x,y) está dentro del wire cerrado.
+    Usa polígono muestreado (no FClass2d): en círculos CUT_OUTER de nest,
+    MakeFace+FClass2d reportaba OUT hasta en el centro y el fallback bbox
+    aplicaba agujeros ajenos → se comía piezas (H7).
+    """
     if wire is None:
         return False
-    try:
-        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-        from OCP.BRepTopAdaptor import BRepTopAdaptor_FClass2d
-        from OCP.TopAbs import TopAbs_IN, TopAbs_ON
-        from OCP.gp import gp_Pnt2d
-
-        face_mk = BRepBuilderAPI_MakeFace(wire, True)
-        if not face_mk.IsDone():
-            return False
-        cls = BRepTopAdaptor_FClass2d(face_mk.Face(), float(tol))
-        state = cls.Perform(gp_Pnt2d(float(x), float(y)))
-        return state in (TopAbs_IN, TopAbs_ON)
-    except Exception:
+    poly = _wire_sample_xy(wire)
+    if len(poly) < 3:
         return False
+    return _point_in_polygon(float(x), float(y), poly, tol=float(tol))
 
 
 def _wire_bbox_xy(wire) -> tuple[float, float, float, float] | None:
     return _bbox_xy(wire)
 
 
+def _wire_area_xy(wire) -> float:
+    ob = _wire_bbox_xy(wire)
+    if ob is None:
+        return float("inf")
+    return max(1e-12, (ob[2] - ob[0]) * (ob[3] - ob[1]))
+
+
 def _inner_belongs_to_outer(inner_wire, outer_wire, *, margin: float = 0.5) -> bool:
     """
-    Agujero solo aplica a la pieza cuyo contorno lo contiene.
-    Prioridad: centro del bbox del inner dentro del wire outer.
-    Fallback: bbox del inner completamente dentro del bbox outer.
+    Agujero aplica a la pieza si:
+      1) su centro está dentro del contorno outer (polígono), y
+      2) su bbox cabe dentro del bbox outer (evita que un agujero grande
+         cuyo centro cae en una pieza chica anidada la destruya).
     """
     ib = _wire_bbox_xy(inner_wire)
-    if ib is None:
+    ob = _wire_bbox_xy(outer_wire)
+    if ib is None or ob is None:
         return False
     cx = 0.5 * (ib[0] + ib[2])
     cy = 0.5 * (ib[1] + ib[3])
-    if _point_in_wire(cx, cy, outer_wire):
-        return True
-    ob = _wire_bbox_xy(outer_wire)
-    if ob is None:
+    if not _point_in_wire(cx, cy, outer_wire):
         return False
+    m = float(margin)
     return (
-        ib[0] >= ob[0] - margin
-        and ib[1] >= ob[1] - margin
-        and ib[2] <= ob[2] + margin
-        and ib[3] <= ob[3] + margin
+        ib[0] >= ob[0] - m
+        and ib[1] >= ob[1] - m
+        and ib[2] <= ob[2] + m
+        and ib[3] <= ob[3] + m
     )
 
 
-def _apply_inners_to_outer(body, outer_wire, inner_wires, *, thk_mm: float):
+def _assign_inners_to_outers(
+    outer_wires: list[Any], inner_wires: list[Any]
+) -> list[list[Any]]:
+    """
+    Cada CUT_INNER → la pieza outer más chica que lo contiene de verdad
+    (centro dentro + bbox del agujero dentro del bbox de la pieza).
+    """
+    assigned: list[list[Any]] = [[] for _ in outer_wires]
+    if not outer_wires or not inner_wires:
+        return assigned
+    areas = [_wire_area_xy(ow) for ow in outer_wires]
+    for iw in inner_wires:
+        hits: list[tuple[float, int]] = []
+        for oi, ow in enumerate(outer_wires):
+            if _inner_belongs_to_outer(iw, ow):
+                hits.append((areas[oi], oi))
+        if not hits:
+            continue
+        hits.sort()
+        assigned[hits[0][1]].append(iw)
+    return assigned
+
+
+def _apply_inners_to_outer(
+    body,
+    outer_wire,
+    inner_wires,
+    *,
+    thk_mm: float,
+    prefiltered: bool = False,
+):
     """
     Boolean CUT de agujeros propios de esta pieza.
-    Si el cut destruye el sólido (0 solids), se conserva el body original.
+    Si el cut destruye el sólido (0 solids / -50% vol / multi-sólido),
+    se conserva el body original o se reintenta agujero a agujero.
     """
     if body is None:
         return None
     if not inner_wires:
         return body
-    own = [w for w in inner_wires if _inner_belongs_to_outer(w, outer_wire)]
+    own = (
+        list(inner_wires)
+        if prefiltered
+        else [w for w in inner_wires if _inner_belongs_to_outer(w, outer_wire)]
+    )
     if not own:
         return body
+
+    def _cut_with_tools(base, tools_list):
+        if not tools_list:
+            return base
+        tool = tools_list[0] if len(tools_list) == 1 else _compound(tools_list)
+        cut_res = _cut(base, tool)
+        if cut_res is None:
+            return None
+        sols = _list_solids(cut_res)
+        if len(sols) != 1:
+            return None
+        best = sols[0]
+        v0 = _shape_volume(base)
+        v1 = _shape_volume(best)
+        if v1 <= 1e-6:
+            return None
+        if v0 > 1e-6 and v1 < v0 * 0.50:
+            return None
+        return best
+
     tools = []
     for w in own:
         sol = _extrude_wire(w, thk_mm)
@@ -341,18 +470,16 @@ def _apply_inners_to_outer(body, outer_wire, inner_wires, *, thk_mm: float):
             tools.append(sol)
     if not tools:
         return body
-    tool = tools[0] if len(tools) == 1 else _compound(tools)
-    cut_res = _cut(body, tool)
-    if cut_res is None:
-        return body
-    sols = _list_solids(cut_res)
-    if not sols:
-        # Bug histórico: tool global de TODOS los inners borraba piezas chicas.
-        return body
-    best = max(sols, key=_shape_volume)
-    if _shape_volume(best) <= 1e-6:
-        return body
-    return best
+
+    got = _cut_with_tools(body, tools)
+    if got is not None:
+        return got
+    out = body
+    for tool in tools:
+        trial = _cut_with_tools(out, [tool])
+        if trial is not None:
+            out = trial
+    return out
 
 
 def _seg_hits_bbox(
@@ -1024,11 +1151,18 @@ def build_freecad_like_shapes(
             outer_solids.append(sol)
             outer_wires_ok.append(w)
 
+    inners_per_outer = _assign_inners_to_outers(outer_wires_ok, geom.inner_wires)
     final_parts = []
-    for body, owire in zip(outer_solids, outer_wires_ok):
+    for body, owire, own_inners in zip(
+        outer_solids, outer_wires_ok, inners_per_outer
+    ):
         final_parts.append(
             _apply_inners_to_outer(
-                body, owire, geom.inner_wires, thk_mm=thk_mm
+                body,
+                owire,
+                own_inners,
+                thk_mm=thk_mm,
+                prefiltered=True,
             )
         )
 
