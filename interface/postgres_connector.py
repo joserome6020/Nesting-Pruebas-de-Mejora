@@ -49,11 +49,22 @@ def _aplicar_env_db_config(db_config: dict | None) -> None:
         os.environ["NESTING_DB_NAME"] = str(dbname)
 
 
-# Un job sin perfiles nunca genera CSV en AutoDXF (y a veces ni siquiera la
-# carpeta AutoDXF, caso GIGA BOARD 5). Eso no es una falla de ingeniería: la WO
-# simplemente no lleva largos y no debe tumbar el export / PQART.
+# Política dura: la lista de largos NUNCA tumba el export / PQART / reporte_cortes.
+# GIGA y muchos gabinetes no llevan perfiles; job_data tipado (9913 vs 9919),
+# AutoDXF ausente o CSV faltante son avisos, no errores de nesting.
+# Antes se usaba una lista blanca de estados y cada status nuevo (p. ej.
+# job_mismatch) volvía a abortar el multi-lote: esa whitelist es solo
+# documentación/telemetría; el guardado siempre continúa.
 ESTADOS_LARGOS_SIN_LISTA = frozenset(
-    {"csv_no_encontrado", "csv_vacio", "autodxf_no_existe"}
+    {
+        "csv_no_encontrado",
+        "csv_vacio",
+        "autodxf_no_existe",
+        "job_mismatch",
+        "job_vacio",
+        "ruta_exportacion_vacia",
+        "desconocido",
+    }
 )
 
 _wos_sin_lista_largos: list[str] = []
@@ -1199,10 +1210,13 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         print(f"[BD] Preparadas {piezas_guardadas} piezas. Estado 3D: {estado_3d}. Ruta inyectada.")
 
         # =======================================================
-        # IMPORTACIÓN VERIFICADA DE LISTA DE LARGOS POR JOB
+        # LISTA DE LARGOS (OPCIONAL — NUNCA ABORTA EL COMMIT)
         # =======================================================
-        # El commit va después de este bloque: si la importación falla, la WO
-        # no debe quedar a medias en reporte_cortes/pqart_wo.
+        # PQART / reporte_cortes ya están preparados arriba. La demanda de
+        # largos se intenta importar por comodidad, pero cualquier fallo
+        # (sin CSV, AutoDXF ausente, job_data tipado, excepción) es AVISO:
+        # se registra y se hace commit igual. MRL de largos se aplica luego
+        # desde NESTEO DE LARGOS si el usuario lo pide.
         print(
             f"[DEBUG][LISTA_LARGOS] es_swo={es_swo} | "
             f"job_original={job_original} | "
@@ -1222,35 +1236,32 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 )
                 print(f"[BD][LISTA_LARGOS] Resultado importación: {resultado_largos}")
                 status_largos = str(resultado_largos.get("status") or "desconocido")
-                if status_largos in ESTADOS_LARGOS_SIN_LISTA:
+                if not resultado_largos.get("ok"):
                     _registrar_wo_sin_lista_largos(nombre_wo, job_original, status_largos)
-                elif not resultado_largos.get("ok"):
-                    raise RuntimeError(
-                        f"No se importó la lista de largos (estado={status_largos})."
-                    )
-                pedidos = resultado_largos.get("pedidos_material")
-                if pedidos:
-                    _reportar_pedidos_material(
-                        pedidos,
-                        f"import job='{job_original}'",
-                    )
+                else:
+                    pedidos = resultado_largos.get("pedidos_material")
+                    if pedidos:
+                        _reportar_pedidos_material(
+                            pedidos,
+                            f"import job='{job_original}'",
+                        )
             except Exception as e:
-                raise RuntimeError(
-                    f"No se pudo importar la lista de largos del job "
-                    f"'{job_original}': {e}"
-                ) from e
+                _registrar_wo_sin_lista_largos(
+                    nombre_wo,
+                    job_original,
+                    f"excepcion:{type(e).__name__}",
+                )
+                print(
+                    f"[BD][LISTA_LARGOS][AVISO] Import opcional falló "
+                    f"(job='{job_original}'): {e}. Se continúa con PQART."
+                )
 
-            # material_requerido_ldg se aplica desde NESTEO DE LARGOS al exportar
-            # (plan calculado con el nesting + exclusiones elegidas por el usuario).
             print(
                 f"[BD][LISTA_LARGOS] Sin propagación automática a material_requerido_ldg "
                 f"(job='{job_original}' wo='{nombre_wo}')."
             )
         elif es_swo and db_config and ruta_exportacion:
-            # SWO: importar largos SOLO de jobs presentes en el nest
-            # (reporte_cortes). El diccionario puede tener prefijos viejos
-            # (p. ej. W.O. 1 X11 → 251007) que no están en esta fusión y
-            # no deben tumbar el export con autodir_no_existe.
+            # SWO: intentar largos de jobs del nest; nunca tumbar PQART.
             _aplicar_env_db_config(db_config)
             jobs_swo = set()
             try:
@@ -1267,11 +1278,17 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                     if j:
                         jobs_swo.add(j)
             except Exception as e_jobs:
-                raise RuntimeError(
-                    f"No se pudieron resolver los jobs fuente de SWO '{nombre_job}': {e_jobs}"
-                ) from e_jobs
+                _registrar_wo_sin_lista_largos(
+                    nombre_wo,
+                    str(nombre_job or ""),
+                    f"jobs_swo_error:{type(e_jobs).__name__}",
+                )
+                print(
+                    f"[BD][LISTA_LARGOS][AVISO] SWO '{nombre_job}': no se "
+                    f"resolvieron jobs para largos ({e_jobs}). Se continúa."
+                )
+                jobs_swo = set()
 
-            fallos_largos_swo = []
             jobs_importables = [
                 j for j in sorted(jobs_swo)
                 if j
@@ -1279,8 +1296,10 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                 and "S.W.O" not in str(j).upper()
             ]
             if not jobs_importables:
-                raise RuntimeError(
-                    f"SWO '{nombre_job}' no tiene jobs fuente trazables para importar largos."
+                _registrar_wo_sin_lista_largos(
+                    nombre_wo,
+                    str(nombre_job or ""),
+                    "sin_jobs_fuente",
                 )
             for j_imp in jobs_importables:
                 try:
@@ -1293,33 +1312,34 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                         propagar_material=False,
                     )
                     print(f"[BD][LISTA_LARGOS] SWO job={j_imp}: {resultado_largos}")
-                    status = str(resultado_largos.get("status") or "estado desconocido")
-                    if status in ESTADOS_LARGOS_SIN_LISTA:
-                        _registrar_wo_sin_lista_largos(nombre_wo, j_imp, status)
-                        continue
+                    status = str(resultado_largos.get("status") or "desconocido")
                     if not resultado_largos.get("ok"):
-                        # Job del nest sin carpeta AutoDXF: avisar, no tumbar PQART
-                        # si ya hay demanda de largos en BD para ese job.
-                        if status == "autodir_no_existe":
-                            cursor.execute(
-                                "SELECT COUNT(*) FROM lista_largos_job WHERE TRIM(job) = %s",
-                                (j_imp,),
-                            )
-                            n_exist = int((cursor.fetchone() or [0])[0] or 0)
+                        if status in ("autodxf_no_existe", "autodir_no_existe"):
+                            try:
+                                cursor.execute(
+                                    "SELECT COUNT(*) FROM lista_largos_job WHERE TRIM(job) = %s",
+                                    (j_imp,),
+                                )
+                                n_exist = int((cursor.fetchone() or [0])[0] or 0)
+                            except Exception:
+                                n_exist = 0
                             if n_exist > 0:
                                 print(
                                     f"[BD][LISTA_LARGOS][WARN] job={j_imp}: "
-                                    f"autodir_no_existe; se reutilizan {n_exist} filas en BD."
+                                    f"{status}; se reutilizan {n_exist} filas en BD."
                                 )
                                 continue
-                        fallos_largos_swo.append(f"{j_imp} ({status})")
+                        _registrar_wo_sin_lista_largos(nombre_wo, j_imp, status)
                 except Exception as e:
-                    fallos_largos_swo.append(f"{j_imp} ({e})")
-            if fallos_largos_swo:
-                raise RuntimeError(
-                    f"SWO '{nombre_job}': falló importación de largos para "
-                    + ", ".join(fallos_largos_swo)
-                )
+                    _registrar_wo_sin_lista_largos(
+                        nombre_wo,
+                        j_imp,
+                        f"excepcion:{type(e).__name__}",
+                    )
+                    print(
+                        f"[BD][LISTA_LARGOS][AVISO] SWO job={j_imp}: {e}. "
+                        "Se continúa con PQART."
+                    )
             print(
                 f"[BD][LISTA_LARGOS] SWO '{nombre_job}': material_requerido_ldg "
                 "se aplica al exportar desde el plan de NESTEO DE LARGOS."

@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-25d — Lista de largos NUNCA tumba el export (job_mismatch)
+- Caso real: W.O. 37 X2 / carpeta `9919-12CABINET2` + `job_data_9913-12CABINET2.csv`
+  → `estado=job_mismatch` abortaba PQART/reporte_cortes.
+- Causa de regresión: fixes previos usaban **whitelist**
+  (`csv_no_encontrado` / `csv_vacio` / `autodxf_no_existe`). Cada status nuevo
+  volvía a tumbar el multi-lote.
+- Fix estructural: import de largos es **siempre opcional**. Cualquier `ok=False`
+  o excepción → aviso + commit de nesting. SWO igual (sin raise por largos).
+- BD residual W.O. 37 (costos_prorrateo + ERP tipado 9913) purgada.
+- Candados: `test_job_mismatch_caso_9919_vs_9913` +
+  `test_postgres_nunca_raise_por_lista_largos` (prohíbe reintroducir los raise).
+
 ### 2026-08-25c — OCCT: agujeros ya no se comen piezas (H7)
 - Causa real: `FClass2d` en círculos/`CUT_OUTER` reportaba OUT hasta el centro;
   el fallback por bbox aplicaba `CUT_INNER` ajenos y destruía sólidos (H7 pieza

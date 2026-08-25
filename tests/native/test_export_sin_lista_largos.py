@@ -74,6 +74,64 @@ def test_estados_sin_lista_son_avisos():
     assert "csv_no_encontrado" in ESTADOS_LARGOS_SIN_LISTA
     assert "csv_vacio" in ESTADOS_LARGOS_SIN_LISTA
     assert "autodxf_no_existe" in ESTADOS_LARGOS_SIN_LISTA
+    # W.O. 37 X2 / 9919-12CABINET2: job_data tipado 9913 no debe tumbar PQART
+    assert "job_mismatch" in ESTADOS_LARGOS_SIN_LISTA
+
+
+def test_job_mismatch_caso_9919_vs_9913():
+    """Caso real GIGA: carpeta 9919 + job_data_9913-*.csv → status=job_mismatch."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "9919-12CABINET2"
+        root.mkdir()
+        (root / "job_data_9913-12CABINET2.csv").write_text(
+            "Job Number,Producto,Cliente,Cantidad\n"
+            "9913-12CABINET2,ENCLOSURES NEMA 1,GIGA,2\n",
+            encoding="utf-8",
+        )
+        wo_export = root / "MODEL CORE FILES" / "W.O. 37 X2" / "ARGA MODEL CORE"
+        wo_export.mkdir(parents=True)
+
+        with patch(
+            "modules.lista_largos_importer._buscar_carpeta_job_corporate",
+            return_value=None,
+        ):
+            resultado = importar_lista_largos_job(
+                job="9919-12CABINET2",
+                ruta_exportacion=str(wo_export),
+                db_config={
+                    "host": "127.0.0.1",
+                    "dbname": "x",
+                    "user": "x",
+                    "password": "x",
+                },
+            )
+
+        assert resultado["ok"] is False
+        assert resultado["status"] == "job_mismatch"
+        assert resultado["status"] in ESTADOS_LARGOS_SIN_LISTA
+        assert resultado.get("job_job_data") == "9913-12CABINET2"
+
+
+def test_postgres_nunca_raise_por_lista_largos():
+    """Candado estructural: el guardado de nesting no puede volver a raise por largos.
+
+    Los fixes 2026-08-05 / 08-06 / 08-18 usaban whitelist; cada status nuevo
+    (job_mismatch) reabría el bug. Ahora la política es catch-all: no debe
+    existir RuntimeError que aborte el commit por lista de largos.
+    """
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "interface"
+        / "postgres_connector.py"
+    ).read_text(encoding="utf-8")
+    prohibidos = (
+        "No se importó la lista de largos",
+        "No se pudo importar la lista de largos del job",
+        "falló importación de largos para",
+        "no tiene jobs fuente trazables para importar largos",
+    )
+    for frase in prohibidos:
+        assert frase not in src, f"Regresión: reapareció raise por largos ({frase!r})"
 
 
 def test_avisos_se_acumulan_sin_duplicar():
@@ -168,6 +226,8 @@ if __name__ == "__main__":
     test_autodxf_sin_csv_no_resuelve_lista()
     test_job_sin_carpeta_autodxf_reporta_estado()
     test_estados_sin_lista_son_avisos()
+    test_job_mismatch_caso_9919_vs_9913()
+    test_postgres_nunca_raise_por_lista_largos()
     test_avisos_se_acumulan_sin_duplicar()
     test_corporate_search_no_usa_rglob()
     test_corporate_prefiere_carpeta_con_autodxf()
