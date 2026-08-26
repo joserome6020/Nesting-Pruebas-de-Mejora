@@ -28,6 +28,37 @@ def rotar_punto(x, y, cx, cy, deg):
     return (cx + xr, cy + yr)
 
 
+def decimar_polyline_xy(
+    pts: list[tuple[float, float]],
+    *,
+    max_pts: int = 1200,
+    tol: float | None = None,
+) -> list[tuple[float, float]]:
+    """Reduce vértices para visor/thumbnail sin bloquear la UI en LWPOLY densas."""
+    if not pts or len(pts) <= max_pts:
+        return list(pts)
+    if tol is None:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), 1e-9)
+        tol = max(span * 0.002, 0.01)
+    try:
+        from shapely.geometry import LineString
+
+        ls = LineString(pts)
+        simp = ls.simplify(float(tol), preserve_topology=True)
+        out = [(float(x), float(y)) for x, y in simp.coords]
+        if 3 <= len(out) <= max_pts:
+            return out
+    except Exception:
+        pass
+    step = max(1, len(pts) // max_pts)
+    out = list(pts[::step])
+    if pts[-1] != out[-1]:
+        out.append(pts[-1])
+    return out
+
+
 def dxf_arc_ccw_sweep_rad(start_deg, end_deg):
     sa = math.radians(float(start_deg))
     span_deg = (float(end_deg) - float(start_deg)) % 360.0
@@ -600,6 +631,9 @@ def build_snap_context(entities, render_all_layers: bool):
                         verts.append((float(p.x), float(p.y), b))
             except Exception:
                 continue
+            if len(verts) > 600 and all(abs(v[2]) < 1e-9 for v in verts):
+                xy = decimar_polyline_xy([(v[0], v[1]) for v in verts], max_pts=600)
+                verts = [(x, y, 0.0) for x, y in xy]
             n = len(verts)
             if n < 2:
                 continue

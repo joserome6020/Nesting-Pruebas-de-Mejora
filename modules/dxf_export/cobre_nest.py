@@ -104,10 +104,11 @@ def _preparar_sheet_cobre(
 ) -> dict[str, Any]:
     s = dict(sheet or {})
     s.setdefault("modo_largos_cu", True)
+    amada_pieza = bool(s.get("cu_export_amada"))
     try:
         from modules.nesting_engine.nest_runtime_prefs import is_cu_force_dxf_step_enabled
 
-        if is_cu_force_dxf_step_enabled():
+        if is_cu_force_dxf_step_enabled() and not amada_pieza:
             s["cu_modo_separacion_barra"] = "con_gap"
             s["export_3d_format"] = "step"
             s.pop("cu_export_vertical", None)
@@ -117,7 +118,7 @@ def _preparar_sheet_cobre(
     except Exception:
         pass
     if force_horizontal or s.get("cu_export_amada"):
-        # AMADA: barra horizontal pieza completa (incluye RTZCU con gap).
+        # AMADA/FIXTURA: pieza horizontal sola (sin geometría de fixtura).
         s["cu_modo_separacion_barra"] = "con_gap"
         s["export_3d_format"] = "dxf"
         s.pop("cu_export_vertical", None)
@@ -216,12 +217,11 @@ def export_cobre_hoja_to_dxf(
             log(f"PIEZA COBRE {i}/{len(placements_work)}: {format_placement_spec(p, index=i)}")
             log(f"  modo={export_mode}")
 
-            # VERTICAL especial: sin MARK ni CUT_INNER (solo líneas de corte).
+            # VERTICAL CyPTube ESP: cortes + MARK; sin barrenos en la barra vertical.
             piece_holes = draw_holes
             piece_marks = draw_marks
             if bool(p.get("cu_especial_vertical")) and not sheet_work.get("cu_export_amada"):
                 piece_holes = False
-                piece_marks = False
 
             mode, ok_channel = dxf_export_piece(
                 msp,
@@ -292,18 +292,6 @@ def export_cobre_hoja_to_dxf(
         if not draw_marks:
             purge_layers.add("MARK")
         _purge_entities_on_layers(msp, purge_layers)
-
-        if sheet_work.get("cu_export_amada"):
-            from modules.dxf_export.amada_fixture import draw_amada_fixture_provisional
-
-            fid = str(sheet_work.get("cu_amada_fixtura_id") or "").strip() or None
-            draw_amada_fixture_provisional(
-                msp,
-                _sheet_bar_l,
-                _sheet_bar_w,
-                fixture_id=fid,
-                largo_pieza_in=float(_sheet_bar_l) / 25.4,
-            )
 
         if sin_gap:
             _export_cu_bar_inicio_marker_vertical(

@@ -233,13 +233,12 @@ def _collect_piezas_amada_fixtura(resultados: dict) -> list[dict]:
 
 def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     """
-    Sheet + placement de UNA pieza ESP. en origen (0,0) para barrenado Amada.
-    Contorno cerrado + barrenos/marcaje; fixtura se dibuja al exportar.
+    Sheet + placement de UNA pieza ESP. en origen (0,0) para AMADA/FIXTURA.
+
+    Contorno engañado +10\" (join cerrado) + barrenos en banda superior; sin marcaje.
     """
-    from modules.nesting_engine.cu_largos_nesting import (
-        AMADA_FIXTURA_ANCHO_IN,
-        amada_fixtura_elegir,
-    )
+    from modules.dxf_export.amada_esp import build_amada_esp_padded_geometry
+    from modules.nesting_engine.cu_largos_nesting import AMADA_FIXTURA_ANCHO_IN
 
     pols = (pieza or {}).get("poligonos") or []
     if not pols:
@@ -255,28 +254,23 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     dx, dy = -float(minx), -float(miny)
     outer_l = _shift_ring_xy(outer, dx, dy)
     holes_l = [_shift_ring_xy(h, dx, dy) for h in (holes or [])]
-    marks_l = [
-        _shift_ring_xy(mk, dx, dy) for mk in ((pieza or {}).get("marcas") or [])
-    ]
-    bb2 = _bbox_rings_mm([outer_l] + holes_l)
-    if bb2 is None:
+    outer_padded, holes_padded, len_mm, alto_total_mm = build_amada_esp_padded_geometry(
+        outer_l, holes_l
+    )
+    if not outer_padded or len_mm <= 0.5 or alto_total_mm <= 0.5:
         return None
-    _x0, _y0, maxx2, maxy2 = bb2
-    len_mm = float(maxx2) - float(_x0)
-    w_piece = float(maxy2) - float(_y0)
-    # Ancho de asiento = fixtura 5"; si la pieza es exactamente 5" queda flush.
+    w_piece = float(alto_total_mm)
     bar_w = max(float(w_piece), float(AMADA_FIXTURA_ANCHO_IN) * 25.4)
     bar_l = max(float(len_mm), 1.0)
-    largo_in = float(len_mm) / 25.4
-    fixtura = amada_fixtura_elegir(largo_in) or {}
     ruta = str(pieza.get("ruta") or "").strip()
     use_src = bool(ruta) and os.path.isfile(ruta)
-    # Geometría ya en origen del nest: no reaplicar matriz del DXF fuente.
     placement = {
         "part_name": str(pieza.get("nombre") or "PIEZA"),
-        "outer": outer_l,
-        "holes": holes_l,
-        "marks": marks_l,
+        "outer": outer_padded,
+        "holes": holes_padded,
+        "marks": [],
+        "cu_amada_outer_padded": True,
+        "cu_amada_pieza_export": True,
         "ruta": "",
         "prefer_source_dxf": False,
         "compensated": False,
@@ -286,8 +280,6 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
         "cu_bar_w_mm": bar_w,
         "cu_bar_l_mm": bar_l,
         "cu_especial_vertical": True,
-        "cu_amada_fixtura_id": str(fixtura.get("id") or ""),
-        "cu_amada_fixtura_label": str(fixtura.get("label") or ""),
         "omit_cut_cu": True,
         "closed": True,
         "orig_minx": 0.0,
@@ -304,8 +296,6 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
     sheet = {
         "modo_largos_cu": True,
         "cu_export_amada": True,
-        "cu_amada_fixtura_id": str(fixtura.get("id") or ""),
-        "cu_amada_fixtura_label": str(fixtura.get("label") or ""),
         "cu_modo_separacion_barra": "con_gap",
         "export_3d_format": "dxf",
         "length": bar_l,
@@ -1479,7 +1469,7 @@ def exportar_resultados_a_dxf(
                 if hoja["export_3d_format"] == "dxf":
                     log(
                         f"hoja {hoja.get('sheet_code') or sheet_seq}: cobre sin separación "
-                        f"(sin_gap) → solo DXF (BAR_START; sin Plate, CUT_CU ni 3D)"
+                        f"(sin_gap) → solo DXF (MARK + BAR_START; sin Plate, CUT_CU ni 3D)"
                     )
                 elif hoja.get("cu_rtz_virtual"):
                     log(
@@ -1909,7 +1899,7 @@ def exportar_resultados_a_dxf(
                 if solo_plasma:
                     exportados_principales.append(path_plasma)
 
-    # AMADA/FIXTURA: 1 DXF por pieza ESP. de PARTS (subproceso barrenado), no por barra.
+    # AMADA/FIXTURA: 1 DXF por pieza ESP. (pieza sola, sin fixtura), no por barra.
     nest_tag_fix = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
     for item_fx in _collect_piezas_amada_fixtura(resultados):
         pieza_fx = item_fx["pieza"]
@@ -1926,7 +1916,7 @@ def exportar_resultados_a_dxf(
         thick_fx = _safe_dxf_stem(thick_fx, fallback="CU")
         nombre_fx = f"{nest_tag_fix}_{thick_fx}_{part_stem}.dxf"
         path_fx = os.path.join(rutas["nesteos_cobre_amada_dxf"], nombre_fx)
-        log(f"-> EXPORT COBRE AMADA FIXTURA (pieza): {path_fx}")
+        log(f"-> EXPORT COBRE AMADA PIEZA (sin fixtura): {path_fx}")
         try:
             export_cobre_hoja_to_dxf(
                 path_fx,
@@ -1934,7 +1924,7 @@ def exportar_resultados_a_dxf(
                 [placement_fx],
                 title=f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_FIXTURA} | {part_stem}",
                 draw_holes=True,
-                draw_marks=True,
+                draw_marks=False,
                 strict=True,
                 include_rtz_pieces=False,
                 force_horizontal=True,

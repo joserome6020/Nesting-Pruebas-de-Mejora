@@ -20,6 +20,14 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_visor_dense_lwpoly.py",
+        "2026-08-26 - visor: LWPOLY densas (SPLINE procesadas) sin bloquear UI",
+    ),
+    (
+        "test_processed_layers_spline.py",
+        "2026-08-26 - AutoDXF Processed Files: SPLINE Inventor → CUT_OUTER/CUT_INNER",
+    ),
+    (
         "test_dxf_local_staging.py",
         "2026-08-25 - DXF UNC/red → %TEMP% antes de ezdxf/OCCT (Crear STEPs estable)",
     ),
@@ -86,6 +94,14 @@ REGRESIONES = [
     (
         "test_amada_fixtura_catalogo.py",
         "2026-08-06e - Amada elige Fixtura 2 (28.95) cuando es la más justa",
+    ),
+    (
+        "test_amada_export_sin_fixtura.py",
+        "2026-08-25 - AMADA/FIXTURA exporta pieza ESP. sola, sin capa FIXTURE ni MARK",
+    ),
+    (
+        "test_amada_validacion_barrenos.py",
+        "2026-08-26 - Amada ESP. PARTS: solo valida ancho 5\" (barrenos/largo fuera por ahora)",
     ),
     (
         "test_auto_setup_dependencies_internal_modules.py",
@@ -202,6 +218,14 @@ REGRESIONES = [
     (
         "test_cu_force_dxf_step.py",
         "2026-08-14s - switch cobre DXF+STEP fuerza gap, mata RTZCU/Amada nest y exporta STEP",
+    ),
+    (
+        "test_cobre_sin_gap_marks.py",
+        "2026-08-26 - cobre sin_gap (CyPTube) exporta capa MARK en el DXF",
+    ),
+    (
+        "test_cyptube_esp_vertical_marks.py",
+        "2026-08-26 - barra vertical ESP CyPTube: MARK sí, barrenos no",
     ),
     (
         "test_lite_hole_fill_brida.py",

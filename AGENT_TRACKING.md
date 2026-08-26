@@ -55,6 +55,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-26b — Amada ESP: vertical con MARK; FIXTURA colchón +10\" join
+- Barra vertical CyPTube (ESP.): cortes + **MARK**; sin barrenos.
+- AMADA/FIXTURA: rectángulo **15\"** (5\" pieza + 10\" colchón) como LWPOLYLINE
+  cerrado + barrenos en banda superior; sin marcaje.
+- Módulo `modules/dxf_export/amada_esp.py`.
+- Candados: `test_cyptube_esp_vertical_marks.py`, `test_amada_export_sin_fixtura.py`.
+
+### 2026-08-26 — Cobre sin_gap: MARK de vuelta en DXF CyPTube
+- Se quitó la supresión de `draw_marks` en export `sin_gap` (CyPTube).
+- Capas: CUT_OUTER + CUT_INNER + **MARK** + BAR_START (sin Plate/CUT_CU).
+- Excepción intacta: piezas `cu_especial_vertical` Amada siguen sin MARK.
+- Candado: `tests/native/test_cobre_sin_gap_marks.py`.
+
 ### 2026-08-25d — Lista de largos NUNCA tumba el export (job_mismatch)
 - Caso real: W.O. 37 X2 / carpeta `9919-12CABINET2` + `job_data_9913-12CABINET2.csv`
   → `estado=job_mismatch` abortaba PQART/reporte_cortes.

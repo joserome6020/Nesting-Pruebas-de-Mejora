@@ -531,6 +531,11 @@ def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
 
     try:
         from modules.nesting_engine.occt_step_export import _ensure_cad_engine
+        from modules.nesting_engine.step_export_prefs import (
+            step_mark_chunk,
+            step_mark_mode,
+            step_piece_workers,
+        )
     except Exception as exc:
         dbg(f"[{nombre}] ❌ No se pudo cargar motor OCCT: {exc}")
         return [(f"{nombre}_OCCT", False)]
@@ -572,9 +577,10 @@ def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
                     off_y=off_y,
                     off_z=off_z,
                     origen=None if str(origen).upper() in ("NONE", "", "NULL") else origen,
-                    # ENGRAVE por lotes (chunk 100): estable con 1k–3k MARK.
-                    # PIECE_ONESHOT / ONESHOT se cuelga o tarda horas en nests densos.
-                    mark_mode="ENGRAVE",
+                    # Perfil fast: ENGRAVE chunk50 + paralelo por pieza (step_export_prefs).
+                    mark_mode=step_mark_mode(),
+                    mark_chunk=step_mark_chunk(),
+                    piece_workers=step_piece_workers(),
                     include_plate=False,
                 )
                 if not os.path.isfile(step_path) or os.path.getsize(step_path) < 64:

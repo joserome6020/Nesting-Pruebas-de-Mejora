@@ -1,6 +1,6 @@
-"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + BAR_START (sin MARK/Plate/CUT_CU).
+"""Canal cobre largos — sin_gap: CUT_OUTER + INNER + MARK + BAR_START (sin Plate/CUT_CU).
 
-Marcaje stick (LINE) solo en canales que generan STEP (acero / cobre con_gap).
+Marcaje stick (LINE) en sin_gap (CyPTube) y en canales con STEP (acero / cobre con_gap).
 """
 from __future__ import annotations
 
@@ -34,6 +34,16 @@ def export_piece(
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
     count_before = _msp_count(msp)
+
+    if bool(p.get("cu_amada_pieza_export")) or (
+        bool(sheet and sheet.get("cu_export_amada"))
+        and bool(p.get("cu_especial_vertical"))
+    ):
+        from modules.dxf_export.amada_esp import export_amada_esp_piece
+
+        ok_amada = export_amada_esp_piece(msp, p, draw_holes=draw_holes)
+        return ok_amada or bool(_msp_snapshot(msp)[count_before:])
+
     used_source = False
 
     if bool(p.get("prefer_source_dxf")) and ruta and os.path.isfile(ruta):

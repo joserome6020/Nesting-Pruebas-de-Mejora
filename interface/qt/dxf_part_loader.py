@@ -13,6 +13,7 @@ from interface.qt.dxf_part_geometry import (
     capa_relevante_visual,
     centroid_2d,
     clasificar_contornos_cerrados,
+    decimar_polyline_xy,
     dxf_arc_ccw_sweep_rad,
     es_cut_layer,
     es_inner_layer,
@@ -45,6 +46,8 @@ class DxfPartModel:
     msp: object = None
     # Contornos OUTER en coords de escena (unidades DXF), para overlay plasma.
     outer_rings: list = field(default_factory=list)
+    shapes_cerrados: list = field(default_factory=list)
+    use_shape_render: bool = False
 
 
 def _insunits_factor(doc) -> float:
@@ -149,6 +152,8 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
     outer_line_arc_raw: list = []
     inner_line_arc_raw: list = []
     distancia_suavizado = 0.05 * (model.factor_conversion / 25.4)
+    _max_poly_pts = int(__import__("os").getenv("ARGA_VISOR_MAX_POLY_PTS", "1200"))
+    vertice_total = 0
 
     for entity in entities:
         layer = entity.dxf.layer.upper()
@@ -216,6 +221,42 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
                     outer_line_arc_raw.append(entity)
                 else:
                     inner_line_arc_raw.append(entity)
+            except Exception:
+                pass
+            continue
+
+        if typ in ("LWPOLYLINE", "POLYLINE"):
+            try:
+                if typ == "LWPOLYLINE":
+                    raw_pts = [(float(x), float(y)) for x, y, *_ in entity.get_points("xyb")]
+                    closed = bool(entity.closed)
+                else:
+                    raw_pts = [
+                        (float(v.dxf.location.x), float(v.dxf.location.y))
+                        for v in entity.vertices()
+                    ]
+                    closed = bool(getattr(entity, "is_closed", False))
+                if len(raw_pts) < 2:
+                    continue
+                vertice_total += len(raw_pts)
+                v2d = (
+                    decimar_polyline_xy(raw_pts, max_pts=_max_poly_pts)
+                    if len(raw_pts) > 600
+                    else raw_pts
+                )
+                if es_cut_layer(layer) or model.render_all_layers:
+                    if len(v2d) > 400:
+                        from shapely.geometry import LineString
+
+                        perimetro_total += float(LineString(v2d).length)
+                    else:
+                        for i in range(len(v2d) - 1):
+                            perimetro_total += math.hypot(
+                                v2d[i + 1][0] - v2d[i][0],
+                                v2d[i + 1][1] - v2d[i][1],
+                            )
+                all_points_raw.extend(v2d)
+                contornos.append(("POLY", layer, v2d, closed))
             except Exception:
                 pass
             continue
@@ -330,6 +371,8 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
 
     model.perimetro_total = perimetro_total
     model.area_neta = max(0.0, area_neta)
+    model.shapes_cerrados = list(shapes_cerrados)
+    model.use_shape_render = vertice_total >= 4000
 
     if all_points_raw:
         model.min_x_raw = min(p[0] for p in all_points_raw)

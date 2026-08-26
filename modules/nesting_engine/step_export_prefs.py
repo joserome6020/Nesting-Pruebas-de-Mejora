@@ -145,3 +145,65 @@ def motor_3d_export() -> str:
     if v in _LEGACY_FREECAD_MOTOR_ALIASES:
         return "freecad"
     return "occt"
+
+
+def step_mark_profile() -> str:
+    """
+    Perfil de marcaje STEP: fast (default planta) | quality (chunk fino).
+    Override: ARGA_STEP_MARK_PROFILE=fast|quality
+    """
+    v = (os.environ.get("ARGA_STEP_MARK_PROFILE") or "fast").strip().lower()
+    if v in ("quality", "fine", "slow", "chunk", "chunk100"):
+        return "quality"
+    return "fast"
+
+
+def step_mark_mode() -> str:
+    """Modo OCCT para marcaje real en sólido (siempre ENGRAVE + chunk)."""
+    return "ENGRAVE"
+
+
+def step_mark_chunk() -> int:
+    """
+    Segmentos MARK por boolean CUT (por pieza).
+    fast=50 (default planta) | quality=100
+  Override: ARGA_STEP_MARK_CHUNK
+    """
+    custom = (os.environ.get("ARGA_STEP_MARK_CHUNK") or "").strip()
+    if custom:
+        try:
+            return max(1, int(custom))
+        except ValueError:
+            pass
+    if step_mark_profile() == "quality":
+        return 100
+    return 50
+
+
+def step_piece_workers() -> int:
+    """
+    Hilos para ENGRAVE por pieza en un mismo DXF (fast default 4).
+    Override: ARGA_STEP_PIECE_WORKERS=0 desactiva.
+    """
+    custom = (os.environ.get("ARGA_STEP_PIECE_WORKERS") or "").strip()
+    if custom:
+        try:
+            return max(0, int(custom))
+        except ValueError:
+            pass
+    if step_mark_profile() == "quality":
+        return 1
+    return 4
+
+
+def step_mark_text_flatten_mm() -> float:
+    """Tolerancia text2path (mm): menos segmentos = ENGRAVE más rápido."""
+    custom = (os.environ.get("ARGA_MARK_TEXT_FLATTEN_MM") or "").strip()
+    if custom:
+        try:
+            return max(0.15, float(custom))
+        except ValueError:
+            pass
+    if step_mark_profile() == "quality":
+        return 0.35
+    return 0.75

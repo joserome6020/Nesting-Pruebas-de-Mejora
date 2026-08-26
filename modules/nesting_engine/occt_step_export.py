@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from .step_export_prefs import step_mark_chunk, step_mark_mode, step_piece_workers
+
 ProgressCb = Callable[..., None]
 
 
@@ -84,7 +86,9 @@ def _convertir_carpeta_occt(
                 off_y=float(off_y),
                 off_z=float(off_z),
                 origen=origen,
-                mark_mode="ENGRAVE",
+                mark_mode=step_mark_mode(),
+                mark_chunk=step_mark_chunk(),
+                piece_workers=step_piece_workers(),
                 include_plate=False,
             )
             if not os.path.isfile(out_step) or os.path.getsize(out_step) < 64:
@@ -157,7 +161,9 @@ def _convertir_robot_ab_occt(
                 step_b,
                 thk_mm=thk,
                 material=material,
-                mark_mode="ENGRAVE",
+                    mark_mode=step_mark_mode(),
+                mark_chunk=step_mark_chunk(),
+                piece_workers=step_piece_workers(),
             )
             if not os.path.isfile(step_a) or os.path.getsize(step_a) < 64:
                 raise RuntimeError(f"STEP A vacío: {step_a}")
@@ -213,6 +219,7 @@ def lanzar_occt_robotica(
         _localizar_carpeta_dxf,
         step_universal_sin_camas_activo,
     )
+    from .step_export_prefs import step_mark_chunk, step_mark_mode, step_piece_workers
 
     # plasma_off se conserva por firma/paridad FreeCAD; el DXF plasma ya
     # sale compensado en exportación y OCCT extruye la geometría tal cual.
@@ -457,7 +464,9 @@ def generar_steps_cobre_fuentes_occt(
                 out_step,
                 thk_mm=thk,
                 material="CU",
-                mark_mode="ENGRAVE",
+                mark_mode=step_mark_mode(),
+                mark_chunk=step_mark_chunk(),
+                piece_workers=step_piece_workers(),
                 include_plate=False,
             )
             if os.path.isfile(out_step) and os.path.getsize(out_step) >= 64:

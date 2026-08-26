@@ -5,6 +5,7 @@ de una esquina) y lo exporta como cobre largos sin_gap via el camino real
 prefer_source_dxf. Comprueba:
   - dimensiones intercambiadas (W<->H) sin escalado (area preservada)
   - barreno y marca conservan su posicion RELATIVA a la pieza (sin desalinear)
+  - capa MARK exportada desde el DXF fuente (CyPTube)
   - BAR_START una sola linea en y=0 abarcando el ancho de barra
   - geometria dentro de la barra (no fuera de lugar)
 """
@@ -16,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 import ezdxf
@@ -206,14 +207,20 @@ def verify():
                     f"[{ox0:.1f},{oy0:.1f}]-[{ox1:.1f},{oy1:.1f}] (desalineado)"
                 )
 
-        # --- 3. MARK: en sin_gap NO debe existir (CyPTube rompe con esa capa) ---
+        # --- 3. MARK: debe exportarse desde el DXF fuente (CyPTube) ---
         marks = _entities_by_layer(doc, "MARK")
-        if marks:
-            errors.append(
-                f"sin_gap NO debe llevar capa MARK: {len(marks)} entidad(es) presentes"
-            )
-        if "MARK" in doc.layers:
-            errors.append("sin_gap NO debe definir la capa MARK (debe purgarse)")
+        if not marks:
+            errors.append("sin_gap debe exportar capa MARK desde el DXF fuente")
+        else:
+            for ln in marks:
+                if ln.dxftype() != "LINE":
+                    errors.append(f"MARK debe ser LINE, hay {ln.dxftype()}")
+                    break
+            mx0, my0, mx1, my1 = _bbox(marks)
+            if not (ox0 - 1 <= mx0 <= ox1 + 1 and ox0 - 1 <= mx1 <= ox1 + 1):
+                errors.append(
+                    f"MARK fuera del contorno [{ox0:.1f},{oy0:.1f}]-[{ox1:.1f},{oy1:.1f}]"
+                )
 
         # --- 4. BAR_START: una linea en y=0 abarcando ancho de barra ---
         bar_lines = [

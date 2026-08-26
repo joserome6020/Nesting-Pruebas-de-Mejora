@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -729,7 +730,10 @@ def _engrave_marks_on_solid(
     if int(chunk or 0) <= 0:
         tool_shape = tools[0] if len(tools) == 1 else _compound(tools)
         got = _try_cut(out, tool_shape)
-        return got if got is not None else solid
+        if got is not None:
+            return got
+        # Compound masivo suele fallar validación → mismo resultado que chunk100.
+        chunk = 100
 
     step = max(1, int(chunk or 100))
     for i in range(0, len(tools), step):
@@ -882,9 +886,24 @@ def _stitch_edges_to_closed_wires(edges: list, *, tol: float = 1e-3) -> list:
 
 
 
+def _mark_text_flatten_mm() -> float:
+    """Tolerancia flatten text2path (mm). Menos segmentos → ENGRAVE más rápido."""
+    custom = (os.environ.get("ARGA_MARK_TEXT_FLATTEN_MM") or "").strip()
+    if custom:
+        try:
+            return max(0.15, float(custom))
+        except ValueError:
+            pass
+    profile = (os.environ.get("ARGA_STEP_MARK_PROFILE") or "fast").strip().lower()
+    if profile in ("quality", "fine", "slow", "chunk", "chunk100"):
+        return 0.35
+    return 0.75
+
+
 def _mark_segs_from_text_entity(entity) -> list[tuple[float, float, float, float]]:
     """Stroke TEXT/MTEXT/ATTRIB on MARK-like layers into line segments for ENGRAVE."""
     segs: list[tuple[float, float, float, float]] = []
+    flat_mm = _mark_text_flatten_mm()
     try:
         from ezdxf.addons.text2path import make_paths_from_entity
     except Exception:
@@ -895,7 +914,7 @@ def _mark_segs_from_text_entity(entity) -> list[tuple[float, float, float, float
         return segs
     for path in paths or []:
         try:
-            pts = list(path.flattening(0.35))
+            pts = list(path.flattening(flat_mm))
         except Exception:
             continue
         for i in range(len(pts) - 1):
@@ -1113,6 +1132,70 @@ def _mark_edges_compound(
     return _compound(edges)
 
 
+def _engrave_pieces_serial(
+    base_parts: list[Any],
+    segs: list[tuple[float, float, float, float]],
+    *,
+    thk_mm: float,
+    off_z: float,
+    chunk: int,
+) -> list[Any]:
+    solids: list[Any] = []
+    for sh in base_parts:
+        bb = _bbox_xy(sh)
+        piece_segs = (
+            [s for s in segs if bb and _seg_hits_bbox(s, bb)]
+            if bb
+            else list(segs)
+        )
+        solids.append(
+            _engrave_marks_on_solid(
+                sh, piece_segs, thk_mm=thk_mm, off_z=off_z, chunk=chunk
+            )
+        )
+    return solids
+
+
+def _engrave_pieces_parallel(
+    base_parts: list[Any],
+    segs: list[tuple[float, float, float, float]],
+    *,
+    thk_mm: float,
+    off_z: float,
+    chunk: int,
+    workers: int,
+) -> list[Any]:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    tasks: list[tuple[int, Any, list[tuple[float, float, float, float]]]] = []
+    for idx, sh in enumerate(base_parts):
+        bb = _bbox_xy(sh)
+        piece_segs = (
+            [s for s in segs if bb and _seg_hits_bbox(s, bb)]
+            if bb
+            else list(segs)
+        )
+        tasks.append((idx, sh, piece_segs))
+
+    out: list[Any | None] = [None] * len(base_parts)
+    with ThreadPoolExecutor(max_workers=max(1, int(workers))) as pool:
+        fut_map = {
+            pool.submit(
+                _engrave_marks_on_solid,
+                sh,
+                piece_segs,
+                thk_mm=thk_mm,
+                off_z=off_z,
+                chunk=chunk,
+            ): idx
+            for idx, sh, piece_segs in tasks
+        }
+        for fut in as_completed(fut_map):
+            idx = fut_map[fut]
+            out[idx] = fut.result()
+    return [s if s is not None else base_parts[i] for i, s in enumerate(out)]
+
+
 def build_freecad_like_shapes(
     geom: DxfNestGeometry,
     *,
@@ -1122,6 +1205,8 @@ def build_freecad_like_shapes(
     off_z: float = 0.0,
     origen: str | None = None,
     mark_mode: str = "ENGRAVE",
+    mark_chunk: int | None = None,
+    piece_workers: int = 1,
     apply_placement: bool = True,
     mark_meta: dict | None = None,
 ) -> tuple[Any | None, list[Any], tuple[float, float, float, float] | None]:
@@ -1194,19 +1279,32 @@ def build_freecad_like_shapes(
                         )
                     )
         else:
-            chunk = 0 if piece_oneshot else 100
-            engrave_note = "piece_oneshot" if piece_oneshot else "piece_chunk100"
-            for sh in base_parts:
-                bb = _bbox_xy(sh)
-                piece_segs = (
-                    [s for s in segs if bb and _seg_hits_bbox(s, bb)]
-                    if bb
-                    else list(segs)
+            chunk = int(mark_chunk or 0)
+            if chunk <= 0:
+                chunk = 0 if piece_oneshot else 100
+            workers = max(1, int(piece_workers or 1))
+            if piece_oneshot:
+                engrave_note = "piece_oneshot"
+            elif workers > 1 and len(base_parts) > 1:
+                engrave_note = f"piece_chunk{chunk}_parallel{workers}"
+            else:
+                engrave_note = f"piece_chunk{chunk}"
+            if workers > 1 and len(base_parts) > 1:
+                solids = _engrave_pieces_parallel(
+                    base_parts,
+                    segs,
+                    thk_mm=thk_mm,
+                    off_z=0.0,
+                    chunk=chunk,
+                    workers=workers,
                 )
-                solids.append(
-                    _engrave_marks_on_solid(
-                        sh, piece_segs, thk_mm=thk_mm, off_z=0.0, chunk=chunk
-                    )
+            else:
+                solids = _engrave_pieces_serial(
+                    base_parts,
+                    segs,
+                    thk_mm=thk_mm,
+                    off_z=0.0,
+                    chunk=chunk,
                 )
     else:
         solids = [sh for sh in final_parts if sh is not None]
@@ -1256,6 +1354,8 @@ def export_dxf_to_step_freecad_batch(
     off_z: float = 0.0,
     origen: str | None = None,
     mark_mode: str | None = None,
+    mark_chunk: int | None = None,
+    piece_workers: int | None = None,
     include_plate: bool = False,
 ) -> dict:
     """
@@ -1292,6 +1392,8 @@ def export_dxf_to_step_freecad_batch(
         off_z=off_z,
         origen=origen,
         mark_mode=mode,
+        mark_chunk=mark_chunk,
+        piece_workers=int(piece_workers or 1),
         apply_placement=True,
         mark_meta=mark_meta,
     )

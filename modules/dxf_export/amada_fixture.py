@@ -1,18 +1,18 @@
 """
-Fixtura Amada real para export AMADA/FIXTURA.
+Catálogo y utilidades de fixtura Amada (validación PARTS, simulaciones).
+
+El export AMADA/FIXTURA ya no dibuja la geometría de fixtura: solo la pieza ESP.
 
 Hay dos fixturas físicas (canal 5\"). Siempre se elige la más justa
 (canal más corto) que todavía acepte el largo de la pieza: así los topes
 presionan el cobre hacia la esquina BL (Punto 0).
 
-Método de alineación:
+Método de alineación (referencia / simulaciones):
   1) En el DXF de fixtura, tomar pared vertical (tope izq) y riel horizontal
      (base) del canal — caras que empaman con el cobre.
   2) Prolongar ambas; su intersección = PUNTO 0.
   3) Colocar la esquina BL de la pieza exactamente en ese punto 0.
   4) La fixtura se copia ÍNTEGRA (no se borra geometría interna).
-
-En el export nest: Punto 0 → (0,0) mm (= BL de la pieza).
 """
 from __future__ import annotations
 

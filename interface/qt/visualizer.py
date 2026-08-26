@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import io
+import os
+import threading
 
 import ezdxf
 import matplotlib
@@ -28,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from interface.qt.cad_graphics_view import CadPartGraphicsView
 from interface.qt.dxf_part_loader import load_dxf_part
+from interface.qt.thread_bridge import call_on_main
 from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK, TOOLTIP_OSCURO_QSS
 
 CAD_VIEW_BG = "#0B1220"
@@ -96,6 +99,7 @@ class VisorDXF:
 
         self.factor_conversion = 25.4
         self._ruta_actual = None
+        self._render_token = 0
         self._rotacion_vista_deg = 0
         self._persist_rotation_hook = None
         self._orientation_lock_hook = None
@@ -392,6 +396,68 @@ class VisorDXF:
         self._restaurar_metricas_ui(snap)
 
     def renderizar_dxf(self, ruta_dxf, rotacion_vista_deg=None, plasma_offset_mm=None):
+        self._render_token = int(getattr(self, "_render_token", 0)) + 1
+        token = self._render_token
+        ruta = str(ruta_dxf or "")
+        cambio_pieza = bool(self._ruta_actual) and str(self._ruta_actual) != ruta
+        if rotacion_vista_deg is not None:
+            self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
+        elif cambio_pieza:
+            self._rotacion_vista_deg = 0
+        if plasma_offset_mm is not None:
+            self._plasma_offset_mm = float(plasma_offset_mm or 0.0)
+        self._ruta_actual = ruta_dxf
+        if cambio_pieza:
+            self._plasma_emphasis_on = False
+            self._plasma_emphasis_offset_in = None
+
+        self.limpiar_lienzo()
+        if ruta and os.path.isfile(ruta):
+            self._cad.show_placeholder("Cargando vista…")
+
+        def _worker():
+            model = None
+            try:
+                if ruta and os.path.isfile(ruta):
+                    model = load_dxf_part(ruta, self._rotacion_vista_deg)
+            except Exception:
+                model = None
+            call_on_main(
+                self._aplicar_render_dxf,
+                token,
+                ruta_dxf,
+                model,
+                plasma_offset_mm,
+            )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _aplicar_render_dxf(self, token, ruta_dxf, model, plasma_offset_mm=None):
+        if token != getattr(self, "_render_token", 0):
+            return
+        self.limpiar_lienzo()
+        try:
+            if model is None:
+                return False
+            self._cad.set_material(self._material)
+            self.factor_conversion = model.factor_conversion
+            self._cad.load_model(model, fit=True)
+            if self._plasma_offset_mm > 0:
+                self._reaplicar_overlay_plasma()
+            elif self._plasma_emphasis_on:
+                self.set_plasma_contour_emphasis(
+                    True, offset_in=self._plasma_emphasis_offset_in
+                )
+            else:
+                self._cad.clear_plasma_overlay()
+                if hasattr(self, "lbl_plasma"):
+                    self.lbl_plasma.setText("—")
+            return True
+        except Exception:
+            return False
+
+    def _renderizar_dxf_sync(self, ruta_dxf, rotacion_vista_deg=None, plasma_offset_mm=None):
+        """Ruta síncrona legacy (p. ej. tests)."""
         self.limpiar_lienzo()
         try:
             if self._ruta_actual and str(self._ruta_actual) != str(ruta_dxf):
@@ -399,9 +465,6 @@ class VisorDXF:
                     self._rotacion_vista_deg = int(rotacion_vista_deg) % 360
                 else:
                     self._rotacion_vista_deg = 0
-                # Al cambiar de pieza el énfasis del anterior no aplica; el
-                # caller (seleccionar_fila) volverá a llamar a
-                # set_plasma_contour_emphasis según corresponda.
                 self._plasma_emphasis_on = False
                 self._plasma_emphasis_offset_in = None
             elif rotacion_vista_deg is not None:
@@ -415,12 +478,9 @@ class VisorDXF:
                 return False
             self.factor_conversion = model.factor_conversion
             self._cad.load_model(model, fit=True)
-            # load_model dispara metrics_callback → aplica overlay si hay offset.
             if self._plasma_offset_mm > 0:
                 self._reaplicar_overlay_plasma()
             elif self._plasma_emphasis_on:
-                # DXF ya compensado: el énfasis rojo del OUTER y la etiqueta
-                # "+X"" deben sobrevivir a un ROTAR 90° o a un re-render.
                 self.set_plasma_contour_emphasis(
                     True, offset_in=self._plasma_emphasis_offset_in
                 )
@@ -436,6 +496,8 @@ class VisorDXF:
 def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
     try:
         from interface.material_colors import paleta_cad_hex
+        from interface.qt.dxf_part_geometry import decimar_polyline_xy
+        from modules.dxf_thread_lock import EZDXF_LOCK
 
         piece_fill, hole_fill, piece_edge = paleta_cad_hex(material)
 
@@ -445,12 +507,14 @@ def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
         ax = fig.add_subplot(111)
         ax.axis("off")
 
-        msp = ezdxf.readfile(ruta_dxf).modelspace()
+        with EZDXF_LOCK:
+            msp = ezdxf.readfile(ruta_dxf).modelspace()
 
         for e in msp:
             try:
                 layer_u = e.dxf.layer.upper()
-                if e.dxftype() == "CIRCLE" and "CUT" in layer_u:
+                typ = e.dxftype()
+                if typ == "CIRCLE" and "CUT" in layer_u:
                     c = e.dxf.center
                     r = float(e.dxf.radius)
                     if "OUTER" in layer_u:
@@ -469,8 +533,13 @@ def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
                         )
                     )
                     continue
-                p = path.make_path(e)
-                pts = [(v[0], v[1]) for v in p.flattening(0.01)]
+                if typ == "LWPOLYLINE":
+                    pts = [(float(x), float(y)) for x, y, *_ in e.get_points("xyb")]
+                    if len(pts) > 120:
+                        pts = decimar_polyline_xy(pts, max_pts=120)
+                else:
+                    p = path.make_path(e)
+                    pts = [(v[0], v[1]) for v in p.flattening(0.05)]
                 if len(pts) > 2:
                     if "OUTER" in layer_u:
                         color = piece_fill

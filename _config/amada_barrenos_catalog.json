@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "ancho_in": 5.0,
+  "ancho_tol_in": 0.02,
+  "largo_max_in": 43.125,
+  "largo_tol_in": 0.02,
+  "require_guillotina_outer": true,
+  "min_holes": 1,
+  "barreno_tol_in": 0.02,
+  "oval_aspect_min": 1.15,
+  "oval_aspect_max": 2.0,
+  "circle_diam_in": [0.433, 0.438],
+  "oval_sizes_in": [
+    [0.406, 0.594],
+    [0.438, 0.625],
+    [0.438, 0.687],
+    [0.438, 0.812]
+  ],
+  "notes": "Catálogo Amada ESP. (5\" + barrenos). Sembrado desde GENE-*CU-5-* Prueba CU."
+}

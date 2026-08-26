@@ -179,6 +179,70 @@ class CadPartGraphicsView(QGraphicsView):
         self._scene.addItem(item)
         self._preview_items.append(item)
 
+    def _render_shapes_model(self, model: DxfPartModel) -> QRectF:
+        """Render rápido para LWPOLY densas (SPLINE procesadas) sin ezdxf Frontend."""
+        piece_fill, hole_fill, piece_edge = self._paleta()
+        minx = miny = float("inf")
+        maxx = maxy = float("-inf")
+        span = max(
+            float(model.max_x_raw - model.min_x_raw),
+            float(model.max_y_raw - model.min_y_raw),
+            1e-9,
+        )
+
+        def _add_path(pts, *, rol: str, closed: bool):
+            nonlocal minx, miny, maxx, maxy
+            if len(pts) < 2:
+                return
+            if rol == "inner":
+                fill, edge, zf, zs = hole_fill, piece_edge, Z_HOLE_FILL, Z_HOLE_STROKE
+            elif rol == "mark":
+                fill, edge, zf, zs = CAD_VIEW_BG, CAD_MARK, Z_MARK, Z_MARK
+            else:
+                fill, edge, zf, zs = piece_fill, piece_edge, Z_GEOM_FILL, Z_GEOM_STROKE
+            qp = self._path_from_pts(pts, closed=closed)
+            br = qp.boundingRect()
+            minx = min(minx, br.left())
+            miny = min(miny, br.top())
+            maxx = max(maxx, br.right())
+            maxy = max(maxy, br.bottom())
+            fill_item = QGraphicsPathItem(qp)
+            fill_item.setBrush(QBrush(QColor(fill)))
+            fill_item.setPen(QPen(Qt.PenStyle.NoPen))
+            fill_item.setZValue(zf)
+            self._scene.addItem(fill_item)
+            self._geom_root_items.append(fill_item)
+            stroke_item = QGraphicsPathItem(qp)
+            stroke_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            stroke_item.setPen(_stroke_pen(edge, span, self.factor_conversion))
+            stroke_item.setZValue(zs)
+            self._scene.addItem(stroke_item)
+            self._geom_root_items.append(stroke_item)
+
+        for sh in list(getattr(model, "shapes_cerrados", None) or []):
+            pts = list(sh.get("pts") or [])
+            rol = str(sh.get("rol") or "outer")
+            if sh.get("kind") == "circle":
+                cx = float(sh.get("rcx") or sh.get("cx") or 0.0)
+                cy = float(sh.get("rcy") or sh.get("cy") or 0.0)
+                rr = float(sh.get("rr") or sh.get("r") or 0.0)
+                if rr <= 0:
+                    continue
+                ring = [
+                    (
+                        cx + rr * math.cos(2.0 * math.pi * i / 32.0),
+                        cy + rr * math.sin(2.0 * math.pi * i / 32.0),
+                    )
+                    for i in range(32)
+                ]
+                _add_path(ring, rol=rol, closed=True)
+            elif len(pts) >= 2:
+                _add_path(pts, rol=rol, closed=len(pts) >= 3)
+
+        if minx == float("inf"):
+            return QRectF()
+        return QRectF(minx, miny, maxx - minx, maxy - miny)
+
     def _path_from_pts(self, pts, closed: bool = False) -> QPainterPath:
         path = QPainterPath()
         if not pts:
@@ -203,12 +267,17 @@ class CadPartGraphicsView(QGraphicsView):
         )
         self._user_view_adjusted = False
 
-        if model.doc is not None and model.msp is not None:
+        if getattr(model, "use_shape_render", False) and model.shapes_cerrados:
+            rect = self._render_shapes_model(model)
+            self._content_rect = rect if rect and not rect.isEmpty() else None
+        elif model.doc is not None and model.msp is not None:
             rect = render_modelspace(model.doc, model.msp, self._scene, bg_color=CAD_VIEW_BG)
             self._content_rect = rect if rect and not rect.isEmpty() else None
             self._geom_root_items = [
                 it for it in self._scene.items() if it.zValue() < Z_DIM
             ]
+        else:
+            self._content_rect = None
 
         if fit:
             QTimer.singleShot(0, self.fit_view)

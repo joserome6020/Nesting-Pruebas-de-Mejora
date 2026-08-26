@@ -3,6 +3,13 @@ import os
 import math
 from datetime import datetime
 
+from ezdxf import path
+
+# AutoDXF: tolerancia más gruesa que el parser de nest (evita LWPOLY de 30k+ vértices).
+_AUTODXF_SPLINE_TOL_MM = float(os.getenv("ARGA_AUTODXF_SPLINE_TOL_MM", "0.25"))
+_SPLINE_FLATTEN_IN = _AUTODXF_SPLINE_TOL_MM / 25.4
+_AUTODXF_SIMPLIFY_IN = float(os.getenv("ARGA_AUTODXF_SIMPLIFY_IN", "0.015"))
+
 
 class ProcesadorDXF:
     def __init__(self):
@@ -68,10 +75,46 @@ class ProcesadorDXF:
                     puntos = pts2d
                 except Exception:
                     puntos = []
+        elif dxftype in ("SPLINE", "ELLIPSE"):
+            # Inventor exporta flat patterns con SPLINE; sin esto Processed Files queda vacío.
+            try:
+                p = path.make_path(entity)
+                verts = list(p.flattening(distance=_SPLINE_FLATTEN_IN))
+                if len(verts) >= 2:
+                    puntos = [(float(v[0]), float(v[1]), 0) for v in verts]
+                    if p.is_closed and len(puntos) >= 3:
+                        if self._dist(puntos[0], puntos[-1]) >= 0.01:
+                            puntos.append(puntos[0])
+            except Exception:
+                puntos = []
         return puntos
 
     def _dist(self, p1, p2):
         return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+    @staticmethod
+    def _simplificar_cadena_xyb(cadena: list, *, tol: float) -> list:
+        """Douglas-Peucker en cadenas sin bulge (SPLINE aplanadas)."""
+        if len(cadena) <= 800:
+            return cadena
+        if any(abs(float(p[2] or 0.0)) > 1e-9 for p in cadena):
+            return cadena
+        try:
+            from shapely.geometry import LineString
+
+            pts = [(float(p[0]), float(p[1])) for p in cadena]
+            closed = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) < 0.01
+            ls = LineString(pts)
+            simp = ls.simplify(max(float(tol), 1e-6), preserve_topology=True)
+            out = [(float(x), float(y), 0.0) for x, y in simp.coords]
+            if closed and len(out) >= 3:
+                if math.hypot(out[0][0] - out[-1][0], out[0][1] - out[-1][1]) > 1e-9:
+                    out.append(out[0])
+            if len(out) >= 3:
+                return out
+        except Exception:
+            pass
+        return cadena
 
     def _invertir_cadena(self, cadena):
         nueva = []
@@ -167,6 +210,7 @@ class ProcesadorDXF:
 
         for c in unidos:
             if self._dist(c[0], c[-1]) < 0.01:
+                c = self._simplificar_cadena_xyb(c, tol=_AUTODXF_SIMPLIFY_IN)
                 c[-1] = (c[0][0], c[0][1], c[-1][2])
                 area = self._calcular_area_con_bulges(c)
                 if area <= 0:

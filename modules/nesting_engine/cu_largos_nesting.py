@@ -7,18 +7,18 @@ Nesting 1D para largos de cobre (CU).
 - Gap: 3/8" siempre entre piezas normales. Sin umbral por largo.
   Excepciones sin_gap (independiente del largo):
   1) Perfil relieve/Z (escalón/diagonal) — auto por geometría.
-  2) Pieza marcada especial en PARTS (`cu_especial_vertical`) — DXF vertical
-     sin MARK/CUT_INNER; export a AMADA/VERTICAL + AMADA/FIXTURA (solo 5").
+  2) Pieza marcada especial en PARTS (`cu_especial_vertical`) — barra vertical CyPTube
+     con cortes + MARK (sin barrenos); export AMADA/FIXTURA con colchón +10\" + barrenos.
   Relieve/Z y especiales se priorizan al inicio y NUNCA van a RTZCU (si no caben
   en ≤114\", abren barra nueva). Amada (PARTS) y Z NUNCA comparten la misma barra:
-  la fixtura Amada es solo rectangular de 5\". Otras piezas rectangulares en
+  Amada ESP. solo admite barras de 5\" de ancho. Otras piezas rectangulares en
   la misma barra Amada/Z van a RTZCU con gap.
   Rectángulos con orilla o laminas verticales exactas SÍ pueden ir a RTZCU.
   Cada pieza usa su tira objetivo (exacta o la mínima del catálogo).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK (con_gap / Amada).
-- sin_gap madre (Z): DXF vertical CyPTube + BAR_START.
-- especial PARTS: AMADA/VERTICAL (barra en rebanadas, sin MARK/INNER) +
-  AMADA/FIXTURA (1 DXF por pieza ESP. con barrenos + fixtura para Amada).
+- sin_gap madre (Z): DXF vertical CyPTube + MARK + BAR_START.
+- especial PARTS: AMADA/VERTICAL (barra CyPTube: cortes + MARK, sin barrenos) +
+  AMADA/FIXTURA (1 DXF por pieza ESP.: colchón +10\" join + barrenos, sin marcaje).
   El RTZCU también exporta a DXF/STEP normal.
 - con_gap: CUT_OUTER cerrado por pieza + STEP.
 
