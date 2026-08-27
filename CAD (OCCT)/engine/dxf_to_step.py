@@ -397,6 +397,24 @@ def _inner_belongs_to_outer(inner_wire, outer_wire, *, margin: float = 0.5) -> b
     )
 
 
+def _is_large_inner_hole(
+    inner_wire,
+    outer_wire,
+    *,
+    min_area_ratio: float = 0.12,
+) -> bool:
+    """
+    Hueco estructural (ventana de anillo/placa), no barrenos pequeños.
+    El guard de volumen 50% rechazaba estos cortes → disco sólido con piezas
+    anidadas dentro (S.W.O 37 H16/H17).
+    """
+    ia = _wire_area_xy(inner_wire)
+    oa = _wire_area_xy(outer_wire)
+    if oa <= 0 or ia <= 0:
+        return False
+    return (ia / oa) >= float(min_area_ratio)
+
+
 def _assign_inners_to_outers(
     outer_wires: list[Any], inner_wires: list[Any]
 ) -> list[list[Any]]:
@@ -445,7 +463,7 @@ def _apply_inners_to_outer(
     if not own:
         return body
 
-    def _cut_with_tools(base, tools_list):
+    def _cut_with_tools(base, tools_list, *, min_vol_ratio: float = 0.50):
         if not tools_list:
             return base
         tool = tools_list[0] if len(tools_list) == 1 else _compound(tools_list)
@@ -460,24 +478,40 @@ def _apply_inners_to_outer(
         v1 = _shape_volume(best)
         if v1 <= 1e-6:
             return None
-        if v0 > 1e-6 and v1 < v0 * 0.50:
+        if v0 > 1e-6 and v1 < v0 * float(min_vol_ratio):
             return None
         return best
 
-    tools = []
+    large_wires: list[Any] = []
+    small_wires: list[Any] = []
     for w in own:
+        if _is_large_inner_hole(w, outer_wire):
+            large_wires.append(w)
+        else:
+            small_wires.append(w)
+
+    out = body
+    for w in large_wires:
+        tool = _extrude_wire(w, thk_mm)
+        if tool is None:
+            continue
+        trial = _cut_with_tools(out, [tool], min_vol_ratio=0.05)
+        if trial is not None:
+            out = trial
+
+    small_tools = []
+    for w in small_wires:
         sol = _extrude_wire(w, thk_mm)
         if sol is not None:
-            tools.append(sol)
-    if not tools:
-        return body
+            small_tools.append(sol)
+    if not small_tools:
+        return out
 
-    got = _cut_with_tools(body, tools)
+    got = _cut_with_tools(out, small_tools, min_vol_ratio=0.50)
     if got is not None:
         return got
-    out = body
-    for tool in tools:
-        trial = _cut_with_tools(out, [tool])
+    for tool in small_tools:
+        trial = _cut_with_tools(out, [tool], min_vol_ratio=0.50)
         if trial is not None:
             out = trial
     return out

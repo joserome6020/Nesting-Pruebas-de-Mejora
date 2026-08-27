@@ -18,18 +18,23 @@ o equivalente, además del flujo de `release-publish.mdc`:
 ## Empaquetado 100% (obligatorio)
 
 1. Correr `python tools/build_arga_exe.py --release` **sin** `--skip-smoke`.
-2. El smoke debe cubrir imports críticos de UI/runtime, incluidos los que
+2. El artefacto debe ser **paridad funcional total** con el proyecto fuente:
+   misma capacidad de UI/runtime (cobre AutoCAD-safe, Amada, Crear STEPs,
+   buzón, nest, export 3D, etc.). Si el usuario “pide release”, asume que
+   exige esa copia exacta — no un zip parcial.
+3. El smoke debe cubrir imports críticos de UI/runtime, incluidos los que
    fallan en frozen por path dinámico, p. ej.:
    - `engine` / `engine.step_paths` (Crear STEPs / Ver STEP; viven en
      `CAD (OCCT)/` vía `--paths`)
    - `interface.qt.dialogs.crear_steps`
    - `interface.qt.dialogs.support_inbox` (buzón / Outlook)
    - motores nativos / Worker / sidecars del checklist
-3. Si falta un módulo, asset o sidecar → **arreglar `tools/build_arga_exe.py`
+   - export DXF cobre (`modules.nest_exporter` / `modules.dxf_export.cobre_nest`)
+4. Si falta un módulo, asset o sidecar → **arreglar `tools/build_arga_exe.py`
    en el mismo ciclo** (`HIDDEN_IMPORTS`, `COLLECT_SUBMODULES`, `--paths`,
    `--add-data`, `CRITICAL_SUITE_FILES`, `SMOKE_IMPORT_MODULES`) y **repetir
    el build** hasta que smoke + checklist pasen al 100%.
-4. Publicar solo el zip del build bueno (`publish_release.py --github …`) y
+5. Publicar solo el zip del build bueno (`publish_release.py --github …`) y
    devolver la URL del tag nuevo.
 
 ## Qué NO hacer

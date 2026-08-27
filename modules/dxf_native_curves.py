@@ -345,6 +345,88 @@ def _longest_arc_from(pts: List[Point], i: int, n: int) -> Tuple[int, Optional[T
     return best_len, best_arc
 
 
+def _bulge_semicircle() -> float:
+    """Bulge DXF para arco semicircular (180°)."""
+    return math.tan(math.pi / 4.0)
+
+
+def fit_stadium_lwpoly_bulge(
+    points: Iterable,
+) -> Optional[list[tuple[float, float, float]]]:
+    """
+    Ranura ovalada (estadio): 4 vértices + 2 bulges semicirculares.
+    Devuelve None si el anillo facetado no encaja en una cápsula.
+    """
+    pts = normalize_ring(points, closed=True)
+    if len(pts) < 6:
+        return None
+    xs = [float(p[0]) for p in pts]
+    ys = [float(p[1]) for p in pts]
+    minx, maxx = min(xs), max(xs)
+    miny, maxy = min(ys), max(ys)
+    w = maxx - minx
+    h = maxy - miny
+    if w < 0.2 or h < 0.2:
+        return None
+    b = _bulge_semicircle()
+
+    def _capsule_ok_horizontal(r: float, x_lo: float, x_hi: float) -> bool:
+        cy = (miny + maxy) / 2.0
+        tol = max(0.12, r * 0.1)
+        for x, y in pts:
+            if y < miny - tol or y > maxy + tol:
+                return False
+            if x <= x_lo + tol:
+                if abs(math.hypot(x - x_lo, y - cy) - r) > tol:
+                    return False
+            elif x >= x_hi - tol:
+                if abs(math.hypot(x - x_hi, y - cy) - r) > tol:
+                    return False
+            elif abs(y - miny) > tol and abs(y - maxy) > tol:
+                return False
+        return True
+
+    if w >= h * 1.12:
+        r = h / 2.0
+        x_lo, x_hi = minx + r, maxx - r
+        if x_hi <= x_lo + 1e-6:
+            return None
+        if not _capsule_ok_horizontal(r, x_lo, x_hi):
+            return None
+        return [
+            (x_lo, miny, 0.0),
+            (x_hi, miny, b),
+            (x_hi, maxy, 0.0),
+            (x_lo, maxy, b),
+        ]
+
+    if h >= w * 1.12:
+        r = w / 2.0
+        y_lo, y_hi = miny + r, maxy - r
+        if y_hi <= y_lo + 1e-6:
+            return None
+        cx = (minx + maxx) / 2.0
+        tol = max(0.12, r * 0.1)
+        for x, y in pts:
+            if x < minx - tol or x > maxx + tol:
+                return None
+            if y <= y_lo + tol:
+                if abs(math.hypot(x - cx, y - y_lo) - r) > tol:
+                    return None
+            elif y >= y_hi - tol:
+                if abs(math.hypot(x - cx, y - y_hi) - r) > tol:
+                    return None
+            elif abs(x - minx) > tol and abs(x - maxx) > tol:
+                return None
+        return [
+            (minx, y_lo, 0.0),
+            (minx, y_hi, b),
+            (maxx, y_hi, 0.0),
+            (maxx, y_lo, b),
+        ]
+    return None
+
+
 def export_ring_native(
     msp,
     points: Iterable,

@@ -231,6 +231,34 @@ def _dbg_nesting(msg: str):
                 "YES",
             ):
                 return
+        # GRUPO-PIEZA ×1500+ satura disco/consola en cobre largos (GIGA qty).
+        if msg.startswith("[GRUPO-PIEZA]") and "debug_id=" in msg:
+            if str(os.environ.get("ARGA_NEST_VERBOSE", "")).strip() not in (
+                "1",
+                "true",
+                "TRUE",
+                "yes",
+                "YES",
+            ):
+                return
+        # Geometría por pieza en jobs CU grandes: solo con verbose.
+        if msg.startswith(
+            (
+                "[POST-TRANSLATE]",
+                "[POST-NESTING-PROXY]",
+                "[POST-BUFFER0]",
+                "[INVALID-BEFORE-BUFFER0]",
+                "[PRE-PARSER]",
+            )
+        ):
+            if str(os.environ.get("ARGA_NEST_VERBOSE", "")).strip() not in (
+                "1",
+                "true",
+                "TRUE",
+                "yes",
+                "YES",
+            ):
+                return
         os.makedirs(DEBUG_DIR, exist_ok=True)
         linea = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
         print(linea)
@@ -4079,14 +4107,28 @@ class MotorNesting:
             f"regla={(regla_gap or {}).get('label') or 'CU'}",
             flush=True,
         )
-        for pz in piezas:
-            poly_dbg = pz.get("poly")
+        if es_cobre_grupo and len(piezas) > 30:
+            for pz in piezas[:5]:
+                poly_dbg = pz.get("poly")
+                _dbg_nesting(
+                    f"[GRUPO-PIEZA] clave={clave} | debug_id={pz.get('debug_id', 'SIN_DEBUG_ID')} | "
+                    f"nombre={pz.get('nombre')} | area={pz.get('area', 0.0):.3f} | "
+                    f"bounds={_fmt_bounds(poly_dbg) if poly_dbg is not None else 'SIN_POLY'} | "
+                    f"ruta={pz.get('ruta', 'SIN_RUTA')}"
+                )
             _dbg_nesting(
-                f"[GRUPO-PIEZA] clave={clave} | debug_id={pz.get('debug_id', 'SIN_DEBUG_ID')} | "
-                f"nombre={pz.get('nombre')} | area={pz.get('area', 0.0):.3f} | "
-                f"bounds={_fmt_bounds(poly_dbg) if poly_dbg is not None else 'SIN_POLY'} | "
-                f"ruta={pz.get('ruta', 'SIN_RUTA')}"
+                f"[GRUPO-PIEZA] clave={clave} | piezas={len(piezas)} | "
+                f"(log truncado; ARGA_NEST_VERBOSE=1 para detalle)"
             )
+        else:
+            for pz in piezas:
+                poly_dbg = pz.get("poly")
+                _dbg_nesting(
+                    f"[GRUPO-PIEZA] clave={clave} | debug_id={pz.get('debug_id', 'SIN_DEBUG_ID')} | "
+                    f"nombre={pz.get('nombre')} | area={pz.get('area', 0.0):.3f} | "
+                    f"bounds={_fmt_bounds(poly_dbg) if poly_dbg is not None else 'SIN_POLY'} | "
+                    f"ruta={pz.get('ruta', 'SIN_RUTA')}"
+                )
 
         placas_ok, match_mode = self._clasificar_placas_por_calibre(
             req_cal, req_mat, datos_placas

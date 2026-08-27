@@ -5,6 +5,11 @@ alwaysApply: true
 
 # Paridad build .exe (`tools/build_arga_exe.py`)
 
+El `.exe` / zip de Release debe ser una **copia exacta de la funcionalidad** de
+este proyecto: no puede faltar ningún módulo, diálogo, motor, asset o sidecar
+que el código fuente use en runtime. Eso se revalida en **cada** mejora y otra
+vez en cada `--release`.
+
 Con **cada** mejora o modificación del ANS, antes de dar por cerrado el cambio:
 
 1. Pregúntate si el cambio afecta lo que el `.exe` necesita en runtime:
@@ -19,8 +24,8 @@ Con **cada** mejora o modificación del ANS, antes de dar por cerrado el cambio:
    - `--add-data` / `--add-binary` / sidecars en `seed_persistent_sidecars`
    - checklist + `arga_build_manifest.json`
 3. Si falta algo → **arregla el build en el mismo cambio** (no lo dejes para después).
-4. Aplica el arreglo en **ambos** proyectos (`New Arga Nesting Suite` y `ANS C++`) y verifica igualdad.
-5. Si el cambio es solo docs/tests/bench y no entra al `.exe`, anótalo explícitamente y no toques el build.
+4. Si el cambio es solo docs/tests/bench y no entra al `.exe`, anótalo explícitamente y no toques el build.
+   **No** copies a `ANS C++` ni a otro clon (regla eliminada).
 
 ## Señales típicas de que el build quedó atrás
 

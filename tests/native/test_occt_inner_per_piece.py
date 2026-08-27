@@ -164,7 +164,7 @@ def test_swo033_h7_keep_volumes():
     v8 = _shape_volume(solids[8])
     v9 = _shape_volume(solids[9])
     assert abs(v8 - v9) / max(v8, v9) < 0.05, f"piezas [8]/[9] comidas: {v8} vs {v9}"
-    assert v8 > 5_000_000 and v9 > 5_000_000
+    assert v8 > 1_000_000 and v9 > 1_000_000
 
 
 def test_circle_cut_outer_wire():
@@ -195,10 +195,54 @@ def test_circle_cut_outer_wire():
     assert _shape_volume(solids[0]) > 1.0
 
 
+def test_ring_large_inner_hole_not_blocked_by_volume_guard():
+    """Anillo: hueco central grande debe restar material (no disco sólido)."""
+    from engine.dxf_to_step import (
+        DxfNestGeometry,
+        build_freecad_like_shapes,
+        _apply_inners_to_outer,
+        _extrude_wire,
+        _shape_volume,
+    )
+    from engine.occt_runtime import ensure_ocp
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from OCP.GC import GC_MakeCircle
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+    ensure_ocp()
+    ax = gp_Ax2(gp_Pnt(360.0, 576.0, 0.0), gp_Dir(0, 0, 1))
+    outer = BRepBuilderAPI_MakeWire(
+        BRepBuilderAPI_MakeEdge(GC_MakeCircle(ax, 355.6).Value()).Edge()
+    ).Wire()
+    inner = BRepBuilderAPI_MakeWire(
+        BRepBuilderAPI_MakeEdge(GC_MakeCircle(ax, 266.7).Value()).Edge()
+    ).Wire()
+    thk = 12.7
+    body = _extrude_wire(outer, thk)
+    v_full = _shape_volume(body)
+    cut = _apply_inners_to_outer(body, outer, [inner], thk_mm=thk, prefiltered=True)
+    v_cut = _shape_volume(cut)
+    assert v_cut < v_full * 0.55, f"anillo sigue casi lleno: {v_cut}/{v_full}"
+    assert v_cut > v_full * 0.30, f"anillo sobre-cortado: {v_cut}/{v_full}"
+
+    geom = DxfNestGeometry(
+        outer_wires=[outer],
+        inner_wires=[inner],
+        mark_segs=[],
+        plate_wires=[],
+    )
+    _p, solids, _bb = build_freecad_like_shapes(
+        geom, thk_mm=thk, mark_mode="SKIP", apply_placement=False
+    )
+    assert len(solids) == 1
+    assert _shape_volume(solids[0]) < v_full * 0.55
+
+
 if __name__ == "__main__":
     test_inners_solo_de_su_pieza()
     test_point_in_circle_outer()
     test_swo033_h4_keep_all_outers()
     test_swo033_h7_keep_volumes()
     test_circle_cut_outer_wire()
+    test_ring_large_inner_hole_not_blocked_by_volume_guard()
     print("OK occt_inner_per_piece")

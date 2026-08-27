@@ -41,7 +41,9 @@ def export_piece(
     ):
         from modules.dxf_export.amada_esp import export_amada_esp_piece
 
-        ok_amada = export_amada_esp_piece(msp, p, draw_holes=draw_holes)
+        ok_amada = export_amada_esp_piece(
+            msp, p, doc=doc, draw_holes=draw_holes, strict=strict
+        )
         return ok_amada or bool(_msp_snapshot(msp)[count_before:])
 
     used_source = False

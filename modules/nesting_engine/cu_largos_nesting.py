@@ -28,7 +28,8 @@ Cortes CUT_OUTER (láser):
      línea horizontal CUT_OUTER (CU_CORTE__SUP__) a la altura del ancho real de la pieza.
   3. Pieza con relieve en la frontera entre rebanadas: escalón/diagonal local junto al corte
      vertical (no el techo largo del stock que atravesaría toda la pieza).
-  4. CU_CORTE__V__ intermedias solo en visor; al DXF láser solo la del final de barra.
+  4. CU_CORTE__V__ (guillotinas a ancho completo de tira) en el DXF CyPTube entre piezas
+     y al final de barra; el contorno de pieza omite aristas que coinciden con el stock.
 """
 from __future__ import annotations
 
@@ -459,20 +460,16 @@ def _segmentos_relieve_en_frontera(
         if _es_horizontal(y1, y2, miny):
             continue
 
+        if _es_arista_horizontal(x1, y1, x2, y2, tol):
+            continue
+
         if xmax_e < frontera_x - band or xmin_e > frontera_x + band:
             continue
 
         if _es_vertical(x1, x2, frontera_x) and (ymax_e - ymin_e) > (maxy - miny) * 0.45:
             continue
 
-        if _es_horizontal(y1, y2, maxy):
-            if abs(xmax_e - xmin_e) > band + tol:
-                continue
-            centro_x = (x1 + x2) / 2.0
-            if abs(centro_x - frontera_x) > band * 0.65:
-                continue
-
-        if _es_arista_horizontal(x1, y1, x2, y2, tol) or _es_arista_vertical(x1, y1, x2, y2, tol):
+        if _es_arista_vertical(x1, y1, x2, y2, tol):
             segmentos.append([(x1, y1), (x2, y2)])
         elif seg_len > tol * 2:
             segmentos.append([(x1, y1), (x2, y2)])
@@ -553,14 +550,11 @@ def _arista_en_relieve_frontera(
     ):
         return False
 
-    if _es_arista_horizontal(x1, y1, x2, y2, tol) and abs((y1 + y2) / 2.0 - maxy) <= tol:
-        if abs(xmax_e - xmin_e) > band + tol:
-            return False
-        centro_x = (x1 + x2) / 2.0
-        if abs(centro_x - frontera_x) > band * 0.65:
-            return False
+    # Relieve en frontera: solo diagonal o vertical local (nunca horizontales).
+    if _es_arista_horizontal(x1, y1, x2, y2, tol):
+        return False
 
-    if _es_arista_horizontal(x1, y1, x2, y2, tol) or _es_arista_vertical(x1, y1, x2, y2, tol):
+    if _es_arista_vertical(x1, y1, x2, y2, tol):
         return True
     return seg_len > tol * 2
 
@@ -938,21 +932,61 @@ def _simular_encaje_en_barra(
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> tuple[bool, float, float, float]:
     """Prueba colocación con el mismo recálculo final de posiciones/gaps."""
-    trial = list(barra["colocados"]) + [(item, 0.0, 0.0)]
-    nuevos, cursor, _ = _recalcular_colocados_barra(
-        trial,
-        separacion_in=separacion_in,
-        largo_mm=float(barra["largo_mm"]),
-        largo_sin_separacion_in=largo_sin_separacion_in,
+    colocados = list(barra.get("colocados") or [])
+    items_prev = [c[0] for c in colocados]
+    trial_items = items_prev + [item]
+    modo_trial = _modo_separacion_barra(trial_items, largo_sin_separacion_in)
+    modo_prev = (
+        _modo_separacion_barra(items_prev, largo_sin_separacion_in)
+        if items_prev
+        else modo_trial
     )
+    # Fast path: append incremental (O(1)). Full recalc solo si cambia el modo de gap.
+    if modo_trial == modo_prev:
+        tiene_relieve = any(_pieza_cu_forzar_sin_gap(it) for it in trial_items)
+        if not colocados:
+            x_pos = 0.0
+            gap_before = 0.0
+            cursor = float(item.get("len_mm") or 0.0)
+        else:
+            prev_item, prev_x, _ = colocados[-1]
+            gap = _gap_mm_entre_piezas_cu(
+                modo_trial,
+                prev_item,
+                item,
+                separacion_in,
+                tiene_relieve=tiene_relieve,
+            )
+            x_pos = float(prev_x) + float(prev_item.get("len_mm") or 0.0) + gap
+            gap_before = gap
+            cursor = x_pos + float(item.get("len_mm") or 0.0)
+    else:
+        trial = colocados + [(item, 0.0, 0.0)]
+        nuevos, cursor, _modo = _recalcular_colocados_barra(
+            trial,
+            separacion_in=separacion_in,
+            largo_mm=float(barra["largo_mm"]),
+            largo_sin_separacion_in=largo_sin_separacion_in,
+        )
+        if cursor > float(barra["largo_mm"]) + 0.5:
+            return False, 0.0, 0.0, cursor
+        x_pos = float(nuevos[-1][1])
+        if len(nuevos) < 2:
+            gap_before = 0.0
+        else:
+            prev_item, prev_x, _ = nuevos[-2]
+            gap_before = x_pos - (prev_x + float(prev_item.get("len_mm") or 0.0))
+        # Relieve/Z: solo dentro de zona máquina (114"); no empujar a RTZCU.
+        if _pieza_cu_forzar_sin_gap(item):
+            from .cu_rtz_sin_gap import rtz_zona_inicio_mm
+
+            x_end = x_pos + float(item.get("len_mm") or 0.0)
+            if x_end > float(rtz_zona_inicio_mm()) + 0.5:
+                return False, 0.0, 0.0, cursor
+        return True, gap_before, x_pos, cursor
+
     if cursor > float(barra["largo_mm"]) + 0.5:
         return False, 0.0, 0.0, cursor
-    x_pos = float(nuevos[-1][1])
-    if len(nuevos) < 2:
-        gap_before = 0.0
-    else:
-        prev_item, prev_x, _ = nuevos[-2]
-        gap_before = x_pos - (prev_x + float(prev_item["len_mm"]))
     # Relieve/Z: solo dentro de zona máquina (114"); no empujar a RTZCU.
     # Orilla rectangular SÍ puede pasar de 114\" hacia RTZCU.
     if _pieza_cu_forzar_sin_gap(item):
@@ -1080,12 +1114,28 @@ def _aplicar_pieza_en_barra(
     if not _barra_acepta_familia_corte(barra, item):
         return False
     item_eff = _adaptar_item_a_barra(item, barra)
-    ok, _gap, _x, cursor = _simular_encaje_en_barra(
+    ok, _gap, x_pos, cursor = _simular_encaje_en_barra(
         barra, item_eff, separacion_in, largo_sin_separacion_in
     )
     if not ok:
         return False
-    trial = list(barra["colocados"]) + [(item_eff, 0.0, 0.0)]
+    colocados = list(barra.get("colocados") or [])
+    items_prev = [c[0] for c in colocados]
+    modo_new = _modo_separacion_barra(
+        items_prev + [item_eff], largo_sin_separacion_in
+    )
+    modo_prev = (
+        _modo_separacion_barra(items_prev, largo_sin_separacion_in)
+        if items_prev
+        else modo_new
+    )
+    if not colocados or modo_prev == modo_new:
+        item_mod = {**item_eff, "cu_modo_separacion_barra": modo_new}
+        barra["colocados"] = colocados + [(item_mod, float(x_pos), 0.0)]
+        barra["cursor_x"] = float(cursor)
+        barra["cu_modo_separacion"] = modo_new
+        return True
+    trial = colocados + [(item_eff, 0.0, 0.0)]
     nuevos, cursor, modo = _recalcular_colocados_barra(
         trial,
         separacion_in=separacion_in,
@@ -1193,7 +1243,10 @@ def _consolidar_barras_con_pieza_sola(
 ) -> None:
     """Reubica piezas solas en otra barra del mismo ancho objetivo donde quepan."""
     cambiado = True
-    while cambiado:
+    max_passes = 8 if len(barras_abiertas) > 40 else 64
+    n_pass = 0
+    while cambiado and n_pass < max_passes:
+        n_pass += 1
         cambiado = False
         for i, barra in enumerate(list(barras_abiertas)):
             colocados = barra.get("colocados") or []
@@ -1247,34 +1300,35 @@ def empaquetar_largos_cu(
     largo_umbral = max(0.0, float(largo_sin_separacion_in or LARGO_SIN_SEPARACION_CU_IN))
     items = []
     sin_colocar: List[dict] = []
+    orient_cache: dict[str, dict] = {}
     for p in piezas or []:
-        oriented = _orientar_pieza_para_catalogo(p.get("poly"), catalogo)
-        if oriented is None:
-            sin_colocar.append(copy.deepcopy(p))
-            continue
-        poly_o, largo_x, ancho_y, barra, corte_sup, cal_sup, rot_deg = oriented
-        item = {
-            **copy.deepcopy(p),
-            "poly": poly_o,
-            "len_mm": largo_x,
-            "wid_mm": ancho_y,
-            "ancho_in": ancho_y / 25.4,
-            "barra_objetivo_in": float(barra["ancho_in"]),
-            "corte_superior_mm": corte_sup,
-            "calibre_superior": cal_sup,
-            "rot_deg": float(rot_deg),
-        }
+        cache_key = str(p.get("ruta") or "").strip() or str(id(p.get("poly")))
+        tpl = orient_cache.get(cache_key)
+        if tpl is None:
+            oriented = _orientar_pieza_para_catalogo(p.get("poly"), catalogo)
+            if oriented is None:
+                sin_colocar.append(dict(p))
+                continue
+            poly_o, largo_x, ancho_y, barra, corte_sup, cal_sup, rot_deg = oriented
+            tpl = {
+                "poly": poly_o,
+                "len_mm": largo_x,
+                "wid_mm": ancho_y,
+                "ancho_in": ancho_y / 25.4,
+                "barra_objetivo_in": float(barra["ancho_in"]),
+                "corte_superior_mm": corte_sup,
+                "calibre_superior": cal_sup,
+                "rot_deg": float(rot_deg),
+            }
+            marks = p.get("marks")
+            if marks is not None and not getattr(marks, "is_empty", True) and rot_deg:
+                marks_r = affinity.rotate(marks, 90.0, origin="centroid", use_radians=False)
+                poly_raw = affinity.rotate(p.get("poly"), 90.0, origin="centroid", use_radians=False)
+                mx0, my0, _, _ = poly_raw.bounds
+                tpl["marks"] = affinity.translate(marks_r, -mx0, -my0)
+            orient_cache[cache_key] = tpl
+        item = {**tpl, **dict(p)}
         item = _marcar_forzar_sin_gap(item)
-        # Marcas: rotar igual que el contorno si aplica.
-        marks = p.get("marks")
-        if marks is not None and not getattr(marks, "is_empty", True) and rot_deg:
-            marks_r = affinity.rotate(marks, 90.0, origin="centroid", use_radians=False)
-            minx, miny, _, _ = poly_o.bounds
-            # poly_o ya está en origen; alinear marks al mismo origen del poly rotado crudo.
-            # Recalcular desde poly original rotado:
-            poly_raw = affinity.rotate(p.get("poly"), 90.0, origin="centroid", use_radians=False)
-            mx0, my0, _, _ = poly_raw.bounds
-            item["marks"] = affinity.translate(marks_r, -mx0, -my0)
         items.append(item)
 
     # Agrupa por ancho; Amada y Z no se mezclan (familias aparte); largas primero.
@@ -1295,11 +1349,21 @@ def empaquetar_largos_cu(
     )
 
     barras_abiertas: List[dict] = []
+    barras_por_ancho: dict[float, List[dict]] = {}
+    last_bar_by_ancho: dict[float, dict] = {}
 
     for item in items:
         candidatos: dict[str, tuple[dict, float, float, float]] = {}
+        ancho_obj = float(item.get("barra_objetivo_in") or 0.0)
+        ancho_key = round(ancho_obj, 4)
 
-        for barra in barras_abiertas:
+        ultima = last_bar_by_ancho.get(ancho_key)
+        if ultima is not None and _aplicar_pieza_en_barra(
+            ultima, item, separacion_in, largo_umbral
+        ):
+            continue
+
+        for barra in barras_por_ancho.get(ancho_key, ()):
             if not _pieza_cabe_en_ancho_barra(item, barra):
                 continue
             score = _score_barra_para_item(
@@ -1341,21 +1405,23 @@ def empaquetar_largos_cu(
         if elegido is not None:
             barra, _gap_before, _x_pos, _score = elegido
             if _aplicar_pieza_en_barra(barra, item, separacion_in, largo_umbral):
+                last_bar_by_ancho[ancho_key] = barra
                 continue
 
         if stock is not None:
             item0 = _adaptar_item_a_barra(item, stock)
-            barras_abiertas.append(
-                {
-                    "stock": stock,
-                    "largo_mm": stock["largo_mm"],
-                    "ancho_mm": stock["ancho_mm"],
-                    "ancho_in": stock["ancho_in"],
-                    "cursor_x": item0["len_mm"],
-                    "colocados": [(item0, 0.0, 0.0)],
-                    "cu_modo_separacion": _modo_separacion_barra([item0], largo_umbral),
-                }
-            )
+            nueva = {
+                "stock": stock,
+                "largo_mm": stock["largo_mm"],
+                "ancho_mm": stock["ancho_mm"],
+                "ancho_in": stock["ancho_in"],
+                "cursor_x": item0["len_mm"],
+                "colocados": [(item0, 0.0, 0.0)],
+                "cu_modo_separacion": _modo_separacion_barra([item0], largo_umbral),
+            }
+            barras_abiertas.append(nueva)
+            barras_por_ancho.setdefault(ancho_key, []).append(nueva)
+            last_bar_by_ancho[ancho_key] = nueva
             continue
 
         if item not in sin_colocar:
@@ -1644,8 +1710,12 @@ def consolidar_barras_cu_baja_ocupacion(
         ),
     )
     umbral = max(0.35, min(0.95, float(umbral_long_frac)))
+    n_madre = sum(1 for h in out if _es_hoja_madre_cu(h))
+    max_pasadas_eff = max(1, int(max_pasadas or 1))
+    if n_madre > 80:
+        max_pasadas_eff = min(max_pasadas_eff, 4)
 
-    for pasada in range(max(1, int(max_pasadas or 1))):
+    for pasada in range(max_pasadas_eff):
         # clave = (ancho_mm_redondeado, familia)
         por_grupo: Dict[tuple, List[tuple[int, dict, float]]] = {}
         for i, h in enumerate(out):
@@ -1804,13 +1874,22 @@ def procesar_grupo_largos_cu(
     if not placas_ok:
         return clave, {"error": "Sin inventario CU disponible para largos."}
 
+    from .nest_runtime_prefs import load_nest_runtime_prefs
+
+    load_nest_runtime_prefs()  # calienta cache (hot path CU × miles de lecturas)
+
+    import time as _time
+
+    t_pack0 = _time.perf_counter()
     hojas, sin_colocar = empaquetar_largos_cu(
         piezas,
         placas_ok,
         separacion_in=sep_in,
         largo_sin_separacion_in=largo_umbral,
     )
+    _log(f"[CU-LARGOS][TIME] empaquetar={_time.perf_counter() - t_pack0:.1f}s")
     # RTZCU con gap: lo que no cabe en el tramo → barras nuevas (pueden generar otro RTZCU).
+    t_rtz0 = _time.perf_counter()
     hojas, sin_derrame = resolver_derrames_rtz_cu(
         hojas,
         placas_ok,
@@ -1831,9 +1910,11 @@ def procesar_grupo_largos_cu(
         separacion_in=sep_in,
         largo_sin_separacion_in=largo_umbral,
         dbg_fn=_log,
+        max_iter=12 if len(hojas) > 80 else 24,
     )
     if sin_derrame2:
         sin_derrame = list(sin_derrame or []) + list(sin_derrame2)
+    _log(f"[CU-LARGOS][TIME] rtz+cola={_time.perf_counter() - t_rtz0:.1f}s")
     if sin_derrame:
         sin_colocar = list(sin_colocar or []) + list(sin_derrame)
     hojas = ordenar_hojas_largos_cu_por_ancho(hojas)

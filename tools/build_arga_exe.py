@@ -290,6 +290,8 @@ SMOKE_IMPORT_MODULES = (
     "modules.plasma_offset_clipper",
     "modules.dxf_export.amada_fixture",
     "modules.dxf_export.amada_esp",
+    "modules.dxf_export.cobre_nest",
+    "modules.nest_exporter",
     "modules.processed_layers",
     "modules.ls_ready_paso1",
 )

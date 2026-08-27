@@ -31,6 +31,16 @@ _DEFAULTS: dict[str, Any] = {
     },
 }
 
+# Cache en memoria: empaquetar CU llama is_cu_force_dxf_step miles de veces por corrida.
+_PREFS_CACHE_MTIME: float | None = None
+_PREFS_CACHE_DATA: dict[str, Any] | None = None
+
+
+def _invalidate_prefs_cache() -> None:
+    global _PREFS_CACHE_MTIME, _PREFS_CACHE_DATA
+    _PREFS_CACHE_MTIME = None
+    _PREFS_CACHE_DATA = None
+
 
 def config_path() -> Path:
     try:
@@ -52,8 +62,16 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 
 
 def load_nest_runtime_prefs() -> dict[str, Any]:
-    prefs = copy.deepcopy(_DEFAULTS)
+    global _PREFS_CACHE_MTIME, _PREFS_CACHE_DATA
     path = config_path()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else 0.0
+    except OSError:
+        mtime = 0.0
+    if _PREFS_CACHE_DATA is not None and _PREFS_CACHE_MTIME == mtime:
+        return copy.deepcopy(_PREFS_CACHE_DATA)
+
+    prefs = copy.deepcopy(_DEFAULTS)
     if path.is_file():
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -100,7 +118,9 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
     for key, value in _DEFAULTS["spark"].items():
         spark.setdefault(key, value)
     prefs["spark"] = spark
-    return prefs
+    _PREFS_CACHE_MTIME = mtime
+    _PREFS_CACHE_DATA = copy.deepcopy(prefs)
+    return copy.deepcopy(prefs)
 
 
 def save_nest_runtime_prefs(prefs: dict[str, Any]) -> Path:
@@ -123,6 +143,7 @@ def save_nest_runtime_prefs(prefs: dict[str, Any]) -> Path:
     data["exportar_a_servidor"] = bool(data.get("exportar_a_servidor", True))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _invalidate_prefs_cache()
     return path
 
 
@@ -140,8 +161,11 @@ def set_step_feedstock_enabled(enabled: bool) -> Path:
 
 def is_cu_force_dxf_step_enabled(prefs: dict[str, Any] | None = None) -> bool:
     """True = cobre solo con gap + DXF/STEP (sin RTZCU / sin_gap / Amada nest)."""
-    data = prefs if isinstance(prefs, dict) else load_nest_runtime_prefs()
-    return bool(data.get("cu_force_dxf_step"))
+    if isinstance(prefs, dict):
+        return bool(prefs.get("cu_force_dxf_step"))
+    if _PREFS_CACHE_DATA is not None:
+        return bool(_PREFS_CACHE_DATA.get("cu_force_dxf_step"))
+    return bool(load_nest_runtime_prefs().get("cu_force_dxf_step"))
 
 
 def is_giga_cal11_galv_enabled(prefs: dict[str, Any] | None = None) -> bool:

@@ -16,7 +16,8 @@ from modules.nest_exporter import (
     DxfExportValidationError,
     TOL_GEOM_MM,
     _bar_width_mm,
-    _ensure_cierre_corte_madre_cu,
+    _ensure_guillotina_fin_ultima_pieza_sin_gap,
+    _omitir_cu_corte_v_fuera_madre_sin_gap,
     _export_cu_bar_inicio_marker,
     _export_cu_bar_inicio_marker_vertical,
     _fail_export,
@@ -24,7 +25,7 @@ from modules.nest_exporter import (
     _msp_snapshot,
     _purge_capas_no_produccion_cobre,
     _purge_entities_on_layers,
-    _save_dxf_atomic,
+    _save_cobre_dxf_atomic,
     _setup_layers,
     _sheet_is_sin_gap,
     _sheet_cu_exporta_cortes_segmentados,
@@ -74,6 +75,9 @@ def _filtrar_placements_cobre(
         if nom.startswith("RETAZO_GUILLOTINA__") and "RTZCU" in nom.upper():
             continue
         if nom.startswith("TATUAJE__") and "RTZCU" in nom.upper():
+            continue
+        if nom.startswith("CU_CORTE__"):
+            out.append(p)
             continue
         if p.get("cu_zona_rtz") and not include_rtz_pieces:
             # En hoja virtual RTZCU las piezas llevan cu_zona_rtz: no filtrarlas.
@@ -130,7 +134,7 @@ def _preparar_sheet_cobre(
         s["export_3d_format"] = "step"
         s.pop("cu_export_vertical", None)
     elif _sheet_is_sin_gap(s):
-        # Solo madre sin_gap → CyPTube vertical.
+        # Madre sin_gap (Amada ESP, escalón/Z, …): DXF vertical CyPTube.
         s["cu_export_vertical"] = True
         # Si hay RTZCU, acotar largo DXF al tramo madre.
         try:
@@ -187,7 +191,7 @@ def export_cobre_hoja_to_dxf(
     sheet_len = float(sheet_work.get("length", sheet_work.get("Length", 0)) or 0)
     sheet_w = float(sheet_work.get("width", sheet_work.get("Width", 0)) or 0)
 
-    doc = ezdxf.new(dxfversion="R2010")
+    doc = ezdxf.new(dxfversion="R2000")
     doc.header["$INSUNITS"] = 4
     _setup_layers(doc, solo_cobre=True, omit_plate=True, omit_plate_text=True)
 
@@ -205,13 +209,31 @@ def export_cobre_hoja_to_dxf(
         from modules.dxf_export.dispatcher import export_piece as dxf_export_piece
 
         for i, p in enumerate(placements_work, start=1):
+            part_name = str(p.get("part_name", p.get("name", f"PART_{i}")))
+
+            if part_name.startswith("CU_CORTE__SUP__") and _sheet_is_sin_gap(
+                sheet_work
+            ):
+                log(
+                    f"  skip {part_name}: techo de pieza ya incluido en DXF fuente"
+                )
+                continue
+
+            if _omitir_cu_corte_v_fuera_madre_sin_gap(
+                p, sheet_work, placements_work
+            ):
+                log(
+                    f"  skip {part_name}: guillotina fuera de madre "
+                    f"(zona RTZCU / gap; cierre solo al fin de última pieza)"
+                )
+                continue
+
             if bool(p.get("cu_largos_piece")):
                 if not float(p.get("cu_bar_w_mm") or 0):
                     p["cu_bar_w_mm"] = _sheet_bar_w
                 if not float(p.get("cu_bar_l_mm") or 0):
                     p["cu_bar_l_mm"] = _sheet_bar_l
 
-            part_name = str(p.get("part_name", p.get("name", f"PART_{i}")))
             export_mode = resolve_export_mode(p)
             count_before = _msp_count(msp)
             log(f"PIEZA COBRE {i}/{len(placements_work)}: {format_placement_spec(p, index=i)}")
@@ -268,17 +290,17 @@ def export_cobre_hoja_to_dxf(
                 ok=bool(new_entities),
             )
 
-        # Madre sin_gap + RTZ: corte de cierre ANTES del check vacío
-        # (caso 1 sola pieza Amada: sin CU_CORTE intermedias).
+        # CyPTube: guillotina a ancho completo al final de la última pieza (siempre).
         if (
             sin_gap
             and not rtz_virtual
             and not sheet_work.get("cu_export_amada")
-            and sheet_work.get("cu_rtz_activo")
         ):
-            if _ensure_cierre_corte_madre_cu(msp, sheet_work):
+            if _ensure_guillotina_fin_ultima_pieza_sin_gap(
+                msp, sheet_work, placements_work
+            ):
                 exported_pieces += 1
-                log("  -> cierre madre RTZ: CUT_OUTER insertado")
+                log("  -> guillotina cierre última pieza: CUT_OUTER insertado")
 
         if strict and exported_pieces == 0:
             raise DxfExportValidationError(
@@ -303,22 +325,16 @@ def export_cobre_hoja_to_dxf(
         _purge_capas_no_produccion_cobre(doc)
 
         if not _sheet_cu_exporta_cortes_segmentados(sheet_work):
-            from modules.cobre_step_audit import (
-                validate_cut_outer_piece_count,
-                write_cu_piece_meta,
-            )
+            from modules.cobre_step_audit import validate_cut_outer_piece_count
 
-            expected_cu = validate_cut_outer_piece_count(
+            validate_cut_outer_piece_count(
                 msp,
                 placements_work,
                 sheet_label=str(title or out_path),
                 strict=strict,
             )
-            write_cu_piece_meta(
-                msp,
-                expected_pieces=expected_cu,
-                sheet_label=os.path.basename(out_path),
-            )
+            # No escribir ARGA_META en el DXF de máquina: el acero no lo lleva y
+            # AutoCAD/TrueView abren más limpio sin capas de auditoría.
 
         if strict:
             _validate_full_sheet(
@@ -331,7 +347,7 @@ def export_cobre_hoja_to_dxf(
             )
             _validate_dxf_document(doc)
 
-        _save_dxf_atomic(doc, out_path)
+        _save_cobre_dxf_atomic(doc, out_path, sheet_work)
         log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
     except DxfExportValidationError as exc:
         log_export_error(out_path, exc, canal=canal_tag)

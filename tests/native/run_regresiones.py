@@ -33,6 +33,7 @@ REGRESIONES = [
     ),
     (
         "test_occt_inner_per_piece.py",
+        "2026-08-27 - OCCT: huecos grandes de anillo no bloqueados por guard 50% (S.W.O 37)",
         "2026-08-25 - OCCT: CUT_INNER solo de su pieza (H4 9 outers no bajar a 5)",
     ),
     (
@@ -97,7 +98,7 @@ REGRESIONES = [
     ),
     (
         "test_amada_export_sin_fixtura.py",
-        "2026-08-25 - AMADA/FIXTURA exporta pieza ESP. sola, sin capa FIXTURE ni MARK",
+        "2026-08-27 - AMADA/FIXTURA: barrenos fuente inch→mm, LIMMAX≠A4, join +10\" sin MARK",
     ),
     (
         "test_amada_validacion_barrenos.py",
@@ -226,6 +227,14 @@ REGRESIONES = [
     (
         "test_cyptube_esp_vertical_marks.py",
         "2026-08-26 - barra vertical ESP CyPTube: MARK sí, barrenos no",
+    ),
+    (
+        "test_amada_vertical_exporta_mark.py",
+        "2026-08-26 - barra vertical Amada: draw_marks=True (MARK sí, sin barrenos)",
+    ),
+    (
+        "test_cu_sin_gap_escalon_sin_horizontales.py",
+        "2026-08-26 - sin_gap escalón: DXF vertical + contorno fuente 1:1",
     ),
     (
         "test_lite_hole_fill_brida.py",

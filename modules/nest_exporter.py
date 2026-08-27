@@ -1,6 +1,7 @@
 # modules/nest_exporter.py
 import os
 import math
+import re
 import time
 import uuid
 from functools import lru_cache
@@ -104,7 +105,7 @@ def _sheet_omits_cut_cu(sheet: dict | None, p: dict | None = None) -> bool:
 
 
 def _sheet_cu_exporta_cortes_segmentados(sheet: dict | None) -> bool:
-    """True solo sin_gap (CyPTube): CUT_OUTER parcial + guillotinas; sin contorno STEP."""
+    """True solo sin_gap (CyPTube): clon 1:1 del DXF fuente + guillotina final de barra."""
     return _sheet_is_sin_gap(sheet)
 
 
@@ -113,6 +114,11 @@ def _sheet_cu_allows_closed_cut_outer_poly(sheet: dict | None) -> bool:
     if not isinstance(sheet, dict) or not sheet.get("modo_largos_cu"):
         return False
     return not _sheet_cu_exporta_cortes_segmentados(sheet)
+
+
+def _sheet_allows_amada_closed_poly(sheet: dict | None) -> bool:
+    """AMADA/FIXTURA: islas cerradas (LWPOLYLINE/CIRCLE) con colchón +10\"."""
+    return isinstance(sheet, dict) and bool(sheet.get("cu_export_amada"))
 
 
 def _validate_production_entities(
@@ -135,6 +141,7 @@ def _validate_production_entities(
 
     label = _piece_label(p)
     allow_outer_poly = solo_cobre and _sheet_cu_allows_closed_cut_outer_poly(sheet)
+    allow_amada_poly = solo_cobre and _sheet_allows_amada_closed_poly(sheet)
     for ent in prod:
         typ = ent.dxftype()
         layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
@@ -152,6 +159,16 @@ def _validate_production_entities(
             if not bool(getattr(ent, "closed", False) or ent.closed):
                 raise DxfExportValidationError(
                     f"{label}: CUT_OUTER debe ser LWPOLYLINE cerrada (1 por pieza STEP)."
+                )
+            continue
+        if (
+            allow_amada_poly
+            and layer_u in ("CUT_OUTER", "CUT_INNER")
+            and typ == "LWPOLYLINE"
+        ):
+            if not bool(getattr(ent, "closed", False) or ent.closed):
+                raise DxfExportValidationError(
+                    f"{label}: {layer_u} Amada debe ser LWPOLYLINE cerrada."
                 )
             continue
         if typ not in NATIVE_PROD_TYPES:
@@ -192,6 +209,7 @@ def _validate_full_sheet(
             "La hoja no tiene geometría de corte (CUT_OUTER/CUT_INNER)."
         )
     allow_outer_poly = solo_cobre and _sheet_cu_allows_closed_cut_outer_poly(sheet)
+    allow_amada_poly = solo_cobre and _sheet_allows_amada_closed_poly(sheet)
     for ent in prod:
         typ = ent.dxftype()
         layer_u = str(getattr(ent.dxf, "layer", "") or "").upper()
@@ -210,6 +228,16 @@ def _validate_full_sheet(
             if not bool(getattr(ent, "closed", False) or ent.closed):
                 raise DxfExportValidationError(
                     "CUT_OUTER debe ser LWPOLYLINE cerrada por pieza (STEP cobre)."
+                )
+            continue
+        if (
+            allow_amada_poly
+            and layer_u in ("CUT_OUTER", "CUT_INNER")
+            and typ == "LWPOLYLINE"
+        ):
+            if not bool(getattr(ent, "closed", False) or ent.closed):
+                raise DxfExportValidationError(
+                    f"{layer_u} Amada debe ser LWPOLYLINE cerrada."
                 )
             continue
         if typ not in NATIVE_PROD_TYPES:
@@ -254,6 +282,117 @@ def _fail_export(part_name: str, reason: str) -> None:
     raise DxfExportValidationError(f"{part_name}: {reason}")
 
 
+def _production_layer_entities(msp):
+    """Entidades que definen la vista/producción (excluye ARGA_META / ruido)."""
+    keep_prefixes = ("CUT_",)
+    keep_exact = {"MARK", "FIXTURE", "PLATE", "BAR_START"}
+    out = []
+    for e in msp:
+        layer = str(getattr(e.dxf, "layer", "") or "").upper()
+        if layer.startswith(keep_prefixes) or layer in keep_exact:
+            out.append(e)
+    return out
+
+
+def _sync_dxf_header_view(doc) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """
+    AutoCAD/TrueView: ezdxf deja EXTMIN/EXTMAX en ±1e20 y LIMMAX en A4.
+    Sin bbox real la vista inicial queda vacía (pantalla negra hasta ZOOM E).
+    También ajusta VPORT *Active (center/height) — AutoCAD ignora EXT* al abrir
+    si el viewport activo apunta a (0,0) con altura default.
+
+    Cobre vs acero: el acero dibuja Plate (marco de placa) y el zoom “cae” bien;
+    el cobre omite Plate y las barras son largas (hasta 144\") — si LIMMAX queda
+    en A4 (420×297) AutoCAD abre mirando vacío. Por eso el sync/VPORT va en
+    _save_dxf_atomic (ambos caminos), con bbox solo de capas de corte.
+    """
+    try:
+        from ezdxf import bbox as ezdxf_bbox
+
+        msp = doc.modelspace()
+        prod = _production_layer_entities(msp)
+        ext = ezdxf_bbox.extents(prod if prod else msp)
+        if not ext.has_data:
+            return None
+        mn, mx = ext.extmin, ext.extmax
+        # saveas() copia extmin/extmax del layout al header; sin esto no persiste.
+        msp.dxf.extmin = mn
+        msp.dxf.extmax = mx
+        try:
+            layout = doc.active_layout()
+            layout.dxf.extmin = mn
+            layout.dxf.extmax = mx
+        except Exception:
+            pass
+        doc.header["$EXTMIN"] = (float(mn.x), float(mn.y), float(mn.z))
+        doc.header["$EXTMAX"] = (float(mx.x), float(mx.y), float(mx.z))
+        pad = 10.0
+        limmin = (float(mn.x) - pad, float(mn.y) - pad)
+        limmax = (float(mx.x) + pad, float(mx.y) + pad)
+        doc.header["$LIMMIN"] = limmin
+        doc.header["$LIMMAX"] = limmax
+        doc.header["$LIMCHECK"] = 0
+        if int(doc.header.get("$INSUNITS", 0) or 0) == 0:
+            doc.header["$INSUNITS"] = 4
+        _fit_active_vport(doc, mn, mx)
+        return limmin, limmax
+    except Exception:
+        return None
+
+
+def _fit_active_vport(doc, mn, mx) -> None:
+    """Centra VPORT *Active en el bbox (equivalente a ZOOM Extents al abrir)."""
+    cx = (float(mn.x) + float(mx.x)) / 2.0
+    cy = (float(mn.y) + float(mx.y)) / 2.0
+    span_x = max(float(mx.x) - float(mn.x), 1.0)
+    span_y = max(float(mx.y) - float(mn.y), 1.0)
+    # Altura con margen; aspect del viewport tipico ~1.3–1.8.
+    height = max(span_y * 1.15, span_x * 1.15 / 1.34)
+    try:
+        for vp in doc.viewports:
+            if str(getattr(vp.dxf, "name", "") or "") in ("*Active", "*ACTIVE", ""):
+                vp.dxf.center = (cx, cy, 0.0)
+                vp.dxf.height = float(height)
+    except Exception:
+        pass
+    try:
+        for entry in doc.tables.viewports:
+            name = str(getattr(entry.dxf, "name", "") or "")
+            if name in ("*Active", "*ACTIVE"):
+                entry.dxf.center = (cx, cy)
+                entry.dxf.height = float(height)
+    except Exception:
+        pass
+
+
+def _patch_dxf_limits_on_disk(
+    path: str,
+    limmin: tuple[float, float],
+    limmax: tuple[float, float],
+) -> None:
+    """ezdxf saveas() resetea $LIMMIN/$LIMMAX a A4 aunque el header en memoria sea correcto."""
+    import re
+    from pathlib import Path
+
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    for tag, (x, y) in (("$LIMMIN", limmin), ("$LIMMAX", limmax)):
+        pat = (
+            rf"({re.escape(tag)}\s*\r?\n\s*10\s*\r?\n)([^\r\n]+)"
+            rf"(\s*\r?\n\s*20\s*\r?\n)([^\r\n]+)"
+        )
+        text, n = re.subn(pat, rf"\g<1>{float(x)}\g<3>{float(y)}", text, count=1)
+        if n == 0:
+            return
+    try:
+        p.write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _save_dxf_atomic(doc, out_path: str) -> None:
     """Escribe DXF vía temporal + reemplazo atómico (tolerante a locks breves)."""
     out_path = os.path.abspath(str(out_path))
@@ -264,7 +403,11 @@ def _save_dxf_atomic(doc, out_path: str) -> None:
         f".__arga_export_{os.getpid()}_{uuid.uuid4().hex[:8]}.dxf",
     )
     try:
+        limits = _sync_dxf_header_view(doc)
         doc.saveas(tmp_path)
+        if limits is not None:
+            _patch_dxf_limits_on_disk(tmp_path, limits[0], limits[1])
+        _strip_ezdxf_fingerprint_on_disk(tmp_path)
         last_err: OSError | None = None
         for attempt in range(10):
             try:
@@ -772,17 +915,6 @@ def _edge_on_bar_exterior(
         # sin_gap: largo en Y, ancho en X; inicio de barra en y=0.
         if _es_arista_horizontal(x1, y1, x2, y2, tol) and y1 <= tol and y2 <= tol:
             return True
-        if piece_bounds and _es_arista_horizontal(x1, y1, x2, y2, tol):
-            minx, miny, maxx, maxy = piece_bounds
-            ancho = maxx - minx
-            if ancho > tol:
-                span = abs(float(x2) - float(x1))
-                if span >= ancho - max(tol, ancho * 0.05):
-                    y_mid = (y1 + y2) / 2.0
-                    if idx > 0 and abs(y_mid - miny) <= tol:
-                        return True
-                    if abs(y_mid - maxy) <= tol:
-                        return True
         if _es_arista_vertical(x1, y1, x2, y2, tol) and x1 <= tol and x2 <= tol:
             return True
         if (
@@ -792,10 +924,23 @@ def _edge_on_bar_exterior(
             and x2 >= bar_w - tol
         ):
             return True
-        if _es_arista_horizontal(x1, y1, x2, y2, tol):
-            ymid = (y1 + y2) / 2.0
-            if bar_len > tol and abs(ymid - bar_len) <= tol:
-                return True
+        if (
+            _es_arista_horizontal(x1, y1, x2, y2, tol)
+            and bar_len > tol
+            and abs((y1 + y2) / 2.0 - bar_len) <= tol
+        ):
+            return True
+        if piece_bounds and _es_arista_horizontal(x1, y1, x2, y2, tol):
+            minx, miny, maxx, maxy = piece_bounds
+            ancho = maxx - minx
+            if ancho > tol and bar_w > tol:
+                span = abs(float(x2) - float(x1))
+                if span >= min(ancho, bar_w) - max(tol, min(ancho, bar_w) * 0.05):
+                    y_mid = (y1 + y2) / 2.0
+                    if idx > 0 and abs(y_mid - miny) <= tol:
+                        return True
+                    if abs(y_mid - maxy) <= tol:
+                        return True
         return False
 
     # Cara izquierda del stock (inicio de barra → marcador CUT_CU, no láser)
@@ -825,6 +970,46 @@ def _edge_on_bar_exterior(
             return True
 
     return False
+
+
+def _should_export_cu_laser_edge(
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    *,
+    outer_work: list,
+    bar_len: float,
+    bar_w: float,
+    tol: float = TOL_GEOM_MM,
+    piece_bounds=None,
+    idx: int = 0,
+    n_total: int = 1,
+    bar_vertical: bool = False,
+) -> bool:
+    """
+    True si la arista del contorno fuente debe ir al DXF sin_gap vertical.
+
+    Exporta el CUT_OUTER nativo 1:1 (integridad del DXF original) salvo caras del
+    stock (fondo/techo/laterales de barra y guillotinas verticales completas).
+    """
+    from modules.nesting_engine.cu_largos_nesting import _solo_cortes_guillotina_vertical
+
+    if not outer_work or _solo_cortes_guillotina_vertical(outer_work, tol=tol):
+        return False
+    return _edge_is_bar_interior_laser_cut(
+        x1,
+        y1,
+        x2,
+        y2,
+        bar_len=bar_len,
+        bar_w=bar_w,
+        tol=tol,
+        piece_bounds=piece_bounds,
+        idx=idx,
+        n_total=n_total,
+        bar_vertical=bar_vertical,
+    )
 
 
 def _edge_is_bar_interior_laser_cut(
@@ -988,8 +1173,6 @@ def _export_cu_contour_cuts_from_ring(
     coords_vertical: bool = False,
 ) -> int:
     """Respaldo: aristas del contorno colocado que son corte interior a la barra."""
-    bar_w = float(p.get("cu_bar_w_mm") or 0.0)
-    bar_l = float(p.get("cu_bar_l_mm") or 0.0)
     idx = int(p.get("cu_slice_idx", 0) or 0)
     n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
     if not coords_vertical:
@@ -997,7 +1180,14 @@ def _export_cu_contour_cuts_from_ring(
     pts = normalize_ring(ring, closed=True)
     if len(pts) < 2:
         return 0
-    piece_bounds = _poly_bounds(pts)
+    outer_work = list(pts)
+    piece_bounds = _poly_bounds(outer_work)
+    bar_w = float(p.get("cu_bar_w_mm") or 0.0)
+    bar_l = float(p.get("cu_bar_l_mm") or 0.0)
+    if bar_w <= 0 and piece_bounds:
+        bar_w = piece_bounds[3] - piece_bounds[1]
+    if bar_l <= 0 and piece_bounds:
+        bar_l = piece_bounds[2] - piece_bounds[0]
     bar_vertical = _sheet_export_sin_gap_vertical(sheet) or coords_vertical
     seen_lines: set = set()
     seen_arcs: set = set()
@@ -1006,11 +1196,12 @@ def _export_cu_contour_cuts_from_ring(
     for i in range(n):
         j = (i + 1) % n
         p1, p2 = pts[i], pts[j]
-        if _edge_is_bar_interior_laser_cut(
+        if not _should_export_cu_laser_edge(
             p1[0],
             p1[1],
             p2[0],
             p2[1],
+            outer_work=outer_work,
             bar_len=bar_l,
             bar_w=bar_w,
             tol=TOL_GEOM_MM,
@@ -1019,8 +1210,9 @@ def _export_cu_contour_cuts_from_ring(
             n_total=n_total,
             bar_vertical=bar_vertical,
         ):
-            if _emit_cut_outer_segment(msp, p1, p2, None, seen_lines=seen_lines, seen_arcs=seen_arcs):
-                added += 1
+            continue
+        if _emit_cut_outer_segment(msp, p1, p2, None, seen_lines=seen_lines, seen_arcs=seen_arcs):
+            added += 1
     return added
 
 
@@ -1103,11 +1295,12 @@ def _export_cu_laser_outer_cuts_native(
                 continue
             keep_arc = False
             for i in range(len(pts) - 1):
-                if _edge_is_bar_interior_laser_cut(
+                if _should_export_cu_laser_edge(
                     pts[i][0],
                     pts[i][1],
                     pts[i + 1][0],
                     pts[i + 1][1],
+                    outer_work=outer_work,
                     bar_len=bar_l,
                     bar_w=bar_w,
                     tol=TOL_GEOM_MM,
@@ -1130,11 +1323,12 @@ def _export_cu_laser_outer_cuts_native(
             continue
         if p1 is None or p2 is None:
             continue
-        if not _edge_is_bar_interior_laser_cut(
+        if not _should_export_cu_laser_edge(
             p1[0],
             p1[1],
             p2[0],
             p2[1],
+            outer_work=outer_work,
             bar_len=bar_l,
             bar_w=bar_w,
             tol=TOL_GEOM_MM,
@@ -1298,6 +1492,52 @@ def _export_cu_inner_and_marks(
     return added
 
 
+def _export_cu_sin_gap_outer_from_source(
+    msp,
+    doc,
+    part_doc,
+    m,
+    p: dict,
+    outer: list,
+    *,
+    draw_holes: bool = True,
+    draw_marks: bool = True,
+    sheet: dict | None = None,
+) -> bool:
+    """
+    sin_gap CyPTube: contorno nativo del DXF fuente sin caras del stock;
+    inner/marks 1:1. Las guillotinas CU_CORTE__V__ van por placements aparte.
+    """
+    from modules.nesting_engine.cu_largos_nesting import _solo_cortes_guillotina_vertical
+
+    label = _piece_label(p)
+    outer_added = _export_cu_laser_outer_cuts_native(
+        msp, part_doc, m, p, sheet=sheet
+    )
+    if outer_added <= 0 and not _solo_cortes_guillotina_vertical(outer):
+        return False
+
+    inner_ok = _export_cu_inner_and_marks_from_source(
+        msp, doc, part_doc, m, p, draw_holes=draw_holes, draw_marks=draw_marks
+    )
+    holes = p.get("holes") or p.get("inner") or []
+    marks = p.get("marks") or p.get("mark") or []
+    if not inner_ok and ((holes and draw_holes) or (marks and draw_marks)):
+        inner_ok = _export_cu_inner_and_marks(
+            msp,
+            p,
+            draw_holes=draw_holes,
+            draw_marks=draw_marks,
+            sheet=sheet,
+        )
+    if not inner_ok and holes and draw_holes:
+        _fail_export(
+            label,
+            "barrenos/interiores no exportables 1:1 desde el DXF fuente",
+        )
+    return outer_added > 0 or _solo_cortes_guillotina_vertical(outer)
+
+
 def _export_cu_largos_from_source(
     msp,
     doc,
@@ -1308,12 +1548,7 @@ def _export_cu_largos_from_source(
     strict: bool = True,
     sheet: dict | None = None,
 ) -> None:
-    """Cobre largos: cortes CUT_OUTER nativos + inner/marks 1:1 desde DXF fuente."""
-    from modules.nesting_engine.cu_largos_nesting import (
-        _segmentos_corte_laser_pieza,
-        _solo_cortes_guillotina_vertical,
-    )
-
+    """Cobre largos: DXF fuente 1:1 (sin_gap) o CUT_OUTER cerrado (con_gap/STEP)."""
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
     outer = p.get("outer") or p.get("outer_poly") or []
@@ -1358,42 +1593,22 @@ def _export_cu_largos_from_source(
             )
         return
 
-    laser_added = _export_cu_laser_outer_for_piece(
-        msp, part_doc, m, p, outer, sheet=sheet
-    )
-    if laser_added <= 0 and not _solo_cortes_guillotina_vertical(outer):
-        idx = int(p.get("cu_slice_idx", 0) or 0)
-        n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
-        if _segmentos_corte_laser_pieza(outer, idx=idx, n_total=n_total):
-            _fail_export(
-                label,
-                "sin cortes CUT_OUTER exportables desde el DXF fuente (revise perfil y capas)",
-            )
-
-    inner_ok = _export_cu_inner_and_marks_from_source(
-        msp, doc, part_doc, m, p, draw_holes=draw_holes, draw_marks=draw_marks
-    )
-
-    holes = p.get("holes") or p.get("inner") or []
-    marks = p.get("marks") or p.get("mark") or []
-    if not inner_ok and ((holes and draw_holes) or (marks and draw_marks)):
-        inner_ok = _export_cu_inner_and_marks(
-            msp,
-            p,
-            draw_holes=draw_holes,
-            draw_marks=draw_marks,
-            sheet=sheet,
-        )
-    if not inner_ok and holes and draw_holes:
+    if not _export_cu_sin_gap_outer_from_source(
+        msp,
+        doc,
+        part_doc,
+        m,
+        p,
+        outer,
+        draw_holes=draw_holes,
+        draw_marks=draw_marks,
+        sheet=sheet,
+    ):
         _fail_export(
             label,
-            "barrenos/interiores no exportables 1:1 desde el DXF fuente",
+            "sin cortes CUT_OUTER exportables desde el DXF fuente (revise perfil y capas)",
         )
-    if not inner_ok and not draw_marks:
-        pass
-    elif not inner_ok and draw_marks and (p.get("marks") or p.get("mark")):
-        if strict:
-            _fail_export(label, "marcaje no exportable desde el DXF fuente")
+    return
 
 
 def _export_source_dxf_at_placement(
@@ -1652,6 +1867,47 @@ def _export_block_at_placement(msp, doc, cache_blocks: dict, p: dict) -> bool:
         print(f"[ERROR] Transformación block falló para {part_name}: {e}")
         return False
 
+def _posicion_x_cu_corte_v(p: dict) -> float | None:
+    """Coordenada X (nest mm) de una guillotina CU_CORTE__V__."""
+    outer = p.get("outer") or p.get("outer_poly") or []
+    if len(outer) < 2:
+        return None
+    try:
+        xs = [float(pt[0]) for pt in outer]
+    except Exception:
+        return None
+    if not xs:
+        return None
+    if max(xs) - min(xs) > TOL_GEOM_MM:
+        return None
+    return sum(xs) / len(xs)
+
+
+def _omitir_cu_corte_v_fuera_madre_sin_gap(
+    p: dict,
+    sheet: dict | None,
+    placements: list | None = None,
+) -> bool:
+    """
+    Madre sin_gap: omitir guillotinas después del fin de la última pieza real
+    (inicio RTZCU / gap / cola RTZ). Solo debe quedar el corte en cu_fin_piezas_mm.
+    """
+    nom = str(p.get("part_name") or p.get("name") or "")
+    if not nom.startswith("CU_CORTE__V__"):
+        return False
+    if not isinstance(sheet, dict) or not _sheet_is_sin_gap(sheet):
+        return False
+    if sheet.get("cu_rtz_virtual") or sheet.get("cu_export_amada"):
+        return False
+    fin_madre = _fin_x_ultima_pieza_cu(sheet, placements)
+    if fin_madre <= TOL_GEOM_MM:
+        return False
+    x_corte = _posicion_x_cu_corte_v(p)
+    if x_corte is None:
+        return False
+    return float(x_corte) > float(fin_madre) + max(0.5, TOL_GEOM_MM)
+
+
 def _max_cu_corte_v_index(placements: list) -> int:
     best = 0
     for p in placements or []:
@@ -1696,72 +1952,114 @@ def _export_cu_bar_inicio_marker_vertical(msp, bar_width_mm: float) -> None:
     )
 
 
-def _ensure_cierre_corte_madre_cu(msp, sheet: dict | None) -> bool:
-    """
-    Añade CUT_OUTER al fin de la madre (antes del RTZCU) si falta.
-    En export vertical CyPTube el corte queda horizontal a y = fin_madre.
-    """
-    if not isinstance(sheet, dict) or not sheet.get("cu_rtz_activo"):
-        return False
-    if sheet.get("cu_rtz_virtual") or sheet.get("cu_export_amada"):
-        return False
-    try:
-        fin = float(sheet.get("cu_fin_piezas_mm") or 0.0)
-    except (TypeError, ValueError):
-        fin = 0.0
-    if fin <= TOL_GEOM_MM:
+def _fin_x_ultima_pieza_cu(
+    sheet: dict | None, placements: list | None = None
+) -> float:
+    """Coordenada X (nest mm) del extremo + de la última pieza real en la madre."""
+    fin = 0.0
+    if isinstance(sheet, dict):
         try:
-            inicio = float(sheet.get("cu_rtz_inicio_mm") or 0.0)
+            fin = float(sheet.get("cu_fin_piezas_mm") or 0.0)
         except (TypeError, ValueError):
-            inicio = 0.0
-        # inicio = fin_madre + gap → aproximar fin si no hay cu_fin_piezas_mm
-        gap = 0.375 * 25.4
+            fin = 0.0
+    if fin > TOL_GEOM_MM:
+        return fin
+    for p in placements or []:
+        if not isinstance(p, dict) or not p.get("cu_largos_piece"):
+            continue
+        nom = str(p.get("part_name") or p.get("name") or "")
+        if nom.startswith("CU_CORTE__") or nom.startswith("TATUAJE"):
+            continue
+        outer = p.get("outer") or p.get("outer_poly") or []
+        if len(outer) < 2:
+            continue
         try:
-            from modules.nesting_engine.cu_rtz_sin_gap import _gap_rtz_mm
-
-            gap = float(_gap_rtz_mm(sheet))
+            fin = max(fin, max(float(pt[0]) for pt in outer))
         except Exception:
-            pass
-        fin = max(0.0, inicio - gap) if inicio > gap + TOL_GEOM_MM else inicio
-    if fin <= TOL_GEOM_MM:
+            continue
+    return fin
+
+
+def _guillotina_fin_pieza_ya_exportada(
+    msp,
+    fin_x: float,
+    bar_w: float,
+    *,
+    sheet: dict | None = None,
+    tol: float | None = None,
+) -> bool:
+    """True si ya hay CUT_OUTER a ancho completo en el fin de la última pieza."""
+    if fin_x <= TOL_GEOM_MM or bar_w <= TOL_GEOM_MM:
         return False
-
-    bar_w = _bar_width_mm(sheet)
-    if bar_w <= TOL_GEOM_MM:
-        return False
-
-    p1 = (float(fin), 0.0)
-    p2 = (float(fin), float(bar_w))
-    if _sheet_export_sin_gap_vertical(sheet):
-        pts = _transform_poly_sin_gap_vertical([p1, p2], bar_w)
-        if len(pts) < 2:
-            return False
-        p1, p2 = pts[0], pts[1]
-
-    # ¿Ya hay un CUT_OUTER casi en esa posición?
-    tol = max(1.0, TOL_GEOM_MM * 4)
+    tol = max(1.0, float(tol or TOL_GEOM_MM * 4))
+    vertical = _sheet_export_sin_gap_vertical(sheet)
     for e in msp:
         if str(getattr(e.dxf, "layer", "") or "") != "CUT_OUTER":
             continue
         if e.dxftype() != "LINE":
             continue
         try:
-            a = e.dxf.start
-            b = e.dxf.end
-            ax, ay = float(a.x), float(a.y)
-            bx, by = float(b.x), float(b.y)
+            a, b = e.dxf.start, e.dxf.end
+            ax, ay, bx, by = float(a.x), float(a.y), float(b.x), float(b.y)
         except Exception:
             continue
-        # Vertical en nest / horizontal en CyPTube: misma coordenada de avance.
-        if _sheet_export_sin_gap_vertical(sheet):
-            if abs(ay - float(fin)) <= tol and abs(by - float(fin)) <= tol:
-                return False
+        if vertical:
+            if abs(ay - fin_x) > tol or abs(by - fin_x) > tol:
+                continue
+            span = abs(bx - ax)
         else:
-            if abs(ax - float(fin)) <= tol and abs(bx - float(fin)) <= tol:
-                return False
+            if abs(ax - fin_x) > tol or abs(bx - fin_x) > tol:
+                continue
+            span = abs(by - ay)
+        if span >= bar_w - tol:
+            return True
+    return False
 
+
+def _emit_guillotina_fin_pieza_sin_gap(
+    msp,
+    fin_x: float,
+    bar_w: float,
+    *,
+    sheet: dict | None = None,
+) -> bool:
+    """CUT_OUTER a ancho completo de tira al final de la última pieza (CyPTube)."""
+    if fin_x <= TOL_GEOM_MM or bar_w <= TOL_GEOM_MM:
+        return False
+    if _guillotina_fin_pieza_ya_exportada(msp, fin_x, bar_w, sheet=sheet):
+        return False
+    p1 = (float(fin_x), 0.0)
+    p2 = (float(fin_x), float(bar_w))
+    if _sheet_export_sin_gap_vertical(sheet):
+        pts = _transform_poly_sin_gap_vertical([p1, p2], bar_w)
+        if len(pts) < 2:
+            return False
+        p1, p2 = pts[0], pts[1]
     msp.add_line(p1, p2, dxfattribs={"layer": "CUT_OUTER"})
     return True
+
+
+def _ensure_guillotina_fin_ultima_pieza_sin_gap(
+    msp,
+    sheet: dict | None,
+    placements: list | None = None,
+) -> bool:
+    """
+    CyPTube: garantiza guillotina a ancho completo tras la última pieza real.
+    Siempre (con o sin RTZCU detrás); el RTZCU se procesa aparte.
+    """
+    if not isinstance(sheet, dict) or not _sheet_is_sin_gap(sheet):
+        return False
+    if sheet.get("cu_rtz_virtual") or sheet.get("cu_export_amada"):
+        return False
+    bar_w = _bar_width_mm(sheet)
+    fin_x = _fin_x_ultima_pieza_cu(sheet, placements)
+    return _emit_guillotina_fin_pieza_sin_gap(msp, fin_x, bar_w, sheet=sheet)
+
+
+def _ensure_cierre_corte_madre_cu(msp, sheet: dict | None) -> bool:
+    """Compat: cierre madre = guillotina fin última pieza (antes de RTZCU)."""
+    return _ensure_guillotina_fin_ultima_pieza_sin_gap(msp, sheet)
 
 
 def _export_cu_guillotina_fin_pieza(msp, p: dict, sheet: dict | None = None) -> bool:
@@ -1774,25 +2072,15 @@ def _export_cu_guillotina_fin_pieza(msp, p: dict, sheet: dict | None = None) -> 
         return False
     try:
         xs = [float(pt[0]) for pt in outer]
-        ys = [float(pt[1]) for pt in outer]
     except Exception:
         return False
-    if not xs or not ys:
+    if not xs:
         return False
     maxx = max(xs)
-    miny, maxy = min(ys), max(ys)
-    if abs(maxy - miny) <= TOL_GEOM_MM:
+    bar_w = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
+    if bar_w <= TOL_GEOM_MM:
         return False
-    p1 = (float(maxx), float(miny))
-    p2 = (float(maxx), float(maxy))
-    if _sheet_export_sin_gap_vertical(sheet):
-        bw = _bar_width_mm(sheet, float(p.get("cu_bar_w_mm") or 0.0))
-        pts = _transform_poly_sin_gap_vertical([p1, p2], bw)
-        if len(pts) < 2:
-            return False
-        p1, p2 = pts[0], pts[1]
-    msp.add_line(p1, p2, dxfattribs={"layer": "CUT_OUTER"})
-    return True
+    return _emit_guillotina_fin_pieza_sin_gap(msp, maxx, bar_w, sheet=sheet)
 
 
 def _canal_es_cama_laser(canal: str | None) -> bool:
@@ -1813,13 +2101,11 @@ def _sheet_is_sin_gap(sheet: dict | None) -> bool:
 
 
 def _sheet_export_sin_gap_vertical(sheet: dict | None) -> bool:
-    """Rotación vertical CyPTube en DXF (solo madre sin_gap; RTZCU nunca)."""
+    """Rotación vertical CyPTube en DXF (toda madre sin_gap; RTZCU nunca)."""
     if not _sheet_is_sin_gap(sheet):
         return False
     if isinstance(sheet, dict) and sheet.get("cu_rtz_virtual"):
         return False
-    if isinstance(sheet, dict) and sheet.get("cu_export_vertical"):
-        return True
     return True
 
 
@@ -1959,6 +2245,204 @@ def _purge_capas_no_produccion_cobre(doc) -> None:
             pass
 
 
+def _strip_arga_meta_entities(msp) -> None:
+    """Quita ARGA_META del DXF de máquina (auditoría interna; el acero no lo lleva)."""
+    doomed = [
+        e
+        for e in msp
+        if str(getattr(e.dxf, "layer", "") or "").upper() == "ARGA_META"
+    ]
+    for e in doomed:
+        try:
+            msp.delete_entity(e)
+        except Exception:
+            try:
+                e.destroy()
+            except Exception:
+                pass
+
+
+def _clone_prod_entity(msp, ent, layer: str) -> bool:
+    """Clona entidad de corte/marcaje sin arrastrar handles/reactores de ezdxf."""
+    typ = ent.dxftype()
+    attrs = {"layer": layer}
+    try:
+        if typ == "LINE":
+            msp.add_line(ent.dxf.start, ent.dxf.end, dxfattribs=attrs)
+            return True
+        if typ == "CIRCLE":
+            msp.add_circle(ent.dxf.center, float(ent.dxf.radius), dxfattribs=attrs)
+            return True
+        if typ == "ARC":
+            msp.add_arc(
+                ent.dxf.center,
+                float(ent.dxf.radius),
+                float(ent.dxf.start_angle),
+                float(ent.dxf.end_angle),
+                dxfattribs=attrs,
+            )
+            return True
+        if typ == "LWPOLYLINE":
+            pts = list(ent.get_points("xyb"))
+            if len(pts) < 2:
+                return False
+            msp.add_lwpolyline(
+                pts,
+                format="xyb",
+                dxfattribs={**attrs, "closed": bool(getattr(ent, "closed", False) or ent.closed)},
+            )
+            return True
+        if typ == "POLYLINE":
+            # Degenera a LWPOLY si es 2D.
+            try:
+                pts = [(float(v.dxf.location.x), float(v.dxf.location.y), 0.0) for v in ent.vertices]
+            except Exception:
+                return False
+            if len(pts) < 2:
+                return False
+            msp.add_lwpolyline(
+                pts,
+                format="xyb",
+                dxfattribs={**attrs, "closed": bool(ent.is_closed)},
+            )
+            return True
+        if typ == "ELLIPSE":
+            # Aprox. no: dejar caer — AutoCAD a veces rechaza ELLIPSE rara de terceros.
+            return False
+        if typ == "SPLINE":
+            return False
+        if typ == "POINT":
+            msp.add_point(ent.dxf.location, dxfattribs=attrs)
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _rewrite_cobre_doc_autocad_safe(doc):
+    """
+    Reescribe el DXF cobre a R2000 solo con geometría de máquina.
+
+    AutoCAD 2026: DXF de terceros (ezdxf AC1024 + fingerprint en OBJECTS /
+    DictionaryVariables) → 'Invalid or incomplete DXF input -- drawing discarded'
+    y pantalla negra + 'Press ENTER to continue'. El acero no falla igual porque
+    suele abrirse desde flujos con Plate/vista más 'nativa'; aquí forzamos un
+    DXF mínimo que AutoCAD acepta.
+    """
+    keep_exact = {"MARK", "BAR_START", "FIXTURE", "PLATE", "CUT_CU"}
+    src = [
+        e
+        for e in doc.modelspace()
+        if (
+            str(getattr(e.dxf, "layer", "") or "").upper().startswith("CUT_")
+            or str(getattr(e.dxf, "layer", "") or "").upper() in keep_exact
+        )
+    ]
+    out = ezdxf.new("R2000")
+    out.header["$INSUNITS"] = int(doc.header.get("$INSUNITS", 4) or 4)
+    out.header["$MEASUREMENT"] = 1
+    for name, color in (
+        ("CUT_OUTER", 1),
+        ("CUT_INNER", 3),
+        ("MARK", 4),
+        ("BAR_START", 8),
+        ("FIXTURE", 5),
+        ("CUT_CU", 1),
+        ("Plate", 3),
+    ):
+        if name not in out.layers:
+            out.layers.new(name, dxfattribs={"color": color})
+    msp = out.modelspace()
+    for ent in src:
+        layer = str(getattr(ent.dxf, "layer", "") or "0")
+        _clone_prod_entity(msp, ent, layer)
+    for layer in out.layers:
+        try:
+            layer.on()
+            layer.thaw()
+        except Exception:
+            pass
+    return out
+
+
+def _finalize_cobre_dxf_for_autocad(doc, sheet: dict | None = None):
+    """Deja el DXF cobre listo para AutoCAD (sin repair posterior)."""
+    _ = sheet
+    _strip_arga_meta_entities(doc.modelspace())
+    clean = _rewrite_cobre_doc_autocad_safe(doc)
+    _sync_dxf_header_view(clean)
+    return clean
+
+
+def _assert_dxf_autocad_safe_on_disk(path: str) -> None:
+    """Falla el export si el archivo en disco aún no es aceptable para AutoCAD."""
+    from pathlib import Path
+
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise DxfExportValidationError(f"No se pudo verificar DXF cobre: {exc}") from exc
+    if "EOF" not in text[-40:]:
+        raise DxfExportValidationError("DXF cobre incompleto (sin EOF).")
+    # Fingerprint ezdxf en OBJECTS → AutoCAD 2026: drawing discarded + Press ENTER.
+    if re.search(r"1\.\d+\.\d+\s+@\s+20\d\d-", text):
+        raise DxfExportValidationError(
+            "DXF cobre con fingerprint ezdxf; AutoCAD lo descartaría."
+        )
+    try:
+        doc = ezdxf.readfile(str(p))
+    except Exception as exc:
+        raise DxfExportValidationError(f"DXF cobre ilegible tras guardar: {exc}") from exc
+    ver = str(doc.header.get("$ACADVER") or doc.dxfversion or "")
+    if ver not in ("AC1015", "AC1014", "AC1012", "AC1009"):
+        raise DxfExportValidationError(
+            f"DXF cobre debe ser R2000/AC1015 para AutoCAD, quedó {ver}."
+        )
+    lim = doc.header.get("$LIMMAX")
+    ext = doc.header.get("$EXTMAX")
+    if lim is None or ext is None:
+        raise DxfExportValidationError("DXF cobre sin $LIMMAX/$EXTMAX tras guardar.")
+    try:
+        if abs(float(lim[0]) - 420.0) < 0.1 and float(ext[0]) > 500.0:
+            raise DxfExportValidationError(
+                f"DXF cobre con $LIMMAX A4 ({lim}) y geometría {ext}; AutoCAD abre negro."
+            )
+    except (TypeError, ValueError, IndexError) as exc:
+        raise DxfExportValidationError(f"DXF cobre header LIM/EXT inválido: {exc}") from exc
+
+
+def _save_cobre_dxf_atomic(doc, out_path: str, sheet: dict | None = None) -> None:
+    """Único punto de escritura DXF cobre: R2000 limpio + assert AutoCAD."""
+    clean = _finalize_cobre_dxf_for_autocad(doc, sheet)
+    _save_dxf_atomic(clean, out_path)
+    _assert_dxf_autocad_safe_on_disk(out_path)
+
+
+def _strip_ezdxf_fingerprint_on_disk(path: str) -> None:
+    """Quita el stamp '1.4.x @ ISO-date' que ezdxf mete en OBJECTS (AutoCAD lo rechaza)."""
+    import re
+    from pathlib import Path
+
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    # Group code 1 with ezdxf version fingerprint inside DictionaryVariables.
+    new, n = re.subn(
+        r"(?m)^(\s*1\s*\r?\n)1\.\d+\.\d+\s+@\s+[^\r\n]+",
+        r"\g<1>0",
+        text,
+        count=2,
+    )
+    if n:
+        try:
+            p.write_text(new, encoding="utf-8", newline="\n")
+        except OSError:
+            pass
+
+
 # =========================================================================
 # EXPORTACIÓN PRINCIPAL
 # =========================================================================
@@ -2003,7 +2487,8 @@ def export_nest_to_dxf(
     sheet_len = float(sheet.get("length", sheet.get("Length", 0)) or 0)
     sheet_w = float(sheet.get("width", sheet.get("Width", 0)) or 0)
 
-    doc = ezdxf.new(dxfversion="R2010")
+    # Cobre: R2000 desde el inicio. R2010+ezdxf OBJECTS → AutoCAD 2026 descarta el DWG.
+    doc = ezdxf.new(dxfversion="R2000" if solo_cobre else "R2010")
     doc.header["$INSUNITS"] = 4
     # Cama láser: sin contorno Plate ni título (máquina cobre + láser compartida).
     omit_plate_frame = _canal_es_cama_laser(canal_tag)
@@ -2177,21 +2662,13 @@ def export_nest_to_dxf(
 
         if solo_cobre:
             if not _sheet_cu_exporta_cortes_segmentados(sheet):
-                from modules.cobre_step_audit import (
-                    validate_cut_outer_piece_count,
-                    write_cu_piece_meta,
-                )
+                from modules.cobre_step_audit import validate_cut_outer_piece_count
 
-                expected_cu = validate_cut_outer_piece_count(
+                validate_cut_outer_piece_count(
                     msp,
                     placements,
                     sheet_label=str(title or out_path),
                     strict=strict,
-                )
-                write_cu_piece_meta(
-                    msp,
-                    expected_pieces=expected_cu,
-                    sheet_label=os.path.basename(out_path),
                 )
 
         if strict:
@@ -2205,7 +2682,12 @@ def export_nest_to_dxf(
             )
             _validate_dxf_document(doc)
 
-        _save_dxf_atomic(doc, out_path)
+        if solo_cobre:
+            _save_cobre_dxf_atomic(
+                doc, out_path, sheet if isinstance(sheet, dict) else None
+            )
+        else:
+            _save_dxf_atomic(doc, out_path)
         log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
     except DxfExportValidationError as exc:
         log_export_error(out_path, exc, canal=canal_tag)

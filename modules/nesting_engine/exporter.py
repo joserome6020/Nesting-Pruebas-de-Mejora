@@ -271,8 +271,8 @@ def _placement_fixtura_amada_pieza(pieza: dict) -> tuple[dict, dict] | None:
         "marks": [],
         "cu_amada_outer_padded": True,
         "cu_amada_pieza_export": True,
-        "ruta": "",
-        "prefer_source_dxf": False,
+        "ruta": ruta if use_src else "",
+        "prefer_source_dxf": bool(use_src),
         "compensated": False,
         "cu_largos_piece": True,
         "cu_slice_idx": 0,
@@ -1435,6 +1435,13 @@ def exportar_resultados_a_dxf(
             es_cu_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
             es_cu_hoja = bool(hoja.get("modo_largos_cu"))
             es_cu_especial = es_cu_hoja and _hoja_cobre_es_especial(hoja)
+            es_cu_sin_gap_dxf = (
+                es_cu_hoja
+                and not es_cu_rtz_virtual
+                and str(hoja.get("cu_modo_separacion_barra") or "").strip().lower()
+                == "sin_gap"
+                and str(hoja.get("export_3d_format") or "dxf").strip().lower() == "dxf"
+            )
 
             if es_swo_export and swo_ref.upper().startswith("SWO"):
                 order_label = swo_ref
@@ -1746,36 +1753,54 @@ def exportar_resultados_a_dxf(
                     path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
 
                 try:
-                    if es_cu_especial and not es_cu_rtz_virtual:
-                        path_vertical = os.path.join(
-                            rutas["nesteos_cobre_vertical_dxf"], nombre_archivo
-                        )
-                        log(
-                            f"-> EXPORT COBRE ESPECIAL VERTICAL: {path_vertical}"
-                        )
+                    if es_cu_sin_gap_dxf:
+                        sheet_vertical = dict(sheet_info)
+                        sheet_vertical["cu_export_vertical"] = True
+                        if es_cu_especial:
+                            path_out = os.path.join(
+                                rutas["nesteos_cobre_vertical_dxf"], nombre_archivo
+                            )
+                            canal_tag = (
+                                f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_VERTICAL} | {clave}"
+                            )
+                            draw_holes_exp = False
+                            draw_marks_exp = True
+                            log_tag = "COBRE AMADA/ESP VERTICAL"
+                            tipo_pqart = RUTA_COBRE_VERTICAL
+                            progress_suffix = f"VERTICAL {nombre_archivo}"
+                        else:
+                            path_out = path_principal
+                            canal_tag = f"{carpeta_principal} | {clave}"
+                            draw_holes_exp = True
+                            draw_marks_exp = True
+                            log_tag = (
+                                f"COBRE SIN_GAP vertical CyPTube [{carpeta_principal}]"
+                            )
+                            tipo_pqart = carpeta_principal
+                            progress_suffix = nombre_archivo
+                        log(f"-> EXPORT {log_tag}: {path_out}")
                         export_cobre_hoja_to_dxf(
-                            path_vertical,
-                            sheet_info,
+                            path_out,
+                            sheet_vertical,
                             placements_principales,
-                            title=f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_VERTICAL} | {clave}",
-                            draw_holes=False,
-                            draw_marks=False,
+                            title=canal_tag,
+                            draw_holes=draw_holes_exp,
+                            draw_marks=draw_marks_exp,
                             strict=True,
                         )
-                        exportados_principales.append(path_vertical)
-                        path_principal = path_vertical
+                        exportados_principales.append(path_out)
+                        path_principal = path_out
                         dxf_done += 1
                         _progress(
                             mensaje=(
-                                f"DXF {dxf_done}/{n_dxf_est}: "
-                                f"AMADA VERTICAL {nombre_archivo}"
+                                f"DXF {dxf_done}/{n_dxf_est}: {progress_suffix}"
                             ),
                             step_done=0,
                         )
                         _registrar_exportacion_pqart_hoja(
                             hoja,
-                            ruta_dxf=path_vertical,
-                            tipo_corte=_normalizar_tipo_corte_pqart(RUTA_COBRE_VERTICAL),
+                            ruta_dxf=path_out,
+                            tipo_corte=_normalizar_tipo_corte_pqart(tipo_pqart),
                         )
                     else:
                         log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")

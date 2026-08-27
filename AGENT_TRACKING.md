@@ -1,4 +1,4 @@
-# ANS C++ — Seguimiento
+# New Arga Nesting Suite — Seguimiento
 
 > Core **0.5.3** · ABI **1.4.0** · Paridad CAM relativa  
 > Compact-lite: **ON** (band-close + backfill) · Lite = **MC propio** (no FORCE) · hole-fill ON · Venom OFF  
@@ -29,7 +29,7 @@
 ## Verificar
 
 ```powershell
-cd "C:\Proyectos\ANS C++"
+cd "C:\Proyectos\New Arga Nesting Suite"
 py -3.14 tests\native\run_regresiones.py   # obligatorio: candados de bugs ya corregidos
 py -3.14 tests\native\test_compact_lite.py
 py -3.14 tests\native\test_band_close.py
@@ -54,6 +54,20 @@ código viejo. Un bug sin candado vuelve.
   versión estable de referencia hasta el próximo release explícito.
 
 ## Changelog
+
+### 2026-08-27b — Eliminada regla de copiar a ANS C++
+- `AGENTS.md` y `build-exe-parity.mdc`: único árbol =
+  `New Arga Nesting Suite`. No sync / Compare-Object a `ANS C++`.
+
+### 2026-08-27 — Cobre DXF: R2000 AutoCAD-safe obligatorio al exportar
+- Causa: AutoCAD 2026 descarta DXF R2010 de ezdxf (fingerprint OBJECTS) →
+  pantalla negra + "Press ENTER to continue".
+- Fix en export (no repair externo): `_save_cobre_dxf_atomic` siempre
+  reescribe a R2000/AC1015, sincroniza vista/LIMMAX, quita fingerprint, y
+  **falla el export** si el archivo en disco no pasa el assert AutoCAD.
+- Caminos: `export_cobre_hoja_to_dxf` + `export_nest_to_dxf` (`solo_cobre`).
+- Candado: `test_cobre_export_limmax_cubre_geometria` +
+  `_assert_dxf_autocad_safe_on_disk`.
 
 ### 2026-08-26b — Amada ESP: vertical con MARK; FIXTURA colchón +10\" join
 - Barra vertical CyPTube (ESP.): cortes + **MARK**; sin barrenos.
