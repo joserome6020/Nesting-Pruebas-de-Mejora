@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_step_mark_fast_defaults.py",
+        "2026-08-28f - STEP planta: PIECE_ONESHOT multi-tool (no chunks lentos)",
+    ),
+    (
         "test_limpiar_nesting_previo.py",
         "2026-08-28e - reexport WO/SWO limpia NESTING previo (sin DXF huérfanos)",
     ),
@@ -170,6 +174,10 @@ REGRESIONES = [
     (
         "test_plasma_compensation_persistence.py",
         "2026-08-13f - mover, cambiar placa o renestear conserva compensación de PARTS",
+    ),
+    (
+        "test_plasma_export_solo_sin_duplicar_laser.py",
+        "2026-08-28g - piezas compensadas sin flag de hoja: solo Robot Plasma (no DXF láser duplicado)",
     ),
     (
         "test_renest_calibre_and_worker_window.py",

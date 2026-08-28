@@ -4,8 +4,9 @@ Dos modos:
   - Desde nesteo: Local/Remoto → cliente → job → W.O. (o S.W.O.)
   - Desde ruta: selector de carpeta NESTING (igual que despachador_nocturno)
 
-Motor: OCCT (Arga) — une LINE/ARC en memoria, acero + cobre, ENGRAVE_ONESHOT.
-Override legacy solo vía env ARGA_CREAR_STEPS_MOTOR=freecad.
+Motor: OCCT (Arga). Flujo planta (rápido + marcas reales):
+  ENGRAVE_PIECE_ONESHOT = 1 CUT multi-tool por pieza (no chunks lentos).
+  Override legacy: ARGA_CREAR_STEPS_MOTOR=freecad / ARGA_STEP_MARK_MODE=…
 """
 from __future__ import annotations
 

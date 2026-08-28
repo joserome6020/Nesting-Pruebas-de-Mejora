@@ -577,7 +577,7 @@ def _procesar_familia_occt(familia: dict, thk_mm: float, plasma_off_mm: float):
                     off_y=off_y,
                     off_z=off_z,
                     origen=None if str(origen).upper() in ("NONE", "", "NULL") else origen,
-                    # Perfil fast: ENGRAVE chunk50 + paralelo por pieza (step_export_prefs).
+                    # Flujo planta: ENGRAVE_PIECE_ONESHOT (multi-tool) vía step_export_prefs.
                     mark_mode=step_mark_mode(),
                     mark_chunk=step_mark_chunk(),
                     piece_workers=step_piece_workers(),

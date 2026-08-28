@@ -159,16 +159,30 @@ def step_mark_profile() -> str:
 
 
 def step_mark_mode() -> str:
-    """Modo OCCT para marcaje real en sólido (siempre ENGRAVE + chunk)."""
-    return "ENGRAVE"
+    """
+    Modo OCCT para marcaje en sólido.
+    Default planta: ENGRAVE_PIECE_ONESHOT (1 CUT multi-tool por pieza).
+    Override: ARGA_STEP_MARK_MODE=ENGRAVE|ENGRAVE_PIECE_ONESHOT|ONESHOT|NONE
+    """
+    v = (os.environ.get("ARGA_STEP_MARK_MODE") or "ENGRAVE_PIECE_ONESHOT").strip().upper()
+    if v in ("NONE", "SKIP", "SOLID", "OFF", "NOMARK", "NO_MARK", "BARE"):
+        return "NONE"
+    if v in ("ONESHOT", "ENGRAVE_ONESHOT", "MULTI_ONESHOT"):
+        return "ENGRAVE_ONESHOT"
+    if v in ("ENGRAVE", "CHUNK", "ENGRAVE_CHUNK"):
+        return "ENGRAVE"
+    return "ENGRAVE_PIECE_ONESHOT"
 
 
 def step_mark_chunk() -> int:
     """
-    Segmentos MARK por boolean CUT (por pieza).
-    fast=50 (default planta) | quality=100
-  Override: ARGA_STEP_MARK_CHUNK
+    Segmentos MARK por boolean CUT cuando mode=ENGRAVE (lotes).
+    Con ENGRAVE_PIECE_ONESHOT / ONESHOT el motor fuerza chunk=0 (multi-tool).
+    Override: ARGA_STEP_MARK_CHUNK
     """
+    mode = step_mark_mode()
+    if mode in ("ENGRAVE_PIECE_ONESHOT", "ENGRAVE_ONESHOT", "NONE"):
+        return 0
     custom = (os.environ.get("ARGA_STEP_MARK_CHUNK") or "").strip()
     if custom:
         try:
@@ -176,14 +190,14 @@ def step_mark_chunk() -> int:
         except ValueError:
             pass
     if step_mark_profile() == "quality":
-        return 100
-    return 50
+        return 50
+    return 80
 
 
 def step_piece_workers() -> int:
     """
-    Hilos para ENGRAVE por pieza en un mismo DXF (fast default 4).
-    Override: ARGA_STEP_PIECE_WORKERS=0 desactiva.
+    Hilos para ENGRAVE por pieza en un mismo DXF.
+    fast default 2 (evitar thrash). Override: ARGA_STEP_PIECE_WORKERS=0|N
     """
     custom = (os.environ.get("ARGA_STEP_PIECE_WORKERS") or "").strip()
     if custom:
@@ -193,7 +207,7 @@ def step_piece_workers() -> int:
             pass
     if step_mark_profile() == "quality":
         return 1
-    return 4
+    return 2
 
 
 def step_mark_text_flatten_mm() -> float:
@@ -206,4 +220,5 @@ def step_mark_text_flatten_mm() -> float:
             pass
     if step_mark_profile() == "quality":
         return 0.35
-    return 0.75
+    # Planta: más grueso → menos ranuras → booleanos mucho más rápidos
+    return 1.25

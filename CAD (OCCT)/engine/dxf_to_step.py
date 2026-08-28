@@ -760,18 +760,53 @@ def _engrave_marks_on_solid(
         except Exception:
             return None
 
-    # Un movimiento: todas las ranuras de la pieza en un compound.
+    # Un movimiento: multi-tool CUT (SetTools) — mucho más rápido que
+    # compound de ranuras que se cruzan, y mejor que N cuts secuenciales.
     if int(chunk or 0) <= 0:
+        try:
+            raw = _cut_multi([out], tools, fuzzy=1e-5)
+        except Exception:
+            raw = None
+        if raw is not None:
+            trial = _largest_solid(raw)
+            if trial is not None:
+                v1 = _shape_volume(trial)
+                v_body = _shape_volume(out)
+                if (
+                    v_body > 1e-12
+                    and v1 > 1e-6
+                    and v1 < (v_body - 1e-6)
+                    and v1 >= v_body * 0.50
+                ):
+                    return trial
+        # Fallback histórico: compound (suele ser más lento / frágil)
         tool_shape = tools[0] if len(tools) == 1 else _compound(tools)
         got = _try_cut(out, tool_shape)
         if got is not None:
             return got
-        # Compound masivo suele fallar validación → mismo resultado que chunk100.
         chunk = 100
 
     step = max(1, int(chunk or 100))
     for i in range(0, len(tools), step):
         bloque = tools[i : i + step]
+        # Preferir multi-tool por bloque (sin fuse previo)
+        try:
+            raw = _cut_multi([out], bloque, fuzzy=1e-5)
+        except Exception:
+            raw = None
+        if raw is not None:
+            trial = _largest_solid(raw)
+            if trial is not None:
+                v1 = _shape_volume(trial)
+                v_body = _shape_volume(out)
+                if (
+                    v_body > 1e-12
+                    and v1 > 1e-6
+                    and v1 < (v_body - 1e-6)
+                    and v1 >= v_body * 0.50
+                ):
+                    out = trial
+                    continue
         tool_shape = bloque[0] if len(bloque) == 1 else _compound(bloque)
         got = _try_cut(out, tool_shape)
         if got is not None:
@@ -928,10 +963,13 @@ def _mark_text_flatten_mm() -> float:
             return max(0.15, float(custom))
         except ValueError:
             pass
-    profile = (os.environ.get("ARGA_STEP_MARK_PROFILE") or "fast").strip().lower()
-    if profile in ("quality", "fine", "slow", "chunk", "chunk100"):
-        return 0.35
-    return 0.75
+    try:
+        from modules.nesting_engine.step_export_prefs import step_mark_text_flatten_mm
+
+        return float(step_mark_text_flatten_mm())
+    except Exception:
+        profile = (os.environ.get("ARGA_STEP_MARK_PROFILE") or "fast").strip().lower()
+        return 0.35 if profile in ("quality", "fine", "slow") else 1.25
 
 
 def _mark_segs_from_text_entity(entity) -> list[tuple[float, float, float, float]]:
@@ -1255,7 +1293,9 @@ def build_freecad_like_shapes(
     ensure_ocp()
 
     mode = str(mark_mode or "ENGRAVE").strip().upper()
-    if mode in ("CUT", "GROOVE", "BOOLEAN", "CARVE", "REAL"):
+    if mode in ("NONE", "SKIP", "SOLID", "OFF", "NOMARK", "NO_MARK", "BARE"):
+        mode = "NONE"
+    elif mode in ("CUT", "GROOVE", "BOOLEAN", "CARVE", "REAL"):
         mode = "ENGRAVE"
     oneshot = mode in ("ENGRAVE_ONESHOT", "ONESHOT", "MULTI_ONESHOT", "ONESHOT_MULTI")
     piece_oneshot = mode in ("ENGRAVE_PIECE_ONESHOT", "PIECE_ONESHOT")
@@ -1313,9 +1353,14 @@ def build_freecad_like_shapes(
                         )
                     )
         else:
-            chunk = int(mark_chunk or 0)
-            if chunk <= 0:
-                chunk = 0 if piece_oneshot else 100
+            # PIECE_ONESHOT siempre multi-tool (chunk=0). Ignorar mark_chunk>0
+            # del perfil fast antiguo (si no, vuelve al camino lento por lotes).
+            if piece_oneshot:
+                chunk = 0
+            else:
+                chunk = int(mark_chunk or 0)
+                if chunk <= 0:
+                    chunk = 100
             workers = max(1, int(piece_workers or 1))
             if piece_oneshot:
                 engrave_note = "piece_oneshot"
@@ -1410,11 +1455,13 @@ def export_dxf_to_step_freecad_batch(
     is_copper = mat in ("CU", "COBRE", "COPPER")
     appearance = copper_appearance() if is_copper else steel_appearance()
 
-    # Siempre ENGRAVE para que MARK viva DENTRO de los sólidos (1 producto = IPT).
-    # Un segundo label de curvas → Inventor abre .iam.
+    # ENGRAVE = ranuras en sólido (IPT multibody).
+    # NONE/SKIP/SOLID/OFF = solo extrusión CUT (pasada rápida); marcas después.
+    # EDGES/CURVE → se fuerzan a ENGRAVE (curvas sueltas rompen Inventor .iam).
     mode = (mark_mode or "ENGRAVE").strip().upper()
-    if mode in ("EDGE", "EDGES", "CURVE", "CURVES", "WIRE", "FREE"):
-        # Forzar grabado: curvas sueltas rompen multibody en Inventor
+    if mode in ("NONE", "SKIP", "SOLID", "OFF", "NOMARK", "NO_MARK", "BARE"):
+        mode = "NONE"
+    elif mode in ("EDGE", "EDGES", "CURVE", "CURVES", "WIRE", "FREE"):
         mode = "ENGRAVE"
 
     mark_meta: dict = {}
@@ -1522,7 +1569,9 @@ def export_dxf_to_step_robot_camas(
     appearance = copper_appearance() if is_copper else steel_appearance()
 
     mode = (mark_mode or "ENGRAVE").strip().upper()
-    if mode in ("EDGE", "EDGES", "CURVE", "CURVES", "WIRE", "FREE"):
+    if mode in ("NONE", "SKIP", "SOLID", "OFF", "NOMARK", "NO_MARK", "BARE"):
+        mode = "NONE"
+    elif mode in ("EDGE", "EDGES", "CURVE", "CURVES", "WIRE", "FREE"):
         mode = "ENGRAVE"
 
     # Build + engraver una sola vez, sin placement

@@ -55,6 +55,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-28g — Plasma: no duplicar DXF láser/cama en hojas compensadas
+- Causa SWO-042: piezas con `plasma_compensada_manual` sin flag de hoja → canal
+  plasma + DXF láser/cama del mismo H (cotas 1:1 vs compensadas).
+- `hoja_export_solo_plasma` / `_debe_generar_plasma` alineados a pieza|hoja;
+  `promover_compensacion_plasma_en_hoja` en export y transfer.
+- Candado: `tests/native/test_plasma_export_solo_sin_duplicar_laser.py`.
+
+### 2026-08-28f — STEP planta rápido (PIECE_ONESHOT multi-tool)
+- Flujo ANS único para Crear STEPs / export DXF+3D / despachador:
+  `ENGRAVE_PIECE_ONESHOT` = 1 CUT multi-tool por pieza (OCCT `SetTools`),
+  no chunks de 50 ni compound de ranuras cruzadas.
+- Defaults: `step_mark_mode` oneshot, `mark_chunk=0`, flatten texto ≥1.25 mm,
+  `piece_workers=2`. Override: `ARGA_STEP_MARK_MODE` / `ARGA_MARK_TEXT_FLATTEN_MM`.
+- Bugfix: `mark_chunk=80` ya no anula oneshot (volvía al camino lento).
+- Validado en SWO-038/039 Plasma: ~5–22 s/placa vs minutos-horas.
+- Candado `test_step_mark_fast_defaults.py`.
+
 ### 2026-08-28e — Reexport WO/SWO limpia NESTING previo
 - Al exportar DXF de una WO/SWO, si ya existe `ARGA MODEL CORE/NESTING`
   (y placeholders `DXF NESTING` / `3D NESTING`), se elimina el árbol completo

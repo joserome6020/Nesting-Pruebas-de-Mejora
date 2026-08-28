@@ -7151,6 +7151,16 @@ class MotorNesting:
         misma_hoja = origen_hoja is hoja_destino
         if not misma_hoja:
             origen_hoja.update(nueva_orig)
+        # Piezas compensadas mudadas a otra placa: sellar flag de hoja o el
+        # export vuelve a sacar láser+plasma del mismo H (SWO-042).
+        try:
+            from .efficiency_metrics import promover_compensacion_plasma_en_hoja
+
+            promover_compensacion_plasma_en_hoja(hoja_destino)
+            if not misma_hoja:
+                promover_compensacion_plasma_en_hoja(origen_hoja)
+        except Exception:
+            pass
         if isinstance(origen_grupo, dict) and not misma_hoja:
             hojas = origen_grupo.get("hojas") or []
             sincronizar_overlays_grupo(hojas)

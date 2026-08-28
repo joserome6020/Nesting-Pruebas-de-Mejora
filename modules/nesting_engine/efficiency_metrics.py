@@ -368,16 +368,62 @@ def hoja_es_sobrante_plasma_compensado(hoja) -> bool:
     )
 
 
+def hoja_tiene_compensacion_plasma(hoja) -> bool:
+    """True si la hoja o alguna pieza real lleva compensación plasma manual."""
+    if not isinstance(hoja, dict):
+        return False
+    if bool(hoja.get("plasma_compensado_manual")):
+        return True
+    for pz in hoja.get("piezas") or []:
+        if not isinstance(pz, dict):
+            continue
+        if bool(pz.get("plasma_compensada_manual")):
+            return True
+    return False
+
+
+def promover_compensacion_plasma_en_hoja(hoja) -> bool:
+    """
+    Sella plasma_compensado_manual en la hoja si hay piezas compensadas.
+    Evita el caso SWO-042: piezas con flag → canal plasma, pero sin flag de hoja
+    → también se exportaba el DXF láser 1:1 (mismo H, cotas distintas).
+    """
+    if not isinstance(hoja, dict):
+        return False
+    if bool(hoja.get("plasma_compensado_manual")):
+        return True
+    off = 0.0
+    n_comp = 0
+    for pz in hoja.get("piezas") or []:
+        if not isinstance(pz, dict):
+            continue
+        if not bool(pz.get("plasma_compensada_manual")):
+            continue
+        n_comp += 1
+        try:
+            off_pz = float(pz.get("plasma_offset_mm_manual") or 0.0)
+        except (TypeError, ValueError):
+            off_pz = 0.0
+        if off_pz > 0:
+            off = off_pz
+    if n_comp <= 0:
+        return False
+    hoja["plasma_compensado_manual"] = True
+    hoja["plasma_piezas_compensadas"] = int(n_comp)
+    if off > 0 and not hoja.get("plasma_offset_mm_manual"):
+        hoja["plasma_offset_mm_manual"] = off
+    return True
+
+
 def hoja_export_solo_plasma(hoja) -> bool:
     """Placa que solo exporta a Robot Plasma (sin DXF láser duplicado)."""
     if not isinstance(hoja, dict):
         return False
     if hoja_es_sobrante_plasma_compensado(hoja) or bool(hoja.get("is_rtz_plasma_sobrante")):
         return True
-    # Cualquier hoja compensada manualmente (madre o RTZ) va solo a Robot Plasma.
-    if bool(hoja.get("plasma_compensado_manual")):
-        return True
-    return False
+    # Misma condición que dispara el canal plasma: flag de hoja O de pieza.
+    # Antes solo miraba la hoja → DXF láser + plasma duplicados con cotas distintas.
+    return hoja_tiene_compensacion_plasma(hoja)
 
 
 def nombre_rtz_para_placa(

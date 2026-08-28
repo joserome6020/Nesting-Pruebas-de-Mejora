@@ -29,7 +29,7 @@ def limpiar_nesting_previo(out_dir: str, *, log_fn=None) -> int:
     cambian piezas, familias o cantidad de hojas (sobrescribir no basta).
 
     Returns:
-        Numero aproximado de entradas de primer nivel eliminadas (0 si no habia).
+        Número aproximado de entradas de primer nivel eliminadas (0 si no había).
     """
 
     def _log(msg: str) -> None:
@@ -62,7 +62,7 @@ def limpiar_nesting_previo(out_dir: str, *, log_fn=None) -> int:
                 f"({n_entries} entradas de primer nivel)"
             )
         except OSError as exc:
-            _log(f"[EXPORT] WARN limpieza previa fallo en {path}: {exc}")
+            _log(f"[EXPORT] WARN limpieza previa falló en {path}: {exc}")
             # Best-effort: borrar archivo a archivo si rmtree falla (locks UNC).
             try:
                 for dirpath, dirnames, filenames in os.walk(path, topdown=False):
@@ -515,7 +515,8 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
     Flujo normal: robot láser/plasma → 2 STEP (Cama A + Cama B); CAMA LASER solo DXF.
     Overlay STEP_UNIVERSAL_SIN_CAMAS: 1 STEP por cada DXF de acero (sin A/B).
     Cobre: STEP solo si la hoja requiere 3D.
-    Barras Amada (ESP.): 1 DXF VERTICAL por barra + 1 FIXTURA por pieza ESP. única.
+    Barras Amada (ESP.): 2 DXF VERTICAL (Corte+Marcaje) por barra + 1 FIXTURA
+    por pieza ESP. única. Escalón sin_gap: también Corte+Marcaje.
     El RTZCU de esas barras va a DXF/STEP normal.
     """
     n_dxf = 0
@@ -533,8 +534,30 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
             es_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
 
             if es_especial and not es_rtz_virtual:
-                # Solo AMADA/VERTICAL por barra (FIXTURA se cuenta aparte, por pieza).
-                n_dxf += 1
+                # AMADA/VERTICAL: Corte + Marcaje (CyPTube). FIXTURA se cuenta aparte.
+                n_dxf += 2
+                continue
+
+            es_sin_gap_dxf = (
+                es_cu
+                and not es_rtz_virtual
+                and str(hoja.get("cu_modo_separacion_barra") or "").strip().lower()
+                == "sin_gap"
+                and str(hoja.get("export_3d_format") or "dxf").strip().lower() == "dxf"
+            )
+            if es_sin_gap_dxf:
+                # Escalón / sin_gap vertical: también Corte + Marcaje.
+                n_dxf += 2
+                generar_plasma = _debe_generar_plasma(clave, hoja)
+                if generar_plasma:
+                    n_dxf += 1
+                if not generar_step:
+                    continue
+                from .step_export_prefs import step_enabled_for_carpeta
+
+                if step_enabled_for_carpeta(carpeta) and carpeta == RUTA_NESTEOS_COBRE:
+                    if _cu_dxf_requiere_3d(_hoja_cobre_export_3d(hoja)):
+                        n_step += 1
                 continue
 
             n_dxf += 1
@@ -849,13 +872,17 @@ def _debe_generar_plasma(clave, hoja):
     ROBOT PLASMA solo si hubo compensación plasma (manual).
     Antes también se generaba para calibre > 3/8 con pieza grande aunque
     no se hubiera compensado; eso metía DXF 1:1 en la carpeta plasma.
+
+    Alineado con hoja_export_solo_plasma: si hay compensación, el canal
+    plasma se genera y el láser/cama de esa misma hoja se omite.
     """
-    if bool(hoja.get("plasma_compensado_manual", False)):
-        return True
-    for pz in hoja.get("piezas") or []:
-        if bool(pz.get("plasma_compensada_manual")):
-            return True
-    return False
+    from .efficiency_metrics import (
+        hoja_export_solo_plasma,
+        promover_compensacion_plasma_en_hoja,
+    )
+
+    promover_compensacion_plasma_en_hoja(hoja)
+    return hoja_export_solo_plasma(hoja)
 
 def _slug_token(value: str) -> str:
     text = str(value or "").strip()
@@ -1450,6 +1477,7 @@ def exportar_resultados_a_dxf(
     os.makedirs(os.path.join(job_root_dir, ARCHIVO_ARGANEST_NESTING), exist_ok=True)
 
     exportados_principales = []
+    cyptube_vertical_records = []
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
     plasma_offset_job = 0.0625 * 25.4
 
@@ -1800,8 +1828,15 @@ def exportar_resultados_a_dxf(
             nest_tag = swo_ref if es_swo_export else str(base_name).strip() or "NEST"
             nombre_archivo = f"{nest_tag}_{thickness_name}_{sheet_code}.dxf"
 
-            from .efficiency_metrics import hoja_export_solo_plasma
+            from .efficiency_metrics import (
+                hoja_export_solo_plasma,
+                promover_compensacion_plasma_en_hoja,
+            )
 
+            # Piezas compensadas sin flag de hoja (transfer/mini-nest) → sellar
+            # antes de decidir carpeta, para no duplicar láser 1:1 + plasma.
+            promover_compensacion_plasma_en_hoja(hoja)
+            compensada_manual = bool(hoja.get("plasma_compensado_manual", False))
             solo_plasma = hoja_export_solo_plasma(hoja)
 
             log_sheet_plan(
@@ -1866,19 +1901,64 @@ def exportar_resultados_a_dxf(
                             draw_marks=draw_marks_exp,
                             strict=True,
                         )
-                        exportados_principales.append(path_out)
-                        path_principal = path_out
-                        dxf_done += 1
+                        from modules.dxf_export.cyptube_vertical import (
+                            split_cyptube_vertical_dxf,
+                        )
+
+                        _bar_w_cy = float(
+                            sheet_vertical.get("width")
+                            or sheet_vertical.get("Width")
+                            or _cu_bar_w
+                            or 0.0
+                        )
+                        try:
+                            _thk_cy = float(thickness_name)
+                        except (TypeError, ValueError):
+                            _thk_cy = None
+                        paths_cy, rec_cy = split_cyptube_vertical_dxf(
+                            path_out,
+                            bar_width_mm=_bar_w_cy,
+                            canal=canal_tag.split("|", 1)[0].strip()
+                            if "|" in canal_tag
+                            else (
+                                f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_VERTICAL}"
+                                if es_cu_especial
+                                else carpeta_principal
+                            ),
+                            sheet_code=str(sheet_code),
+                            cu_especial_vertical=bool(es_cu_especial),
+                            thickness_in=_thk_cy,
+                            remove_combined=True,
+                        )
+                        cyptube_vertical_records.append(rec_cy)
+                        log(
+                            f"-> CyPTube split: Corte={os.path.basename(paths_cy.corte)} "
+                            f"| Marcaje={os.path.basename(paths_cy.marcaje)} "
+                            f"| A_mm={rec_cy.A_mm:.2f}"
+                        )
+                        exportados_principales.append(paths_cy.corte)
+                        exportados_principales.append(paths_cy.marcaje)
+                        path_principal = paths_cy.corte
+                        dxf_done += 2
                         _progress(
                             mensaje=(
-                                f"DXF {dxf_done}/{n_dxf_est}: {progress_suffix}"
+                                f"DXF {dxf_done}/{n_dxf_est}: "
+                                f"{progress_suffix} (Corte+Marcaje)"
                             ),
                             step_done=0,
                         )
+                        tipo_pq = _normalizar_tipo_corte_pqart(tipo_pqart)
                         _registrar_exportacion_pqart_hoja(
                             hoja,
-                            ruta_dxf=path_out,
-                            tipo_corte=_normalizar_tipo_corte_pqart(tipo_pqart),
+                            ruta_dxf=paths_cy.corte,
+                            tipo_corte=tipo_pq,
+                        )
+                        # Contrato export↔PQART: todo DXF en exportados debe
+                        # tener registro (validación _validar_lote_exportado).
+                        _registrar_exportacion_pqart_hoja(
+                            hoja,
+                            ruta_dxf=paths_cy.marcaje,
+                            tipo_corte=tipo_pq,
                         )
                     else:
                         log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
@@ -2164,6 +2244,18 @@ def exportar_resultados_a_dxf(
     log_section(f"EXPORTACION DXF COMPLETA - {len(exportados_principales)} archivo(s)")
     for pth in exportados_principales:
         log(f"  * {pth}")
+    if cyptube_vertical_records:
+        from modules.dxf_export.cyptube_vertical import escribir_cyptube_verticales_json
+
+        nesteos_cobre_root = os.path.join(job_root_dir, RUTA_NESTEOS_COBRE)
+        path_cy_json = escribir_cyptube_verticales_json(
+            nesteos_cobre_root, cyptube_vertical_records
+        )
+        if path_cy_json:
+            log(
+                f"[CyPTube] Manifiesto verticales: {path_cy_json} "
+                f"({len(cyptube_vertical_records)} barra(s))"
+            )
     return exportados_principales
     return exportados_principales
 
