@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_limpiar_nesting_previo.py",
+        "2026-08-28e - reexport WO/SWO limpia NESTING previo (sin DXF huérfanos)",
+    ),
+    (
         "test_visor_dense_lwpoly.py",
         "2026-08-26 - visor: LWPOLY densas (SPLINE procesadas) sin bloquear UI",
     ),

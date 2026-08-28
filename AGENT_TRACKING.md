@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-28e — Reexport WO/SWO limpia NESTING previo
+- Al exportar DXF de una WO/SWO, si ya existe `ARGA MODEL CORE/NESTING`
+  (y placeholders `DXF NESTING` / `3D NESTING`), se elimina el árbol completo
+  antes de recrear carpetas y escribir. Evita DXF/STEP/PDF/JSON huérfanos
+  tras fallos o cambios de piezas/familias/cantidad de hojas.
+- Helper `limpiar_nesting_previo` en `modules/nesting_engine/exporter.py`.
+- Candado `test_limpiar_nesting_previo.py`.
+
 ### 2026-08-28d — SWO: TAPA≠TAPA 2 + reproceso conserva W.O.__
 - Carga SWO: match de DXF por pieza exacta (ya no `startswith` con espacio).
   Caso SWO-043: `BUSHING PATCH TAPA` no toma el DXF de `… TAPA 2`.

@@ -1179,6 +1179,15 @@ class ExportMixin:
                     except Exception:
                         pass
 
+                    # Si la WO/SWO ya tenia nesting, el motor lo purga antes de
+                    # escribir (no solo overwrite: evita DXF huerfanos).
+                    nesting_prev = os.path.join(ruta_export, "NESTING")
+                    if os.path.isdir(nesting_prev):
+                        print(
+                            f"[EXPORT] Nesting previo detectado → se limpiará "
+                            f"antes de reexportar: {nesting_prev}"
+                        )
+
                     # 1) Primero exportamos DXF/STEP para que mini_resultados
                     #    quede enriquecido con pqart_exports por hoja.
                     lote_dxf_max = [0]

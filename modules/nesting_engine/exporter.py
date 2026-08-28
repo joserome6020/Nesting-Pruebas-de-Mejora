@@ -1,6 +1,7 @@
 import glob
 import os
 import re
+import shutil
 from shapely.geometry import Polygon, MultiPolygon
 
 
@@ -14,6 +15,77 @@ RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
 ARCHIVO_ARGANEST_NESTING = "ARCHIVO DE NESTEO ARGANEST"
+
+# Carpetas de nesting bajo ARGA MODEL CORE que se purgan al reexportar la misma WO/SWO.
+# NESTING cubre todas las familias (cobre, laser, plasma, PDF, arganest, JSON).
+# DXF/3D NESTING son placeholders historicos que a veces acumulan residuos.
+_CARPETAS_NESTING_PREVIO = ("NESTING", "DXF NESTING", "3D NESTING")
+
+
+def limpiar_nesting_previo(out_dir: str, *, log_fn=None) -> int:
+    """Si ya existe nesting previo bajo ``out_dir`` (ARGA MODEL CORE), lo elimina.
+
+    Evita DXF/STEP/PDF/JSON huerfanos al reexportar la misma WO/SWO cuando
+    cambian piezas, familias o cantidad de hojas (sobrescribir no basta).
+
+    Returns:
+        Numero aproximado de entradas de primer nivel eliminadas (0 si no habia).
+    """
+
+    def _log(msg: str) -> None:
+        if callable(log_fn):
+            try:
+                log_fn(msg)
+                return
+            except Exception:
+                pass
+        print(msg)
+
+    root = os.path.normpath(str(out_dir or "").strip())
+    if not root or not os.path.isdir(root):
+        return 0
+
+    removidos = 0
+    for nombre in _CARPETAS_NESTING_PREVIO:
+        path = os.path.join(root, nombre)
+        if not os.path.isdir(path):
+            continue
+        try:
+            n_entries = sum(1 for _ in os.scandir(path))
+        except OSError:
+            n_entries = 0
+        try:
+            shutil.rmtree(path)
+            removidos += max(1, n_entries)
+            _log(
+                f"[EXPORT] Limpieza previa WO/SWO: eliminado {path} "
+                f"({n_entries} entradas de primer nivel)"
+            )
+        except OSError as exc:
+            _log(f"[EXPORT] WARN limpieza previa fallo en {path}: {exc}")
+            # Best-effort: borrar archivo a archivo si rmtree falla (locks UNC).
+            try:
+                for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+                    for name in filenames:
+                        fp = os.path.join(dirpath, name)
+                        try:
+                            os.remove(fp)
+                            removidos += 1
+                        except OSError:
+                            pass
+                    for name in dirnames:
+                        dp = os.path.join(dirpath, name)
+                        try:
+                            os.rmdir(dp)
+                        except OSError:
+                            pass
+                try:
+                    os.rmdir(path)
+                except OSError:
+                    pass
+            except Exception as exc2:
+                _log(f"[EXPORT] WARN limpieza parcial en {path}: {exc2}")
+    return removidos
 
 
 def step_universal_sin_camas_activo() -> bool:
@@ -1308,6 +1380,12 @@ def exportar_resultados_a_dxf(
         f"estimado_dxf={n_dxf_est} | estimado_step={n_step_est} | "
         f"grupos={len(resultados or {})}"
     )
+    # Reexport de la misma WO/SWO: borrar nesting previo (todas las familias)
+    # antes de recrear carpetas, para no dejar DXF/STEP huerfanos.
+    n_prev = limpiar_nesting_previo(out_dir, log_fn=log)
+    if n_prev:
+        log(f"nesting_previo_limpiado entradas~={n_prev}")
+        _progress(mensaje="Limpiando nesting previo de la WO/SWO…", step_done=0)
     _progress(mensaje="Escribiendo DXF de producción…", step_done=0)
 
     rutas = {
