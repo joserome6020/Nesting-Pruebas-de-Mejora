@@ -26,7 +26,13 @@ from PySide6.QtWidgets import (
 )
 
 import config
-from interface.autodxf_metadata import combinar_metadata_dxf, normalizar_material_autodxf
+from interface.autodxf_metadata import (
+    combinar_metadata_dxf,
+    dxf_corresponde_a_item,
+    item_sin_prefijo_wo,
+    normalizar_material_autodxf,
+    parsear_nombre_archivo_dxf,
+)
 from modules.processed_layers import ProcesadorDXF
 from modules.scanner import EscanerServidor
 from interface.qt.layout_helpers import make_card
@@ -378,15 +384,97 @@ class TabFiles(QWidget):
             "multiplicador": multiplicador,
         }
 
+    def _contexto_swo_activo(self) -> bool:
+        job = str(getattr(self.app, "job_activo", "") or "").strip().upper()
+        if re.match(r"^S\.?W\.?O", job):
+            return True
+        prev = getattr(self.app, "datos_partes_actuales", None) or []
+        for row in prev:
+            if not row:
+                continue
+            nom = str(row[0] or "")
+            if "__" in nom and item_sin_prefijo_wo(nom) != nom:
+                return True
+        meta = getattr(self.app, "meta_pdf_por_ruta", None) or {}
+        return any(
+            str((info or {}).get("work_order") or "").strip()
+            for info in meta.values()
+            if isinstance(info, dict)
+        )
+
+    def _fusionar_reproceso_swo(self, prev_items, scanned_items, scanned_meta: dict):
+        """Reprocesar AutoDXF en SWO: actualiza rutas DXF sin quitar prefijo WO ni qty BD."""
+        by_item: dict[str, tuple] = {}
+        for row in scanned_items or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 6:
+                continue
+            pieza = str(row[0] or "").strip()
+            key = pieza.lower()
+            if key and key not in by_item:
+                by_item[key] = tuple(row)
+
+        prev_meta = dict(getattr(self.app, "meta_pdf_por_ruta", None) or {})
+        out = []
+        new_meta: dict = {}
+        for row in prev_items or []:
+            if not isinstance(row, (list, tuple)) or len(row) < 6:
+                continue
+            nombre = str(row[0] or "").strip()
+            item_naked = item_sin_prefijo_wo(nombre)
+            scanned = by_item.get(item_naked.lower())
+            ruta_prev = str(row[5] or "")
+            ruta_prev_norm = self._normalizar_ruta(ruta_prev) if ruta_prev else ""
+            meta_prev = dict(prev_meta.get(ruta_prev_norm) or {})
+            if not meta_prev.get("work_order") and "__" in nombre:
+                pref = nombre.split("__", 1)[0].strip()
+                if pref:
+                    meta_prev["work_order"] = pref
+            if not meta_prev.get("item"):
+                meta_prev["item"] = item_naked
+
+            if scanned:
+                ruta_nueva = str(scanned[5] or ruta_prev)
+                out.append(
+                    (
+                        nombre,
+                        row[1],
+                        row[2],
+                        row[3],
+                        "LISTO",
+                        ruta_nueva,
+                    )
+                )
+                ruta_norm = self._normalizar_ruta(ruta_nueva)
+                meta_scan = dict((scanned_meta or {}).get(ruta_norm) or {})
+                new_meta[ruta_norm] = {
+                    "job": meta_prev.get("job") or meta_scan.get("job") or "",
+                    "item": item_naked,
+                    "work_order": meta_prev.get("work_order") or "",
+                }
+            else:
+                out.append(tuple(row))
+                if ruta_prev_norm:
+                    new_meta[ruta_prev_norm] = meta_prev
+        return out, new_meta
+
     def aplicar_partes_resincronizadas(self, payload: dict, *, thumbnails_async: bool = False) -> int:
         """Aplica el resultado del escaneo en el hilo principal de Qt."""
         items = list(payload.get("items") or [])
         meta_pdf = dict(payload.get("meta_pdf") or {})
         job_name = str(payload.get("job_name") or "").strip()
         multiplicador = max(1, int(payload.get("multiplicador") or 1))
-        if job_name:
-            self.app.job_activo = job_name
-        self.app.multiplicador_tanques = multiplicador
+        prev_items = list(getattr(self.app, "datos_partes_actuales", []) or [])
+        job_prev = str(getattr(self.app, "job_activo", "") or "").strip()
+        # SWO: no reemplazar PARTS con nombres crudos del DXF (pierden W.O.__ y qty BD).
+        if self._contexto_swo_activo() and prev_items:
+            items, meta_pdf = self._fusionar_reproceso_swo(prev_items, items, meta_pdf)
+            if job_prev:
+                self.app.job_activo = job_prev
+            # Mantener multiplicador de la sesión SWO (qty ya vienen de reporte_cortes).
+        else:
+            if job_name:
+                self.app.job_activo = job_name
+            self.app.multiplicador_tanques = multiplicador
         self.app.meta_pdf_por_ruta = meta_pdf
         self.app.cargar_datos_parts(items, thumbnails_async=thumbnails_async)
         if hasattr(self.app, "editable_inputs_actuales"):
@@ -406,7 +494,8 @@ class TabFiles(QWidget):
         return True, total
 
     def _buscar_dxf_item_en_autodxf(self, ruta_autodxf, item):
-        item_limpio = str(item or "").strip().lower()
+        """Resuelve el DXF de un item SWO/BD con match exacto de pieza (no prefijo corto)."""
+        item_limpio = str(item or "").strip()
         if not item_limpio:
             return ""
         candidatos = []
@@ -421,16 +510,18 @@ class TabFiles(QWidget):
             if k not in vistos:
                 vistos.add(k)
                 ordenados.append(p)
+        # 1) Exacto (pieza parseada == item). 2) Legacy `_TAB` solo si no hay exacto.
+        alias_underscore = ""
         for ruta in ordenados:
-            f_lower = os.path.basename(ruta).lower()
-            if (
-                f_lower == f"{item_limpio}.dxf"
-                or f_lower.startswith(f"{item_limpio},")
-                or f_lower.startswith(f"{item_limpio} ")
-                or f_lower.startswith(f"{item_limpio}_")  # ej. 62135-1251-P03_TAB, A 36...
-            ):
+            base = os.path.basename(ruta)
+            if not dxf_corresponde_a_item(base, item_limpio):
+                continue
+            pieza = str(parsear_nombre_archivo_dxf(base).get("pieza") or "").strip()
+            if pieza.lower() == item_limpio.lower():
                 return ruta
-        return ""
+            if not alias_underscore:
+                alias_underscore = ruta
+        return alias_underscore
 
     def ejecutar_escaneo_servidor(self):
         self.btn_nest_scan.setEnabled(False)

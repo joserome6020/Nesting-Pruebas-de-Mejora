@@ -170,6 +170,44 @@ def extraer_metadata_carpetas_autodxf(ruta_dxf: str) -> Dict[str, str]:
     return result
 
 
+def item_sin_prefijo_wo(nombre_parte: str) -> str:
+    """Quita el prefijo SWO `W.O. N XN__` del nombre PARTS; deja el item AutoDXF."""
+    texto = str(nombre_parte or "").strip()
+    if "__" not in texto:
+        return texto
+    prefijo, _, resto = texto.partition("__")
+    resto = resto.strip()
+    if not resto:
+        return texto
+    pref = prefijo.strip().upper()
+    if pref.startswith("W.O") or pref.startswith("W.O.") or pref.startswith("WO "):
+        return resto
+    if re.match(r"^S\.?W\.?O", pref):
+        return resto
+    return texto
+
+
+def dxf_corresponde_a_item(nombre_archivo: str, item: str) -> bool:
+    """True si el DXF es exactamente de `item` (no un hermano con nombre más largo).
+
+    Caso real SWO-043: `BUSHING PATCH TAPA` no debe matchear
+    `BUSHING PATCH TAPA 2, A 36, ...dxf` (el viejo startswith con espacio lo hacía).
+    """
+    item_limpio = str(item or "").strip().lower()
+    if not item_limpio:
+        return False
+    pieza = str(parsear_nombre_archivo_dxf(nombre_archivo).get("pieza") or "").strip().lower()
+    if not pieza:
+        return False
+    if pieza == item_limpio:
+        return True
+    # Legacy Inventor: item DB corto + sufijo de archivo (`62135-1251-P03` → `…_TAB`).
+    # No usar espacio: `TAPA` vs `TAPA 2` son piezas distintas.
+    if pieza.startswith(item_limpio + "_"):
+        return True
+    return False
+
+
 def combinar_metadata_dxf(
     ruta_dxf: str,
     nombre_archivo: Optional[str] = None,

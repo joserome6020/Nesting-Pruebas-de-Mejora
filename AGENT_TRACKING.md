@@ -55,6 +55,32 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-28d — SWO: TAPA≠TAPA 2 + reproceso conserva W.O.__
+- Carga SWO: match de DXF por pieza exacta (ya no `startswith` con espacio).
+  Caso SWO-043: `BUSHING PATCH TAPA` no toma el DXF de `… TAPA 2`.
+- REPROCESAR AUTODXF en contexto SWO: fusiona rutas nuevas sin quitar el
+  prefijo `W.O. N XN__`, sin pisar qty BD ni `job_activo` (SWO-xxx).
+- Candado `test_swo_autodxf_item_match.py`.
+
+### 2026-08-28c — CyPTube Marcaje: guillotina origen + fin
+- `*_Marcaje.dxf` = MARK + líneas a ancho de barra en extremos (BAR_START /
+  CUT_OUTER origen y fin). Sin barrenos ni guillotinas intermedias.
+- Corte sin cambios. Contorno de referencia para empalme CypTube.
+
+### 2026-08-28b — CyPTube: Marcaje también en PQART
+- Fallo W.O. 66: `hay DXF exportados sin registro PQART` en `*_Marcaje.dxf`.
+- Causa: split Corte+Marcaje añadía ambos a `exportados` pero solo registraba
+  Corte. Ahora se registran los dos (mismo `tipo_corte`).
+
+### 2026-08-28 — CyPTube vertical: Corte + Marcaje + JSON
+- Barras verticales cobre (Amada ESP y escalón `sin_gap`): el DXF combinado
+  se parte en `*_Corte.dxf` (CUT_*) y `*_Marcaje.dxf` (MARK); se elimina el
+  combinado.
+- Manifiesto `NESTEOS DE COBRE/cyptube_verticales.json` con `A_mm=ancho+0.2`,
+  `B_mm=6.0` y lista plana `archivos[]` (rol corte/marcaje) para automatización.
+- Módulo `modules/dxf_export/cyptube_vertical.py`; candado
+  `test_cyptube_vertical_split.py`.
+
 ### 2026-08-27b — Eliminada regla de copiar a ANS C++
 - `AGENTS.md` y `build-exe-parity.mdc`: único árbol =
   `New Arga Nesting Suite`. No sync / Compare-Object a `ANS C++`.

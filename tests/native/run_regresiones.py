@@ -33,8 +33,7 @@ REGRESIONES = [
     ),
     (
         "test_occt_inner_per_piece.py",
-        "2026-08-27 - OCCT: huecos grandes de anillo no bloqueados por guard 50% (S.W.O 37)",
-        "2026-08-25 - OCCT: CUT_INNER solo de su pieza (H4 9 outers no bajar a 5)",
+        "2026-08-27/25 - OCCT: huecos anillo + CUT_INNER solo de su pieza (H4)",
     ),
     (
         "test_crear_steps_motor_choice.py",
@@ -99,6 +98,14 @@ REGRESIONES = [
     (
         "test_amada_export_sin_fixtura.py",
         "2026-08-27 - AMADA/FIXTURA: barrenos fuente inch→mm, LIMMAX≠A4, join +10\" sin MARK",
+    ),
+    (
+        "test_cyptube_vertical_split.py",
+        "2026-08-28 - CyPTube vertical: DXF _Corte/_Marcaje + JSON A_mm=ancho+0.2",
+    ),
+    (
+        "test_swo_autodxf_item_match.py",
+        "2026-08-28d - SWO: DXF exacto (TAPA≠TAPA 2) + reproceso conserva W.O.__",
     ),
     (
         "test_amada_validacion_barrenos.py",
