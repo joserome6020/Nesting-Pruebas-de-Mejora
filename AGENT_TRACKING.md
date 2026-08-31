@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-31b — PO ContPAQ: no dar por bueno el export sin correo (GAM 13040)
+- Causa SWO-047: InsertaPO creó OC+PDF, SMTP falló, HTTP 200 con
+  `nombreReporte=""`; ANS no validaba el campo → “PO confirmada” sin mail.
+- InsertaPO (`manager.py`): 3 reintentos de PDF/correo tras crear la OC.
+- ANS: `correo_po_confirmado` + checkpoint `CORREO_PO` WARNING + aviso UI;
+  CONTPAQ queda OK para no duplicar `/run` al reanudar.
+- Candado: `tests/native/test_correo_po_nombre_reporte.py`.
+
 ### 2026-08-31 — SWO MRL: mismo plan al pedir y validar (SWO-047)
 - Causa: export armaba MRL desde el plan del modal (15× ANG037 @ 240\") y
   validaba regenerando el plan en BD (14) → rollback.

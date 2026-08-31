@@ -701,11 +701,27 @@ def avanzar_job_centralizado(job_number):
         )
 
 
+def nombre_reporte_po(body: dict | None) -> str:
+    """InsertaPO devuelve nombreReporte vacío si el correo/PDF no se envió."""
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("nombreReporte") or body.get("nombre_reporte") or "").strip()
+
+
+# Compat interno (tests / imports previos).
+_nombre_reporte_po = nombre_reporte_po
+
+
 def trigger_po_contpaq(nombre_swo):
     """
     Trigger: InsertaPOContPaq — Se llama cuando se exporta DXF de una SWO.
     Crea la Orden de Compra en ContPAQ/PostgreSQL para la SWO exportada.
     API en Docker: 192.168.2.80:8006/run
+
+    Importante (SWO-047 / GAM 13040): InsertaPO puede devolver HTTP 200 con la
+    OC creada y ``nombreReporte`` vacío si falló el SMTP. ``ok=True`` porque la
+    PO ya existe (no re-disparar ``/run``); use ``correo_po_confirmado`` para
+    alertar y reenviar el PDF sin duplicar la OC.
     """
     url = CONTPAQ_PO_SWO_URL
     swo = str(nombre_swo or "").strip()
@@ -713,16 +729,38 @@ def trigger_po_contpaq(nombre_swo):
         print(f"[PO-CONTPAQ] Disparando PO para SWO '{swo}'...")
         code, body = _post_json(url, {"SUPER_WORK_ORDER": swo}, timeout=45)
         if _http_ok(code) or _respuesta_idempotente(code, body):
-            print(
-                f"[PO-CONTPAQ] PO confirmada para SWO '{swo}'. "
-                f"Tiempo: {body.get('execution_time', '?')}s"
+            nombre = _nombre_reporte_po(body if isinstance(body, dict) else None)
+            tiempo = (body or {}).get("execution_time", "?") if isinstance(body, dict) else "?"
+            if not nombre:
+                print(
+                    f"[PO-CONTPAQ][WARN] PO ContPAQ OK para SWO '{swo}' "
+                    f"(t={tiempo}s) pero nombreReporte vacío: el correo NO se envió."
+                )
+            else:
+                print(
+                    f"[PO-CONTPAQ] PO confirmada para SWO '{swo}'. "
+                    f"Tiempo: {tiempo}s reporte='{nombre}'"
+                )
+            return ApiOperationResult(
+                True,
+                "pedido ContPAQ SWO",
+                swo,
+                str(body),
+                code,
+                body if isinstance(body, dict) else None,
             )
-            return ApiOperationResult(True, "pedido ContPAQ SWO", swo, str(body), code, body)
         print(f"[PO-CONTPAQ] Error al crear PO para SWO '{swo}'. Codigo: {code}")
         return ApiOperationResult(False, "pedido ContPAQ SWO", swo, str(body), code, body)
     except Exception as exc:
         print(f"[PO-CONTPAQ][ERROR] Fallo al crear PO para SWO '{swo}': {exc}")
         return ApiOperationResult(False, "pedido ContPAQ SWO", swo, str(exc))
+
+
+def correo_po_confirmado(resultado: ApiOperationResult | None) -> bool:
+    """True solo si InsertaPO devolvió nombreReporte (PDF/correo confirmado)."""
+    if resultado is None or not resultado.ok:
+        return False
+    return bool(_nombre_reporte_po(resultado.response))
 
 
 def validar_po_contpaq(nombre_swo):

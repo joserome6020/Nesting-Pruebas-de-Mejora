@@ -540,7 +540,9 @@ class ExportMixin:
         from modules.nesting_engine.api_client import (
             avanzar_job_centralizado,
             avanzar_swo_centralizado,
+            correo_po_confirmado,
             enviar_reporte_a_api,
+            nombre_reporte_po,
             trigger_po_contpaq,
             validar_po_contpaq,
         )
@@ -715,7 +717,42 @@ class ExportMixin:
                     f"ContPAQ no confirmó el pedido: {detalle}. "
                     "Use ‘Reanudar sync’; no reexporte CAD.",
                 )
+            # CONTPAQ OK aunque el correo falle: re-disparar /run duplicaría la OC.
             _checkpoint(stage, status="OK", detail=resultado_po.summary(), resultado=resultado_po)
+            if not correo_po_confirmado(resultado_po):
+                detalle_correo = (
+                    "PO ContPAQ creada pero nombreReporte vacío: el correo/PDF "
+                    "no se confirmó. No reexporte ni use ‘Reanudar sync’ para "
+                    "ContPAQ (duplicaría la OC). Reenvíe PO_GAM_*.pdf desde InsertaPO."
+                )
+                _checkpoint(
+                    "CORREO_PO",
+                    status="WARNING",
+                    detail=detalle_correo,
+                    resultado=resultado_po,
+                )
+                print(f"[CENTRALIZED][WARN] CORREO_PO {job_activo}: {detalle_correo}")
+                try:
+                    QMessageBox.warning(
+                        self,
+                        "PO sin correo",
+                        (
+                            f"La OC ContPAQ de {job_activo} se creó, pero el correo "
+                            "con el PDF no se confirmó.\n\n"
+                            "No vuelva a exportar ni reanude ContPAQ (duplicaría la PO).\n"
+                            "Reenvíe el PDF PO_GAM_*.pdf desde InsertaPO "
+                            "(tools/resend_po_email.py)."
+                        ),
+                    )
+                except Exception:
+                    pass
+            else:
+                _checkpoint(
+                    "CORREO_PO",
+                    status="OK",
+                    detail=f"nombreReporte={nombre_reporte_po(resultado_po.response)}",
+                    resultado=resultado_po,
+                )
         else:
             print("[CENTRALIZED] CONTPAQ ya confirmado; se omite reintento.")
 

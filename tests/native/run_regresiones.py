@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_correo_po_nombre_reporte.py",
+        "2026-08-31b - PO ContPAQ: nombreReporte vacío = correo no enviado (GAM 13040)",
+    ),
+    (
         "test_mrl_swo_plan_referencia.py",
         "2026-08-31 - SWO MRL: validar con el mismo plan del modal (no regenerar 15→14)",
     ),
