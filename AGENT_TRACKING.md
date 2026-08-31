@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-31c — PO correo: SMTP real + reenvío GAM 13048 (SWO-048)
+- Export SWO-048 creó OC/PDF (`PO_GAM_13048.pdf`, total $43,697.37) y ANS
+  vio `nombreReporte`, pero el mail no llegó (InsertaPO solo montaba
+  `manager.py`; mailer de la imagen podía “éxito” sin SMTP).
+- InsertaPO `manager.py`: PDF + SMTP forzado con aceptados>0 (3 reintentos).
+- `docker-compose`: monta también `reportePOGAM` / `enviarPDFCorreo` / `main`
+  (requiere recreate del contenedor en 2.80).
+- ANS: `correo_po_confirmado` respeta `correo_enviado`.
+- Reenviado correo GAM 13048 (9/9 SMTP OK). Totales PDF OK.
+
 ### 2026-08-31b — PO ContPAQ: no dar por bueno el export sin correo (GAM 13040)
 - Causa SWO-047: InsertaPO creó OC+PDF, SMTP falló, HTTP 200 con
   `nombreReporte=""`; ANS no validaba el campo → “PO confirmada” sin mail.
