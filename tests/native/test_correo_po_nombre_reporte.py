@@ -78,9 +78,41 @@ def test_trigger_po_ok_con_correo():
     assert correo_po_confirmado(resultado) is True
 
 
+def test_correo_po_confirmado_flag_explicito():
+    """Si InsertaPO manda correo_enviado, manda sobre nombreReporte vacío."""
+    con_flag = ApiOperationResult(
+        True,
+        "pedido ContPAQ SWO",
+        "S.W.O 48 X1",
+        "{}",
+        200,
+        {"nombreReporte": "PO_GAM_13048.pdf", "correo_enviado": True},
+    )
+    sin_flag_nombre = ApiOperationResult(
+        True,
+        "pedido ContPAQ SWO",
+        "S.W.O 48 X1",
+        "{}",
+        200,
+        {"nombreReporte": "PO_GAM_13048.pdf"},
+    )
+    flag_false = ApiOperationResult(
+        True,
+        "pedido ContPAQ SWO",
+        "S.W.O 48 X1",
+        "{}",
+        200,
+        {"nombreReporte": "PO_GAM_13048.pdf", "correo_enviado": False},
+    )
+    assert correo_po_confirmado(con_flag) is True
+    assert correo_po_confirmado(sin_flag_nombre) is True
+    assert correo_po_confirmado(flag_false) is False
+
+
 if __name__ == "__main__":
     test_nombre_reporte_po_vacio_y_presente()
     test_correo_po_confirmado_exige_nombre()
     test_trigger_po_ok_aunque_nombre_reporte_vacio()
     test_trigger_po_ok_con_correo()
+    test_correo_po_confirmado_flag_explicito()
     print("OK test_correo_po_nombre_reporte")

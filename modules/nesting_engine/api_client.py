@@ -757,10 +757,14 @@ def trigger_po_contpaq(nombre_swo):
 
 
 def correo_po_confirmado(resultado: ApiOperationResult | None) -> bool:
-    """True solo si InsertaPO devolvió nombreReporte (PDF/correo confirmado)."""
+    """True solo si InsertaPO confirmó PDF/correo (nombreReporte y/o flag)."""
     if resultado is None or not resultado.ok:
         return False
-    return bool(_nombre_reporte_po(resultado.response))
+    body = resultado.response if isinstance(resultado.response, dict) else {}
+    # Flag explícito (InsertaPO nuevo); si no viene, cae a nombreReporte.
+    if "correo_enviado" in body:
+        return bool(body.get("correo_enviado")) and bool(nombre_reporte_po(body))
+    return bool(nombre_reporte_po(body))
 
 
 def validar_po_contpaq(nombre_swo):
