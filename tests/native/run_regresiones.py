@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_mrl_swo_plan_referencia.py",
+        "2026-08-31 - SWO MRL: validar con el mismo plan del modal (no regenerar 15→14)",
+    ),
+    (
         "test_step_mark_fast_defaults.py",
         "2026-08-28f - STEP planta: PIECE_ONESHOT multi-tool (no chunks lentos)",
     ),

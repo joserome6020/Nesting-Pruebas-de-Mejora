@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-08-31 — SWO MRL: mismo plan al pedir y validar (SWO-047)
+- Causa: export armaba MRL desde el plan del modal (15× ANG037 @ 240\") y
+  validaba regenerando el plan en BD (14) → rollback.
+- Conteo correcto: **15** (demanda ~3417\" no cabe en 14×239\" útiles).
+- Fix: `aplicar_pedido…` devuelve el plan usado; `validar_mrl…` lo recibe
+  como `plan_referencia` (no regenera packing distinto).
+- Candado: `tests/native/test_mrl_swo_plan_referencia.py`.
+
 ### 2026-08-28g — Plasma: no duplicar DXF láser/cama en hojas compensadas
 - Causa SWO-042: piezas con `plasma_compensada_manual` sin flag de hoja → canal
   plasma + DXF láser/cama del mismo H (cotas 1:1 vs compensadas).

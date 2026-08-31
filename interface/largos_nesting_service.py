@@ -1460,23 +1460,63 @@ def aplicar_pedido_largos_tras_export(
     return ok, mensaje
 
 
+def _esperadas_mrl_desde_plan(plan: dict[str, Any] | None) -> dict[tuple[str, float], int]:
+    """Barras comerciales esperadas (codigo, largo\") → cantidad desde un plan."""
+    from lista_largos_material_requerido import agregar_filas_desde_plan
+
+    esperadas: dict[tuple[str, float], int] = defaultdict(int)
+    if not _plan_largos_valido(plan):
+        return esperadas
+    for fila in agregar_filas_desde_plan(plan):
+        key = (
+            str(fila.get("codigo") or "").strip(),
+            round(float(fila.get("largo") or 0), 2),
+        )
+        esperadas[key] += int(fila.get("cantidad") or 0)
+    return esperadas
+
+
+def _plan_memoria_referencia_swo(
+    planes: dict,
+    lote_indices: list[int] | tuple[int, ...],
+    sin_demanda: set,
+) -> dict[str, Any] | None:
+    """Plan de modal/nesting a usar como techo MRL (sin regenerar BD)."""
+    validos: list[dict[str, Any]] = []
+    for lote_idx in [int(idx) for idx in lote_indices]:
+        if lote_idx in sin_demanda:
+            continue
+        plan = planes.get(lote_idx)
+        if _plan_largos_valido(plan):
+            validos.append(plan)
+    if len(validos) == 1:
+        return validos[0]
+    return None
+
+
 def aplicar_pedido_largos_swo_acumulado_tras_export(
     app,
     swo_id: str,
     lote_indices: list[int] | tuple[int, ...],
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict[str, Any] | None]:
     """
     Genera un único pedido MRL para una SWO con todos sus lotes exportados.
 
     Cada lote conserva sus exclusiones unitarias antes de consolidar las
     cantidades. Así se evita que el último lote reemplace el pedido de los
     anteriores al compartir el mismo ``orden_id = SWO``.
+
+    Returns:
+        (ok, mensaje, plan_referencia_validacion). El tercer valor es el plan
+        contra el que debe validarse la MRL — el mismo que originó el pedido —
+        para no regenerar otro packing en BD (bug SWO-047: modal=15 vs plan=14).
     """
     planes = getattr(app, "plan_largos_por_lote", None) or {}
     sin_demanda = getattr(app, "plan_largos_sin_demanda_por_lote", set()) or set()
     unidades_activas: list[dict[str, Any]] = []
     lotes_con_demanda = 0
     lotes_sin_plan: list[int] = []
+    plan_memoria_ref = _plan_memoria_referencia_swo(planes, lote_indices, sin_demanda)
 
     for lote_idx in [int(idx) for idx in lote_indices]:
         if lote_idx in sin_demanda:
@@ -1521,7 +1561,7 @@ def aplicar_pedido_largos_swo_acumulado_tras_export(
             f"se descartó caché parcial de {piezas_locales} pieza(s)."
         )
         print(f"[LARGOS_NESTING][RECOVERY] {detalle}")
-        return ok, f"{mensaje} ({detalle})"
+        return ok, f"{mensaje} ({detalle})", plan_swo_canonico
 
     if lotes_sin_plan:
         # En una SWO la fuente persistida ya consolida todos los jobs/lotes.
@@ -1535,9 +1575,9 @@ def aplicar_pedido_largos_swo_acumulado_tras_export(
         )
         if origen_plan == "sin_demanda":
             if not lotes_con_demanda:
-                return True, "La SWO no tiene demanda de largos; no requiere pedido MRL."
+                return True, "La SWO no tiene demanda de largos; no requiere pedido MRL.", None
         elif not plan_swo:
-            return False, str(error_plan or "No se pudo resolver el plan consolidado de la SWO.")
+            return False, str(error_plan or "No se pudo resolver el plan consolidado de la SWO."), None
         else:
             ok, mensaje = enviar_pedido_largos_filtrado(
                 str(swo_id or "").strip(),
@@ -1546,7 +1586,7 @@ def aplicar_pedido_largos_swo_acumulado_tras_export(
             )
             if ok and origen_plan == "postgresql":
                 mensaje = f"{mensaje} (plan consolidado recuperado de PostgreSQL)"
-            return ok, mensaje
+            return ok, mensaje, plan_swo
 
     if not lotes_con_demanda:
         # El caché en memoria puede venir vacío (reabrir workspace / sin modal),
@@ -1564,31 +1604,40 @@ def aplicar_pedido_largos_swo_acumulado_tras_export(
                 "SWO",
                 plan_fallback,
             )
-            return ok, f"{mensaje} (pedido desde plan canónico; caché de lotes vacío)"
-        return True, "La SWO no tiene demanda de largos; no requiere pedido MRL."
+            return ok, f"{mensaje} (pedido desde plan canónico; caché de lotes vacío)", plan_fallback
+        return True, "La SWO no tiene demanda de largos; no requiere pedido MRL.", None
 
     filas = agregar_filas_desde_unidades_mrl(unidades_activas)
     if not filas:
-        return False, "No se pudo resolver material Herinox para el pedido MRL acumulado."
+        return False, "No se pudo resolver material Herinox para el pedido MRL acumulado.", None
 
-    return enviar_pedido_largos_filas(
+    ok, mensaje = enviar_pedido_largos_filas(
         str(swo_id or "").strip(),
         "SWO",
         filas,
     )
+    # Misma fuente que el modal (15 ANG037 en SWO-047): no revalidar contra un
+    # plan regenerado en BD que puede empaquetar distinto (14).
+    return ok, mensaje, plan_memoria_ref
 
 
-def validar_mrl_swo_canonica_tras_export(swo_id: str) -> tuple[bool, str]:
+def validar_mrl_swo_canonica_tras_export(
+    swo_id: str,
+    plan_referencia: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     """
     Barrera final antes de VSM/ContPAQ.
 
     Acepta:
     - Sin plan y sin MRL → SWO sin demanda de largos.
-    - MRL idéntica al plan canónico.
+    - MRL idéntica al plan de referencia.
     - MRL ⊆ plan (exclusiones Pedir/No del modal); nunca cantidades por encima
       del plan ni códigos ajenos al plan.
-    - MRL ya persistida si el plan canónico aún no es regenerable (p. ej. justo
-      después de nestear, antes de consolidar filas en BD).
+    - MRL ya persistida si el plan aún no es regenerable.
+
+    ``plan_referencia`` debe ser el mismo plan con el que se armó el pedido
+    (modal/nesting o canónico ya cargado). Si se omite, se carga desde BD
+    (compat); eso puede divergir del packing del modal — preferir pasarlo.
     """
     swo = str(swo_id or "").strip()
     if not swo:
@@ -1617,11 +1666,15 @@ def validar_mrl_swo_canonica_tras_export(swo_id: str) -> tuple[bool, str]:
             cursor.close()
             conexion.close()
 
-        try:
-            plan = cargar_plan_largos(swo, "SWO")
-        except Exception as exc_plan:
-            plan = {}
-            print(f"[LARGOS_NESTING][WARN] Plan canónico SWO no disponible: {exc_plan}")
+        plan: dict[str, Any] = {}
+        if _plan_largos_valido(plan_referencia):
+            plan = plan_referencia  # type: ignore[assignment]
+        else:
+            try:
+                plan = cargar_plan_largos(swo, "SWO")
+            except Exception as exc_plan:
+                plan = {}
+                print(f"[LARGOS_NESTING][WARN] Plan canónico SWO no disponible: {exc_plan}")
 
         if not _plan_largos_valido(plan):
             if not actuales:
@@ -1635,13 +1688,7 @@ def validar_mrl_swo_canonica_tras_export(swo_id: str) -> tuple[bool, str]:
                 f"({sum(actuales.values())} barras; plan canónico aún no regenerable).",
             )
 
-        esperadas: dict[tuple[str, float], int] = defaultdict(int)
-        for fila in agregar_filas_desde_plan(plan):
-            key = (
-                str(fila.get("codigo") or "").strip(),
-                round(float(fila.get("largo") or 0), 2),
-            )
-            esperadas[key] += int(fila.get("cantidad") or 0)
+        esperadas = _esperadas_mrl_desde_plan(plan)
 
         if not esperadas:
             if not actuales:

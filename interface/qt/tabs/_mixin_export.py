@@ -1364,7 +1364,7 @@ class ExportMixin:
                             validar_mrl_swo_canonica_tras_export,
                         )
 
-                        ok_ldg, msg_ldg = aplicar_pedido_largos_swo_acumulado_tras_export(
+                        ok_ldg, msg_ldg, plan_mrl_ref = aplicar_pedido_largos_swo_acumulado_tras_export(
                             self.app,
                             job_activo,
                             list(range(len(self.app.resultados_multilote))),
@@ -1381,7 +1381,10 @@ class ExportMixin:
                                 f"SWO {job_activo}: no se confirmó el pedido acumulado de largos: "
                                 f"{msg_ldg}"
                             )
-                        ok_mrl, msg_mrl = validar_mrl_swo_canonica_tras_export(job_activo)
+                        ok_mrl, msg_mrl = validar_mrl_swo_canonica_tras_export(
+                            job_activo,
+                            plan_referencia=plan_mrl_ref,
+                        )
                         if not ok_mrl:
                             _registrar_checkpoint(
                                 job_activo,
