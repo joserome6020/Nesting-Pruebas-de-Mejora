@@ -120,7 +120,12 @@ def schedule_nest_sidebar_sync(tab) -> None:
 
 def build_tab_nesting_ui(tab) -> None:
     root = QVBoxLayout(tab)
-    root.setContentsMargins(0, 0, 0, 0)
+    root.setContentsMargins(8, 4, 8, 0)
+    root.setSpacing(6)
+
+    # Cinta a ANCHO COMPLETO (arriba del splitter): todos los comandos caben.
+    tab.frame_header_der = build_nesting_ribbon(tab)
+    root.addWidget(tab.frame_header_der)
 
     splitter = make_horizontal_splitter(NEST_SIDEBAR_WIDTH_FALLBACK_PX)
     tab._nest_splitter = splitter
@@ -182,11 +187,6 @@ def build_tab_nesting_ui(tab) -> None:
     der_wrap_lay.setContentsMargins(0, 0, 0, 0)
     der_wrap_lay.setSpacing(0)
 
-    # Cinta en su propio slot; margen bajo para no “montar” el panel oscuro.
-    tab.frame_header_der = build_nesting_ribbon(tab)
-    der_wrap_lay.addWidget(tab.frame_header_der)
-    der_wrap_lay.addSpacing(6)
-
     tab.panel_der = make_panel_dark()
     panel_lay = QVBoxLayout(tab.panel_der)
     panel_lay.setContentsMargins(10, 10, 10, 10)
@@ -237,4 +237,4 @@ def build_tab_nesting_ui(tab) -> None:
     finalize_splitter(splitter, min_left=280, min_right=480)
     apply_nest_sidebar_width(tab)
     schedule_nest_sidebar_sync(tab)
-    root.addWidget(splitter)
+    root.addWidget(splitter, 1)
