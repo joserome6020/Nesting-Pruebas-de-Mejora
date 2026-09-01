@@ -2256,7 +2256,13 @@ def exportar_resultados_a_dxf(
                 f"[CyPTube] Manifiesto verticales: {path_cy_json} "
                 f"({len(cyptube_vertical_records)} barra(s))"
             )
-    return exportados_principales
+            # Modo B: ANS → CypTube auto-nest (RPA Corte+Marcaje). No bloquea UI.
+            try:
+                from modules.dxf_export.cyptube_bridge import launch_cyptube_auto_nest
+
+                launch_cyptube_auto_nest(nesteos_cobre_root, log_fn=log)
+            except Exception as exc:
+                log(f"[CyPTube] ERROR bridge: {exc}")
     return exportados_principales
 
 

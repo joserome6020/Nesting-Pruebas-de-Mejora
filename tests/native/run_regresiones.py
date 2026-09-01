@@ -120,6 +120,10 @@ REGRESIONES = [
         "2026-08-28 - CyPTube vertical: DXF _Corte/_Marcaje + JSON A_mm=ancho+0.2",
     ),
     (
+        "test_cyptube_bridge.py",
+        "2026-09-01 - ANS post-export dispara CypTube auto-nest (Modo B)",
+    ),
+    (
         "test_swo_autodxf_item_match.py",
         "2026-08-28d - SWO: DXF exacto (TAPA≠TAPA 2) + reproceso conserva W.O.__",
     ),

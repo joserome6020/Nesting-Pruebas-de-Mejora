@@ -42,6 +42,7 @@ STEP_EXPORT_CONFIG = ROOT / "_config" / "step_export_folders.json"
 NEST_RUNTIME_CONFIG = ROOT / "_config" / "nest_runtime.json"
 CUT_GAPS_CONFIG = ROOT / "_config" / "cut_gaps_table.json"
 AMADA_BARRENOS_CONFIG = ROOT / "_config" / "amada_barrenos_catalog.json"
+CYPTUBE_BRIDGE_CONFIG = ROOT / "_config" / "cyptube_bridge.json"
 NEST_ENGINE_CONFIG_JSON = ROOT / "configuracion_nesting.json"
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 BRANDING_PNG_PRESERVE = (
@@ -103,6 +104,7 @@ HIDDEN_IMPORTS = (
     "modules.dxf_export.cobre",
     "modules.dxf_export.cobre_nest",
     "modules.dxf_export.cyptube_vertical",
+    "modules.dxf_export.cyptube_bridge",
     "modules.dxf_export.dispatcher",
     "modules.dxf_export.laser",
     "modules.dxf_export.plasma",
@@ -253,6 +255,7 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "dxf_export" / "amada_fixture.py",
     ROOT / "modules" / "dxf_export" / "amada_esp.py",
     ROOT / "modules" / "dxf_export" / "cyptube_vertical.py",
+    ROOT / "modules" / "dxf_export" / "cyptube_bridge.py",
     ROOT / "modules" / "processed_layers.py",
     ROOT / "modules" / "ls_ready_paso1" / "bridge.py",
     ROOT / "modules" / "ls_ready_paso1" / "UF1_clasificador" / "run_ls_ready_flow.py",
@@ -266,6 +269,7 @@ CRITICAL_SUITE_FILES = (
     NEST_RUNTIME_CONFIG,
     CUT_GAPS_CONFIG,
     AMADA_BARRENOS_CONFIG,
+    CYPTUBE_BRIDGE_CONFIG,
 )
 
 SMOKE_IMPORT_MODULES = (
@@ -294,6 +298,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.dxf_export.amada_esp",
     "modules.dxf_export.cobre_nest",
     "modules.dxf_export.cyptube_vertical",
+    "modules.dxf_export.cyptube_bridge",
     "modules.nest_exporter",
     "modules.processed_layers",
     "modules.ls_ready_paso1",
@@ -907,6 +912,7 @@ def _pyinstaller_data_args() -> list[str]:
         (NEST_RUNTIME_CONFIG, "defaults/_config"),
         (CUT_GAPS_CONFIG, "defaults/_config"),
         (AMADA_BARRENOS_CONFIG, "defaults/_config"),
+        (CYPTUBE_BRIDGE_CONFIG, "defaults/_config"),
     ]
     for src, dest in data_pairs:
         if src.exists():
@@ -923,6 +929,8 @@ def _pyinstaller_data_args() -> list[str]:
             print("[WARN] _config/cut_gaps_table.json no encontrado; se omite del bundle.")
         elif src.name == "amada_barrenos_catalog.json":
             print("[WARN] _config/amada_barrenos_catalog.json no encontrado; se omite del bundle.")
+        elif src.name == "cyptube_bridge.json":
+            print("[WARN] _config/cyptube_bridge.json no encontrado; se omite del bundle.")
     # Solo los DXF de fixtura productivos (no scripts _sim).
     for dxf in FIXTURA_AMADA_DXFS:
         if dxf.is_file():
@@ -992,6 +1000,7 @@ def verify_build_artifacts(
             "_config/nest_runtime.json",
             "_config/cut_gaps_table.json",
             "_config/amada_barrenos_catalog.json",
+            "_config/cyptube_bridge.json",
         ):
             p = defaults_root / rel
             if not p.is_file():
@@ -1127,6 +1136,7 @@ def seed_persistent_sidecars(
             "_config/nest_runtime.json": dist_root / "_config" / "nest_runtime.json",
             "_config/cut_gaps_table.json": dist_root / "_config" / "cut_gaps_table.json",
             "_config/amada_barrenos_catalog.json": dist_root / "_config" / "amada_barrenos_catalog.json",
+            "_config/cyptube_bridge.json": dist_root / "_config" / "cyptube_bridge.json",
         }
     else:
         defaults_root = dist_root / "defaults"
@@ -1137,6 +1147,7 @@ def seed_persistent_sidecars(
             "_config/nest_runtime.json": defaults_root / "_config" / "nest_runtime.json",
             "_config/cut_gaps_table.json": defaults_root / "_config" / "cut_gaps_table.json",
             "_config/amada_barrenos_catalog.json": defaults_root / "_config" / "amada_barrenos_catalog.json",
+            "_config/cyptube_bridge.json": defaults_root / "_config" / "cyptube_bridge.json",
         }
     sources = {
         "inventario_remanentes.csv": ROOT / "inventario_remanentes.csv",
@@ -1145,6 +1156,7 @@ def seed_persistent_sidecars(
         "_config/nest_runtime.json": NEST_RUNTIME_CONFIG,
         "_config/cut_gaps_table.json": CUT_GAPS_CONFIG,
         "_config/amada_barrenos_catalog.json": AMADA_BARRENOS_CONFIG,
+        "_config/cyptube_bridge.json": CYPTUBE_BRIDGE_CONFIG,
     }
     for rel, dst in seed_targets.items():
         src = sources[rel]
@@ -1463,6 +1475,10 @@ def print_deploy_checklist(exe_path: Path, onefile: bool = False):
             (
                 "defaults/_config/amada_barrenos_catalog.json",
                 (dist / "defaults" / "_config" / "amada_barrenos_catalog.json").is_file(),
+            ),
+            (
+                "defaults/_config/cyptube_bridge.json",
+                (dist / "defaults" / "_config" / "cyptube_bridge.json").is_file(),
             ),
         ])
     layout = "onefile" if onefile else "onedir"

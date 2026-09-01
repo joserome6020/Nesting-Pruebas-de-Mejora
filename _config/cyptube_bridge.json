@@ -1,0 +1,11 @@
+{
+  "_comment": "ANS → CypTube post-export (Modo B). Funciona para Nesteos Locales Y servidor 80: pasa la ruta absoluta real del NESTEOS DE COBRE exportado.",
+  "enabled": true,
+  "cyptube_main": "C:\\Proyectos\\Cobre - CypTube\\main.py",
+  "python_exe": "",
+  "skip_wait": true,
+  "dry_run": false,
+  "new_console": true,
+  "path_maps": [],
+  "_path_maps_help": "Opcional. Si el RPA ve otra letra/UNC que ANS, ej: [{\"from\": \"\\\\\\\\192.168.2.80\\\\Users\\\\Administrator\\\\Desktop\\\\Grupo Arga Metals\", \"to\": \"Z:\\\\Grupo Arga Metals\"}]"
+}

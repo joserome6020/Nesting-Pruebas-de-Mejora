@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-01 — CypTube Modo B: ANS dispara auto-nest al exportar cobre
+- Tras `cyptube_verticales.json`, ANS lanza CypTube
+  `auto-nest --nesteos-dir … --skip-wait` (consola nueva, no bloquea UI).
+- **Local y servidor 80:** pasa la ruta absoluta real del export (UNC si
+  `exportar_a_servidor`); CTDS junto a ese `NESTEOS DE COBRE`. Log
+  `destino=servidor|local`. Remapeo opcional `path_maps`.
+- Config: `_config/cyptube_bridge.json` (`enabled`, `cyptube_main`, `python_exe`).
+- Off: `enabled: false` o `ARGA_CYPTUBE_AUTO_NEST=0`.
+- Módulo `modules/dxf_export/cyptube_bridge.py`; candado `test_cyptube_bridge.py`.
+- Convenio ANS↔CypTube actualizado (Modo B + dual path).
+
 ### 2026-08-31c — PO correo: SMTP real + reenvío GAM 13048 (SWO-048)
 - Export SWO-048 creó OC/PDF (`PO_GAM_13048.pdf`, total $43,697.37) y ANS
   vio `nombreReporte`, pero el mail no llegó (InsertaPO solo montaba
