@@ -1183,6 +1183,18 @@ def seed_persistent_sidecars(
     else:
         print("[WARN] Sin ArgaNestWorker.exe para sembrar junto al .exe")
 
+    # Icon Handler: siempre en dist/icon_handler (aunque .arganest ya esté
+    # registrado en esta PC). Sin esto el checklist del release marca FALTA.
+    try:
+        local_icon = Path(os.environ.get("LOCALAPPDATA", "")) / "ArgaNesting"
+        deployed = _deploy_icon_assets(dist_root, local_icon)
+        if deployed.is_file() and (dist_root / "icon_handler" / "ArgaIconHandler.dll").is_file():
+            print(f"[OK] Icon Handler sembrado: {dist_root / 'icon_handler' / 'ArgaIconHandler.dll'}")
+        else:
+            print("[WARN] Icon Handler no quedó en dist/icon_handler (DLL ausente).")
+    except Exception as exc:
+        print(f"[WARN] No se pudo sembrar Icon Handler en dist: {exc}")
+
     # Script de swap del updater: lo ejecuta PowerShell desde disco después de
     # que el .exe se cierre. Debe existir como archivo real (no dentro de
     # _MEIPASS) para poder ser invocado con `-File`.
