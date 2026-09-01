@@ -68,7 +68,9 @@ class SistemaNestingPro(QMainWindow):
             pass
 
         self.setWindowTitle("ARGA NESTING SUITE")
-        self.setMinimumSize(1000, 650)
+        from interface.qt.ui_scale import apply_main_window_chrome
+
+        apply_main_window_chrome(self)
         self._cancelar_tarea_flag = threading.Event()
         self._accept_best_flag = threading.Event()
         self._abort_task_flag = threading.Event()
@@ -238,6 +240,9 @@ class SistemaNestingPro(QMainWindow):
             pass
 
     def _mostrar_maximizado(self):
+        from interface.qt.ui_scale import apply_main_window_chrome
+
+        apply_main_window_chrome(self)
         self.showMaximized()
         self.raise_()
         self.activateWindow()

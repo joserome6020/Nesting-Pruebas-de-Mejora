@@ -55,6 +55,35 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-01e — Repo/release: main al día + tag GitHub en commit real
+- `publish_release.py`: `gh release create --target <commit>` del
+  `latest.json` (antes caía a `main` viejo: tag con hash nuevo, commit julio).
+- Regla `release-publish.mdc` + `AGENTS.md` 9b: release exige push **y**
+  actualizar `main` remota, no solo la feature branch.
+- Commit pendiente UI scale / cinta / PARTS-SHEETS + candado `test_ui_scale`.
+
+### 2026-09-01d — Cinta Nesting compacta + PARTS AMADA/PLASMA visible
+- Cinta: altura compacta, botones Fixed (sin hueco vacío), sin barra de scroll
+  visible; rueda del mouse desplaza si no cabe. Separación clara vs panel oscuro.
+- PARTS: columna **AMADA / PLASMA** (antes ESP.) con checkbox etiquetado
+  Amada/Plasma; anchos mínimos para que no se esconda. Toolbar sin barra fea.
+- SHEETS filtros: mismo scroll invisible + finalize de ancho.
+
+### 2026-09-01c — UI scale: cinta Nesting + barras PARTS/SHEETS
+- Cinta Nesting más alta (140px diseño), botones con más padding y columnas
+  apiladas sin recorte vertical; scroll horizontal si el panel es angosto.
+- PARTS: toolbar superior con scroll + botones escalados; visor CAD con barra
+  y métricas en scroll horizontal (LARGO/ANCHO/… ya no se truncan).
+- SHEETS: fila de filtros con scroll horizontal; combos y etiquetas escalados.
+- Helper reutilizable `make_hscroll_toolbar` en `layout_helpers.py`.
+
+### 2026-09-01b — UI scale: ANS respeta resolución/escala de cada PC
+- Baseline diseño 1920×1080: en pantallas/VM más chicas reduce botones,
+  márgenes y diálogos (`interface/qt/ui_scale.py`); no agranda sobre diseño.
+- High-DPI PassThrough en `main.py`; FILES con scroll + tamaños `s()`.
+- Diálogos clave usan `fit_window` / `set_scaled_*` (largos, nest sim, modales).
+- Candado: `tests/native/test_ui_scale.py`.
+
 ### 2026-09-01 — CypTube Modo B: ANS dispara auto-nest al exportar cobre
 - Tras `cyptube_verticales.json`, ANS lanza CypTube
   `auto-nest --nesteos-dir … --skip-wait` (consola nueva, no bloquea UI).

@@ -120,6 +120,22 @@ def _github_release_exists(repo: str, tag: str) -> bool:
         return False
 
 
+def _github_target_commit(latest: dict) -> str:
+    """
+    Commit exacto del build (no la rama default). Sin esto, `gh release create`
+    clava el tag en `main` aunque el zip se haya construido en otra rama.
+    """
+    full = str(latest.get("commit") or "").strip()
+    short = str(latest.get("commit_short") or "").strip()
+    target = full or short
+    if not target or target.startswith("nogit"):
+        raise SystemExit(
+            "latest.json sin 'commit'/'commit_short' válido: el tag GitHub "
+            "debe apuntar al commit del build, no a main por defecto."
+        )
+    return target
+
+
 def _github_publish(
     repo: str,
     tag: str,
@@ -135,6 +151,7 @@ def _github_publish(
             "y corre `gh auth login` en esta PC."
         )
     notes = str(latest.get("notes") or "").strip() or "ANS release"
+    target = _github_target_commit(latest)
     if not _github_release_exists(repo, tag):
         cmd = [
             "gh",
@@ -143,6 +160,8 @@ def _github_publish(
             tag,
             "--repo",
             repo,
+            "--target",
+            target,
             "--title",
             f"ARGA NESTING SUITE {latest.get('version')}",
             "--notes",

@@ -58,7 +58,8 @@ class _BouncingLogoLabel(QLabel):
                 Qt.TransformationMode.SmoothTransformation,
             )
         self.setPixmap(pix)
-        self.setFixedSize(54, 54)
+        from interface.qt.ui_scale import s as _s
+        self.setFixedSize(_s(54), _s(54))
         self.move(8, 8)
 
         self._t0 = time.perf_counter()
@@ -112,7 +113,9 @@ class ProgressDialog(QDialog):
             alto = 320
         else:
             alto = 250
-        self.setFixedSize(500, alto)
+        from interface.qt.ui_scale import s, set_scaled_fixed_size
+
+        set_scaled_fixed_size(self, 500, alto)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(surface_dialog_stylesheet())
@@ -125,7 +128,7 @@ class ProgressDialog(QDialog):
         self._aceptando = False
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 24, 24, 24)
+        lay.setContentsMargins(s(24), s(24), s(24), s(24))
 
         self.lbl_mensaje = QLabel("Procesando motor matemático...")
         self.lbl_mensaje.setStyleSheet(f"font-weight:700;color:{COLOR_GRIS_DARK};")
@@ -149,7 +152,7 @@ class ProgressDialog(QDialog):
         lay.addWidget(self.barra, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self._logo_box = QFrame()
-        self._logo_box.setFixedSize(360, 95)
+        self._logo_box.setFixedSize(s(360), s(95))
         self._logo_box.setStyleSheet(
             "background:#FBFCFF;border:1px solid #D8DFEB;border-radius:12px;"
         )

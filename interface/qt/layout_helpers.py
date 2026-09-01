@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
+    QHBoxLayout,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -72,6 +73,77 @@ def finalize_splitter(splitter: QSplitter, min_left: int = 280, min_right: int =
         handle = splitter.handle(i)
         if handle is not None:
             handle.setCursor(Qt.CursorShape.SplitHCursor)
+
+
+_HSCROLL_BAR_SS = """
+QScrollArea#{name} QScrollBar:horizontal {{
+    width: 0px;
+    height: 0px;
+    background: transparent;
+    border: none;
+}}
+QScrollArea#{name} QScrollBar:vertical {{
+    width: 0px;
+    height: 0px;
+}}
+"""
+
+
+def make_hscroll_toolbar(
+    *,
+    height_design: int = 48,
+    min_height: int = 40,
+    object_name: str = "HScrollToolbar",
+    inner: QWidget | None = None,
+) -> tuple[QScrollArea, QWidget, QHBoxLayout]:
+    """
+    Barra horizontal: si no cabe, rueda del mouse desplaza (sin barra visible).
+    Devuelve (scroll_area, inner_widget, hbox_layout).
+    """
+    from interface.qt.ui_scale import s
+
+    h = s(height_design, min_px=min_height)
+    scroll = QScrollArea()
+    scroll.setObjectName(object_name)
+    scroll.setFixedHeight(h)
+    scroll.setWidgetResizable(False)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setStyleSheet(_HSCROLL_BAR_SS.format(name=object_name))
+
+    body = inner or QWidget()
+    lay = QHBoxLayout(body)
+    lay.setContentsMargins(
+        s(12, min_px=8),
+        s(6, min_px=4),
+        s(12, min_px=8),
+        s(6, min_px=4),
+    )
+    lay.setSpacing(s(10, min_px=6))
+    lay.setSizeConstraint(QHBoxLayout.SizeConstraint.SetFixedSize)
+    body.adjustSize()
+    scroll.setWidget(body)
+
+    def _wheel_hscroll(event):
+        bar = scroll.horizontalScrollBar()
+        delta = event.angleDelta().y() or event.angleDelta().x()
+        if delta and bar.maximum() > 0:
+            bar.setValue(bar.value() - int(delta / 2))
+            event.accept()
+            return
+        event.ignore()
+
+    scroll.wheelEvent = _wheel_hscroll  # type: ignore[method-assign]
+    return scroll, body, lay
+
+
+def finalize_hscroll_toolbar(scroll: QScrollArea, body: QWidget) -> None:
+    """Llamar al terminar de llenar la barra: fija ancho real del contenido."""
+    body.adjustSize()
+    hint = body.sizeHint()
+    body.setMinimumWidth(max(hint.width(), body.width()))
+    scroll.setWidget(body)
 
 
 def make_scroll(parent: QWidget | None = None) -> QScrollArea:

@@ -1,6 +1,8 @@
 """Editor de lote activo — PySide6 nativo."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -29,7 +31,7 @@ class EditorLoteWindow(QDialog):
         super().__init__(tab_nesting)
         self.tab = tab_nesting
         self.setWindowTitle("Editar lote activo")
-        self.resize(1220, 620)
+        fit_window(self, 1220, 620)
         self.setModal(True)
         self._build_ui()
         self._refrescar_tabla()

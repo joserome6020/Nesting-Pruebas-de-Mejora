@@ -1,6 +1,8 @@
 """Reproductor de nesteo — canvas + play + barra (zoom/pan como nest normal)."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window, set_scaled_min_size, s
+
 import os
 import sys
 
@@ -91,8 +93,8 @@ class NestReplayer(QMainWindow):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
-        self.setMinimumSize(1000, 680)
-        self.resize(1280, 800)
+        set_scaled_min_size(self, 1000, 680, floor_w=720, floor_h=480)
+        fit_window(self, 1280, 800)
 
         central = QWidget()
         self.setCentralWidget(central)

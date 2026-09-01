@@ -21,10 +21,14 @@
     Si no, **arregla el build en el mismo cambio** para que no se quede atrás.
     Ver `.cursor/rules/build-exe-parity.mdc`.
 9b. **Release = build + publicar + versionar:** si el usuario pide un release /
-    zip de Release, además del `--release` local hay que publicar el artefacto
+    zip de Release, además del `--release` local hay que: (1) commit+push de
+    lo que entra, (2) **actualizar `main` en remoto** (merge/FF desde la
+    rama de trabajo), (3) publicar el artefacto con tag apuntando al
+    **commit del build** (`publish_release.py` usa `--target`),
     (`python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
     o el UNC indicado) y devolver la URL del tag nuevo. No dejar el zip solo
-    en `dist/releases/`. Ver `.cursor/rules/release-publish.mdc`.
+    en `dist/releases/` ni dejar `main` congelada. Ver
+    `.cursor/rules/release-publish.mdc`.
 9c. **Release = ANS cerrado + empaquetado 100%:** cerrar el Suite antes del
     build; smoke sin `--skip-smoke` debe cubrir módulos de runtime (p. ej.
     `engine.step_paths` / Crear STEPs, buzón). Si falta algo en el bundle,

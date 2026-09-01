@@ -1,6 +1,8 @@
 """Visor STEP experimental (OCCT + VTK) — pestaña NESTING."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window
+
 import math
 import os
 import re
@@ -315,7 +317,7 @@ class StepViewerDialog(QDialog):
             | Qt.WindowType.WindowMinMaxButtonsHint
             | Qt.WindowType.WindowCloseButtonHint
         )
-        self.resize(1280, 800)
+        fit_window(self, 1280, 800)
         self.setStyleSheet(surface_dialog_stylesheet())
 
         self._app = app

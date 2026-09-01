@@ -104,8 +104,10 @@ class LargosNestingDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setModal(False)
-        self.setMinimumSize(960, 620)
-        self.resize(1320, 820)
+        from interface.qt.ui_scale import fit_window, set_scaled_min_size
+
+        set_scaled_min_size(self, 960, 620, floor_w=720, floor_h=480)
+        fit_window(self, 1320, 820)
         self.setStyleSheet(surface_dialog_stylesheet())
 
         root = QVBoxLayout(self)

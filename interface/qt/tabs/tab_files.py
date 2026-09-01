@@ -1,6 +1,7 @@
 """Pestaña FILES — PySide6 nativo (paridad con interface/tab_files.py oficial)."""
 from __future__ import annotations
 
+
 import csv
 import glob
 import os
@@ -35,8 +36,9 @@ from interface.autodxf_metadata import (
 )
 from modules.processed_layers import ProcesadorDXF
 from modules.scanner import EscanerServidor
-from interface.qt.layout_helpers import make_card
+from interface.qt.layout_helpers import make_card, make_scroll
 from interface.qt.thread_bridge import call_on_main
+from interface.qt.ui_scale import fit_window, s, sp, ui_factor
 from interface.qt.theme import (
     COLOR_BORDE,
     COLOR_FONDO_APP,
@@ -65,34 +67,55 @@ class TabFiles(QWidget):
     def _build_ui(self):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = make_scroll(self)
+        host = QWidget()
+        host_lay = QVBoxLayout(host)
+        host_lay.setContentsMargins(s(8), s(8), s(8), s(8))
+
         card = make_card()
-        card.setMinimumSize(720, 480)
-        card.setMaximumWidth(980)
+        card.setMinimumSize(s(720, min_px=480), s(480, min_px=360))
+        card.setMaximumWidth(s(980, min_px=560))
+        m = s(48, min_px=16)
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(48, 44, 48, 44)
-        lay.setSpacing(18)
+        lay.setContentsMargins(m, s(44, min_px=16), m, s(44, min_px=16))
+        lay.setSpacing(s(18, min_px=10))
 
         title = QLabel("CONEXIÓN CON EL SERVIDOR")
-        title.setStyleSheet(f"font-size:22px;font-weight:700;color:{COLOR_TEXTO_SUBTITULO};")
+        title.setStyleSheet(
+            f"font-size:{s(22, min_px=15)}px;font-weight:700;color:{COLOR_TEXTO_SUBTITULO};"
+        )
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
 
+        bw, bh = s(450, min_px=280), s(80, min_px=52)
+        fs_main = s(16, min_px=12)
+        pad_main = sp("12px 20px")
+
         self.btn_nest_scan = QPushButton("IMPORTAR JOB INDIVIDUAL\n(INGENIERÍA)")
-        self.btn_nest_scan.setFixedSize(450, 80)
-        apply_push_button(self.btn_nest_scan, COLOR_GRIS_DARK, font_size=16, padding="12px 20px")
+        self.btn_nest_scan.setFixedSize(bw, bh)
+        apply_push_button(
+            self.btn_nest_scan, COLOR_GRIS_DARK, font_size=fs_main, padding=pad_main
+        )
         self.btn_nest_scan.clicked.connect(self.ejecutar_escaneo_servidor)
         lay.addWidget(self.btn_nest_scan, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.btn_swo_web = QPushButton("IMPORTAR S.W.O.\n(FUSIÓN DESDE TABLERO WEB)")
-        self.btn_swo_web.setFixedSize(450, 80)
-        apply_push_button(self.btn_swo_web, "#455E75", hover="#334659", font_size=16, padding="12px 20px")
+        self.btn_swo_web.setFixedSize(bw, bh)
+        apply_push_button(
+            self.btn_swo_web, "#455E75", hover="#334659", font_size=fs_main, padding=pad_main
+        )
         self.btn_swo_web.clicked.connect(self.buscar_swos_pendientes)
         lay.addWidget(self.btn_swo_web, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.btn_step_feedstock = QPushButton("PROCESAR STEP DEL JOB\n(COMPLEMENTO LOCAL)")
-        self.btn_step_feedstock.setFixedSize(450, 72)
+        self.btn_step_feedstock.setFixedSize(bw, s(72, min_px=48))
         apply_push_button(
-            self.btn_step_feedstock, "#0F766E", hover="#0D9488", font_size=14, padding="10px 18px"
+            self.btn_step_feedstock,
+            "#0F766E",
+            hover="#0D9488",
+            font_size=s(14, min_px=11),
+            padding=sp("10px 18px"),
         )
         self.btn_step_feedstock.setToolTip(
             "Busca .stp/.step dentro de AutoDXF del job activo, genera DXF en "
@@ -103,8 +126,13 @@ class TabFiles(QWidget):
         lay.addWidget(self.btn_step_feedstock, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.btn_historial = QPushButton("GESTIONAR HISTORIAL\n(JOBS YA IMPORTADOS)")
-        self.btn_historial.setFixedSize(450, 56)
-        apply_push_button(self.btn_historial, "#FFFFFF", font_size=12, padding="8px 16px")
+        self.btn_historial.setFixedSize(bw, s(56, min_px=40))
+        apply_push_button(
+            self.btn_historial,
+            "#FFFFFF",
+            font_size=s(12, min_px=10),
+            padding=sp("8px 16px"),
+        )
         self.btn_historial.clicked.connect(self.mostrar_gestion_historial)
         lay.addWidget(self.btn_historial, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -115,7 +143,7 @@ class TabFiles(QWidget):
 
         engine_title = QLabel("MOTOR DE NESTEO")
         engine_title.setStyleSheet(
-            f"font-size:13px;font-weight:700;color:{COLOR_TEXTO_SECUNDARIO};letter-spacing:0.5px;"
+            f"font-size:{s(13, min_px=10)}px;font-weight:700;color:{COLOR_TEXTO_SECUNDARIO};letter-spacing:0.5px;"
         )
         engine_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(engine_title)
@@ -125,7 +153,7 @@ class TabFiles(QWidget):
 
         self._engine_combo = QComboBox()
         self._engine_combo.setObjectName("HerinoxCombo")
-        self._engine_combo.setFixedSize(450, 40)
+        self._engine_combo.setFixedSize(bw, s(40, min_px=28))
         self._engine_metas = list_engine_metas()
         current_eid = load_default_steel_engine_id()
         current_idx = 0
@@ -154,16 +182,24 @@ class TabFiles(QWidget):
         lay.addWidget(self._engine_combo, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.lbl_engine_status = QLabel("")
-        self.lbl_engine_status.setStyleSheet(f"color:{COLOR_TEXTO_MUTED};font-size:11px;")
+        self.lbl_engine_status.setStyleSheet(
+            f"color:{COLOR_TEXTO_MUTED};font-size:{s(11, min_px=9)}px;"
+        )
         self.lbl_engine_status.setWordWrap(True)
         self.lbl_engine_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._refresh_engine_status_label(current_eid)
         lay.addWidget(self.lbl_engine_status)
 
-        outer.addStretch()
-        outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
-        outer.addStretch()
+        host_lay.addStretch()
+        host_lay.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+        host_lay.addStretch()
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
         self.refrescar_step_feedstock_ui()
+        try:
+            print(f"[UI-SCALE][FILES] factor={ui_factor():.3f} btn={bw}x{bh}", flush=True)
+        except Exception:
+            pass
 
     def refrescar_step_feedstock_ui(self) -> None:
         """Muestra/oculta el 3er botón según Configuración Global."""
@@ -813,7 +849,7 @@ class TabFiles(QWidget):
     def mostrar_selector_jobs(self, jobs):
         dlg = QDialog(self)
         dlg.setWindowTitle("IMPORTAR TRABAJOS")
-        dlg.resize(820, 620)
+        fit_window(dlg, 820, 620)
         dlg.setStyleSheet(surface_dialog_stylesheet())
         dlg.setModal(True)
 

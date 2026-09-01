@@ -10,6 +10,8 @@ Motor: OCCT (Arga). Flujo planta (rápido + marcas reales):
 """
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window
+
 import os
 import sys
 import threading
@@ -193,7 +195,7 @@ def _seleccionar_job_y_wo(parent, *, modo_servidor: bool) -> Path | None:
 
     dlg = QDialog(parent)
     dlg.setWindowTitle(f"CREAR STEPs — {origen}")
-    dlg.resize(820, 620)
+    fit_window(dlg, 820, 620)
     dlg.setStyleSheet(surface_dialog_stylesheet())
     dlg.setModal(True)
     elegido: dict = {"nesting": None}
@@ -399,7 +401,7 @@ def _seleccionar_swo(parent, *, modo_servidor: bool) -> Path | None:
 
     dlg = QDialog(parent)
     dlg.setWindowTitle(f"CREAR STEPs — S.W.O. ({origen})")
-    dlg.resize(720, 520)
+    fit_window(dlg, 720, 520)
     dlg.setStyleSheet(surface_dialog_stylesheet())
     dlg.setModal(True)
     elegido: dict = {"nesting": None}

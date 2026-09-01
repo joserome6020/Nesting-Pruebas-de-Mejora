@@ -104,14 +104,29 @@ if __name__ == "__main__":
     import urllib.parse  # noqa: F401
     import urllib.request  # noqa: F401
 
-    from PySide6.QtWidgets import QApplication
     from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication
+    from interface.qt.ui_scale import configure_high_dpi, scale_info
     from interface.qt.theme import apply_theme
     from interface.qt.main_window import SistemaNestingPro
+
+    # High-DPI antes de QApplication: respeta escala Windows (100/125/150%) sin
+    # redondear agresivo; los layouts usan ui_scale para pantallas chicas (VM).
+    configure_high_dpi()
 
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("ARGA NESTING SUITE")
     qt_app.setApplicationDisplayName("ARGA NESTING SUITE")
+    try:
+        _info = scale_info()
+        print(
+            f"[UI-SCALE] available={_info['available_w']}x{_info['available_h']} "
+            f"factor={_info['factor']} dpr={_info['device_pixel_ratio']} "
+            f"design={_info['design']}",
+            flush=True,
+        )
+    except Exception:
+        pass
     try:
         import config as _cfg
 

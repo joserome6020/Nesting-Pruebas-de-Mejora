@@ -1,6 +1,8 @@
 """Lab Qt: carga .arganest / nest activo → placas → preview actual vs simulación (4 motores)."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window, set_scaled_min_size, s
+
 import copy
 import os
 import threading
@@ -141,8 +143,8 @@ class NestSimCompareDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
-        self.setMinimumSize(1100, 700)
-        self.resize(1480, 880)
+        set_scaled_min_size(self, 1100, 700, floor_w=800, floor_h=520)
+        fit_window(self, 1480, 880)
         self.setStyleSheet(surface_dialog_stylesheet())
 
         root = QVBoxLayout(self)

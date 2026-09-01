@@ -1,6 +1,8 @@
 # nesting_modals.py — diálogos Qt (paridad con interface/nesting_modals.py)
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window, s, set_scaled_min_size
+
 import copy
 
 from PySide6.QtCore import Qt
@@ -65,7 +67,7 @@ def preguntar_separacion_cobre_renest(
     dlg = QDialog(parent)
     dlg.setWindowTitle("Separación entre piezas de cobre")
     dlg.setModal(True)
-    dlg.setFixedSize(360, 140)
+    dlg.setFixedSize(s(360), s(140))
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -281,7 +283,7 @@ def _editar_tabla_gaps_corte(parent) -> bool:
     dlg.setWindowTitle("Editar tabla de gaps de corte")
     dlg.setModal(True)
     dlg.setMinimumWidth(460)
-    dlg.resize(480, 740)
+    fit_window(dlg, 480, 740)
     dlg.setStyleSheet(surface_dialog_stylesheet())
     lay = QVBoxLayout(dlg)
 
@@ -376,7 +378,7 @@ def abrir_modal_configuracion(parent):
     dlg.setWindowTitle("Configuración Global")
     dlg.setModal(True)
     dlg.setMinimumWidth(480)
-    dlg.resize(520, 760)
+    fit_window(dlg, 520, 760)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     root = QVBoxLayout(dlg)
@@ -768,7 +770,7 @@ class CostosOrdenDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.setModal(False)
-        self.resize(480, 560)
+        fit_window(self, 480, 560)
         self.setStyleSheet(surface_dialog_stylesheet())
 
         root = QVBoxLayout(self)
@@ -951,7 +953,7 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
     dlg = QDialog(parent)
     dlg.setWindowTitle("Análisis MES de Lotes")
     dlg.setModal(True)
-    dlg.resize(750, 570)
+    fit_window(dlg, 750, 570)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -1059,7 +1061,7 @@ def _build_transfer_dialog(parent, piezas_sel, entries, titulo, on_confirm):
     dlg = QDialog(parent)
     dlg.setWindowTitle("Mudar Piezas" if multi else "Mudar Pieza")
     dlg.setModal(True)
-    dlg.resize(520, 580 if multi else 550)
+    fit_window(dlg, 520, 580 if multi else 550)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -1164,7 +1166,7 @@ def abrir_modal_transferencia_masiva(parent, clave, hoja_origen):
     dlg = QDialog(parent)
     dlg.setWindowTitle("Cambiar piezas a otra placa")
     dlg.setModal(True)
-    dlg.resize(520, 580)
+    fit_window(dlg, 520, 580)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -1217,7 +1219,7 @@ def mostrar_modal_comparacion_motores(parent, bundle) -> str | None:
 
     dlg = QDialog(parent)
     dlg.setWindowTitle("Comparación de motores de nesting")
-    dlg.setMinimumSize(820, 420)
+    set_scaled_min_size(dlg, 820, 420, floor_w=640, floor_h=360)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)
@@ -1521,7 +1523,7 @@ def preguntar_seleccion_placas_nesting(
     dlg = QDialog(parent)
     dlg.setWindowTitle("Selección de placas — Nesting")
     dlg.setModal(True)
-    dlg.resize(680, 580)
+    fit_window(dlg, 680, 580)
     dlg.setStyleSheet(surface_dialog_stylesheet())
 
     lay = QVBoxLayout(dlg)

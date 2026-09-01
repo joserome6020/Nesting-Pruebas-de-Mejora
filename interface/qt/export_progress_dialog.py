@@ -29,7 +29,9 @@ class ExportProgressDialog(QDialog):
     def __init__(self, parent, titulo: str = "Exportando DXF / STEP"):
         super().__init__(parent)
         self.setWindowTitle(titulo)
-        self.setFixedSize(520, 320)
+        from interface.qt.ui_scale import set_scaled_fixed_size
+
+        set_scaled_fixed_size(self, 520, 320)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(surface_dialog_stylesheet())

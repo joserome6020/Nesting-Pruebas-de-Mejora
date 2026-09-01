@@ -182,9 +182,10 @@ def build_tab_nesting_ui(tab) -> None:
     der_wrap_lay.setContentsMargins(0, 0, 0, 0)
     der_wrap_lay.setSpacing(0)
 
-    # Cinta dentro del panel (no overlay sobre el QTabBar: eso deformaba las pestañas).
+    # Cinta en su propio slot; margen bajo para no “montar” el panel oscuro.
     tab.frame_header_der = build_nesting_ribbon(tab)
     der_wrap_lay.addWidget(tab.frame_header_der)
+    der_wrap_lay.addSpacing(6)
 
     tab.panel_der = make_panel_dark()
     panel_lay = QVBoxLayout(tab.panel_der)

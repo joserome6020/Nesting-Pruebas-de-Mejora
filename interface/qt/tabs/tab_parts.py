@@ -1,6 +1,8 @@
 """Tab PARTS — PySide6 nativo."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window, s
+
 import os
 import csv
 import json
@@ -42,10 +44,12 @@ from interface.qt.thread_bridge import call_on_main
 from interface.qt.visualizer import VisorDXF, generar_thumbnail
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
 from interface.qt.layout_helpers import (
+    finalize_hscroll_toolbar,
     finalize_splitter,
     make_card,
     make_herinox_card,
     make_horizontal_splitter,
+    make_hscroll_toolbar,
     make_scroll,
     make_scroll_content,
 )
@@ -132,14 +136,14 @@ class TabParts(QWidget, TimerHost):
         self._origen_mat_cal_por_ruta: dict[str, tuple[str, str]] = {}
 
         self.local_col_config = [
-            {"weight": 5, "min": 260},
-            {"weight": 2, "min": 90},
-            {"weight": 1, "min": 45},
-            {"weight": 1, "min": 70},
-            {"weight": 1, "min": 65},
-            {"weight": 1, "min": 70},
-            {"weight": 1, "min": 52},
-            {"weight": 1, "min": 72},
+            {"weight": 4, "min": 180},  # PIEZA / REF
+            {"weight": 2, "min": 88},   # MATERIAL
+            {"weight": 1, "min": 44},   # QTY
+            {"weight": 1, "min": 64},   # TOTAL QTY
+            {"weight": 1, "min": 64},   # CALIBRE
+            {"weight": 1, "min": 64},   # ESTADO
+            {"weight": 1, "min": 96},   # AMADA / PLASMA (ESP) — no aplastar
+            {"weight": 1, "min": 64},   # VISTA
         ]
 
         # Estado para lista de largos
@@ -161,17 +165,27 @@ class TabParts(QWidget, TimerHost):
         tabla_lay = QVBoxLayout(frame_tabla)
         tabla_lay.setContentsMargins(16, 16, 12, 16)
 
-        frame_header = QWidget()
-        hdr = QHBoxLayout(frame_header)
+        frame_header_scroll, frame_header, hdr = make_hscroll_toolbar(
+            height_design=54,
+            min_height=46,
+            object_name="PartsToolbarScroll",
+        )
         self.lbl_tanques = QLabel("TANQUES DEL PROYECTO:")
-        self.lbl_tanques.setStyleSheet(f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:15px;")
+        self.lbl_tanques.setStyleSheet(
+            f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:{s(15, min_px=12)}px;"
+        )
         hdr.addWidget(self.lbl_tanques)
         self.ent_tanques = QLineEdit("X1")
-        self.ent_tanques.setFixedWidth(70)
+        self.ent_tanques.setFixedWidth(s(70, min_px=56))
         self.ent_tanques.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hdr.addWidget(self.ent_tanques)
         self.btn_aplicar_tanques = QPushButton("APLICAR")
-        apply_push_button(self.btn_aplicar_tanques, ARGB_BTN_2, font_size=11)
+        apply_push_button(
+            self.btn_aplicar_tanques,
+            ARGB_BTN_2,
+            font_size=s(11, min_px=9),
+            padding=f"{s(6, min_px=4)}px {s(12, min_px=8)}px",
+        )
         self.btn_aplicar_tanques.clicked.connect(self.aplicar_cantidad_tanques)
         hdr.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
@@ -180,7 +194,12 @@ class TabParts(QWidget, TimerHost):
         self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
         hdr.addStretch()
         self.btn_reprocesar_autodxf = QPushButton("REPROCESAR AUTODXF")
-        apply_push_button(self.btn_reprocesar_autodxf, ARGB_BTN_2, font_size=11)
+        apply_push_button(
+            self.btn_reprocesar_autodxf,
+            ARGB_BTN_2,
+            font_size=s(11, min_px=9),
+            padding=f"{s(6, min_px=4)}px {s(10, min_px=7)}px",
+        )
         self.btn_reprocesar_autodxf.setToolTip(
             "Vuelve a limpiar/procesar los DXF crudos de AutoDXF → Processed Files "
             "y actualiza PARTS. Luego RENESTEAR ESTA PLACA en la placa afectada."
@@ -188,10 +207,16 @@ class TabParts(QWidget, TimerHost):
         self.btn_reprocesar_autodxf.clicked.connect(self.reprocesar_autodxf_partes)
         hdr.addWidget(self.btn_reprocesar_autodxf)
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
-        apply_push_button(self.btn_lista_largos, ARGB_BTN_3, font_size=11)
+        apply_push_button(
+            self.btn_lista_largos,
+            ARGB_BTN_3,
+            font_size=s(11, min_px=9),
+            padding=f"{s(6, min_px=4)}px {s(10, min_px=7)}px",
+        )
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
         hdr.addWidget(self.btn_lista_largos)
-        tabla_lay.addWidget(frame_header)
+        finalize_hscroll_toolbar(frame_header_scroll, frame_header)
+        tabla_lay.addWidget(frame_header_scroll)
 
         header_wrap = QWidget()
         header_wrap_lay = QHBoxLayout(header_wrap)
@@ -205,20 +230,20 @@ class TabParts(QWidget, TimerHost):
         self._parts_head_grid = QGridLayout(self._parts_head)
         self._parts_head_grid.setContentsMargins(self._PARTS_GRID_MARGIN_H, 0, self._PARTS_GRID_MARGIN_H, 0)
         self._apply_parts_grid_columns(self._parts_head_grid)
-        titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "ESP.", "VISTA"]
+        titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "AMADA / PLASMA", "VISTA"]
         for i, txt in enumerate(titulos):
             lbl = QLabel(txt)
             if i == 0:
                 lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             else:
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if txt == "ESP.":
+            if txt == "AMADA / PLASMA":
                 lbl.setToolTip(
-                    "Cobre: Amada ESP. — ancho 5\" (±tol).\n"
-                    "VERTICAL sin gap + DXF pieza en AMADA/FIXTURA.\n"
-                    "Acero/otros: marcar para compensación plasma "
+                    "Cobre: marca = Amada ESP (ancho 5\" ±tol) → VERTICAL + DXF en AMADA/FIXTURA.\n"
+                    "Acero/otros: marca = compensación plasma "
                     "(reprocesa geometría y nestea en placas solo-plasma)."
                 )
+                lbl.setStyleSheet(f"font-weight:700;color:{COLOR_GRIS_DARK};")
             self._parts_head_grid.addWidget(lbl, 0, i)
         header_wrap_lay.addWidget(self._parts_head, 1)
 
@@ -268,16 +293,23 @@ class TabParts(QWidget, TimerHost):
 
         hdr_row = QHBoxLayout()
         tit = QLabel("DETALLE DE PIEZA")
-        tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:14px;")
+        tit.setStyleSheet(
+            f"font-weight:700;color:{COLOR_TEXTO_TITULO};font-size:{s(14, min_px=12)}px;"
+        )
+        tit.setMinimumWidth(s(120, min_px=90))
         hdr_row.addWidget(tit)
         self.lbl_job_activo = QLabel("—")
         self.lbl_job_activo.setStyleSheet(
-            f"font-weight:600;color:{COLOR_TEXTO_SUBTITULO};font-size:13px;padding-left:6px;"
+            f"font-weight:600;color:{COLOR_TEXTO_SUBTITULO};"
+            f"font-size:{s(12, min_px=10)}px;padding-left:{s(6, min_px=4)}px;"
         )
-        hdr_row.addWidget(self.lbl_job_activo)
-        hdr_row.addStretch()
-        lbl_sub = QLabel("VISTA CAD CON COTAS INTERACTIVAS")
-        lbl_sub.setStyleSheet(f"color:{COLOR_GRIS_MED};font-size:11px;")
+        self.lbl_job_activo.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        hdr_row.addWidget(self.lbl_job_activo, 1)
+        lbl_sub = QLabel("VISTA CAD")
+        lbl_sub.setStyleSheet(f"color:{COLOR_GRIS_MED};font-size:{s(11, min_px=9)}px;")
+        lbl_sub.setToolTip("Vista CAD con cotas interactivas")
         hdr_row.addWidget(lbl_sub)
         vis_lay.addLayout(hdr_row)
 
@@ -296,7 +328,7 @@ class TabParts(QWidget, TimerHost):
         splitter.addWidget(frame_visor_bg)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        finalize_splitter(splitter, min_left=640, min_right=280)
+        finalize_splitter(splitter, min_left=520, min_right=300)
         self._parts_splitter = splitter
         root.addWidget(splitter)
 
@@ -417,8 +449,13 @@ class TabParts(QWidget, TimerHost):
                     chk_wrap = QWidget()
                     chk_lay = QHBoxLayout(chk_wrap)
                     chk_lay.setContentsMargins(0, 0, 0, 0)
+                    chk_lay.setSpacing(4)
                     chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     chk = QCheckBox()
+                    chk.setStyleSheet(
+                        "QCheckBox::indicator{width:18px;height:18px;}"
+                        "QCheckBox{spacing:4px;}"
+                    )
                     self._configurar_esp_checkbox(chk, ruta, mat, cal)
                     chk_lay.addWidget(chk)
                     row_lay.addWidget(chk_wrap, 0, i)
@@ -637,6 +674,7 @@ class TabParts(QWidget, TimerHost):
         if es_cu and ruta:
             chk.setEnabled(True)
             chk.setVisible(True)
+            chk.setText("Amada")
             chk.setToolTip(
                 'Amada ESP.: 5" + barrenos catálogo → VERTICAL + DXF pieza AMADA/FIXTURA'
             )
@@ -651,6 +689,7 @@ class TabParts(QWidget, TimerHost):
         elif ruta and not es_cu:
             chk.setEnabled(True)
             chk.setVisible(True)
+            chk.setText("Plasma")
             chk.setToolTip(
                 "Plasma: compensar esta pieza y nestearla en placas solo-plasma"
             )
@@ -668,6 +707,7 @@ class TabParts(QWidget, TimerHost):
         else:
             chk.setEnabled(False)
             chk.setVisible(False)
+            chk.setText("")
             chk.setToolTip("")
             chk.blockSignals(True)
             chk.setChecked(False)
@@ -908,7 +948,7 @@ class TabParts(QWidget, TimerHost):
     def _mostrar_dialogo_dxf_omitidos(self, omitidos: list):
         dlg = QDialog(self)
         dlg.setWindowTitle("DXF omitidos del nesteo")
-        dlg.resize(1100, 560)
+        fit_window(dlg, 1100, 560)
         dlg.setModal(True)
         lay = QVBoxLayout(dlg)
         card = make_herinox_card()
@@ -1886,7 +1926,7 @@ class TabParts(QWidget, TimerHost):
     def _mostrar_dialogo_lista_largos(self, grupos):
         dlg = QDialog(self)
         dlg.setWindowTitle("Demanda de largos")
-        dlg.resize(1260, 680)
+        fit_window(dlg, 1260, 680)
         dlg.setModal(True)
         lay = QVBoxLayout(dlg)
         card = make_herinox_card()

@@ -9,27 +9,37 @@ Cuando el usuario pida un **release**, un **zip de Release**, **versionar el ANS
 o equivalente, el agente **NO** se detiene en el artefacto local. El flujo
 obligatorio es:
 
-1. **Commit + push** de lo que entra al release (rama al día con `origin`).
+1. **Commit + push** de lo que entra al release (rama de trabajo al día con
+ `origin`). Si el trabajo está en una feature branch, **también** mergear/
+ fast-forward a `main` y **push de `main`**, para que GitHub no muestre
+ `main` congelada mientras el zip ya lleva 100+ commits nuevos.
 2. **Build**: `python tools/build_arga_exe.py --release` (onedir + zip en
-   `dist/releases/` + `latest.json`).
+ `dist/releases/` + `latest.json`). El `latest.json` debe llevar `commit` /
+ `commit_short` del HEAD que se construyó.
 3. **Publicar**: `python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
-   (o el `--unc` que indique el usuario). Eso crea/actualiza el tag de GitHub
-   Releases, sube el `.zip` y reescribe `latest.json` con `url` +
-   `published_at_utc`.
+ (o el `--unc` que indique el usuario). Eso crea/actualiza el tag de GitHub
+ Releases **apuntando al commit del build** (`gh release create --target
+ <commit>`, nunca dejar que caiga al default `main` viejo), sube el `.zip` y
+ reescribe `latest.json` con `url` + `published_at_utc`.
 4. **Verificar** y devolver al usuario la URL del release (p. ej.
-   `https://github.com/joserome6020/Nesting-Pruebas-de-Mejora/releases/tag/v…`)
-   y confirmar que el zip remoto es el de la versión/commit recién construidos
-   — **no** el release anterior.
+ `https://github.com/joserome6020/Nesting-Pruebas-de-Mejora/releases/tag/v…`)
+ y confirmar que el zip remoto es el de la versión/commit recién construidos
+ — **no** el release anterior. Confirmar también que `main` en GitHub
+ refleja ese commit (o lo contiene).
 
 ## Qué NO hacer
 
 - Dejar el zip solo en `dist/releases/` y decir "falta publicar".
 - Publicar sobre un tag viejo (p. ej. `v2026.08.13-…`) cuando el build nuevo
-  es otra versión/commit: cada build genera su propio tag
-  `v{version}-{commit_short}`.
+ es otra versión/commit: cada build genera su propio tag
+ `v{version}-{commit_short}`.
+- Crear el tag GitHub sin `--target` del commit del build (cae a `main` y
+ el historial de GitHub miente: tag con hash nuevo apuntando a commit viejo).
+- Dejar `main` atrasada respecto al release publicado (solo feature branch
+ empujada).
 - Considerar el release cerrado sin URL pública / UNC usable por el updater.
 - Construir con el ANS abierto o publicar un zip con smoke/checklist a medias
-  (ver `release-complete-packaging.mdc`).
+ (ver `release-complete-packaging.mdc`).
 
 ## Excepciones
 

@@ -1,4 +1,4 @@
-"""Cinta tipo AutoCAD para la pestaña Nesting (paneles + comandos planos)."""
+"""Cinta tipo AutoCAD para la pestaña Nesting (ancho completo, sin recortes)."""
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
@@ -14,11 +14,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-# Contraste sobre fondo navy (#1E293B), mismo tono que botones / panel oscuro.
+from interface.qt.ui_scale import s as _s
+
 _ICON = QColor("#F8FAFC")
 _ACCENT = QColor("#93C5FD")
 _RIBBON_BG = "#1E293B"
-_RIBBON_SS = f"""
+
+
+def _ribbon_ss() -> str:
+    return f"""
 QFrame#NestingRibbon {{
     background: {_RIBBON_BG};
     border: 1px solid #0F172A;
@@ -39,17 +43,16 @@ QFrame#NestingRibbon QLabel {{
 }}
 QFrame#NestingRibbon QLabel#RibbonPanelTitle {{
     color: #94A3B8;
-    font-size: 10px;
+    font-size: {_s(10, min_px=9)}px;
     font-weight: 600;
     letter-spacing: 0.3px;
-    padding: 10px 4px 1px 4px;
-    min-height: 16px;
+    padding: 0px 2px;
     margin: 0;
 }}
 QFrame#NestingRibbon QFrame#RibbonSep {{
     background: #475569;
     border: none;
-    margin: 8px 4px 18px 4px;
+    margin: {_s(4, min_px=2)}px {_s(4, min_px=2)}px;
     max-width: 1px;
 }}
 QFrame#NestingRibbon QToolButton {{
@@ -57,7 +60,6 @@ QFrame#NestingRibbon QToolButton {{
     color: #F8FAFC;
     border: 1px solid transparent;
     border-radius: 4px;
-    margin-bottom: 0px;
 }}
 QFrame#NestingRibbon QToolButton:hover {{
     background: #334155;
@@ -76,7 +78,6 @@ QFrame#NestingRibbon QToolButton:checked {{
 QFrame#NestingRibbon QToolButton:disabled {{
     color: #64748B;
 }}
-/* Tip sobre botones blancos: no heredar #F8FAFC del ribbon. */
 QToolTip {{
     background-color: #FFFFFF;
     color: #111827;
@@ -84,6 +85,8 @@ QToolTip {{
     padding: 4px 8px;
 }}
 """
+
+
 _MENU_SS = (
     "QMenu{background:#0F172A;color:#F1F5F9;border:1px solid #334155;"
     "border-radius:4px;padding:4px;}"
@@ -143,7 +146,6 @@ def _pix(kind: str, size: int = 28) -> QPixmap:
         p.drawLine(r.center().x(), r.top(), r.right() - 1, r.top() + 4)
         p.drawLine(r.center().x(), r.top(), r.center().x(), r.bottom() - 4)
     elif kind == "crear_step":
-        # Caja STEP + signo + (generar)
         p.drawRect(r.adjusted(1, 5, -8, -5))
         p.drawLine(r.left() + 1, r.top() + 5, r.center().x() - 4, r.top() + 1)
         p.drawLine(r.center().x() - 4, r.top() + 1, r.right() - 9, r.top() + 5)
@@ -232,22 +234,34 @@ def ribbon_icon(kind: str, size: int = 28) -> QIcon:
     return QIcon(_pix(kind, size))
 
 
-def _cmd_style(*, large: bool) -> str:
-    pad = "4px 8px 2px 8px" if large else "2px 6px"
-    min_w = 64 if large else 92
-    min_h = 52 if large else 22
-    return f"""
+def make_cmd(
+    text: str,
+    *,
+    icon: str,
+    tip: str | None = None,
+    menu: QMenu | None = None,
+) -> QToolButton:
+    """Botón de cinta: icono arriba + texto abajo, tamaño fijo (no se estira ni recorta)."""
+    btn = QToolButton()
+    btn.setText(text)
+    ico = _s(22, min_px=18)
+    btn.setIcon(ribbon_icon(icon, ico))
+    btn.setIconSize(QSize(ico, ico))
+    btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+    btn.setAutoRaise(True)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setFixedSize(_s(72, min_px=64), _s(58, min_px=50))
+    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    btn.setStyleSheet(
+        f"""
         QToolButton {{
             background: transparent;
             color: #F8FAFC;
             border: 1px solid transparent;
             border-radius: 4px;
-            padding: {pad};
-            min-width: {min_w}px;
-            min-height: {min_h}px;
-            font-size: {"11px" if large else "10px"};
+            padding: 2px 2px 0px 2px;
+            font-size: {_s(10, min_px=9)}px;
             font-weight: 600;
-            margin-bottom: 0px;
         }}
         QToolButton:hover {{
             background: #334155;
@@ -257,12 +271,10 @@ def _cmd_style(*, large: bool) -> str:
         QToolButton:pressed {{
             background: #0F172A;
             border-color: #93C5FD;
-            color: #FFFFFF;
         }}
         QToolButton:checked {{
             background: #334155;
             border-color: #93C5FD;
-            color: #FFFFFF;
         }}
         QToolButton:disabled {{
             color: #64748B;
@@ -271,30 +283,8 @@ def _cmd_style(*, large: bool) -> str:
             image: none;
             width: 0;
         }}
-    """
-
-
-def make_cmd(
-    text: str,
-    *,
-    icon: str,
-    tip: str | None = None,
-    large: bool = True,
-    menu: QMenu | None = None,
-) -> QToolButton:
-    btn = QToolButton()
-    btn.setText(text)
-    btn.setIcon(ribbon_icon(icon, 28 if large else 16))
-    btn.setIconSize(QSize(28, 28) if large else QSize(16, 16))
-    btn.setToolButtonStyle(
-        Qt.ToolButtonStyle.ToolButtonTextUnderIcon
-        if large
-        else Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        """
     )
-    btn.setAutoRaise(True)
-    btn.setCursor(Qt.CursorShape.PointingHandCursor)
-    btn.setStyleSheet(_cmd_style(large=large))
-    btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
     if tip:
         btn.setToolTip(tip)
     if menu is not None:
@@ -304,41 +294,26 @@ def make_cmd(
     return btn
 
 
-def make_panel(title: str, *rows_or_widgets) -> QFrame:
-    """Panel de cinta: comandos arriba + título abajo (sin solaparse al hover)."""
+def make_panel(title: str, *buttons: QToolButton) -> QFrame:
+    """Grupo horizontal de botones + título abajo (todo visible, sin apilar)."""
     panel = QFrame()
     panel.setObjectName("RibbonPanel")
+    panel.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
     root = QVBoxLayout(panel)
-    root.setContentsMargins(8, 4, 8, 0)
-    root.setSpacing(0)
+    root.setContentsMargins(_s(4, min_px=2), _s(4, min_px=2), _s(4, min_px=2), _s(2, min_px=1))
+    root.setSpacing(_s(2, min_px=1))
 
-    body = QHBoxLayout()
-    body.setContentsMargins(0, 0, 0, 0)
-    body.setSpacing(4)
-    body.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-    for item in rows_or_widgets:
-        if isinstance(item, (list, tuple)):
-            col = QVBoxLayout()
-            col.setContentsMargins(0, 0, 0, 0)
-            col.setSpacing(2)
-            col.setAlignment(Qt.AlignmentFlag.AlignTop)
-            for w in item:
-                col.addWidget(w)
-            col.addStretch()
-            body.addLayout(col)
-        else:
-            body.addWidget(item)
-
-    body.addStretch()
-    root.addLayout(body, 1)
-    # Empuja el título hacia el borde inferior (sin cambiar font-size).
-    root.addSpacing(8)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(_s(2, min_px=1))
+    for btn in buttons:
+        row.addWidget(btn)
+    root.addLayout(row)
 
     lbl = QLabel(title)
     lbl.setObjectName("RibbonPanelTitle")
-    lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
-    lbl.setFixedHeight(22)
+    lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+    lbl.setFixedHeight(_s(16, min_px=14))
     root.addWidget(lbl)
     return panel
 
@@ -348,38 +323,43 @@ def make_vsep() -> QFrame:
     line.setObjectName("RibbonSep")
     line.setFrameShape(QFrame.Shape.VLine)
     line.setFixedWidth(1)
+    line.setFixedHeight(_s(64, min_px=54))
     return line
 
 
-RIBBON_HEIGHT_PX = 108
-
-
-def _ribbon_target_height(tab) -> int:
-    return RIBBON_HEIGHT_PX
+def _ribbon_target_height(tab=None) -> int:
+    # 2 filas × (botón 58 + título 16 + márgenes) ≈ 168 diseño.
+    return _s(168, min_px=150)
 
 
 def apply_nesting_ribbon_height(tab) -> None:
     ribbon = getattr(tab, "frame_header_der", None)
     if ribbon is None:
         return
-    ribbon.setFixedHeight(RIBBON_HEIGHT_PX)
+    h = _ribbon_target_height(tab)
+    ribbon.setFixedHeight(h)
+    ribbon.setMinimumHeight(h)
 
 
 def sync_nesting_ribbon_geometry(tab) -> None:
-    """La cinta vive en el layout del panel; solo asegura altura fija."""
     apply_nesting_ribbon_height(tab)
 
 
 def mount_nesting_ribbon_on_tabbar(tab) -> None:
-    """No-op: ya no se monta overlay sobre el QTabBar (rompía el layout al cambiar de pestaña)."""
     apply_nesting_ribbon_height(tab)
 
 
-def build_nesting_ribbon(tab) -> QFrame:
-    """Construye la cinta y asigna los botones al tab (compatibilidad)."""
+def build_nesting_ribbon(tab) -> QWidget:
+    """
+    Cinta a ANCHO COMPLETO (2 filas). Todos los comandos visibles sin scroll
+    ni apilado vertical que recorte títulos.
+    """
+    h = _ribbon_target_height(tab)
+
     ribbon = QFrame()
     ribbon.setObjectName("NestingRibbon")
-    ribbon.setFixedHeight(_ribbon_target_height(tab))
+    ribbon.setFixedHeight(h)
+    ribbon.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     ribbon.setAutoFillBackground(True)
     pal = ribbon.palette()
     pal.setColor(QPalette.ColorRole.Window, QColor(_RIBBON_BG))
@@ -390,155 +370,118 @@ def build_nesting_ribbon(tab) -> QFrame:
     pal.setColor(QPalette.ColorRole.ToolTipBase, QColor("#FFFFFF"))
     pal.setColor(QPalette.ColorRole.ToolTipText, QColor("#111827"))
     ribbon.setPalette(pal)
-    ribbon.setStyleSheet(_RIBBON_SS)
-    lay = QHBoxLayout(ribbon)
-    lay.setContentsMargins(6, 4, 10, 4)
-    lay.setSpacing(0)
+    ribbon.setStyleSheet(_ribbon_ss())
+
+    outer = QVBoxLayout(ribbon)
+    outer.setContentsMargins(_s(6, min_px=4), _s(4, min_px=2), _s(6, min_px=4), _s(4, min_px=2))
+    outer.setSpacing(_s(2, min_px=1))
+
+    row1 = QHBoxLayout()
+    row1.setContentsMargins(0, 0, 0, 0)
+    row1.setSpacing(0)
+    row1.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+    row2 = QHBoxLayout()
+    row2.setContentsMargins(0, 0, 0, 0)
+    row2.setSpacing(0)
+    row2.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
     # —— Archivo ——
-    tab.btn_abrir_nest = make_cmd(
-        "Abrir", icon="open", tip="Abrir nest (.arganest)"
-    )
+    tab.btn_abrir_nest = make_cmd("Abrir", icon="open", tip="Abrir nest (.arganest)")
     tab.btn_abrir_nest.clicked.connect(tab.abrir_workspace_nesting)
-    tab.btn_guardar_nest = make_cmd(
-        "Guardar", icon="save", tip="Guardar nest"
-    )
+    tab.btn_guardar_nest = make_cmd("Guardar", icon="save", tip="Guardar nest")
     tab.btn_guardar_nest.clicked.connect(tab.guardar_workspace_nesting)
-    lay.addWidget(make_panel("Archivo", tab.btn_abrir_nest, tab.btn_guardar_nest))
-    lay.addWidget(make_vsep())
+    row1.addWidget(make_panel("Archivo", tab.btn_abrir_nest, tab.btn_guardar_nest))
+    row1.addWidget(make_vsep())
 
     # —— Orden ——
-    tab.btn_editar_lote = make_cmd(
-        "Editar lote", icon="lote", tip="Editar lote activo"
-    )
+    tab.btn_editar_lote = make_cmd("Editar lote", icon="lote", tip="Editar lote activo")
     tab.btn_editar_lote.clicked.connect(tab.editar_lote_activo)
-    tab.btn_ver_lotes = make_cmd(
-        "Historial", icon="hist", tip="Historial de W.O.", large=False
-    )
+    tab.btn_ver_lotes = make_cmd("Historial", icon="hist", tip="Historial de W.O.")
     tab.btn_ver_lotes.clicked.connect(tab.reabrir_modal_escenarios)
-    tab.btn_nesting_largos = make_cmd(
-        "Largos", icon="largos", tip="Nesteo de largos", large=False
-    )
+    tab.btn_nesting_largos = make_cmd("Largos", icon="largos", tip="Nesteo de largos")
     tab.btn_nesting_largos.clicked.connect(tab.abrir_nesting_largos)
-    lay.addWidget(
-        make_panel(
-            "Orden",
-            tab.btn_editar_lote,
-            [tab.btn_ver_lotes, tab.btn_nesting_largos],
-        )
+    row1.addWidget(
+        make_panel("Orden", tab.btn_editar_lote, tab.btn_ver_lotes, tab.btn_nesting_largos)
     )
-    lay.addWidget(make_vsep())
+    row1.addWidget(make_vsep())
 
     # —— Salida ——
-    tab.btn_exportar = make_cmd(
-        "Exportar", icon="export", tip="Exportar DXF/STEP"
-    )
+    tab.btn_exportar = make_cmd("Exportar", icon="export", tip="Exportar DXF/STEP")
     tab.btn_exportar.clicked.connect(tab.exportar_resultados_dxf)
-    tab.btn_reanudar_sync = make_cmd(
-        "Reanudar sync",
-        icon="export",
-        tip="Reintentar VSM/ContPAQ (requiere contraseña) — no reexporta CAD",
-        large=False,
-    )
-    tab.btn_reanudar_sync.clicked.connect(tab.reanudar_centralizacion_pendiente)
-
-    tab.btn_pdf_nesting = make_cmd(
-        "PDF", icon="pdf", tip="Exportar reporte PDF nesting"
-    )
+    tab.btn_pdf_nesting = make_cmd("PDF", icon="pdf", tip="Exportar reporte PDF nesting")
     tab.btn_pdf_nesting.clicked.connect(tab.exportar_reporte_pdf_nesting)
-
-    tab.btn_ver_step = make_cmd(
-        "Ver STEP", icon="step", tip="Abrir visor STEP", large=False
-    )
+    tab.btn_ver_step = make_cmd("Ver STEP", icon="step", tip="Abrir visor STEP")
     tab.btn_ver_step.clicked.connect(tab.abrir_visor_step)
     tab.btn_crear_steps = make_cmd(
         "Crear STEPs",
         icon="crear_step",
-        tip="Generar STEP desde DXF ya exportados (nesteo o ruta)",
-        large=False,
+        tip="Generar STEP desde DXF ya exportados",
     )
     tab.btn_crear_steps.clicked.connect(tab.abrir_crear_steps)
-
-    lay.addWidget(
+    tab.btn_reanudar_sync = make_cmd(
+        "Reanudar sync",
+        icon="export",
+        tip="Reintentar VSM/ContPAQ (requiere contraseña)",
+    )
+    tab.btn_reanudar_sync.clicked.connect(tab.reanudar_centralizacion_pendiente)
+    row1.addWidget(
         make_panel(
             "Salida",
             tab.btn_exportar,
             tab.btn_pdf_nesting,
-            [tab.btn_ver_step, tab.btn_crear_steps, tab.btn_reanudar_sync],
+            tab.btn_ver_step,
+            tab.btn_crear_steps,
+            tab.btn_reanudar_sync,
         )
     )
-    lay.addWidget(make_vsep())
+    row1.addWidget(make_vsep())
 
     # —— Herramientas ——
-    tab.btn_costos = make_cmd(
-        "Costos", icon="cost", tip="Costos de orden", large=False
-    )
+    tab.btn_costos = make_cmd("Costos", icon="cost", tip="Costos de orden")
     tab.btn_costos.clicked.connect(
         lambda: __import__(
             "interface.qt.dialogs.nesting_modals", fromlist=["abrir_modal_costos"]
         ).abrir_modal_costos(tab)
     )
-    tab.btn_config = make_cmd(
-        "Configuración", icon="cfg", tip="Configuración global", large=False
-    )
+    tab.btn_config = make_cmd("Configuración", icon="cfg", tip="Configuración global")
     tab.btn_config.clicked.connect(
         lambda: __import__(
             "interface.qt.dialogs.nesting_modals",
             fromlist=["abrir_modal_configuracion"],
         ).abrir_modal_configuracion(tab)
     )
-    tab.btn_nest_sim_lab = make_cmd(
-        "Lab", icon="lab", tip="Lab · Comparar motores", large=False
-    )
+    tab.btn_nest_sim_lab = make_cmd("Lab", icon="lab", tip="Lab · Comparar motores")
     tab.btn_nest_sim_lab.clicked.connect(tab.abrir_nest_sim_lab)
-
-    lay.addWidget(
-        make_panel(
-            "Herramientas",
-            [tab.btn_costos, tab.btn_config, tab.btn_nest_sim_lab],
-        )
+    row1.addWidget(
+        make_panel("Herramientas", tab.btn_costos, tab.btn_config, tab.btn_nest_sim_lab)
     )
-    lay.addWidget(make_vsep())
+    row1.addStretch(1)
 
-    # —— Placa (antes: panel flotante HERRAMIENTAS DE PLACA) ——
+    # —— Placa (fila 2: todo visible) ——
     tab.btn_panel_renest_placa = make_cmd(
-        "Renestear",
-        icon="renest",
-        tip="Renestear la placa / barra activa",
+        "Renestear", icon="renest", tip="Renestear la placa / barra activa"
     )
     tab.btn_panel_renest_placa.clicked.connect(tab.panel_renestear_placa)
     tab.btn_panel_renest_placa.setEnabled(False)
 
     tab.btn_panel_cambiar_placa = make_cmd(
-        "Cambiar",
-        icon="swap",
-        tip="Cambiar placa madre",
+        "Cambiar", icon="swap", tip="Cambiar placa madre"
     )
     tab.btn_panel_cambiar_placa.clicked.connect(tab.panel_cambiar_placa_madre)
     tab.btn_panel_cambiar_placa.setEnabled(False)
 
     tab.btn_panel_renest_calibre = make_cmd(
-        "Calibre",
-        icon="plate",
-        tip="Renestear calibre completo",
-        large=False,
+        "Calibre", icon="plate", tip="Renestear calibre completo"
     )
     tab.btn_panel_renest_calibre.clicked.connect(tab.panel_renestear_calibre)
     tab.btn_panel_renest_calibre.setEnabled(False)
 
-    tab.btn_ajustar_vista = make_cmd(
-        "Vista",
-        icon="view",
-        tip="Ajustar vista de la placa",
-        large=False,
-    )
+    tab.btn_ajustar_vista = make_cmd("Vista", icon="view", tip="Ajustar vista de la placa")
     tab.btn_ajustar_vista.clicked.connect(tab.panel_ajustar_vista)
 
     tab.btn_transferir = make_cmd(
-        "Mudar",
-        icon="move",
-        tip="Mudar pieza(s) seleccionada(s) a otra placa",
-        large=False,
+        "Mudar", icon="move", tip="Mudar pieza(s) a otra placa"
     )
     tab.btn_transferir.setEnabled(False)
     tab.btn_transferir.clicked.connect(
@@ -548,50 +491,48 @@ def build_nesting_ribbon(tab) -> QFrame:
         ).abrir_modal_transferencia(tab)
     )
 
-    tab.btn_limpiar_sel = make_cmd(
-        "Limpiar",
-        icon="clear",
-        tip="Limpiar selección de piezas",
-        large=False,
-    )
+    tab.btn_limpiar_sel = make_cmd("Limpiar", icon="clear", tip="Limpiar selección")
     tab.btn_limpiar_sel.clicked.connect(tab.panel_limpiar_seleccion)
 
-    tab.btn_rot_m1 = make_cmd(
-        "-1°", icon="rotate", tip="Rotar −1°", large=False
-    )
+    tab.btn_rot_m1 = make_cmd("-1°", icon="rotate", tip="Rotar −1°")
     tab.btn_rot_m1.setEnabled(False)
     tab.btn_rot_m1.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(-1))
-    tab.btn_rot_p1 = make_cmd(
-        "+1°", icon="rotate", tip="Rotar +1°", large=False
-    )
+    tab.btn_rot_p1 = make_cmd("+1°", icon="rotate", tip="Rotar +1°")
     tab.btn_rot_p1.setEnabled(False)
     tab.btn_rot_p1.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(1))
-    tab.btn_rot_90 = make_cmd(
-        "90°", icon="rotate", tip="Rotar 90°", large=False
-    )
+    tab.btn_rot_90 = make_cmd("90°", icon="rotate", tip="Rotar 90°")
     tab.btn_rot_90.setEnabled(False)
     tab.btn_rot_90.clicked.connect(lambda: tab.visor.rotar_pieza_seleccionada(90))
 
     tab.switch_edicion_libre = make_cmd(
         "Ed. libre",
         icon="free",
-        tip="Edición libre entre selección (colisión solo con placa y piezas fuera del grupo)",
-        large=False,
+        tip="Edición libre entre selección",
     )
     tab.switch_edicion_libre.setCheckable(True)
     tab.switch_edicion_libre.setEnabled(False)
     tab.switch_edicion_libre.toggled.connect(tab._on_toggle_edicion_libre)
 
-    lay.addWidget(
+    row2.addWidget(
         make_panel(
             "Placa",
             tab.btn_panel_renest_placa,
             tab.btn_panel_cambiar_placa,
-            [tab.btn_panel_renest_calibre, tab.btn_ajustar_vista],
-            [tab.btn_transferir, tab.btn_limpiar_sel, tab.switch_edicion_libre],
-            [tab.btn_rot_m1, tab.btn_rot_p1, tab.btn_rot_90],
+            tab.btn_panel_renest_calibre,
+            tab.btn_ajustar_vista,
+            tab.btn_transferir,
+            tab.btn_limpiar_sel,
+            tab.btn_rot_m1,
+            tab.btn_rot_p1,
+            tab.btn_rot_90,
+            tab.switch_edicion_libre,
         )
     )
+    row2.addStretch(1)
 
-    lay.addStretch(1)
+    outer.addLayout(row1)
+    outer.addLayout(row2)
+
+    tab._nesting_ribbon_inner = ribbon
+    tab.frame_header_der = ribbon
     return ribbon

@@ -124,6 +124,10 @@ REGRESIONES = [
         "2026-09-01 - ANS post-export dispara CypTube auto-nest (Modo B)",
     ),
     (
+        "test_ui_scale.py",
+        "2026-09-01 - UI scale: factor≤1 sobre 1920x1080; diálogos caben en pantalla",
+    ),
+    (
         "test_swo_autodxf_item_match.py",
         "2026-08-28d - SWO: DXF exacto (TAPA≠TAPA 2) + reproceso conserva W.O.__",
     ),

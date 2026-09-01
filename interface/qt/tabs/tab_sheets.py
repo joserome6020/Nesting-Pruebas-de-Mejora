@@ -1,6 +1,8 @@
 """Tab SHEETS — PySide6 nativo."""
 from __future__ import annotations
 
+from interface.qt.ui_scale import fit_window, s
+
 import re
 import os
 import csv
@@ -33,7 +35,7 @@ from PySide6.QtWidgets import (
 import config
 from interface.material_colors import paleta_material
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
-from interface.qt.layout_helpers import make_card, make_scroll, make_scroll_content
+from interface.qt.layout_helpers import make_card, make_hscroll_toolbar, make_scroll, make_scroll_content
 from interface.qt.theme import (
     apply_push_button,
     surface_dialog_stylesheet,
@@ -115,22 +117,30 @@ class TabSheets(QWidget, TimerHost):
         cont_lay.setContentsMargins(0, 0, 0, 12)
         cont_lay.setSpacing(0)
 
-        filtros = QFrame()
-        filtros.setObjectName("FilterBar")
-        filtros.setFrameShape(QFrame.Shape.NoFrame)
-        filtros.setFixedHeight(78)
-        filtros_lay = QHBoxLayout(filtros)
-        filtros_lay.setContentsMargins(20, 6, 20, 4)
+        filtros_scroll, filtros, filtros_lay = make_hscroll_toolbar(
+            height_design=92,
+            min_height=78,
+            object_name="SheetsFilterScroll",
+        )
+        filtros_lay.setContentsMargins(
+            s(20, min_px=12),
+            s(8, min_px=4),
+            s(20, min_px=12),
+            s(6, min_px=4),
+        )
+        filtros_lay.setSpacing(s(14, min_px=8))
 
         def _filtro(lbl, key, width, values, on_change):
             grp = QWidget()
             gl = QVBoxLayout(grp)
             gl.setContentsMargins(0, 0, 0, 0)
+            gl.setSpacing(s(4, min_px=2))
             lbl_w = QLabel(lbl)
             lbl_w.setObjectName("LabelCaption")
+            lbl_w.setStyleSheet(f"font-size:{s(10, min_px=9)}px;")
             gl.addWidget(lbl_w)
             cmb = QComboBox()
-            cmb.setFixedWidth(width)
+            cmb.setFixedWidth(s(width, min_px=max(88, int(width * 0.72))))
             cmb.addItems(values or ["TODOS"])
             cmb.currentTextChanged.connect(lambda _t, k=key: on_change())
             self._selector_combos[key] = cmb
@@ -146,10 +156,19 @@ class TabSheets(QWidget, TimerHost):
         _filtro("FILTRO $$/LB", "precio", 140, ["TODOS", "MENOR PRECIO", "MAYOR PRECIO"], self.aplicar_filtros)
         filtros_lay.addStretch()
         self.btn_remanentes = QPushButton("REMANENTES DISPONIBLES")
-        apply_push_button(self.btn_remanentes, COLOR_GRIS_MED, font_size=11)
+        apply_push_button(
+            self.btn_remanentes,
+            COLOR_GRIS_MED,
+            font_size=s(11, min_px=9),
+            padding=f"{s(6, min_px=4)}px {s(12, min_px=8)}px",
+        )
         self.btn_remanentes.clicked.connect(self.abrir_inventario_remanentes)
         filtros_lay.addWidget(self.btn_remanentes)
-        cont_lay.addWidget(filtros)
+        filtros.adjustSize()
+        from interface.qt.layout_helpers import finalize_hscroll_toolbar
+
+        finalize_hscroll_toolbar(filtros_scroll, filtros)
+        cont_lay.addWidget(filtros_scroll)
 
         self.tabs = QTabWidget()
         self.tabs.setObjectName("StockTabs")
@@ -727,7 +746,7 @@ class TabSheets(QWidget, TimerHost):
     def _mostrar_cambios_sincronizacion_qt_inline(self, resultado):
         dlg = QDialog(self)
         dlg.setWindowTitle("Cambios de sincronización Herinox")
-        dlg.resize(1120, 680)
+        fit_window(dlg, 1120, 680)
         dlg.setStyleSheet(surface_dialog_stylesheet())
         lay = QVBoxLayout(dlg)
         tit = QLabel("ULTIMA SINCRONIZACION DE PLACAS")
@@ -809,7 +828,7 @@ class TabSheets(QWidget, TimerHost):
     def abrir_inventario_remanentes(self):
         dlg = QDialog(self)
         dlg.setWindowTitle("Inventario de Remanentes (> 400 in²)")
-        dlg.resize(750, 550)
+        fit_window(dlg, 750, 550)
         dlg.setModal(True)
         dlg.setStyleSheet(surface_dialog_stylesheet())
         lay = QVBoxLayout(dlg)
