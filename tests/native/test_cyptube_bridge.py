@@ -94,6 +94,7 @@ def test_launch_ok_tras_json() -> None:
                 "skip_wait": True,
                 "dry_run": False,
                 "new_console": False,
+                "launch_delay_s": 0,
             },
             popen=fake_popen,
         )
@@ -102,6 +103,49 @@ def test_launch_ok_tras_json() -> None:
         assert str(nest.resolve()) in captured["cmd"] or os.path.abspath(str(nest)) in captured["cmd"]
         assert "--skip-wait" in captured["cmd"]
         assert any("auto-nest lanzado" in m for m in logs)
+
+
+def test_launch_delay_programa_hilo() -> None:
+    from modules.dxf_export.cyptube_bridge import launch_cyptube_auto_nest
+
+    with tempfile.TemporaryDirectory() as tmp:
+        nest = Path(tmp) / "NESTEOS DE COBRE"
+        nest.mkdir()
+        (nest / "cyptube_verticales.json").write_text("{}", encoding="utf-8")
+        main = Path(tmp) / "main.py"
+        main.write_text("#", encoding="utf-8")
+        py = Path(tmp) / "python.exe"
+        py.write_bytes(b"")
+
+        calls: list = []
+
+        class FakeProc:
+            pid = 99
+
+        def fake_popen(cmd, **kwargs):
+            calls.append(cmd)
+            return FakeProc()
+
+        logs: list[str] = []
+        result = launch_cyptube_auto_nest(
+            nest,
+            log_fn=logs.append,
+            prefs={
+                "enabled": True,
+                "cyptube_main": str(main),
+                "python_exe": str(py),
+                "launch_delay_s": 0.05,
+                "new_console": False,
+            },
+            popen=fake_popen,
+        )
+        assert result.launched and result.reason == "scheduled_0s"
+        assert not calls
+        assert any("programado" in m for m in logs)
+        import time as _time
+
+        _time.sleep(0.15)
+        assert calls, "debe lanzar tras el delay"
 
 
 def test_servidor_unc_pasa_al_cmd_sin_romper() -> None:
@@ -171,6 +215,7 @@ if __name__ == "__main__":
     test_build_cmd_incluye_skip_wait_y_dry_run()
     test_launch_disabled_no_popen()
     test_launch_ok_tras_json()
+    test_launch_delay_programa_hilo()
     test_servidor_unc_pasa_al_cmd_sin_romper()
     test_path_maps_remap_servidor()
     test_config_default_file_existe()

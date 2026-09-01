@@ -16,6 +16,9 @@ _DEFAULTS: dict[str, Any] = {
     # OFF: cobre normal (sin_gap / RTZCU / Amada vertical según geometría).
     # ON: fuerza gap + DXF/STEP y desactiva RTZCU / CyPTube / fixtura Amada nest.
     "cu_force_dxf_step": False,
+    # OFF: cobre exporta MARK + split Corte/Marcaje (CyPTube completo).
+    # ON (default): cobre sin marcaje; verticales solo *_Corte.dxf (RPA sigue cortando).
+    "cu_sin_marcaje": True,
     # OFF: Cal 11 Galv usa el motor del selector (Ultra/Lite). ON: motor giga_cal11_galv.
     "giga_cal11_galv": False,
     # OFF: FILES sin botón STEP. ON: complemento feedstock STEP dentro de AutoDXF.
@@ -36,7 +39,7 @@ _PREFS_CACHE_MTIME: float | None = None
 _PREFS_CACHE_DATA: dict[str, Any] | None = None
 
 
-def _invalidate_prefs_cache() -> None:
+def invalidate_nest_runtime_prefs_cache() -> None:
     global _PREFS_CACHE_MTIME, _PREFS_CACHE_DATA
     _PREFS_CACHE_MTIME = None
     _PREFS_CACHE_DATA = None
@@ -85,6 +88,7 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
     env_host = (os.environ.get("ARGA_NEST_SPARK_HOST") or "").strip()
     env_port = (os.environ.get("ARGA_NEST_SPARK_PORT") or "").strip()
     env_cu = (os.environ.get("ARGA_CU_FORCE_DXF_STEP") or "").strip().lower()
+    env_cu_mark = (os.environ.get("ARGA_CU_SIN_MARCAJE") or "").strip().lower()
     env_giga = (os.environ.get("ARGA_GIGA_CAL11_GALV") or "").strip().lower()
     env_step = (os.environ.get("ARGA_STEP_FEEDSTOCK") or "").strip().lower()
     if env_prefer:
@@ -100,6 +104,10 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
         prefs["cu_force_dxf_step"] = True
     elif env_cu in ("0", "false", "off", "no"):
         prefs["cu_force_dxf_step"] = False
+    if env_cu_mark in ("1", "true", "on", "yes"):
+        prefs["cu_sin_marcaje"] = True
+    elif env_cu_mark in ("0", "false", "off", "no"):
+        prefs["cu_sin_marcaje"] = False
     if env_giga in ("1", "true", "on", "yes"):
         prefs["giga_cal11_galv"] = True
     elif env_giga in ("0", "false", "off", "no"):
@@ -111,6 +119,7 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
 
     prefs["prefer"] = normalize_prefer(str(prefs.get("prefer") or "local"))
     prefs["cu_force_dxf_step"] = bool(prefs.get("cu_force_dxf_step"))
+    prefs["cu_sin_marcaje"] = bool(prefs.get("cu_sin_marcaje"))
     prefs["giga_cal11_galv"] = bool(prefs.get("giga_cal11_galv"))
     prefs["step_feedstock_enabled"] = bool(prefs.get("step_feedstock_enabled"))
     prefs["exportar_a_servidor"] = bool(prefs.get("exportar_a_servidor", True))
@@ -138,12 +147,13 @@ def save_nest_runtime_prefs(prefs: dict[str, Any]) -> Path:
     data = _deep_merge(data, dict(prefs or {}))
     data["prefer"] = normalize_prefer(str(data.get("prefer") or "local"))
     data["cu_force_dxf_step"] = bool(data.get("cu_force_dxf_step"))
+    data["cu_sin_marcaje"] = bool(data.get("cu_sin_marcaje"))
     data["giga_cal11_galv"] = bool(data.get("giga_cal11_galv"))
     data["step_feedstock_enabled"] = bool(data.get("step_feedstock_enabled"))
     data["exportar_a_servidor"] = bool(data.get("exportar_a_servidor", True))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    _invalidate_prefs_cache()
+    invalidate_nest_runtime_prefs_cache()
     return path
 
 
@@ -166,6 +176,29 @@ def is_cu_force_dxf_step_enabled(prefs: dict[str, Any] | None = None) -> bool:
     if _PREFS_CACHE_DATA is not None:
         return bool(_PREFS_CACHE_DATA.get("cu_force_dxf_step"))
     return bool(load_nest_runtime_prefs().get("cu_force_dxf_step"))
+
+
+def is_cu_sin_marcaje_enabled(prefs: dict[str, Any] | None = None) -> bool:
+    """True = cobre sin MARK; verticales CyPTube solo *_Corte (RPA corte)."""
+    if isinstance(prefs, dict):
+        return bool(prefs.get("cu_sin_marcaje"))
+    if _PREFS_CACHE_DATA is not None:
+        return bool(_PREFS_CACHE_DATA.get("cu_sin_marcaje"))
+    return bool(load_nest_runtime_prefs().get("cu_sin_marcaje"))
+
+
+def should_omit_copper_marks(material: str | None) -> bool:
+    """True si pieza cobre debe salir sin MARK (AutoDXF, nest, export)."""
+    if not is_cu_sin_marcaje_enabled():
+        return False
+    try:
+        from interface.utils_nesting import es_material_cobre
+    except Exception:
+        def es_material_cobre(m):  # type: ignore
+            u = str(m or "").strip().upper()
+            return u in ("CU", "COBRE", "COPPER") or "COBRE" in u or "COPPER" in u
+
+    return es_material_cobre(material)
 
 
 def is_giga_cal11_galv_enabled(prefs: dict[str, Any] | None = None) -> bool:

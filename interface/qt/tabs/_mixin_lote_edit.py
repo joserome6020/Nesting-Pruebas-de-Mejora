@@ -396,7 +396,21 @@ class LoteEditMixin:
         if tipo == "raw":
             shutil.copy2(ruta_origen, ruta_raw_destino)
 
-            exito = self.procesador_lote.limpiar_archivo(ruta_raw_destino, ruta_processed_destino)
+            omit_marcaje = False
+            try:
+                from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
+                from interface.autodxf_metadata import combinar_metadata_dxf
+
+                _pieza, mat, _q, _cal, _ = combinar_metadata_dxf(
+                    ruta_origen, nombre_archivo=os.path.basename(ruta_origen)
+                )
+                omit_marcaje = should_omit_copper_marks(mat)
+            except Exception:
+                pass
+
+            exito = self.procesador_lote.limpiar_archivo(
+                ruta_raw_destino, ruta_processed_destino, omit_marcaje=omit_marcaje
+            )
             if not exito or not os.path.exists(ruta_processed_destino):
                 raise ValueError(
                     f"No se pudo procesar el DXF para el lote activo:\n{ruta_origen}"
@@ -416,8 +430,16 @@ class LoteEditMixin:
             try:
                 from modules.dxf_mark.inject import tiene_marcaje_stick
                 from modules.dxf_mark.pipeline import aplicar_marcaje_nesting
+                from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
+                from interface.autodxf_metadata import combinar_metadata_dxf
 
-                if not tiene_marcaje_stick(ruta_origen):
+                _pieza, mat, _q, _cal, _ = combinar_metadata_dxf(
+                    ruta_origen, nombre_archivo=os.path.basename(ruta_origen)
+                )
+                if (
+                    not should_omit_copper_marks(mat)
+                    and not tiene_marcaje_stick(ruta_origen)
+                ):
                     aplicar_marcaje_nesting(ruta_processed_destino)
             except Exception:
                 pass

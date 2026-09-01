@@ -35,7 +35,7 @@ PARAM_B_MM_DEFAULT = 6.0
 @dataclass
 class CyptubeSplitPaths:
     corte: str
-    marcaje: str
+    marcaje: str = ""
 
 
 @dataclass
@@ -48,7 +48,7 @@ class CyptubeVerticalRecord:
     A_mm: float
     B_mm: float
     corte: str
-    marcaje: str
+    marcaje: str = ""
     cu_especial_vertical: bool = False
     thickness_in: float | None = None
     extras: dict[str, Any] = field(default_factory=dict)
@@ -64,8 +64,12 @@ class CyptubeVerticalRecord:
             "B_mm": round(self.B_mm, 4),
             "cu_especial_vertical": bool(self.cu_especial_vertical),
             "corte": {"ruta": self.corte, "rol": "corte"},
-            "marcaje": {"ruta": self.marcaje, "rol": "marcaje"},
         }
+        if self.marcaje:
+            d["marcaje"] = {"ruta": self.marcaje, "rol": "marcaje"}
+        else:
+            d["marcaje"] = None
+            d["sin_marcaje"] = True
         if self.thickness_in is not None:
             d["thickness_in"] = self.thickness_in
         if self.extras:
@@ -85,10 +89,10 @@ class CyptubeVerticalRecord:
         }
         if self.thickness_in is not None:
             common["thickness_in"] = self.thickness_in
-        return [
-            {**common, "ruta": self.corte, "rol": "corte"},
-            {**common, "ruta": self.marcaje, "rol": "marcaje"},
-        ]
+        out = [{**common, "ruta": self.corte, "rol": "corte"}]
+        if self.marcaje:
+            out.append({**common, "ruta": self.marcaje, "rol": "marcaje"})
+        return out
 
 
 def cyptube_param_A_mm(ancho_mm: float, *, offset_mm: float = PARAM_A_OFFSET_MM) -> float:
@@ -213,10 +217,12 @@ def split_cyptube_vertical_dxf(
     thickness_in: float | None = None,
     B_mm: float = PARAM_B_MM_DEFAULT,
     remove_combined: bool = True,
+    include_marcaje: bool = True,
 ) -> tuple[CyptubeSplitPaths, CyptubeVerticalRecord]:
     """
-    Parte el DXF vertical combinado en *_Corte y *_Marcaje (AutoCAD-safe).
-    Por defecto elimina el combinado para que la automatización solo vea el par.
+    Parte el DXF vertical combinado en *_Corte y (opcional) *_Marcaje.
+    Con ``include_marcaje=False`` (switch cobre sin marcaje) solo escribe Corte;
+    CypTube RPA procesa corte y omite marcaje si no hay ruta.
     """
     path_combined = os.path.abspath(str(path_combined))
     if not os.path.isfile(path_combined):
@@ -231,14 +237,23 @@ def split_cyptube_vertical_dxf(
         ) from exc
 
     path_corte = path_con_sufijo(path_combined, SUFIJO_CORTE)
-    path_marcaje = path_con_sufijo(path_combined, SUFIJO_MARCAJE)
+    path_marcaje = path_con_sufijo(path_combined, SUFIJO_MARCAJE) if include_marcaje else ""
 
     doc_corte = _doc_corte(src)
-    doc_marcaje = _doc_marcaje(src, float(bar_width_mm))
-
     sheet_stub = {"width": float(bar_width_mm), "Width": float(bar_width_mm)}
     _save_cobre_dxf_atomic(doc_corte, path_corte, sheet_stub)
-    _save_cobre_dxf_atomic(doc_marcaje, path_marcaje, sheet_stub)
+
+    if include_marcaje:
+        doc_marcaje = _doc_marcaje(src, float(bar_width_mm))
+        _save_cobre_dxf_atomic(doc_marcaje, path_marcaje, sheet_stub)
+    else:
+        # Limpia un Marcaje viejo del mismo stem si quedó de un export previo.
+        stale = path_con_sufijo(path_combined, SUFIJO_MARCAJE)
+        try:
+            if os.path.isfile(stale):
+                os.remove(stale)
+        except OSError:
+            pass
 
     if remove_combined:
         try:
@@ -275,17 +290,23 @@ def escribir_cyptube_verticales_json(
     dest_dir = os.path.abspath(str(nesteos_cobre_dir))
     os.makedirs(dest_dir, exist_ok=True)
     path = os.path.join(dest_dir, CYPTUBE_JSON_FILENAME)
+    solo_corte = all(not (r.marcaje or "").strip() for r in records)
+    desc = (
+        "Barras verticales cobre (Amada ESP / escalón sin_gap). "
+        "A_mm = ancho_mm + 0.2 (Standard pipe long side); "
+        "B_mm = 6.0 (short side / espesor ~0.25\"). "
+    )
+    if solo_corte:
+        desc += "sin_marcaje=true: solo *_Corte.dxf (RPA corte; sin *_Marcaje)."
+    else:
+        desc += "Marcaje = MARK + guillotina origen/fin (contorno CypTube)."
     payload = {
         "version": CYPTUBE_JSON_VERSION,
         "software": "CypTube",
-        "descripcion": (
-            "Barras verticales cobre (Amada ESP / escalón sin_gap). "
-            "A_mm = ancho_mm + 0.2 (Standard pipe long side); "
-            "B_mm = 6.0 (short side / espesor ~0.25\"). "
-            "Marcaje = MARK + guillotina origen/fin (contorno CypTube)."
-        ),
+        "descripcion": desc,
         "param_A_offset_mm": PARAM_A_OFFSET_MM,
         "param_B_mm_default": PARAM_B_MM_DEFAULT,
+        "sin_marcaje": bool(solo_corte),
         "barras": [r.as_dict() for r in records],
         "archivos": [item for r in records for item in r.flat_archivos()],
     }

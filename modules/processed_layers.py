@@ -242,7 +242,7 @@ class ProcesadorDXF:
                 dxfattribs={"layer": layer_name, "closed": True},
             )
 
-    def limpiar_archivo(self, ruta_entrada, ruta_salida_ignorada=None):
+    def limpiar_archivo(self, ruta_entrada, ruta_salida_ignorada=None, *, omit_marcaje: bool = False):
         if ruta_salida_ignorada:
             ruta_salida_real = os.path.abspath(str(ruta_salida_ignorada))
             carpeta_out = os.path.dirname(ruta_salida_real)
@@ -346,51 +346,59 @@ class ProcesadorDXF:
             for item in inner_cortes:
                 self._escribir_corte(msp, item, "CUT_INNER")
 
-            for m in geo_mark_poly:
-                msp.add_lwpolyline(m, format="xyb", dxfattribs={"layer": "MARK"})
+            if not omit_marcaje:
+                for m in geo_mark_poly:
+                    msp.add_lwpolyline(m, format="xyb", dxfattribs={"layer": "MARK"})
 
-            for m in marcas:
-                if m["type"] == "CIRCLE":
-                    msp.add_circle(
-                        m["data"]["center"],
-                        m["data"]["radius"],
-                        dxfattribs={"layer": "MARK"},
-                    )
+                for m in marcas:
+                    if m["type"] == "CIRCLE":
+                        msp.add_circle(
+                            m["data"]["center"],
+                            m["data"]["radius"],
+                            dxfattribs={"layer": "MARK"},
+                        )
 
             doc_out.saveas(ruta_salida_real)
             self._escribir_log(
                 ruta_reporte,
                 f"  > Outer: {len(outer_cortes)} | Inner: {len(inner_cortes)} | "
-                f"Descartados abiertos: {abiertos_descartados}",
+                f"Descartados abiertos: {abiertos_descartados}"
+                + (" | sin MARK (cu_sin_marcaje)" if omit_marcaje else ""),
             )
 
-            # Marcaje stick (código de pieza) en capa MARK del DXF procesado.
-            # Si el origen ya venía marcado por el .py AutoDXF, solo se procesa (no reinyecta).
-            try:
-                from modules.dxf_mark.inject import tiene_marcaje_stick
-                from modules.dxf_mark.pipeline import aplicar_marcaje_nesting
-
-                ya_marcado = tiene_marcaje_stick(ruta_entrada)
-                result = aplicar_marcaje_nesting(
-                    ruta_salida_real,
-                    origen_ya_marcado=ya_marcado,
-                )
-                if result.already_marked:
-                    self._escribir_log(
-                        ruta_reporte,
-                        "  > MARK stick: omitido (DXF origen ya traía marcaje del script)",
-                    )
-                else:
-                    self._escribir_log(
-                        ruta_reporte,
-                        f"  > MARK stick: '{result.mark_text}' "
-                        f"(alto_vis={result.height_du:.3f} u, piezas={result.components_marked})",
-                    )
-            except Exception as mark_exc:
+            if omit_marcaje:
                 self._escribir_log(
                     ruta_reporte,
-                    f"  > MARK stick OMITIDO: {mark_exc}",
+                    "  > MARK stick: omitido (switch cobre sin marcaje)",
                 )
+            else:
+                # Marcaje stick (código de pieza) en capa MARK del DXF procesado.
+                # Si el origen ya venía marcado por el .py AutoDXF, solo se procesa (no reinyecta).
+                try:
+                    from modules.dxf_mark.inject import tiene_marcaje_stick
+                    from modules.dxf_mark.pipeline import aplicar_marcaje_nesting
+
+                    ya_marcado = tiene_marcaje_stick(ruta_entrada)
+                    result = aplicar_marcaje_nesting(
+                        ruta_salida_real,
+                        origen_ya_marcado=ya_marcado,
+                    )
+                    if result.already_marked:
+                        self._escribir_log(
+                            ruta_reporte,
+                            "  > MARK stick: omitido (DXF origen ya traía marcaje del script)",
+                        )
+                    else:
+                        self._escribir_log(
+                            ruta_reporte,
+                            f"  > MARK stick: '{result.mark_text}' "
+                            f"(alto_vis={result.height_du:.3f} u, piezas={result.components_marked})",
+                        )
+                except Exception as mark_exc:
+                    self._escribir_log(
+                        ruta_reporte,
+                        f"  > MARK stick OMITIDO: {mark_exc}",
+                    )
 
             return True
 

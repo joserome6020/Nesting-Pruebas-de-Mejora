@@ -376,12 +376,17 @@ class TabFiles(QWidget):
             if callable(progress_cb):
                 progress_cb(f"Validando DXF {idx}/{total}…", idx / max(1, total))
             arch = os.path.basename(ruta_in)
+            pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
+            from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
+
+            omit_marcaje = should_omit_copper_marks(mat)
             ruta_out_real = os.path.join(carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados))
             try:
-                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
+                ok_proc = self.procesador.limpiar_archivo(
+                    ruta_in, ruta_out_real, omit_marcaje=omit_marcaje
+                )
                 if (not ok_proc) or (not os.path.exists(ruta_out_real)):
                     shutil.copy2(ruta_in, ruta_out_real)
-                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
                 try:
                     qty_final = str(int(qty_str) * multiplicador)
                 except Exception:
@@ -686,14 +691,19 @@ class TabFiles(QWidget):
         for idx, ruta_in in enumerate(rutas_dxf, start=1):
             _progress(f"Validando DXF STEP {idx}/{total}…", idx / max(1, total))
             arch = os.path.basename(ruta_in)
+            pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
+            from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
+
+            omit_marcaje = should_omit_copper_marks(mat)
             ruta_out_real = os.path.join(
                 carpeta_procesados, self._nombre_destino_unico(arch, nombres_usados)
             )
             try:
-                ok_proc = self.procesador.limpiar_archivo(ruta_in, ruta_out_real)
+                ok_proc = self.procesador.limpiar_archivo(
+                    ruta_in, ruta_out_real, omit_marcaje=omit_marcaje
+                )
                 if (not ok_proc) or (not os.path.exists(ruta_out_real)):
                     shutil.copy2(ruta_in, ruta_out_real)
-                pieza, mat, qty_str, cal = self._parsear_nombre_dxf(arch, ruta_origen=ruta_in)
                 try:
                     qty_final = str(int(qty_str) * multiplicador)
                 except Exception:

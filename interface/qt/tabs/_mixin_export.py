@@ -983,14 +983,29 @@ class ExportMixin:
         # Totales estimados (todos los lotes) para la pantalla dual
         try:
             from modules.nesting_engine.exporter import estimar_conteos_export
+            from modules.nesting_engine.nest_runtime_prefs import (
+                invalidate_nest_runtime_prefs_cache,
+                is_cu_sin_marcaje_enabled,
+            )
 
+            invalidate_nest_runtime_prefs_cache()
+            cu_sin_marcaje = bool(is_cu_sin_marcaje_enabled())
             n_dxf_tot = 0
             n_step_tot = 0
             for orden_obj in (self.app.resultados_multilote or []):
                 mini = orden_obj.get("data") or {}
-                d, s = estimar_conteos_export(mini, generar_step=bool(respuesta_3d))
+                d, s = estimar_conteos_export(
+                    mini,
+                    generar_step=bool(respuesta_3d),
+                    cu_sin_marcaje=cu_sin_marcaje,
+                )
                 n_dxf_tot += int(d)
                 n_step_tot += int(s)
+            print(
+                f"[EXPORT] conteo barra: cu_sin_marcaje={cu_sin_marcaje} "
+                f"dxf_total={n_dxf_tot} step_total={n_step_tot}",
+                flush=True,
+            )
         except Exception as exc_est:
             print(f"[EXPORT][WARN] No se pudo estimar conteos: {exc_est}")
             n_dxf_tot, n_step_tot = 0, 0
@@ -1019,14 +1034,22 @@ class ExportMixin:
             msg = str(kwargs.get("mensaje") or "")
             dd = kwargs.get("dxf_done")
             sd = kwargs.get("step_done")
-            # Acumular por lote: el exporter reporta contadores locales del lote actual.
-            # Usamos deltas vía máximos locales trackeados por lote en el worker.
+            dt = kwargs.get("dxf_total")
+            total_barra = int(n_dxf_tot)
+            if dt is not None:
+                try:
+                    dt_i = int(dt)
+                except (TypeError, ValueError):
+                    dt_i = 0
+                # Un solo lote: el exporter puede corregir el total tras planificar hojas.
+                if dt_i > 0 and len(self.app.resultados_multilote or []) == 1:
+                    total_barra = dt_i
             if hasattr(self.app, "actualizar_progreso_export"):
                 self.app.actualizar_progreso_export(
                     mensaje=msg,
                     dxf_done=dxf_done_global[0] + int(dd or 0) if dd is not None else None,
                     step_done=step_done_global[0] + int(sd or 0) if sd is not None else None,
-                    dxf_total=n_dxf_tot,
+                    dxf_total=total_barra,
                     step_total=n_step_tot if respuesta_3d else 0,
                 )
             elif hasattr(self.app, "actualizar_progreso"):

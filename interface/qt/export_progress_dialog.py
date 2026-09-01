@@ -23,7 +23,7 @@ class ExportProgressDialog(QDialog):
     Carga de exportación con:
     - cronómetro (mismo espíritu que ProgressDialog)
     - barra DXF (n/total + %)
-    - barra STEP (n/total + %)
+    - barra STEP opcional (solo si hay STEP en este export)
     """
 
     def __init__(self, parent, titulo: str = "Exportando DXF / STEP"):
@@ -31,7 +31,9 @@ class ExportProgressDialog(QDialog):
         self.setWindowTitle(titulo)
         from interface.qt.ui_scale import set_scaled_fixed_size
 
-        set_scaled_fixed_size(self, 520, 320)
+        self._size_with_step = (520, 320)
+        self._size_dxf_only = (520, 248)
+        set_scaled_fixed_size(self, *self._size_with_step)
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setStyleSheet(surface_dialog_stylesheet())
@@ -104,14 +106,25 @@ class ExportProgressDialog(QDialog):
             return 100 if done > 0 else 0
         return max(0, min(100, int(round(100.0 * float(done) / float(total)))))
 
+    def _set_step_visible(self, visible: bool) -> None:
+        self.lbl_step.setVisible(visible)
+        self.barra_step.setVisible(visible)
+        from interface.qt.ui_scale import set_scaled_fixed_size
+
+        set_scaled_fixed_size(
+            self,
+            *(self._size_with_step if visible else self._size_dxf_only),
+        )
+
     def set_totals(self, n_dxf: int, n_step: int) -> None:
         self._dxf_total = max(0, int(n_dxf))
         self._step_total = max(0, int(n_step))
+        show_step = self._step_total > 0
+        self._set_step_visible(show_step)
         self._refresh_labels()
-        if self._step_total <= 0:
-            self.lbl_step.setText("STEP  — (sin 3D en este export)")
+        if not show_step:
+            self._step_done = 0
             self.barra_step.setValue(0)
-            self.barra_step.setEnabled(False)
 
     def update_progress(
         self,
@@ -125,9 +138,9 @@ class ExportProgressDialog(QDialog):
             # Si el estimado se quedó corto (p. ej. Amada = 2 DXF), ajusta el total.
             if self._dxf_done > self._dxf_total:
                 self._dxf_total = self._dxf_done
-        if step_done is not None:
+        if step_done is not None and self._step_total > 0:
             self._step_done = max(0, int(step_done))
-            if self._step_done > self._step_total > 0:
+            if self._step_done > self._step_total:
                 self._step_total = self._step_done
         if mensaje:
             self.lbl_mensaje.setText(str(mensaje))

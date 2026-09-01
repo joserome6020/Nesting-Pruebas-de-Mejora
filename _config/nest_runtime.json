@@ -1,7 +1,10 @@
 {
   "prefer": "local",
-  "cu_force_dxf_step": true,
-  "giga_cal11_galv": false,
+  "cu_force_dxf_step": false,
+  "cu_sin_marcaje": true,
+  "giga_cal11_galv": true,
+  "step_feedstock_enabled": false,
+  "exportar_a_servidor": false,
   "spark": {
     "host": "192.168.2.35",
     "port": 8765,

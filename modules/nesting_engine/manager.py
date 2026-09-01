@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from modules.plate_stock import stock_permite_nesting
-from shapely.geometry import box, Polygon, LineString
+from shapely.geometry import box, Polygon, LineString, MultiLineString
 from shapely import affinity
 from shapely.ops import unary_union
 from shapely.prepared import prep
@@ -42,6 +42,7 @@ from .geometry_parser import (
     poligonos_desde_shapely,
     interiores_poly,
 )
+from .nest_runtime_prefs import should_omit_copper_marks
 from .algorithm_bridge import empaquetar_una_hoja_mc, engine_name as nesting_engine_name
 from .engine_registry import list_engine_metas, is_engine_ready
 from .cut_gaps_table import CutGapTableError, gaps_for_calibre
@@ -759,6 +760,9 @@ def _colocar_geometria_exacta_en_pieza(p_orig: dict, p_final: dict, transform: d
     """
     marcas_motor = list(p_final.get("marcas") or [])
     if marcas_motor:
+        return
+
+    if should_omit_copper_marks(p_orig.get("material") or p_final.get("material")):
         return
 
     pe = p_orig.get("poly_exact") or p_orig.get("poly")
@@ -3203,6 +3207,9 @@ class MotorNesting:
                     )
 
             poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta_parse)
+
+            if should_omit_copper_marks(mat):
+                marks = MultiLineString()
 
             if es_material_cobre(mat):
                 rot_deg = int(

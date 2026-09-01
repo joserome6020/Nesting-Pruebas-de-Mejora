@@ -44,12 +44,10 @@ from interface.qt.thread_bridge import call_on_main
 from interface.qt.visualizer import VisorDXF, generar_thumbnail
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
 from interface.qt.layout_helpers import (
-    finalize_hscroll_toolbar,
     finalize_splitter,
     make_card,
     make_herinox_card,
     make_horizontal_splitter,
-    make_hscroll_toolbar,
     make_scroll,
     make_scroll_content,
 )
@@ -135,16 +133,18 @@ class TabParts(QWidget, TimerHost):
         # Primera lectura AutoDXF por ruta → detectar ediciones manuales.
         self._origen_mat_cal_por_ruta: dict[str, tuple[str, str]] = {}
 
+        # Orden: ESP junto al nombre para que Amada/Plasma siempre se vea y se pueda marcar.
         self.local_col_config = [
-            {"weight": 4, "min": 180},  # PIEZA / REF
-            {"weight": 2, "min": 88},   # MATERIAL
-            {"weight": 1, "min": 44},   # QTY
-            {"weight": 1, "min": 64},   # TOTAL QTY
-            {"weight": 1, "min": 64},   # CALIBRE
-            {"weight": 1, "min": 64},   # ESTADO
-            {"weight": 1, "min": 96},   # AMADA / PLASMA (ESP) — no aplastar
-            {"weight": 1, "min": 64},   # VISTA
+            {"weight": 4, "min": 140, "key": "pieza"},
+            {"weight": 0, "min": 52, "key": "esp"},      # checkbox Amada / Plasma
+            {"weight": 2, "min": 72, "key": "material"},
+            {"weight": 1, "min": 40, "key": "qty"},
+            {"weight": 1, "min": 56, "key": "total"},
+            {"weight": 1, "min": 64, "key": "calibre"},
+            {"weight": 1, "min": 64, "key": "estado"},
+            {"weight": 0, "min": 52, "key": "vista"},
         ]
+        self._col_keys = [c["key"] for c in self.local_col_config]
 
         # Estado para lista de largos
         self.btn_lista_largos = None
@@ -160,25 +160,29 @@ class TabParts(QWidget, TimerHost):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
-        splitter = make_horizontal_splitter(1040)
+        splitter = make_horizontal_splitter(680)
         frame_tabla = make_card()
         tabla_lay = QVBoxLayout(frame_tabla)
         tabla_lay.setContentsMargins(16, 16, 12, 16)
 
-        frame_header_scroll, frame_header, hdr = make_hscroll_toolbar(
-            height_design=54,
-            min_height=46,
-            object_name="PartsToolbarScroll",
-        )
+        # Toolbar en 2 filas: nada se corta.
+        frame_header = QWidget()
+        hdr_box = QVBoxLayout(frame_header)
+        hdr_box.setContentsMargins(0, 0, 0, 4)
+        hdr_box.setSpacing(6)
+
+        row_tanques = QHBoxLayout()
+        row_tanques.setContentsMargins(0, 0, 0, 0)
+        row_tanques.setSpacing(8)
         self.lbl_tanques = QLabel("TANQUES DEL PROYECTO:")
         self.lbl_tanques.setStyleSheet(
-            f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:{s(15, min_px=12)}px;"
+            f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:{s(14, min_px=12)}px;"
         )
-        hdr.addWidget(self.lbl_tanques)
+        row_tanques.addWidget(self.lbl_tanques)
         self.ent_tanques = QLineEdit("X1")
         self.ent_tanques.setFixedWidth(s(70, min_px=56))
         self.ent_tanques.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hdr.addWidget(self.ent_tanques)
+        row_tanques.addWidget(self.ent_tanques)
         self.btn_aplicar_tanques = QPushButton("APLICAR")
         apply_push_button(
             self.btn_aplicar_tanques,
@@ -187,36 +191,42 @@ class TabParts(QWidget, TimerHost):
             padding=f"{s(6, min_px=4)}px {s(12, min_px=8)}px",
         )
         self.btn_aplicar_tanques.clicked.connect(self.aplicar_cantidad_tanques)
-        hdr.addWidget(self.btn_aplicar_tanques)
+        row_tanques.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
+        row_tanques.addStretch(1)
+        hdr_box.addLayout(row_tanques)
 
         self._dxf_audit_token = 0
         self._dxf_audit_actual: dict = {"total": 0, "ok": 0, "omitidos": []}
-        hdr.addStretch()
+
+        row_acciones = QHBoxLayout()
+        row_acciones.setContentsMargins(0, 0, 0, 0)
+        row_acciones.setSpacing(8)
         self.btn_reprocesar_autodxf = QPushButton("REPROCESAR AUTODXF")
         apply_push_button(
             self.btn_reprocesar_autodxf,
             ARGB_BTN_2,
             font_size=s(11, min_px=9),
-            padding=f"{s(6, min_px=4)}px {s(10, min_px=7)}px",
+            padding=f"{s(6, min_px=4)}px {s(12, min_px=8)}px",
         )
         self.btn_reprocesar_autodxf.setToolTip(
             "Vuelve a limpiar/procesar los DXF crudos de AutoDXF → Processed Files "
             "y actualiza PARTS. Luego RENESTEAR ESTA PLACA en la placa afectada."
         )
         self.btn_reprocesar_autodxf.clicked.connect(self.reprocesar_autodxf_partes)
-        hdr.addWidget(self.btn_reprocesar_autodxf)
+        row_acciones.addWidget(self.btn_reprocesar_autodxf)
         self.btn_lista_largos = QPushButton("DEMANDA DE LARGOS")
         apply_push_button(
             self.btn_lista_largos,
             ARGB_BTN_3,
             font_size=s(11, min_px=9),
-            padding=f"{s(6, min_px=4)}px {s(10, min_px=7)}px",
+            padding=f"{s(6, min_px=4)}px {s(12, min_px=8)}px",
         )
         self.btn_lista_largos.clicked.connect(self.abrir_ventana_lista_largos)
-        hdr.addWidget(self.btn_lista_largos)
-        finalize_hscroll_toolbar(frame_header_scroll, frame_header)
-        tabla_lay.addWidget(frame_header_scroll)
+        row_acciones.addWidget(self.btn_lista_largos)
+        row_acciones.addStretch(1)
+        hdr_box.addLayout(row_acciones)
+        tabla_lay.addWidget(frame_header)
 
         header_wrap = QWidget()
         header_wrap_lay = QHBoxLayout(header_wrap)
@@ -230,20 +240,30 @@ class TabParts(QWidget, TimerHost):
         self._parts_head_grid = QGridLayout(self._parts_head)
         self._parts_head_grid.setContentsMargins(self._PARTS_GRID_MARGIN_H, 0, self._PARTS_GRID_MARGIN_H, 0)
         self._apply_parts_grid_columns(self._parts_head_grid)
-        titulos = ["PIEZA / REF", "MATERIAL", "QTY", "TOTAL QTY", "CALIBRE", "ESTADO", "AMADA / PLASMA", "VISTA"]
-        for i, txt in enumerate(titulos):
+        titulos = {
+            "pieza": "PIEZA / REF",
+            "esp": "ESP",
+            "material": "MATERIAL",
+            "qty": "QTY",
+            "total": "TOTAL QTY",
+            "calibre": "CALIBRE",
+            "estado": "ESTADO",
+            "vista": "VISTA",
+        }
+        for i, key in enumerate(self._col_keys):
+            txt = titulos[key]
             lbl = QLabel(txt)
-            if i == 0:
+            if key == "pieza":
                 lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             else:
                 lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if txt == "AMADA / PLASMA":
+            if key == "esp":
                 lbl.setToolTip(
-                    "Cobre: marca = Amada ESP (ancho 5\" ±tol) → VERTICAL + DXF en AMADA/FIXTURA.\n"
-                    "Acero/otros: marca = compensación plasma "
-                    "(reprocesa geometría y nestea en placas solo-plasma)."
+                    "Marca la casilla:\n"
+                    "• Cobre → Amada ESP (VERTICAL + DXF AMADA/FIXTURA)\n"
+                    "• Acero/otros → compensación plasma"
                 )
-                lbl.setStyleSheet(f"font-weight:700;color:{COLOR_GRIS_DARK};")
+                lbl.setStyleSheet(f"font-weight:800;color:{COLOR_GRIS_DARK};")
             self._parts_head_grid.addWidget(lbl, 0, i)
         header_wrap_lay.addWidget(self._parts_head, 1)
 
@@ -328,7 +348,7 @@ class TabParts(QWidget, TimerHost):
         splitter.addWidget(frame_visor_bg)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        finalize_splitter(splitter, min_left=520, min_right=300)
+        finalize_splitter(splitter, min_left=480, min_right=360)
         self._parts_splitter = splitter
         root.addWidget(splitter)
 
@@ -404,62 +424,53 @@ class TabParts(QWidget, TimerHost):
             row_lay.setContentsMargins(self._PARTS_GRID_MARGIN_H, 2, self._PARTS_GRID_MARGIN_H, 2)
             self._apply_parts_grid_columns(row_lay)
 
-            valores = [pieza, mat, str(qty_unidad), str(tot_val), cal, st]
+            valores = {
+                "pieza": pieza,
+                "material": mat,
+                "qty": str(qty_unidad),
+                "total": str(tot_val),
+                "calibre": cal,
+                "estado": st,
+            }
             es_cu = self._es_material_cobre(mat)
             es_plasma = bool(ruta) and not es_cu and self._plasma_guardada(ruta)
             if es_plasma:
-                valores[5] = "PLASMA"
+                valores["estado"] = "PLASMA"
             mat_combo = None
             cal_combo = None
             chk = None
             lbl_estado = None
-            for i, conf in enumerate(self.local_col_config):
-                if i < 6:
-                    if i == 0:
-                        lbl = _NombrePiezaLabel(
-                            pieza,
-                            row,
-                            on_select=lambda r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
-                                r, f, p, self._material_actual_fila(r, m)
-                            ),
-                        )
-                        row_lay.addWidget(lbl, 0, i)
-                    elif i == 1 and ruta:
-                        mat_combo = self._crear_combo_material(mat, ruta, row, pieza)
-                        row_lay.addWidget(mat_combo, 0, i)
-                    elif i == 4 and ruta:
-                        cal_combo = self._crear_combo_calibre(cal, mat, ruta, row, pieza)
-                        row_lay.addWidget(cal_combo, 0, i)
-                    else:
-                        lbl = QLabel(valores[i])
-                        if i == 5 and es_plasma:
-                            lbl.setStyleSheet("color:#2563EB;font-weight:700;")
-                        else:
-                            lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
-                        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        lbl.mousePressEvent = (
-                            lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
-                                r, f, p, self._material_actual_fila(r, m)
-                            )
-                        )
-                        row_lay.addWidget(lbl, 0, i)
-                        if i == 5:
-                            lbl_estado = lbl
-                elif i == 6:
+            for i, key in enumerate(self._col_keys):
+                if key == "pieza":
+                    lbl = _NombrePiezaLabel(
+                        pieza,
+                        row,
+                        on_select=lambda r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                            r, f, p, self._material_actual_fila(r, m)
+                        ),
+                    )
+                    row_lay.addWidget(lbl, 0, i)
+                elif key == "esp":
                     chk_wrap = QWidget()
+                    chk_wrap.setMinimumWidth(44)
                     chk_lay = QHBoxLayout(chk_wrap)
                     chk_lay.setContentsMargins(0, 0, 0, 0)
-                    chk_lay.setSpacing(4)
                     chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     chk = QCheckBox()
                     chk.setStyleSheet(
-                        "QCheckBox::indicator{width:18px;height:18px;}"
-                        "QCheckBox{spacing:4px;}"
+                        "QCheckBox::indicator{width:22px;height:22px;}"
+                        "QCheckBox{background:transparent;}"
                     )
                     self._configurar_esp_checkbox(chk, ruta, mat, cal)
                     chk_lay.addWidget(chk)
                     row_lay.addWidget(chk_wrap, 0, i)
-                elif i == 7:
+                elif key == "material" and ruta:
+                    mat_combo = self._crear_combo_material(mat, ruta, row, pieza)
+                    row_lay.addWidget(mat_combo, 0, i)
+                elif key == "calibre" and ruta:
+                    cal_combo = self._crear_combo_calibre(cal, mat, ruta, row, pieza)
+                    row_lay.addWidget(cal_combo, 0, i)
+                elif key == "vista":
                     if thumbnails_async:
                         ph = QLabel("…")
                         ph.setFixedSize(_PARTS_THUMB_PX, _PARTS_THUMB_PX)
@@ -491,6 +502,21 @@ class TabParts(QWidget, TimerHost):
                                 row_lay.addWidget(l_t, 0, i)
                         except Exception:
                             pass
+                else:
+                    lbl = QLabel(str(valores.get(key, "")))
+                    if key == "estado" and es_plasma:
+                        lbl.setStyleSheet("color:#2563EB;font-weight:700;")
+                    else:
+                        lbl.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+                    lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    lbl.mousePressEvent = (
+                        lambda ev, r=ruta, f=row, p=pieza, m=mat: self.seleccionar_fila(
+                            r, f, p, self._material_actual_fila(r, m)
+                        )
+                    )
+                    row_lay.addWidget(lbl, 0, i)
+                    if key == "estado":
+                        lbl_estado = lbl
 
             if ruta:
                 ruta_s = str(ruta)
@@ -674,9 +700,9 @@ class TabParts(QWidget, TimerHost):
         if es_cu and ruta:
             chk.setEnabled(True)
             chk.setVisible(True)
-            chk.setText("Amada")
+            chk.setText("")
             chk.setToolTip(
-                'Amada ESP.: 5" + barrenos catálogo → VERTICAL + DXF pieza AMADA/FIXTURA'
+                'Amada ESP.: marca = VERTICAL + DXF pieza en AMADA/FIXTURA (ancho 5")'
             )
             chk.blockSignals(True)
             chk.setChecked(self._cu_especial_guardada(ruta))
@@ -689,9 +715,9 @@ class TabParts(QWidget, TimerHost):
         elif ruta and not es_cu:
             chk.setEnabled(True)
             chk.setVisible(True)
-            chk.setText("Plasma")
+            chk.setText("")
             chk.setToolTip(
-                "Plasma: compensar esta pieza y nestearla en placas solo-plasma"
+                "Plasma: marca = compensar esta pieza y nestearla en placas solo-plasma"
             )
             chk.blockSignals(True)
             chk.setChecked(self._plasma_guardada(ruta))
@@ -1901,6 +1927,23 @@ class TabParts(QWidget, TimerHost):
             }
             n_cache = invalidar_cache_dxf(rutas) if rutas else invalidar_cache_dxf()
             print(f"[AUTODXF] cache DXF invalidado: {n_cache} entradas", flush=True)
+        except Exception:
+            pass
+        try:
+            from interface.utils_nesting import _es_clave_cobre
+            from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+
+            if is_cu_sin_marcaje_enabled():
+                for clave, info in (getattr(self.app, "resultados_nesting", None) or {}).items():
+                    if not _es_clave_cobre(clave):
+                        continue
+                    for hoja in (info or {}).get("hojas") or []:
+                        for pz in (hoja or {}).get("piezas") or []:
+                            if isinstance(pz, dict):
+                                pz["marcas"] = []
+                vista_nest = getattr(self.app, "vista_nesting", None)
+                if vista_nest and hasattr(vista_nest, "_redibujar_hoja_actual_tras_geom"):
+                    vista_nest._redibujar_hoja_actual_tras_geom()
         except Exception:
             pass
         QMessageBox.information(

@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
 
 from interface.qt.cad_graphics_view import CadPartGraphicsView
 from interface.qt.dxf_part_loader import load_dxf_part
-from interface.qt.layout_helpers import make_hscroll_toolbar
 from interface.qt.thread_bridge import call_on_main
 from interface.qt.theme import apply_push_button, COLOR_GRIS_DARK, TOOLTIP_OSCURO_QSS
 from interface.qt.ui_scale import s
@@ -59,58 +57,52 @@ class VisorDXF:
 
         self.frame_seccion_3 = QFrame()
         self.frame_seccion_3.setObjectName("VisorInfoPanel")
-        self.frame_seccion_3.setFixedHeight(s(88, min_px=76))
+        self.frame_seccion_3.setFixedHeight(s(72, min_px=64))
         master_lay.addWidget(self.frame_seccion_3)
 
         sec2_lay = QVBoxLayout(self.frame_seccion_2)
         sec2_lay.setContentsMargins(0, 0, 0, 0)
         sec2_lay.setSpacing(0)
 
-        toolbar_scroll, toolbar, tb_lay = make_hscroll_toolbar(
-            height_design=44,
-            min_height=38,
-            object_name="VisorToolbarScroll",
-        )
+        toolbar = QFrame()
         toolbar.setStyleSheet("background:#0F172A;border-bottom:1px solid #334155;")
-        toolbar_scroll.setStyleSheet(
-            "QScrollArea#VisorToolbarScroll{background:#0F172A;border-bottom:1px solid #334155;}"
-        )
+        tb_lay = QHBoxLayout(toolbar)
+        tb_lay.setContentsMargins(10, 6, 10, 6)
+        tb_lay.setSpacing(8)
 
         btn_fit = QPushButton("AJUSTAR VISTA")
-        btn_fit.setFixedHeight(s(30, min_px=26))
-        apply_push_button(
-            btn_fit,
-            COLOR_GRIS_DARK,
-            font_size=s(10, min_px=9),
-            padding=f"{s(4, min_px=3)}px {s(12, min_px=8)}px",
-        )
+        btn_fit.setFixedHeight(28)
+        apply_push_button(btn_fit, COLOR_GRIS_DARK, font_size=10, padding="4px 12px")
         btn_fit.clicked.connect(self.ajustar_vista)
         tb_lay.addWidget(btn_fit)
 
         btn_rot = QPushButton("ROTAR 90°")
-        btn_rot.setFixedHeight(s(30, min_px=26))
-        apply_push_button(
-            btn_rot,
-            "#334155",
-            font_size=s(10, min_px=9),
-            padding=f"{s(4, min_px=3)}px {s(12, min_px=8)}px",
-        )
+        btn_rot.setFixedHeight(28)
+        apply_push_button(btn_rot, "#334155", font_size=10, padding="4px 12px")
         btn_rot.clicked.connect(self.rotar_vista_90)
         tb_lay.addWidget(btn_rot)
 
-        lbl_hint = QLabel(
-            "CLIC: COTA  ·  RUEDA: ZOOM  ·  CENTRAL: PAN  ·  DER: ROTAR  ·  ESC: CANCELAR"
+        # Bloqueo de orientación SIEMPRE visible en la barra del visor (no abajo).
+        self.chk_orientacion_corte = QCheckBox("BLOQUEAR ORIENTACIÓN")
+        self.chk_orientacion_corte.setStyleSheet(
+            "QCheckBox{color:#E2E8F0;font-size:11px;font-weight:700;background:transparent;}"
+            "QCheckBox::indicator{width:16px;height:16px;}"
+            + TOOLTIP_OSCURO_QSS
         )
-        lbl_hint.setStyleSheet(
-            f"color:#64748B;font-size:{s(10, min_px=9)}px;background:transparent;"
+        self.chk_orientacion_corte.setToolTip(
+            "Si está activo, el nesting solo podrá usar la orientación visible "
+            "(incluida la de ROTAR 90°). Al desmarcar, vuelven las rotaciones normales."
         )
-        lbl_hint.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        lbl_hint.setMinimumWidth(s(280, min_px=180))
-        tb_lay.addWidget(lbl_hint)
-        toolbar.adjustSize()
-        toolbar_scroll.setWidget(toolbar)
+        self.chk_orientacion_corte.toggled.connect(self._on_orientation_lock_toggled)
+        tb_lay.addWidget(self.chk_orientacion_corte)
 
-        sec2_lay.addWidget(toolbar_scroll)
+        lbl_hint = QLabel("CLIC: COTA  ·  RUEDA: ZOOM  ·  ESC: CANCELAR")
+        lbl_hint.setStyleSheet("color:#64748B;font-size:10px;background:transparent;")
+        lbl_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        tb_lay.addStretch(1)
+        tb_lay.addWidget(lbl_hint)
+
+        sec2_lay.addWidget(toolbar)
 
         self._cad = CadPartGraphicsView()
         self._cad.metrics_callback = self.actualizar_datos
@@ -162,60 +154,32 @@ class VisorDXF:
         self._cad.set_material(self._material)
 
     def construir_tabla_3_columnas(self):
-        # El tooltip se declara aquí también: sobre panel oscuro heredaba el texto
-        # oscuro del tema claro y quedaba ilegible.
+        # Solo métricas abajo; el bloqueo de orientación vive en la barra superior.
         self.frame_seccion_3.setStyleSheet(
             "QFrame#VisorInfoPanel{background:#0F172A;border:none;}"
             + TOOLTIP_OSCURO_QSS
         )
-        outer = QVBoxLayout(self.frame_seccion_3)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-
-        metrics_scroll = QScrollArea()
-        metrics_scroll.setObjectName("VisorMetricsScroll")
-        metrics_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        metrics_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        metrics_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        metrics_scroll.setWidgetResizable(False)
-        metrics_scroll.setStyleSheet(
-            "QScrollArea#VisorMetricsScroll{background:#0F172A;border:none;}"
-            "QScrollArea#VisorMetricsScroll QScrollBar:horizontal{"
-            "background:#0F172A;height:6px;border:none;}"
-            "QScrollArea#VisorMetricsScroll QScrollBar::handle:horizontal{"
-            "background:#475569;border-radius:3px;min-width:20px;}"
-        )
-
-        metrics_host = QWidget()
-        metrics_host.setStyleSheet("background:#0F172A;")
-        row = QHBoxLayout(metrics_host)
-        row.setContentsMargins(
-            s(14, min_px=10),
-            s(10, min_px=8),
-            s(14, min_px=10),
-            s(10, min_px=8),
-        )
-        row.setSpacing(s(16, min_px=10))
-        row.setSizeConstraint(QHBoxLayout.SizeConstraint.SetFixedSize)
+        row = QHBoxLayout(self.frame_seccion_3)
+        row.setContentsMargins(14, 8, 14, 8)
+        row.setSpacing(16)
 
         def _metric(caption: str, attr_name: str):
             wrap = QWidget()
             wrap.setStyleSheet("background:transparent;")
-            # Tamaño natural: evita que LARGO/ANCHO/etc. se estiren a todo el ancho.
             wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
             wl = QVBoxLayout(wrap)
             wl.setContentsMargins(0, 0, 0, 0)
             wl.setSpacing(1)
             cap = QLabel(caption)
             cap.setStyleSheet(
-                f"color:#64748B;font-size:{s(10, min_px=9)}px;font-weight:700;background:transparent;"
+                "color:#64748B;font-size:10px;font-weight:700;background:transparent;"
             )
             val = QLabel("-")
             val.setStyleSheet(
-                f"color:#E2E8F0;font-size:{s(13, min_px=11)}px;font-weight:700;background:transparent;"
+                "color:#E2E8F0;font-size:13px;font-weight:700;background:transparent;"
             )
             val.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            val.setMinimumWidth(s(72, min_px=56))
+            val.setMinimumWidth(64)
             wl.addWidget(cap)
             wl.addWidget(val)
             setattr(self, attr_name, val)
@@ -226,7 +190,7 @@ class VisorDXF:
         _metric("AREA NETA", "lbl_area")
         _metric("PERIMETRO", "lbl_perim")
         _metric("REFERENCIA", "lbl_ref")
-        self.lbl_ref.setMinimumWidth(s(120, min_px=90))
+        self.lbl_ref.setMinimumWidth(100)
 
         plasma_wrap = QWidget()
         plasma_wrap.setStyleSheet("background:transparent;")
@@ -236,45 +200,21 @@ class VisorDXF:
         pl.setSpacing(1)
         self.lbl_plasma_cap = QLabel("PLASMA")
         self.lbl_plasma_cap.setStyleSheet(
-            f"color:#64748B;font-size:{s(10, min_px=9)}px;font-weight:700;background:transparent;"
+            "color:#64748B;font-size:10px;font-weight:700;background:transparent;"
         )
         self.lbl_plasma = QLabel("—")
         self.lbl_plasma.setStyleSheet(
-            f"color:#FCA5A5;font-size:{s(13, min_px=11)}px;font-weight:700;background:transparent;"
+            "color:#FCA5A5;font-size:13px;font-weight:700;background:transparent;"
         )
-        self.lbl_plasma.setMinimumWidth(s(100, min_px=72))
+        self.lbl_plasma.setMinimumWidth(80)
         pl.addWidget(self.lbl_plasma_cap)
         pl.addWidget(self.lbl_plasma)
         row.addWidget(plasma_wrap, 0)
+        row.addStretch(1)
 
-        lock_wrap = QWidget()
-        lock_wrap.setStyleSheet("background:transparent;")
-        lock_wrap.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        ll = QVBoxLayout(lock_wrap)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(1)
-        self.lbl_orientacion_cap = QLabel("ORIENTACIÓN")
-        self.lbl_orientacion_cap.setStyleSheet(
-            f"color:#64748B;font-size:{s(10, min_px=9)}px;font-weight:700;background:transparent;"
-        )
-        self.chk_orientacion_corte = QCheckBox("BLOQUEAR ORIENTACIÓN DE CORTE")
-        self.chk_orientacion_corte.setStyleSheet(
-            f"QCheckBox{{color:#E2E8F0;font-size:{s(11, min_px=9)}px;font-weight:700;background:transparent;}}"
-            f"QCheckBox::indicator{{width:{s(14, min_px=12)}px;height:{s(14, min_px=12)}px;}}"
-            + TOOLTIP_OSCURO_QSS
-        )
-        self.chk_orientacion_corte.setToolTip(
-            "Si está activo, el nesting solo podrá usar la orientación visible "
-            "(incluida la de ROTAR 90°). Al desmarcar, vuelven las rotaciones normales."
-        )
-        self.chk_orientacion_corte.toggled.connect(self._on_orientation_lock_toggled)
-        ll.addWidget(self.lbl_orientacion_cap)
-        ll.addWidget(self.chk_orientacion_corte)
-        row.addWidget(lock_wrap, 0)
-
-        metrics_host.adjustSize()
-        metrics_scroll.setWidget(metrics_host)
-        outer.addWidget(metrics_scroll, 1)
+        # Stub por compat: caption ya no se muestra abajo.
+        self.lbl_orientacion_cap = QLabel("")
+        self.lbl_orientacion_cap.hide()
 
     def _on_orientation_lock_toggled(self, checked: bool):
         if callable(self._orientation_lock_hook):

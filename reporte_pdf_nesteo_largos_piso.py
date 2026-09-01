@@ -286,6 +286,105 @@ def _draw_main_frame(c, x0: float, y_top: float, x1: float, y_bot: float) -> Non
     c.rect(x0, y_bot, x1 - x0, y_top - y_bot, fill=0, stroke=1)
 
 
+def _wrap_text_lines_full(
+    c,
+    txt: str,
+    max_width: float,
+    font: str,
+    size: float,
+) -> list[str]:
+    """Parte texto en líneas completas (sin truncar), con guiones si hace falta."""
+    s = str(txt or "").strip()
+    if not s:
+        return [""]
+    if _text_w(c, s, font, size) <= max_width:
+        return [s]
+
+    lines: list[str] = []
+    rest = s
+    while rest:
+        if _text_w(c, rest, font, size) <= max_width:
+            lines.append(rest)
+            break
+
+        best_pipe = 0
+        pipe_pos = 0
+        while True:
+            idx = rest.find(" | ", pipe_pos)
+            if idx < 0:
+                break
+            chunk = rest[:idx]
+            if chunk and _text_w(c, chunk, font, size) <= max_width:
+                best_pipe = idx
+            pipe_pos = idx + 3
+
+        if best_pipe > 0:
+            lines.append(rest[:best_pipe].rstrip())
+            rest = rest[best_pipe:].lstrip(" |")
+            continue
+
+        best_hyphen = 0
+        for i in range(1, len(rest)):
+            if rest[i - 1] not in "-_":
+                continue
+            chunk = rest[:i]
+            if _text_w(c, chunk, font, size) <= max_width:
+                best_hyphen = i
+
+        if best_hyphen > 0:
+            lines.append(rest[:best_hyphen])
+            rest = rest[best_hyphen:]
+            continue
+
+        best_space = 0
+        for i in range(len(rest) - 1, 0, -1):
+            if rest[i] != " ":
+                continue
+            chunk = rest[:i]
+            if _text_w(c, chunk, font, size) <= max_width:
+                best_space = i
+                break
+
+        if best_space > 0:
+            lines.append(rest[:best_space])
+            rest = rest[best_space:].lstrip()
+            continue
+
+        lo, hi = 1, len(rest)
+        best = 1
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            cand = rest[:mid] + "-"
+            if _text_w(c, cand, font, size) <= max_width:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        lines.append(rest[:best] + "-")
+        rest = rest[best:]
+
+    return lines if lines else [s]
+
+
+def _layout_wrapped_cell_text(
+    c,
+    txt: str,
+    inner_w: float,
+    font: str = FONT_REG,
+    max_size: float = 8.0,
+    min_size: float = 5.5,
+    prefer_max_lines: int = 4,
+) -> tuple[list[str], float]:
+    """Elige tamaño de fuente y líneas para mostrar texto multilínea completo."""
+    size = max_size
+    while size >= min_size:
+        lines = _wrap_text_lines_full(c, txt, inner_w, font, size)
+        if len(lines) <= prefer_max_lines:
+            return lines, size
+        size -= 0.25
+    return _wrap_text_lines_full(c, txt, inner_w, font, min_size), min_size
+
+
 def _wrap_item_lines(
     c,
     txt: str,
@@ -781,6 +880,15 @@ def generar_pdf_nesteo_largos_piso(snapshot: dict, ruta_pdf: str | None = None) 
                 data_font_size,
                 max_lines=4,
             )
+            desc_inner_w = max(8.0, col_widths[1] - 2 * CELL_PAD_X)
+            desc_lines, desc_font_size = _layout_wrapped_cell_text(
+                c,
+                str(row.get("descripcion") or ""),
+                desc_inner_w,
+                max_size=data_font_size,
+                min_size=5.5,
+                prefer_max_lines=4,
+            )
             proceso_inner_w = max(8.0, col_widths[5] - 2 * CELL_PAD_X)
             proceso_lines = _wrap_proceso_lines(
                 c,
@@ -793,6 +901,7 @@ def generar_pdf_nesteo_largos_piso(snapshot: dict, ruta_pdf: str | None = None) 
             row_h = max(
                 ROW_H_DATA,
                 _item_text_block_height(len(item_lines), data_font_size) + 2 * CELL_PAD_Y,
+                _item_text_block_height(len(desc_lines), desc_font_size) + 2 * CELL_PAD_Y,
                 _item_text_block_height(len(proceso_lines), data_font_size) + 2 * CELL_PAD_Y,
             )
 
@@ -829,6 +938,12 @@ def generar_pdf_nesteo_largos_piso(snapshot: dict, ruta_pdf: str | None = None) 
                         c, item_lines, col_xs[i], col_widths[i], row_top, row_bot,
                         size=data_font_size,
                         align="C",
+                    )
+                elif i == 1:
+                    _draw_cell_text_wrapped(
+                        c, desc_lines, col_xs[i], col_widths[i], row_top, row_bot,
+                        size=desc_font_size,
+                        align="L",
                     )
                 elif i == 5:
                     _draw_cell_text_wrapped(

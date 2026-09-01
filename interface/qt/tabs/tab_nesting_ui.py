@@ -123,7 +123,7 @@ def build_tab_nesting_ui(tab) -> None:
     root.setContentsMargins(8, 4, 8, 0)
     root.setSpacing(6)
 
-    # Cinta a ANCHO COMPLETO (arriba del splitter): todos los comandos caben.
+    # Cinta 1 fila a ANCHO COMPLETO (no metida en el panel derecho → no se solapa).
     tab.frame_header_der = build_nesting_ribbon(tab)
     root.addWidget(tab.frame_header_der)
 

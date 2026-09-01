@@ -19,6 +19,7 @@ from modules.dxf_export.cyptube_vertical import (  # noqa: E402
     PARAM_B_MM_DEFAULT,
     cyptube_param_A_mm,
     escribir_cyptube_verticales_json,
+    path_con_sufijo,
     split_cyptube_vertical_dxf,
 )
 from modules.nest_exporter import _assert_dxf_autocad_safe_on_disk  # noqa: E402
@@ -133,6 +134,59 @@ def test_split_vertical_corte_marcaje_y_json() -> None:
         assert math.isclose(data["archivos"][0]["A_mm"], w_mm + 0.2, abs_tol=1e-6)
 
 
+def test_split_solo_corte_sin_marcaje() -> None:
+    """Switch cu_sin_marcaje: solo *_Corte; JSON sin archivo marcaje (RPA corte)."""
+    placement, w_mm, _l = _bar_placement(especial=True)
+    sheet = {
+        "modo_largos_cu": True,
+        "cu_modo_separacion_barra": "sin_gap",
+        "export_3d_format": "dxf",
+        "length": 144.0 * 25.4,
+        "width": w_mm,
+        "Length": 144.0 * 25.4,
+        "Width": w_mm,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        combined = os.path.join(tmp, "NESTING_0.25_W.O. 99 X1-H1.dxf")
+        export_cobre_hoja_to_dxf(
+            combined,
+            sheet,
+            [placement],
+            title="AMADA/VERTICAL | TEST",
+            draw_holes=False,
+            draw_marks=False,
+            strict=False,
+        )
+        paths, rec = split_cyptube_vertical_dxf(
+            combined,
+            bar_width_mm=w_mm,
+            canal="AMADA/VERTICAL",
+            sheet_code="W.O. 99 X1-H1",
+            cu_especial_vertical=True,
+            thickness_in=0.25,
+            remove_combined=True,
+            include_marcaje=False,
+        )
+        assert paths.corte.endswith("_Corte.dxf")
+        assert paths.marcaje == ""
+        assert os.path.isfile(paths.corte)
+        assert not os.path.isfile(path_con_sufijo(combined, "Marcaje"))
+        doc_c = ezdxf.readfile(paths.corte)
+        layers_c = {
+            str(getattr(e.dxf, "layer", "") or "").upper() for e in doc_c.modelspace()
+        }
+        assert any(L.startswith("CUT_") for L in layers_c)
+        assert "MARK" not in layers_c
+
+        nesteos = os.path.join(tmp, "NESTEOS DE COBRE")
+        json_path = escribir_cyptube_verticales_json(nesteos, [rec])
+        data = json.loads(open(json_path, encoding="utf-8").read())
+        assert data.get("sin_marcaje") is True
+        assert len(data["archivos"]) == 1
+        assert data["archivos"][0]["rol"] == "corte"
+        assert data["barras"][0].get("marcaje") is None
+
+
 def test_pqart_debe_registrar_corte_y_marcaje() -> None:
     """Réplica del contrato _validar_lote_exportado tras split CyPTube."""
     from modules.nesting_engine.exporter import _registrar_exportacion_pqart_hoja
@@ -153,5 +207,6 @@ def test_pqart_debe_registrar_corte_y_marcaje() -> None:
 if __name__ == "__main__":
     test_cyptube_param_A_es_ancho_mas_0_2()
     test_split_vertical_corte_marcaje_y_json()
+    test_split_solo_corte_sin_marcaje()
     test_pqart_debe_registrar_corte_y_marcaje()
     print("[OK] CyPTube vertical Corte/Marcaje + JSON")

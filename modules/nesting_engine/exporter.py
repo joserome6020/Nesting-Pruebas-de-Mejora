@@ -509,16 +509,82 @@ def _auditar_steps_en_rutas(
     return resumen
 
 
-def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int, int]:
+def _preparar_hoja_conteo_export(hoja: dict) -> dict:
+    """Replica campos que el export muta antes de decidir split CyPTube."""
+    if bool(hoja.get("modo_largos_cu")):
+        if hoja.get("cu_rtz_virtual"):
+            hoja["cu_modo_separacion_barra"] = "con_gap"
+            hoja["export_3d_format"] = "step"
+        else:
+            hoja["export_3d_format"] = _hoja_cobre_export_3d(hoja)
+    return hoja
+
+
+def _conteo_dxfs_export_plan(resultados: dict, *, cu_sin_marcaje: bool) -> int:
+    """Total DXF que escribe exportar_nesting_dxf (misma regla que dxf_done)."""
+    import copy
+
+    n = 0
+    for clave, data in (resultados or {}).items():
+        if not isinstance(data, dict):
+            continue
+        for hoja in data.get("hojas") or []:
+            if not isinstance(hoja, dict):
+                continue
+            h = copy.deepcopy(hoja)
+            _preparar_hoja_conteo_export(h)
+            n += _dxfs_por_hoja_en_export(clave, h, cu_sin_marcaje=bool(cu_sin_marcaje))
+    n += _contar_fixturas_amada_unicas(resultados)
+    return n
+
+
+def _es_cu_sin_gap_dxf_hoja(hoja: dict) -> bool:
+    """Misma condición que el bloque CyPTube split en exportar_nesting_dxf."""
+    if not isinstance(hoja, dict) or not bool(hoja.get("modo_largos_cu")):
+        return False
+    if bool(hoja.get("cu_rtz_virtual")):
+        return False
+    fmt = str(hoja.get("export_3d_format") or _hoja_cobre_export_3d(hoja)).strip().lower()
+    return (
+        str(hoja.get("cu_modo_separacion_barra") or "").strip().lower() == "sin_gap"
+        and fmt == "dxf"
+    )
+
+
+def _dxfs_por_hoja_en_export(clave: str, hoja: dict, *, cu_sin_marcaje: bool) -> int:
+    """DXF de producción que realmente escribe el export (1:1 con dxf_done)."""
+    from .efficiency_metrics import hoja_export_solo_plasma, promover_compensacion_plasma_en_hoja
+
+    promover_compensacion_plasma_en_hoja(hoja)
+    if hoja_export_solo_plasma(hoja):
+        n = 0
+    elif _es_cu_sin_gap_dxf_hoja(hoja):
+        n = 1 if cu_sin_marcaje else 2
+    else:
+        n = 1
+    if _debe_generar_plasma(clave, hoja) and not bool(hoja.get("modo_largos_cu")):
+        n += 1
+    return n
+
+
+def estimar_conteos_export(
+    resultados: dict,
+    *,
+    generar_step: bool,
+    cu_sin_marcaje: bool | None = None,
+) -> tuple[int, int]:
     """
     Estima (n_dxf, n_step) para barras de progreso.
-    Flujo normal: robot láser/plasma → 2 STEP (Cama A + Cama B); CAMA LASER solo DXF.
-    Overlay STEP_UNIVERSAL_SIN_CAMAS: 1 STEP por cada DXF de acero (sin A/B).
-    Cobre: STEP solo si la hoja requiere 3D.
-    Barras Amada (ESP.): 2 DXF VERTICAL (Corte+Marcaje) por barra + 1 FIXTURA
-    por pieza ESP. única. Escalón sin_gap: también Corte+Marcaje.
-    El RTZCU de esas barras va a DXF/STEP normal.
+    n_dxf usa la misma regla que incrementa ``dxf_done`` en exportar_nesting_dxf.
     """
+    if cu_sin_marcaje is None:
+        try:
+            from .nest_runtime_prefs import is_cu_sin_marcaje_enabled
+
+            cu_sin_marcaje = bool(is_cu_sin_marcaje_enabled())
+        except Exception:
+            cu_sin_marcaje = False
+    cu_flag = bool(cu_sin_marcaje)
     n_dxf = 0
     n_step = 0
     universal = step_universal_sin_camas_activo()
@@ -528,44 +594,15 @@ def estimar_conteos_export(resultados: dict, *, generar_step: bool) -> tuple[int
         for hoja in data.get("hojas") or []:
             if not isinstance(hoja, dict):
                 continue
-            carpeta = _resolver_carpeta_principal(clave, hoja)
-            es_cu = carpeta == RUTA_NESTEOS_COBRE or bool(hoja.get("modo_largos_cu"))
-            es_especial = es_cu and _hoja_cobre_es_especial(hoja)
-            es_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
+            import copy
 
-            if es_especial and not es_rtz_virtual:
-                # AMADA/VERTICAL: Corte + Marcaje (CyPTube). FIXTURA se cuenta aparte.
-                n_dxf += 2
-                continue
-
-            es_sin_gap_dxf = (
-                es_cu
-                and not es_rtz_virtual
-                and str(hoja.get("cu_modo_separacion_barra") or "").strip().lower()
-                == "sin_gap"
-                and str(hoja.get("export_3d_format") or "dxf").strip().lower() == "dxf"
-            )
-            if es_sin_gap_dxf:
-                # Escalón / sin_gap vertical: también Corte + Marcaje.
-                n_dxf += 2
-                generar_plasma = _debe_generar_plasma(clave, hoja)
-                if generar_plasma:
-                    n_dxf += 1
-                if not generar_step:
-                    continue
-                from .step_export_prefs import step_enabled_for_carpeta
-
-                if step_enabled_for_carpeta(carpeta) and carpeta == RUTA_NESTEOS_COBRE:
-                    if _cu_dxf_requiere_3d(_hoja_cobre_export_3d(hoja)):
-                        n_step += 1
-                continue
-
-            n_dxf += 1
-            generar_plasma = _debe_generar_plasma(clave, hoja)
-            if generar_plasma:
-                n_dxf += 1
+            h = copy.deepcopy(hoja)
+            _preparar_hoja_conteo_export(h)
+            n_dxf += _dxfs_por_hoja_en_export(clave, h, cu_sin_marcaje=cu_flag)
             if not generar_step:
                 continue
+            carpeta = _resolver_carpeta_principal(clave, hoja)
+            generar_plasma = _debe_generar_plasma(clave, hoja)
             from .step_export_prefs import step_enabled_for_carpeta
 
             if not step_enabled_for_carpeta(carpeta):
@@ -1365,6 +1402,12 @@ def exportar_resultados_a_dxf(
         from nest_exporter import export_nest_to_dxf, DxfExportValidationError
         from modules.dxf_export.cobre_nest import export_cobre_hoja_to_dxf
 
+    from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+
+    cu_sin_marcaje = bool(is_cu_sin_marcaje_enabled())
+    if cu_sin_marcaje:
+        log("[CyPTube] Preferencia activa: cobre SIN marcaje (solo Corte)")
+
     import config
 
     nest_folder = "NESTING"
@@ -1377,7 +1420,19 @@ def exportar_resultados_a_dxf(
     if motor not in ("freecad", "occt"):
         motor = "occt"
 
-    n_dxf_est, n_step_est = estimar_conteos_export(resultados, generar_step=bool(generar_step))
+    n_dxf_est, n_step_est = estimar_conteos_export(
+        resultados,
+        generar_step=bool(generar_step),
+        cu_sin_marcaje=cu_sin_marcaje,
+    )
+    # Candado: plan explícito = contador de barra (evita drift con mutación de hojas).
+    n_dxf_plan = _conteo_dxfs_export_plan(resultados, cu_sin_marcaje=cu_sin_marcaje)
+    if n_dxf_plan != n_dxf_est:
+        log(
+            f"[WARN] conteo DXF plan={n_dxf_plan} != estimado={n_dxf_est}; "
+            f"usa plan (cu_sin_marcaje={cu_sin_marcaje})"
+        )
+        n_dxf_est = n_dxf_plan
     dxf_done = 0
 
     def _progress(**kwargs):
@@ -1390,6 +1445,8 @@ def exportar_resultados_a_dxf(
             "step_total": n_step_est if generar_step else 0,
             "mensaje": kwargs.get("mensaje", ""),
         }
+        if kwargs.get("dxf_total") is not None:
+            payload["dxf_total"] = int(kwargs["dxf_total"])
         if kwargs.get("step_total") is not None:
             payload["step_total"] = kwargs["step_total"]
         try:
@@ -1877,7 +1934,7 @@ def exportar_resultados_a_dxf(
                                 f"{RUTA_COBRE_AMADA}/{RUTA_COBRE_VERTICAL} | {clave}"
                             )
                             draw_holes_exp = False
-                            draw_marks_exp = True
+                            draw_marks_exp = not cu_sin_marcaje
                             log_tag = "COBRE AMADA/ESP VERTICAL"
                             tipo_pqart = RUTA_COBRE_VERTICAL
                             progress_suffix = f"VERTICAL {nombre_archivo}"
@@ -1885,7 +1942,7 @@ def exportar_resultados_a_dxf(
                             path_out = path_principal
                             canal_tag = f"{carpeta_principal} | {clave}"
                             draw_holes_exp = True
-                            draw_marks_exp = True
+                            draw_marks_exp = not cu_sin_marcaje
                             log_tag = (
                                 f"COBRE SIN_GAP vertical CyPTube [{carpeta_principal}]"
                             )
@@ -1929,37 +1986,55 @@ def exportar_resultados_a_dxf(
                             cu_especial_vertical=bool(es_cu_especial),
                             thickness_in=_thk_cy,
                             remove_combined=True,
+                            include_marcaje=not cu_sin_marcaje,
                         )
                         cyptube_vertical_records.append(rec_cy)
-                        log(
-                            f"-> CyPTube split: Corte={os.path.basename(paths_cy.corte)} "
-                            f"| Marcaje={os.path.basename(paths_cy.marcaje)} "
-                            f"| A_mm={rec_cy.A_mm:.2f}"
-                        )
+                        if paths_cy.marcaje:
+                            log(
+                                f"-> CyPTube split: Corte={os.path.basename(paths_cy.corte)} "
+                                f"| Marcaje={os.path.basename(paths_cy.marcaje)} "
+                                f"| A_mm={rec_cy.A_mm:.2f}"
+                            )
+                        else:
+                            log(
+                                f"-> CyPTube split: Corte={os.path.basename(paths_cy.corte)} "
+                                f"| sin Marcaje (cu_sin_marcaje) "
+                                f"| A_mm={rec_cy.A_mm:.2f}"
+                            )
                         exportados_principales.append(paths_cy.corte)
-                        exportados_principales.append(paths_cy.marcaje)
                         path_principal = paths_cy.corte
-                        dxf_done += 2
-                        _progress(
-                            mensaje=(
-                                f"DXF {dxf_done}/{n_dxf_est}: "
-                                f"{progress_suffix} (Corte+Marcaje)"
-                            ),
-                            step_done=0,
-                        )
                         tipo_pq = _normalizar_tipo_corte_pqart(tipo_pqart)
                         _registrar_exportacion_pqart_hoja(
                             hoja,
                             ruta_dxf=paths_cy.corte,
                             tipo_corte=tipo_pq,
                         )
-                        # Contrato export↔PQART: todo DXF en exportados debe
-                        # tener registro (validación _validar_lote_exportado).
-                        _registrar_exportacion_pqart_hoja(
-                            hoja,
-                            ruta_dxf=paths_cy.marcaje,
-                            tipo_corte=tipo_pq,
-                        )
+                        if paths_cy.marcaje:
+                            exportados_principales.append(paths_cy.marcaje)
+                            dxf_done += 2
+                            _progress(
+                                mensaje=(
+                                    f"DXF {dxf_done}/{n_dxf_est}: "
+                                    f"{progress_suffix} (Corte+Marcaje)"
+                                ),
+                                step_done=0,
+                            )
+                            # Contrato export↔PQART: todo DXF en exportados debe
+                            # tener registro (validación _validar_lote_exportado).
+                            _registrar_exportacion_pqart_hoja(
+                                hoja,
+                                ruta_dxf=paths_cy.marcaje,
+                                tipo_corte=tipo_pq,
+                            )
+                        else:
+                            dxf_done += 1
+                            _progress(
+                                mensaje=(
+                                    f"DXF {dxf_done}/{n_dxf_est}: "
+                                    f"{progress_suffix} (Corte)"
+                                ),
+                                step_done=0,
+                            )
                     else:
                         log(f"-> EXPORT PRINCIPAL [{carpeta_principal}]: {path_principal}")
                         if es_cu_hoja:
@@ -1968,6 +2043,7 @@ def exportar_resultados_a_dxf(
                                 sheet_info,
                                 placements_principales,
                                 title=f"{carpeta_principal} | {clave}",
+                                draw_marks=not cu_sin_marcaje,
                                 strict=True,
                             )
                         else:

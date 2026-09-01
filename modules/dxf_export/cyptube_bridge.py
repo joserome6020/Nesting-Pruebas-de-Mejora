@@ -14,6 +14,7 @@ Config: ``_config/cyptube_bridge.json``. Override env:
   ARGA_CYPTUBE_MAIN=ruta\\main.py
   ARGA_CYPTUBE_PYTHON=ruta\\python.exe
   ARGA_CYPTUBE_DRY_RUN=1
+  ARGA_CYPTUBE_LAUNCH_DELAY_S=15
 """
 from __future__ import annotations
 
@@ -21,6 +22,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +43,8 @@ _DEFAULTS: dict[str, Any] = {
     "skip_wait": True,
     "dry_run": False,
     "new_console": True,
+    # Segundos antes de lanzar auto-nest (deja cerrar modales ANS sin estorbar al RPA).
+    "launch_delay_s": 15.0,
     # Remapeo opcional si CypTube ve otra letra/UNC que ANS (mismo árbol).
     # Ejemplo: [{"from": "\\\\192.168.2.80\\Users\\…", "to": "Z:\\…"}]
     "path_maps": [],
@@ -101,10 +106,21 @@ def load_cyptube_bridge_prefs() -> dict[str, Any]:
     elif env_dry in ("0", "false", "off", "no"):
         prefs["dry_run"] = False
 
+    env_delay = (os.environ.get("ARGA_CYPTUBE_LAUNCH_DELAY_S") or "").strip()
+    if env_delay:
+        try:
+            prefs["launch_delay_s"] = max(0.0, float(env_delay))
+        except ValueError:
+            pass
+
     prefs["enabled"] = bool(prefs.get("enabled"))
     prefs["skip_wait"] = bool(prefs.get("skip_wait", True))
     prefs["dry_run"] = bool(prefs.get("dry_run"))
     prefs["new_console"] = bool(prefs.get("new_console", True))
+    try:
+        prefs["launch_delay_s"] = max(0.0, float(prefs.get("launch_delay_s", 15.0)))
+    except (TypeError, ValueError):
+        prefs["launch_delay_s"] = 15.0
     prefs["cyptube_main"] = str(prefs.get("cyptube_main") or "").strip()
     prefs["python_exe"] = str(prefs.get("python_exe") or "").strip()
     maps = prefs.get("path_maps")
@@ -280,6 +296,7 @@ def launch_cyptube_auto_nest(
     cmd = build_auto_nest_cmd(nest_dir, prefs=data)
     cwd = str(Path(main_py).resolve().parent)
     runner = popen or subprocess.Popen
+    delay_s = max(0.0, float(data.get("launch_delay_s") or 0.0))
 
     kwargs: dict[str, Any] = {
         "cwd": cwd,
@@ -291,6 +308,39 @@ def launch_cyptube_auto_nest(
         kwargs["stdout"] = subprocess.DEVNULL
         kwargs["stderr"] = subprocess.DEVNULL
         kwargs["close_fds"] = True
+
+    def _spawn() -> None:
+        if delay_s > 0:
+            time.sleep(delay_s)
+        try:
+            proc = runner(list(cmd), **kwargs)
+        except Exception as exc:
+            log(f"[CyPTube] ERROR — no se pudo lanzar auto-nest: {exc}")
+            return
+        pid = getattr(proc, "pid", None)
+        dry = " (dry-run)" if bool(data.get("dry_run")) else ""
+        log(
+            f"[CyPTube] auto-nest lanzado{dry} destino={destino} pid={pid} — "
+            f"nesteos-dir={nest_dir}"
+        )
+        log(f"[CyPTube] cmd: {' '.join(cmd)}")
+
+    if delay_s > 0:
+        threading.Thread(target=_spawn, name="CyPTubeAutoNest", daemon=True).start()
+        log(
+            f"[CyPTube] auto-nest programado en {delay_s:.0f}s "
+            f"(espera cierre de ventanas ANS) destino={destino}"
+        )
+        log(f"[CyPTube] cmd (pendiente): {' '.join(cmd)}")
+        return CyptubeBridgeResult(
+            launched=True,
+            skipped=False,
+            reason=f"scheduled_{int(delay_s)}s",
+            cmd=cmd,
+            cwd=cwd,
+            destino=destino,
+            nesteos_dir=nest_dir,
+        )
 
     try:
         proc = runner(list(cmd), **kwargs)

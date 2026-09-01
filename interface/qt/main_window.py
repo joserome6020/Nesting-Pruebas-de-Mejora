@@ -510,9 +510,13 @@ class SistemaNestingPro(QMainWindow):
             # Fallback a ProgressDialog clásico
             pct = 0.0
             if dxf_total and dxf_done is not None:
-                pct = 0.5 * (float(dxf_done) / max(1, float(dxf_total)))
-            if step_total and step_done is not None:
-                pct = 0.5 + 0.5 * (float(step_done) / max(1, float(step_total)))
+                pct = float(dxf_done) / max(1.0, float(dxf_total))
+                if step_total and step_done is not None:
+                    pct = 0.5 * pct + 0.5 * (
+                        float(step_done) / max(1.0, float(step_total))
+                    )
+            elif step_total and step_done is not None:
+                pct = float(step_done) / max(1.0, float(step_total))
             self.actualizar_progreso(mensaje or "Exportando…", pct)
             return
 

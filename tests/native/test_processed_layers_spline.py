@@ -87,6 +87,43 @@ def test_procesador_dxf_spline_inventor():
         assert w_in > 2.0 and h_in > 1.0, f"contorno degenerado {w_in}x{h_in} in"
 
 
+def test_procesador_dxf_cobre_omit_marcaje():
+    """Switch cu_sin_marcaje: Processed Files sin capa MARK ni stick."""
+    import ezdxf
+    from modules.nesting_engine.geometry_parser import recuperar_geometria_robusta_detalle
+    from modules.processed_layers import ProcesadorDXF
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "GENE-FCU-2-105, CU, QTY 1, Cal 0.25.dxf"
+        out_dir = Path(tmp) / "Processed Files"
+        out_dir.mkdir()
+        dst = out_dir / src.name
+
+        doc = ezdxf.new("R2010")
+        doc.header["$INSUNITS"] = 1
+        msp = doc.modelspace()
+        doc.layers.new("IV_OUTER_PROFILE", dxfattribs={"color": 1})
+        msp.add_lwpolyline(
+            [(0, 0), (10, 0), (10, 5), (0, 5)],
+            close=True,
+            dxfattribs={"layer": "IV_OUTER_PROFILE"},
+        )
+        doc.saveas(str(src))
+
+        proc = ProcesadorDXF()
+        assert proc.limpiar_archivo(str(src), str(dst), omit_marcaje=True) is True
+        doc_out = ezdxf.readfile(str(dst))
+        layers = {
+            str(getattr(e.dxf, "layer", "") or "").upper()
+            for e in doc_out.modelspace()
+        }
+        assert "MARK" not in layers
+        _poly, marks, err = recuperar_geometria_robusta_detalle(str(dst))
+        assert err is None
+        assert marks is None or marks.is_empty
+
+
 if __name__ == "__main__":
     test_procesador_dxf_spline_inventor()
+    test_procesador_dxf_cobre_omit_marcaje()
     print("OK processed_layers SPLINE")

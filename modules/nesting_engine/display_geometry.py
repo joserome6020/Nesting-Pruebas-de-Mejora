@@ -541,7 +541,17 @@ def renovar_pieza_desde_dxf_en_pose(pieza: dict) -> bool:
     pieza.pop("_poly_cache", None)
     pieza.pop("_bounds_cache", None)
 
-    if marks_local is not None and not getattr(marks_local, "is_empty", True):
+    omit_mark = False
+    try:
+        from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
+
+        omit_mark = should_omit_copper_marks(pieza.get("material"))
+    except Exception:
+        pass
+
+    if omit_mark:
+        pieza["marcas"] = []
+    elif marks_local is not None and not getattr(marks_local, "is_empty", True):
         try:
             mk = affinity.translate(
                 affinity.rotate(marks_local, best_ang, origin=rot_origin),

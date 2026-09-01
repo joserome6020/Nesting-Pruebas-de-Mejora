@@ -7,6 +7,31 @@ Objetivo: al terminar la exportación de cobre en ANS, CypTube genera `.ctds` (C
 
 ---
 
+## Verificación ANS → CypTube (2026-09-01, chat ANS)
+
+Estado del **gatillo Modo B** revisado en código (no sustituye prueba en planta):
+
+| Paso | Estado |
+|------|--------|
+| Export cobre escribe DXF Corte/Marcaje + `cyptube_verticales.json` | OK (`cyptube_vertical.py` + `exporter.py`) |
+| Tras el JSON, ANS llama `launch_cyptube_auto_nest` | OK (`exporter.py` post-manifiesto) |
+| Comando: `python <cyptube_main> auto-nest --nesteos-dir … --skip-wait` | OK (`cyptube_bridge.py`) |
+| Espera antes del RPA (`launch_delay_s`, default **15 s**) | OK (modales ANS no estorban) |
+| Config `_config/cyptube_bridge.json` (`enabled: true`, ruta main CypTube) | OK · `main.py` CypTube existe en disco |
+| Local + UNC servidor 80 (`path_maps` opcional) | OK candados `test_cyptube_bridge.py` |
+| CypTube CLI `auto-nest --skip-wait` / `--dry-run` | OK (`main.py` + `rpa/auto_nest.py` → RPA `completo-batch`) |
+
+**Pendiente planta (misma PC con Friendess + CypTube elevado):**
+
+1. Exportar W.O. cobre real (local y/o servidor).
+2. En log ANS buscar: `[CyPTube] auto-nest lanzado destino=…`
+3. Consola CypTube / CTDS en esa misma carpeta `NESTEOS DE COBRE`.
+4. Opcional: `python main.py auto-nest --nesteos-dir "…" --dry-run` antes del RPA.
+
+Si el RPA no arranca: confirmar `enabled`, ruta `cyptube_main`, y que Friendess esté instalado (RPA elevado).
+
+---
+
 ## Respuestas ANS (2026-09-01)
 
 1. **¿Ejecutar `auto-nest` al terminar el export?**  
@@ -52,6 +77,13 @@ Objetivo: al terminar la exportación de cobre en ANS, CypTube genera `.ctds` (C
 |------|--------|
 | **B — llamada post-export** | **Activo** (local **y** servidor) |
 | A — `auto-watch` | Reserva (`--modo local` o `servidor`) |
+
+### Switch ANS: cobre sin marcaje (`cu_sin_marcaje`)
+
+- Configuración Global → **COBRE — sin marcaje (solo corte)**.
+- **OFF:** DXF con MARK + split `*_Corte` + `*_Marcaje` (RPA completo).
+- **ON (default):** cobre sin MARK; JSON con `sin_marcaje: true` y solo `*_Corte.dxf`.
+  CypTube `completo-batch` procesa corte y omite marcaje si no hay `marcaje_path`.
 
 ---
 

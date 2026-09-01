@@ -556,6 +556,54 @@ def abrir_modal_configuracion(parent):
 
     switch_cu.toggled.connect(_toggle_cu)
 
+    cu_mark_enabled = [bool(runtime_prefs.get("cu_sin_marcaje"))]
+    cu_mark_tit = QLabel("COBRE — sin marcaje (solo corte)")
+    cu_mark_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(cu_mark_tit)
+    cu_mark_hint = QLabel(
+        "ON quita el marcaje de todo el nesteo de cobre (capa MARK). "
+        "Los DXF verticales CyPTube salen solo como *_Corte.dxf (sin *_Marcaje); "
+        "el RPA sigue procesando corte. OFF = flujo normal Corte + Marcaje."
+    )
+    cu_mark_hint.setWordWrap(True)
+    cu_mark_hint.setStyleSheet("color:#64748B;font-size:11px;")
+    lay.addWidget(cu_mark_hint)
+    cu_mark_row = QHBoxLayout()
+    cu_mark_row.addWidget(QLabel("Cobre sin marcaje:"))
+    switch_cu_mark = HerinoxSwitch(
+        label_on="COBRE SOLO CORTE",
+        label_off="CORTE + MARCAJE",
+        checked=cu_mark_enabled[0],
+    )
+    cu_mark_row.addWidget(switch_cu_mark)
+    cu_mark_row.addStretch(1)
+    lay.addLayout(cu_mark_row)
+    lbl_cu_mark = QLabel(
+        "Activo: DXF cobre sin MARK; CyPTube solo Corte."
+        if cu_mark_enabled[0]
+        else "Modo normal: MARK + split Corte/Marcaje para CyPTube."
+    )
+    lbl_cu_mark.setWordWrap(True)
+    lbl_cu_mark.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(lbl_cu_mark)
+
+    def _toggle_cu_mark(activo: bool):
+        if not activo and not _autorizar_edicion_dyt(
+            dlg,
+            titulo="Cobre sin marcaje",
+            mensaje="Ingrese la contraseña para volver a exportar marcaje en cobre.",
+        ):
+            switch_cu_mark.setChecked(True)
+            return
+        cu_mark_enabled[0] = bool(activo)
+        lbl_cu_mark.setText(
+            "Activo: DXF cobre sin MARK; CyPTube solo Corte."
+            if activo
+            else "Modo normal: MARK + split Corte/Marcaje para CyPTube."
+        )
+
+    switch_cu_mark.toggled.connect(_toggle_cu_mark)
+
     sep_giga = QFrame()
     sep_giga.setFrameShape(QFrame.Shape.HLine)
     sep_giga.setStyleSheet("color:#CBD5E1;")
@@ -718,6 +766,7 @@ def abrir_modal_configuracion(parent):
                 {
                     "prefer": "auto" if spark_enabled[0] else "local",
                     "cu_force_dxf_step": bool(cu_force_enabled[0]),
+                    "cu_sin_marcaje": bool(cu_mark_enabled[0]),
                     "giga_cal11_galv": bool(giga_enabled[0]),
                     "step_feedstock_enabled": bool(step_feed_enabled[0]),
                     "spark": {

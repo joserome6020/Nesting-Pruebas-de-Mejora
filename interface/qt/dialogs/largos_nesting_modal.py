@@ -28,6 +28,7 @@ from interface.largos_nesting_service import (
     listar_unidades_mrl_plan,
     obtener_exclusiones_mrl_unidades,
     previsualizar_pedido_mrl,
+    recalcular_plan_largos_desde_csv,
     resumir_plan_largos,
     vista_barra_para_unidad_mrl,
     preparar_barra_para_canvas,
@@ -219,6 +220,16 @@ class LargosNestingDialog(QDialog):
         self.tbl_mrl.setColumnWidth(2, 62)
         self.tbl_mrl.setColumnWidth(3, 46)
         der_lay.addWidget(self.tbl_mrl, 1)
+
+        self.btn_recalc_csv = QPushButton("Recalcular desde CSV de demanda")
+        apply_push_button(self.btn_recalc_csv, "#2563EB", font_size=11)
+        self.btn_recalc_csv.setMinimumHeight(36)
+        self.btn_recalc_csv.setToolTip(
+            "Vuelve a leer el CSV de AutoDXF (DEMANDA DE LARGOS) y recalcula el nesteo "
+            "para alinear material requerido y PDF con la demanda actual."
+        )
+        self.btn_recalc_csv.clicked.connect(self._recalcular_desde_csv)
+        der_lay.addWidget(self.btn_recalc_csv)
 
         self.btn_pdf_piso = QPushButton("Descargar PDF consumo en piso")
         apply_push_button(self.btn_pdf_piso, COLOR_GRIS_DARK, font_size=11)
@@ -464,6 +475,68 @@ class LargosNestingDialog(QDialog):
         self._barra_vista_actual = vista
         self._material_vista_actual = material
         self.canvas.mostrar_barra(material, vista)
+
+    def _recalcular_desde_csv(self):
+        self.btn_recalc_csv.setEnabled(False)
+        self.btn_pdf_piso.setEnabled(False)
+        self.btn_recalc_csv.setText("Recalculando…")
+        app = self.app
+        tab = self.tab
+
+        def worker():
+            plan, contexto, err = {}, {}, None
+            try:
+                plan, contexto, err = recalcular_plan_largos_desde_csv(app, tab)
+            except Exception as exc:
+                err = str(exc)
+
+            def finish():
+                self.btn_recalc_csv.setEnabled(True)
+                self.btn_pdf_piso.setEnabled(True)
+                self.btn_recalc_csv.setText("Recalcular desde CSV de demanda")
+                if err:
+                    QMessageBox.critical(
+                        self,
+                        "Recalcular desde CSV",
+                        err,
+                    )
+                    return
+                self._aplicar_plan(plan, contexto, None)
+                res = resumir_plan_largos(plan)
+                n_filas = int(contexto.get("demanda_filas") or 0)
+                n_piezas = int(contexto.get("demanda_piezas") or 0)
+                origen = str(contexto.get("demanda_origen") or "csv").upper()
+                csv_path = str(contexto.get("demanda_csv_path") or "")
+                sync_msg = str(contexto.get("sync_lista_largos") or "")
+                persist_msg = str(contexto.get("persist_plan") or "")
+                n_cat = int(contexto.get("catalogo_herinox_items") or 0)
+                lineas = [
+                    "Nesteo de largos actualizado desde CSV AutoDXF.",
+                    "",
+                    f"Origen demanda: {origen}",
+                ]
+                if csv_path:
+                    lineas.append(f"CSV: {csv_path}")
+                lineas.extend([
+                    f"Filas demanda: {n_filas}",
+                    f"Piezas: {n_piezas}",
+                    f"Barras MRL: {int(res.get('mrl_barras_total') or 0)}",
+                    f"Catálogo react-Herinox: {n_cat} perfil(es) LARGO",
+                ])
+                if sync_msg:
+                    estado = "OK" if contexto.get("sync_lista_largos_ok") else "AVISO"
+                    lineas.append(f"BD lista_largos_job ({estado}): {sync_msg}")
+                if persist_msg and persist_msg != "ok":
+                    lineas.append(f"Plan en BD: {persist_msg}")
+                QMessageBox.information(
+                    self,
+                    "Recalcular desde CSV",
+                    "\n".join(lineas),
+                )
+
+            call_on_main(finish)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _exportar_pdf_piso(self):
         if not (self.plan.get("data") or {}):

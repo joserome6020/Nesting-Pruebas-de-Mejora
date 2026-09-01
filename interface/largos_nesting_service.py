@@ -1739,6 +1739,395 @@ def validar_mrl_swo_canonica_tras_export(
         return False, f"SWO {swo}: no se pudo validar MRL canónica: {exc}"
 
 
+    return filas
+
+
+def _expandir_filas_csv_grupo(
+    rows: list[dict],
+    gjob: str,
+    job: str,
+    factor_wo: int,
+) -> list[dict]:
+    from api_server import _extraer_factor_wo
+
+    wo_label = f"LOTE X{max(1, int(factor_wo))}"
+    factor = max(1, int(_extraer_factor_wo(wo_label) or factor_wo or 1))
+    filas: list[dict] = []
+    for row in rows or []:
+        try:
+            cantidad_base = int(float(row.get("cantidad_base", row.get("cantidad")) or 0))
+        except Exception:
+            cantidad_base = 0
+        if cantidad_base <= 0:
+            continue
+        try:
+            largo_in = float(row.get("largo_in") or 0)
+        except Exception:
+            largo_in = 0.0
+        if largo_in <= 0:
+            continue
+        cantidad_wo = cantidad_base * factor
+        filas.append(
+            {
+                "job": gjob or job,
+                "work_order": wo_label,
+                "factor_wo": factor,
+                "nombre": str(row.get("nombre") or "").strip(),
+                "clasificacion": str(row.get("clasificacion") or "").strip(),
+                "largo_in": largo_in,
+                "cantidad": cantidad_wo,
+                "cantidad_base": cantidad_base,
+                "cantidad_wo": cantidad_wo,
+                "proceso": str(row.get("proceso") or "").strip(),
+            }
+        )
+    return filas
+
+
+def _resolver_ruta_exportacion_para_job(app, tab, job: str) -> str | None:
+    """Carpeta raíz del job (…/MODEL CORE FILES/AutoDXF → job)."""
+    from pathlib import Path
+
+    parts = getattr(app, "vista_parts", None)
+    if parts is None:
+        return None
+    job_norm = _norm_job(job)
+    for ruta in getattr(parts, "rutas_dxf_actuales", None) or []:
+        autodxf = parts._resolver_autodxf_desde_ruta(ruta)
+        if not autodxf:
+            continue
+        gjob = parts._resolver_job_desde_autodxf(Path(autodxf))
+        if _norm_job(gjob) != job_norm:
+            continue
+        p = Path(autodxf)
+        if p.name.strip().lower() == "autodxf" and p.parent.name.strip().lower() == "model core files":
+            return str(p.parent.parent)
+        return str(p.parent)
+    return None
+
+
+def _filas_demanda_csv_forzado(
+    app,
+    tab,
+    job: str,
+    factor_lote: int,
+) -> tuple[list[dict], str, str]:
+    """
+    Demanda exclusivamente desde CSV en disco (nunca lista_largos_job).
+    Retorna (filas, origen, csv_path).
+    """
+    from pathlib import Path
+
+    from api_server import _extraer_factor_wo
+
+    job = str(job or getattr(app, "job_activo", "") or "").strip()
+    factor_wo = max(1, int(_extraer_factor_wo(f"LOTE X{max(1, int(factor_lote))}") or 1))
+    csv_path = ""
+
+    if job.upper().startswith("SWO"):
+        pares = resolver_wos_fuente_swo(app, job, cursor=None)
+        filas = _filas_desde_csv_para_pares(app, pares) if pares else []
+        if filas:
+            parts = getattr(app, "vista_parts", None)
+            if parts is not None:
+                for grupo in parts._cargar_listas_largos_desde_rutas():
+                    if grupo.get("status") == "ok" and grupo.get("csv_path"):
+                        csv_path = str(grupo.get("csv_path") or "")
+                        break
+            return filas, "swo_csv", csv_path
+
+    filas = _filas_desde_csv_para_job(app, job, factor_lote)
+    if filas:
+        parts = getattr(app, "vista_parts", None)
+        if parts is not None:
+            for grupo in parts._cargar_listas_largos_desde_rutas():
+                if grupo.get("status") != "ok":
+                    continue
+                if _norm_job(grupo.get("job")) == _norm_job(job):
+                    csv_path = str(grupo.get("csv_path") or "")
+                    break
+        return filas, "csv", csv_path
+
+    parts = getattr(app, "vista_parts", None)
+    job_norm = _norm_job(job)
+    if parts is not None:
+        for grupo in parts._cargar_listas_largos_desde_rutas():
+            if grupo.get("status") != "ok":
+                continue
+            if _norm_job(grupo.get("job")) != job_norm:
+                continue
+            csv_path = str(grupo.get("csv_path") or "")
+            filas = _expandir_filas_csv_grupo(
+                grupo.get("rows") or [],
+                str(grupo.get("job") or job),
+                job,
+                factor_wo,
+            )
+            if filas:
+                return filas, "csv_grupo", csv_path
+
+    try:
+        from modules.lista_largos_importer import (
+            _leer_csv_lista_largos,
+            _resolver_csv_lista_largos,
+            _resolver_ruta_autodxf,
+        )
+    except ImportError:
+        return [], "", csv_path
+
+    rutas: list[str] = []
+    ruta_export = _resolver_ruta_exportacion_para_job(app, tab, job)
+    if ruta_export:
+        rutas.append(ruta_export)
+    if parts is not None:
+        for ruta in getattr(parts, "rutas_dxf_actuales", None) or []:
+            autodxf = parts._resolver_autodxf_desde_ruta(ruta)
+            if autodxf:
+                rutas.append(str(Path(autodxf).parent))
+
+    vistos: set[str] = set()
+    for base in rutas:
+        clave = str(base).lower()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        autodxf = _resolver_ruta_autodxf(base)
+        if not autodxf:
+            continue
+        csv_file = _resolver_csv_lista_largos(Path(autodxf))
+        if not csv_file:
+            continue
+        try:
+            raw = _leer_csv_lista_largos(csv_file)
+        except Exception:
+            continue
+        filas = _expandir_filas_csv_grupo(raw, job, job, factor_wo)
+        if filas:
+            return filas, "csv_directo", str(csv_file)
+
+    return [], "", csv_path
+
+
+def _refrescar_catalogo_herinox_largos() -> int:
+    """Recarga catálogo LARGO desde react-Herinox (PostgreSQL Plate)."""
+    try:
+        from catalogo_largos import _cargar_placas_largos_desde_herinox
+
+        return len(_cargar_placas_largos_desde_herinox(solo_disponibles=False) or [])
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] No se pudo refrescar catálogo Herinox: {exc}")
+        return 0
+
+
+def _sincronizar_lista_largos_job_desde_csv(app, tab, job: str) -> tuple[bool, str]:
+    """Reimporta lista_largos_job desde el CSV AutoDXF (misma ruta que export)."""
+    try:
+        from modules.lista_largos_importer import importar_lista_largos_job
+    except ImportError:
+        return False, "importador lista_largos no disponible"
+
+    ruta = _resolver_ruta_exportacion_para_job(app, tab, job)
+    if not ruta:
+        return False, "sin carpeta export para sincronizar lista_largos_job"
+
+    try:
+        res = importar_lista_largos_job(str(job or "").strip(), ruta, _db_config())
+    except Exception as exc:
+        return False, str(exc)
+
+    if not res.get("ok"):
+        return False, str(res.get("status") or "import falló")
+    n = int(res.get("insertados") or 0)
+    return True, f"{n} fila(s) en lista_largos_job"
+
+
+def _persistir_plan_largos_recalculado(
+    cursor,
+    orden_id: str,
+    tipo_orden: str,
+    plan: dict[str, Any],
+    rows: list[dict],
+) -> tuple[bool, str]:
+    """Guarda plan recalculado si la orden aún no tiene cortes/sesión."""
+    from api_server import (
+        _ll_cargar_plan_row,
+        _ll_guardar_plan,
+        _ll_hash_payload,
+        _ll_liberar_reservas_de_orden,
+        _ll_plan_puede_regenerarse,
+    )
+
+    orden_id = str(orden_id or "").strip()
+    tipo_orden = str(tipo_orden or "").strip().upper()
+    if not orden_id or tipo_orden not in ("WO", "SWO"):
+        return True, ""
+
+    existente = _ll_cargar_plan_row(cursor, orden_id, tipo_orden)
+    if existente and not _ll_plan_puede_regenerarse(cursor, orden_id, tipo_orden, existente):
+        return False, (
+            "La orden ya tiene sesión o cortes registrados; "
+            "solo se actualizó la vista en memoria."
+        )
+
+    if _ll_plan_puede_regenerarse(cursor, orden_id, tipo_orden, existente):
+        _ll_liberar_reservas_de_orden(cursor, orden_id, tipo_orden)
+
+    payload = {
+        "tipo": "swo" if tipo_orden == "SWO" else "wo",
+        "identificador": orden_id,
+        "rows": rows,
+    }
+    plan_hash = _ll_hash_payload(payload)
+    _ll_guardar_plan(cursor, orden_id, tipo_orden, plan_hash, plan)
+    return True, ""
+
+
+def _actualizar_cache_plan_largos(app, tab, plan: dict[str, Any], contexto: dict[str, Any]) -> None:
+    """Publica plan recalculado en memoria (misma caché que post-nesting)."""
+    idx = _lote_idx(tab)
+    job = str(contexto.get("job") or getattr(app, "job_activo", "") or "").strip()
+    if not hasattr(app, "plan_largos_por_lote") or app.plan_largos_por_lote is None:
+        app.plan_largos_por_lote = {}
+    app.plan_largos_por_lote[idx] = plan
+    app.plan_largos_job = job
+    sin_demanda = set(getattr(app, "plan_largos_sin_demanda_por_lote", None) or set())
+    if (plan.get("data") or {}) and int(plan.get("total_barras") or 0) > 0:
+        sin_demanda.discard(idx)
+    else:
+        sin_demanda.add(idx)
+    app.plan_largos_sin_demanda_por_lote = sin_demanda
+
+
+def _calcular_plan_largos_fresco_desde_csv(
+    app,
+    tab,
+    cursor,
+    contexto: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """Regenera el plan leyendo la demanda actual (CSV AutoDXF; ignora BD)."""
+    contexto = dict(contexto)
+    job = str(contexto.get("job") or "").strip()
+    factor = int(contexto.get("factor_lote") or 1)
+
+    n_catalogo = _refrescar_catalogo_herinox_largos()
+    contexto["catalogo_herinox_items"] = n_catalogo
+
+    rows, origen, csv_path = _filas_demanda_csv_forzado(app, tab, job, factor)
+    contexto["demanda_csv_path"] = csv_path
+
+    if not rows:
+        return (
+            {},
+            contexto,
+            "No hay demanda de largos en el CSV AutoDXF. "
+            "Verifica DEMANDA DE LARGOS o reprocesa AutoDXF.",
+        )
+
+    sync_ok, sync_msg = _sincronizar_lista_largos_job_desde_csv(app, tab, job)
+    contexto["sync_lista_largos_ok"] = sync_ok
+    contexto["sync_lista_largos"] = sync_msg
+
+    contexto["demanda_filas"] = len(rows)
+    contexto["demanda_piezas"] = sum(int(r.get("cantidad") or 0) for r in rows)
+    contexto["demanda_origen"] = origen
+
+    def _finalizar_plan(
+        plan: dict[str, Any],
+        orden_id: str,
+        tipo_orden: str,
+        etiqueta: str,
+        modo: str,
+        puede_pedido: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+        if not (plan.get("data") or {}):
+            return {}, contexto, "No se pudo calcular el nesteo de largos con la demanda disponible."
+        plan["_demanda_origen"] = origen
+        plan["_verificacion_62174"] = verificar_empate_referencia_62174(plan, rows)
+        contexto["modo"] = modo
+        contexto["orden_id"] = orden_id
+        contexto["tipo_orden"] = tipo_orden
+        contexto["puede_enviar_pedido"] = puede_pedido
+        contexto["etiqueta"] = etiqueta
+        contexto["origen"] = "csv_recalc"
+        if orden_id and tipo_orden in ("WO", "SWO"):
+            ok_persist, msg_persist = _persistir_plan_largos_recalculado(
+                cursor, orden_id, tipo_orden, plan, rows
+            )
+            contexto["persist_plan_ok"] = ok_persist
+            contexto["persist_plan"] = msg_persist or "ok"
+        return plan, contexto, None
+
+    orden_ctx = resolver_orden_largos(app, tab)
+    if orden_ctx and str(orden_ctx[1]).upper() == "SWO":
+        orden_id, tipo_orden = orden_ctx
+        jobs_fuente = resolver_jobs_fuente_demanda(app, job, cursor=cursor)
+        job_plan = next(
+            (j for j in jobs_fuente if not str(j).upper().startswith("SWO")),
+            job,
+        )
+        plan = _generar_plan_desde_filas(cursor, orden_id, "SWO", job_plan, factor, rows)
+        return _finalizar_plan(
+            plan,
+            orden_id,
+            "SWO",
+            f"ORDEN: {orden_id} · SWO · CSV",
+            "orden",
+            True,
+        )
+
+    if orden_ctx and str(orden_ctx[1]).upper() == "WO":
+        orden_id, tipo_orden = orden_ctx
+        plan = _generar_plan_desde_filas(cursor, orden_id, tipo_orden, job, factor, rows)
+        return _finalizar_plan(
+            plan,
+            orden_id,
+            tipo_orden,
+            f"ORDEN: {orden_id} · {tipo_orden} · CSV",
+            "orden",
+            True,
+        )
+
+    orden_preview = f"PREVIEW-{_norm_job(job)}-LOTE-X{factor}".replace(" ", "_")[:90]
+    plan = _generar_plan_desde_filas(cursor, orden_preview, "WO", job, factor, rows)
+    return _finalizar_plan(
+        plan,
+        "",
+        "WO",
+        f"VISTA PREVIA · JOB: {job or '—'} · LOTE X{factor} · CSV",
+        "preview",
+        False,
+    )
+
+
+def recalcular_plan_largos_desde_csv(app, tab) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """
+    Vuelve a leer la demanda (CSV AutoDXF) y recalcula el nesteo de largos.
+    Actualiza app.plan_largos_por_lote para el lote activo.
+    """
+    contexto = resolver_contexto_largos(app, tab)
+    conexion = None
+    cursor = None
+    try:
+        conexion, cursor_factory = _conexion_bd()
+        cursor = conexion.cursor(cursor_factory=cursor_factory)
+        plan, contexto, err = _calcular_plan_largos_fresco_desde_csv(app, tab, cursor, contexto)
+        if err:
+            return plan, contexto, err
+        try:
+            conexion.commit()
+        except Exception:
+            pass
+        _actualizar_cache_plan_largos(app, tab, plan, contexto)
+        return plan, contexto, None
+    except Exception as exc:
+        return {}, contexto, str(exc)
+    finally:
+        if cursor:
+            cursor.close()
+        if conexion:
+            conexion.close()
+
+
 def cargar_plan_largos_contexto(app, tab) -> tuple[dict[str, Any], dict[str, Any], str | None]:
     """
     Devuelve (plan, contexto, error).
@@ -1934,17 +2323,20 @@ def iter_barras_plan(plan: dict[str, Any]):
 
 
 def obtener_filas_demanda_contexto(app, tab) -> list[dict]:
-    """Demanda de largos del CSV (o BD) para el job/lote activo — cantidad_base por unidad."""
+    """Demanda de largos del CSV AutoDXF para el job/lote activo — cantidad_base por unidad."""
     contexto = resolver_contexto_largos(app, tab)
     job = str(contexto.get("job") or "").strip()
     factor = int(contexto.get("factor_lote") or 1)
+    rows, _origen, _csv_path = _filas_demanda_csv_forzado(app, tab, job, factor)
+    if rows:
+        return list(rows)
     conexion = None
     cursor = None
     try:
         conexion, cursor_factory = _conexion_bd()
         cursor = conexion.cursor(cursor_factory=cursor_factory)
-        rows, _origen = _obtener_filas_demanda_lote(app, cursor, job, factor)
-        return list(rows or [])
+        rows_bd, _origen_bd = _obtener_filas_demanda_lote(app, cursor, job, factor)
+        return list(rows_bd or [])
     except Exception:
         return _filas_desde_csv_para_job(app, job, factor)
     finally:

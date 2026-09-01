@@ -210,9 +210,24 @@ def _es_vista_mini_retazo(hoja) -> bool:
     return not _debe_mostrar_etiqueta_rtz(hoja)
 
 
-def _marcas_para_display(nom: str, marcas) -> list:
+def _marcas_para_display(
+    nom: str,
+    marcas,
+    *,
+    pieza: dict | None = None,
+    hoja: dict | None = None,
+    clave: str = "",
+) -> list:
     if _es_virtual_nombre(nom):
         return []
+    if _is_copper_context(pieza, hoja, clave):
+        try:
+            from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+
+            if is_cu_sin_marcaje_enabled():
+                return []
+        except Exception:
+            pass
     return list(marcas or [])
 
 
@@ -1051,7 +1066,9 @@ def populate_nesting_scene(
             scene.addItem(badge)
             scene_fixed_labels.append(badge)
         else:
-            marcas_disp = _marcas_para_display(nom, p.get("marcas"))
+            marcas_disp = _marcas_para_display(
+                nom, p.get("marcas"), pieza=p, hoja=hoja, clave=params.clave
+            )
             if marcas_disp:
                 _add_marks(
                     scene,

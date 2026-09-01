@@ -55,12 +55,46 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-01i — Largos: PDF descripción completa + recalcular demanda CSV
+- PDF consumo en piso: columna **DESCRIPCION DEL MATERIAL** con ajuste de
+  tipografía y saltos con guiones (sin truncar `...`; mismos anchos de columna).
+- Modal Nesteo de largos: botón **Recalcular desde CSV de demanda** (encima del
+  PDF) — relee AutoDXF, refresca catálogo react-Herinox, reimporta
+  `lista_largos_job` y regenera plan (evita PTR048 en CSV vs PTR027 en nest).
+- `obtener_filas_demanda_contexto` prioriza CSV forzado para PDF y export.
+
+### 2026-09-01h — Config: switch cobre sin marcaje (solo Corte CyPTube)
+- Preferencia `cu_sin_marcaje` en Configuración Global (junto a forzar DXF+STEP).
+- **Default ON** (norma planta): solo corte; OFF restaura MARK + Marcaje (con contraseña).
+- AutoDXF/reproceso respeta el switch: sin capa MARK ni stick en Processed Files.
+- Export: barra DXF cuenta solo archivos reales (sin Marcaje si cu_sin_marcaje); barra STEP oculta si no hay 3D.
+- ON: export cobre sin capa MARK; verticales solo `*_Corte.dxf` (sin `*_Marcaje`).
+- JSON `cyptube_verticales.json` marca `sin_marcaje`; CypTube RPA sigue con corte.
+- Candado: `test_split_solo_corte_sin_marcaje` en `test_cyptube_vertical_split.py`.
+
 ### 2026-09-01e — Repo/release: main al día + tag GitHub en commit real
 - `publish_release.py`: `gh release create --target <commit>` del
   `latest.json` (antes caía a `main` viejo: tag con hash nuevo, commit julio).
 - Regla `release-publish.mdc` + `AGENTS.md` 9b: release exige push **y**
   actualizar `main` remota, no solo la feature branch.
 - Commit pendiente UI scale / cinta / PARTS-SHEETS + candado `test_ui_scale`.
+
+### 2026-09-01g — Cinta 1 fila ancho completo + bloqueo orientación en barra CAD
+- Nesting: cinta original (1 fila) a **ancho completo** arriba del splitter;
+  botones no se comprimen (scroll con rueda si hace falta, sin barra fea).
+- PARTS visor: **BLOQUEAR ORIENTACIÓN** en la barra superior junto a ROTAR 90°;
+  más espacio al panel detalle (splitter equilibrado).
+
+### 2026-09-01f — Cinta Nesting: restaurada layout original (1 fila)
+- Se revirtió el rediseño a 2 filas; vuelve la cinta AutoCAD de una fila
+  en el panel derecho (como antes de los experimentos de UI scale).
+
+### 2026-09-01e — Cinta Nesting ancho completo + PARTS ESP usable
+- Cinta: **2 filas a ancho completo** (arriba del splitter). Todos los
+  comandos visibles; sin scroll feo ni apilado que recorte títulos.
+- PARTS: toolbar en 2 filas (DEMANDA completo); columna **ESP** con
+  checkbox visible (Amada cobre / Plasma acero); tabla con scroll
+  horizontal para no aplastar columnas.
 
 ### 2026-09-01d — Cinta Nesting compacta + PARTS AMADA/PLASMA visible
 - Cinta: altura compacta, botones Fixed (sin hueco vacío), sin barra de scroll
