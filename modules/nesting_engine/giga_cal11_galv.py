@@ -834,6 +834,459 @@ def close_stacked_vfm_pairs(hoja: dict, kerf_in: float | None = None) -> dict[st
     return stats
 
 
+_SNAP_POSE_KEYS = ("poly", "poly_exact", "poligonos", "marcas", "shift_x", "shift_y")
+
+
+def _snapshot_pose(p: dict) -> dict:
+    return {k: copy.deepcopy(p.get(k)) for k in _SNAP_POSE_KEYS}
+
+
+def _restore_pose(p: dict, snap: dict) -> None:
+    for k, v in snap.items():
+        if v is None and k not in p:
+            continue
+        if v is None:
+            p.pop(k, None)
+        else:
+            p[k] = v
+
+
+def _translate_void_children(
+    piezas: list, host: dict, dx: float, dy: float, host_idx: int
+) -> list[tuple[dict, dict]]:
+    """Mueve invitados con _void_parent == host; devuelve snaps para revertir."""
+    from shapely.affinity import translate as shp_translate
+
+    from .venom_hole_fill import _apply_rigid_pose, _piece_poly
+
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return []
+    uid = str(host.get("_void_uid") or "")
+    if not uid:
+        return []
+    moved: list[tuple[dict, dict]] = []
+    for j, pz in enumerate(piezas):
+        if j == host_idx:
+            continue
+        if str(pz.get("_void_parent") or "") != uid:
+            continue
+        gp = _piece_poly(pz)
+        if gp is None:
+            continue
+        snap = _snapshot_pose(pz)
+        g2 = shp_translate(gp, float(dx), float(dy))
+        _apply_rigid_pose(pz, gp, g2, 0.0)
+        moved.append((pz, snap))
+    return moved
+
+
+def zigzag_vfm_tower_stack(
+    hoja: dict,
+    restos: list | None = None,
+    kerf_in: float | None = None,
+) -> dict[str, Any]:
+    """Escalona en X torres de ≥3 VFM-20 (zig-zag) y opcionalmente mete otra I.
+
+    No toca hojas de 1 par (P1–P5 mixtas). Tras comprimir intenta pull desde
+    restos si queda franja legal arriba. Snapshot+revert como close_pair.
+    """
+    from shapely.affinity import rotate as shp_rotate
+    from shapely.affinity import translate as shp_translate
+    from shapely.ops import unary_union
+
+    from .venom_hole_fill import _apply_rigid_pose, _piece_poly
+
+    stats: dict[str, Any] = {
+        "staggered": 0,
+        "saved_in": 0.0,
+        "pulled": 0,
+        "reverted": 0,
+        "candidates": 0,
+    }
+    piezas = list(hoja.get("piezas") or [])
+    live_restos = restos if isinstance(restos, list) else []
+    kerf_in = float(
+        kerf_in if kerf_in is not None else (hoja.get("kerf_usado") or 0.150)
+    )
+    kerf_mm = max(kerf_in * 25.4, 1.0)
+    margin_mm = float(hoja.get("margin_usado") or 0.250) * 25.4
+    placa_w = float(hoja.get("placa_w") or 0.0)
+    placa_h = float(hoja.get("placa_h") or 0.0)
+    inch = 25.4
+
+    def _is_host(p: dict) -> bool:
+        return _is_vfm20_name(p.get("nombre")) and not p.get("_void_prefilled")
+
+    host_idx: list[int] = [i for i, p in enumerate(piezas) if _is_host(p)]
+    if len(host_idx) < 3:
+        return stats
+    # Sin tamaño de placa el checker de margen queda ciego (piezas fuera →
+    # poka expulsa y EMPAQUE-STOP / faltan N).
+    if placa_w <= 1.0 or placa_h <= 1.0:
+        stats["skip"] = "no_plate"
+        return stats
+    # Patio (BKT/HFM/GS no-void) entre I: no escalonar. Cascada Y las aplasta
+    # y el poka-yoke expulsa el inventario (faltan 174).
+    patio_n = sum(
+        1
+        for p in piezas
+        if (not _is_host(p)) and (not p.get("_void_prefilled"))
+    )
+    if patio_n:
+        stats["skip"] = f"patio={patio_n}"
+        return stats
+
+    def _poly_at(i: int):
+        return _piece_poly(piezas[i])
+
+    ordered = sorted(
+        host_idx,
+        key=lambda i: float((_poly_at(i).centroid.y if _poly_at(i) is not None else 0.0)),
+    )
+    polys0 = [_poly_at(i) for i in ordered]
+    if any(p is None for p in polys0):
+        return stats
+
+    # Torre: solape X entre consecutivos (si no, no es pila vertical).
+    for a, b in zip(polys0, polys0[1:]):
+        aa, bb = a.bounds, b.bounds
+        ox = min(aa[2], bb[2]) - max(aa[0], bb[0])
+        if ox < 50.0:
+            return stats
+
+    def _stack_h(ps) -> float:
+        try:
+            u = unary_union(list(ps))
+            return float(u.bounds[3] - u.bounds[1])
+        except Exception:
+            return sum(float(p.bounds[3] - p.bounds[1]) for p in ps) + kerf_mm
+
+    h_before = _stack_h(polys0)
+
+    def _in_plate(test) -> bool:
+        minx, miny, maxx, maxy = test.bounds
+        return (
+            minx + 1e-3 >= margin_mm
+            and miny + 1e-3 >= margin_mm
+            and maxx - 1e-3 <= placa_w - margin_mm
+            and maxy - 1e-3 <= placa_h - margin_mm
+        )
+
+    def _blocked(test, skip: set[int]) -> bool:
+        if not _in_plate(test):
+            return True
+        for j, pz in enumerate(piezas):
+            if j in skip:
+                continue
+            op = _piece_poly(pz)
+            if op is None:
+                continue
+            try:
+                if float(test.intersection(op).area) > 25.0:
+                    return True
+                if float(test.distance(op)) + 1e-3 < kerf_mm:
+                    return True
+            except Exception:
+                return True
+        return False
+
+    def _compress_y(a, b0, skip: set[int]):
+        """Tras dx: empuja b hacia a en Y hasta kerf (permite solape AABB / engrane T)."""
+        sign = 1.0 if b0.centroid.y >= a.centroid.y else -1.0
+        ha = float(a.bounds[3] - a.bounds[1])
+        hb = float(b0.bounds[3] - b0.bounds[1])
+        gap_aabb = (
+            float(b0.bounds[1] - a.bounds[3])
+            if sign > 0
+            else float(a.bounds[1] - b0.bounds[3])
+        )
+        max_push = max(0.0, gap_aabb + 0.60 * min(ha, hb))
+        if max_push < 1.0:
+            max_push = max(ha, hb) * 0.60
+        best = None
+        try:
+            ok0 = (
+                float(a.intersection(b0).area) <= 25.0
+                and (not _blocked(b0, skip))
+                and float(a.distance(b0)) + 1e-3 >= kerf_mm - 0.05
+            )
+        except Exception:
+            ok0 = False
+        if ok0:
+            best = b0
+        lo, hi = 0.0, max_push
+        for _ in range(24):
+            mid = 0.5 * (lo + hi)
+            t = shp_translate(b0, 0.0, -sign * mid)
+            try:
+                inter2 = float(a.intersection(t).area)
+            except Exception:
+                inter2 = 99.0
+            ok = (
+                inter2 <= 25.0
+                and (not _blocked(t, skip))
+                and float(a.distance(t)) + 1e-3 >= kerf_mm - 0.05
+            )
+            if ok:
+                best = t
+                lo = mid
+            else:
+                hi = mid
+        return best
+
+    def _shift_piece(idx: int, dx: float, dy: float) -> None:
+        p = piezas[idx]
+        old = _piece_poly(p)
+        if old is None:
+            return
+        new = shp_translate(old, float(dx), float(dy))
+        _apply_rigid_pose(p, old, new, 0.0)
+        _translate_void_children(piezas, p, float(dx), float(dy), idx)
+
+    # Offsets X (pulgadas) observados en nest manual P7–P13: ~2.6–5.7".
+    # Patrón planta: impar = ancla±dx, par ≈ ancla (el vecino ya trae el desfase).
+    dx_cands_in = (2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0)
+    anchor_cx = float(polys0[0].centroid.x)
+
+    for step, i_cur in enumerate(ordered[1:], start=1):
+        i_prev = ordered[step - 1]
+        a = _piece_poly(piezas[i_prev])
+        b0 = _piece_poly(piezas[i_cur])
+        if a is None or b0 is None:
+            continue
+        prefer = 1.0 if (step % 2) == 1 else -1.0
+        skip = {i_prev, i_cur}
+        for k in ordered[step + 1 :]:
+            skip.add(k)
+        uid_cur = str(piezas[i_cur].get("_void_uid") or "")
+        if uid_cur:
+            for j, pz in enumerate(piezas):
+                if str(pz.get("_void_parent") or "") == uid_cur:
+                    skip.add(j)
+        for k in ordered[step + 1 :]:
+            uid_a = str(piezas[k].get("_void_uid") or "")
+            if not uid_a:
+                continue
+            for j, pz in enumerate(piezas):
+                if str(pz.get("_void_parent") or "") == uid_a:
+                    skip.add(j)
+
+        h_now = _stack_h(
+            [p for p in (_piece_poly(piezas[k]) for k in ordered) if p is not None]
+        )
+        chosen = None
+        targets: list[float] = []
+        if step % 2 == 1:
+            for sign in (prefer, -prefer):
+                for dx_in in dx_cands_in:
+                    targets.append(float(anchor_cx) + float(sign) * float(dx_in) * inch)
+        else:
+            targets.append(float(anchor_cx))
+            for sign in (prefer, -prefer):
+                for dx_in in (2.5, 3.0, 3.5, 4.0):
+                    targets.append(float(anchor_cx) + float(sign) * float(dx_in) * inch)
+
+        for target_cx in targets:
+            stats["candidates"] = int(stats["candidates"]) + 1
+            for ang in (0.0, 180.0):
+                b_r = b0 if ang == 0.0 else shp_rotate(b0, ang, origin="centroid")
+                dx_mm = float(target_cx) - float(b_r.centroid.x)
+                b_x = shp_translate(b_r, dx_mm, 0.0)
+                b_new = _compress_y(a, b_x, skip)
+                if b_new is None:
+                    continue
+                dy_cascade = float(b_new.centroid.y - b0.centroid.y)
+                trial = []
+                for ki, k in enumerate(ordered):
+                    pk = _piece_poly(piezas[k])
+                    if pk is None:
+                        continue
+                    if k == i_cur:
+                        trial.append(b_new)
+                    elif ki > step:
+                        trial.append(shp_translate(pk, 0.0, dy_cascade))
+                    else:
+                        trial.append(pk)
+                h_try = _stack_h(trial)
+                dx_vs_prev = abs(float(b_new.centroid.x) - float(a.centroid.x))
+                score = (h_try, abs(dx_vs_prev - 4.5 * inch))
+                if chosen is None or score < chosen[0]:
+                    chosen = (score, ang, b_new, dy_cascade)
+
+        if chosen is None:
+            continue
+        (_score, ang, b_new, dy_cascade) = chosen
+        h_after_one = _score[0]
+        dx_vs_prev = abs(float(b_new.centroid.x) - float(a.centroid.x))
+        saved_mm = h_now - h_after_one
+        # Engrane: desfase vs vecino (no vs pose original) y/o ahorro vertical.
+        if dx_vs_prev < 1.5 * inch and saved_mm < 3.0:
+            continue
+        if saved_mm < 1.0 and dx_vs_prev < 2.0 * inch:
+            continue
+
+        p_cur = piezas[i_cur]
+        snap_tower: list[tuple[dict, dict]] = []
+        for k in ordered[step:]:
+            snap_tower.append((piezas[k], _snapshot_pose(piezas[k])))
+            uid_k = str(piezas[k].get("_void_uid") or "")
+            if not uid_k:
+                continue
+            for j, pz in enumerate(piezas):
+                if str(pz.get("_void_parent") or "") == uid_k:
+                    snap_tower.append((pz, _snapshot_pose(pz)))
+
+        _apply_rigid_pose(p_cur, b0, b_new, ang)
+        dx_m = float(b_new.centroid.x - b0.centroid.x)
+        dy_m = float(b_new.centroid.y - b0.centroid.y)
+        _translate_void_children(piezas, p_cur, dx_m, dy_m, i_cur)
+        if abs(dy_cascade) > 1e-6:
+            for k in ordered[step + 1 :]:
+                _shift_piece(k, 0.0, dy_cascade)
+
+        b_after = _piece_poly(p_cur)
+        bad = b_after is None
+        if not bad:
+            try:
+                inter_a = float(a.intersection(b_after).area)
+            except Exception:
+                inter_a = 99.0
+            skip_chk = {i_prev, i_cur}
+            if uid_cur:
+                for j, pz in enumerate(piezas):
+                    if str(pz.get("_void_parent") or "") == uid_cur:
+                        skip_chk.add(j)
+            if inter_a > 25.0:
+                bad = True
+            elif float(a.distance(b_after)) + 1e-3 < kerf_mm - 0.05:
+                bad = True
+            elif _blocked(b_after, skip_chk):
+                bad = True
+            else:
+                for k in ordered[step + 1 :]:
+                    pk = _piece_poly(piezas[k])
+                    if pk is None:
+                        continue
+                    if _blocked(pk, {k}):
+                        bad = True
+                        break
+        if bad:
+            for ch, ch_snap in snap_tower:
+                _restore_pose(ch, ch_snap)
+            stats["reverted"] = int(stats["reverted"]) + 1
+            continue
+
+        stats["staggered"] = int(stats["staggered"]) + 1
+        stats["saved_in"] = round(
+            float(stats["saved_in"]) + max(0.0, saved_mm / inch), 3
+        )
+
+    # Pull: otra VFM desde restos si la pila dejó franja arriba.
+    polys_now = [
+        p for p in (_piece_poly(piezas[k]) for k in ordered) if p is not None
+    ]
+    h_after = _stack_h(polys_now) if polys_now else h_before
+    if live_restos and polys_now and placa_h > 1.0:
+        top_host_i = max(
+            ordered,
+            key=lambda i: float(_piece_poly(piezas[i]).bounds[3])
+            if _piece_poly(piezas[i]) is not None
+            else -1e18,
+        )
+        top_poly = _piece_poly(piezas[top_host_i])
+        room = (placa_h - margin_mm) - float(top_poly.bounds[3]) if top_poly else 0.0
+        # Con interlock el pitch cae a ~8–9\"; con ~5.5\" libres ya vale probar.
+        if room >= 5.5 * inch and top_poly is not None:
+            pull_i = None
+            for ri, rp in enumerate(live_restos):
+                if not _is_vfm20_name(rp.get("nombre")):
+                    continue
+                if rp.get("_void_prefilled"):
+                    continue
+                pull_i = ri
+                break
+            if pull_i is not None:
+                cand = live_restos[pull_i]
+                c0 = _piece_poly(cand)
+                if c0 is not None:
+                    skip_none: set[int] = set()
+                    best_pull = None
+                    top_off = float(top_poly.centroid.x) - float(anchor_cx)
+                    # Si el tope está a +dx, la siguiente vuelve al ancla (relativo ~dx).
+                    pull_targets: list[float] = [float(anchor_cx)]
+                    if abs(top_off) > 1.5 * inch:
+                        for dx_in in (2.5, 3.0, 3.5, 4.0):
+                            pull_targets.append(float(anchor_cx) + dx_in * inch)
+                            pull_targets.append(float(anchor_cx) - dx_in * inch)
+                    else:
+                        for sign in (1.0, -1.0):
+                            for dx_in in dx_cands_in:
+                                pull_targets.append(
+                                    float(anchor_cx)
+                                    + float(sign) * float(dx_in) * inch
+                                )
+                    for target_cx in pull_targets:
+                        for ang in (0.0, 180.0):
+                            c_r = (
+                                c0
+                                if ang == 0.0
+                                else shp_rotate(c0, ang, origin="centroid")
+                            )
+                            # Partir ya engrane (~2\") para no nacer fuera de placa.
+                            target_miny = (
+                                float(top_poly.bounds[3]) - 2.0 * inch + kerf_mm
+                            )
+                            dy0 = target_miny - float(c_r.bounds[1])
+                            dx0 = float(target_cx) - float(c_r.centroid.x)
+                            c_x = shp_translate(c_r, dx0, dy0)
+                            c_new = _compress_y(top_poly, c_x, skip_none)
+                            if c_new is None:
+                                continue
+                            if _blocked(c_new, skip_none):
+                                continue
+                            h_try = _stack_h(list(polys_now) + [c_new])
+                            if h_try > placa_h - 2.0 * margin_mm + 1.0:
+                                continue
+                            dx_vs_top = abs(
+                                float(c_new.centroid.x) - float(top_poly.centroid.x)
+                            )
+                            score = (h_try, abs(dx_vs_top - 4.5 * inch))
+                            if best_pull is None or score < best_pull[0]:
+                                best_pull = (score, ang, c_new)
+                    if best_pull is not None:
+                        _ang, c_new = best_pull[1], best_pull[2]
+                        placed = copy.deepcopy(cand)
+                        _apply_rigid_pose(placed, c0, c_new, _ang)
+                        p_chk = _piece_poly(placed)
+                        if p_chk is not None and not _blocked(p_chk, skip_none):
+                            piezas.append(placed)
+                            hoja["piezas"] = piezas
+                            del live_restos[pull_i]
+                            stats["pulled"] = 1
+                            ordered.append(len(piezas) - 1)
+
+    if stats["staggered"] or stats["pulled"] or stats.get("reverted"):
+        h_final_ps = [
+            p
+            for p in (
+                _piece_poly(piezas[k])
+                for k in range(len(piezas))
+                if _is_host(piezas[k])
+            )
+            if p is not None
+        ]
+        h_final = _stack_h(h_final_ps) if h_final_ps else h_after
+        stats["saved_in"] = round(max(float(stats["saved_in"]), (h_before - h_final) / inch), 3)
+        print(
+            f"[GIGA-CAL11] zigzag staggered={stats['staggered']} "
+            f"pulled={stats['pulled']} reverted={int(stats.get('reverted') or 0)} "
+            f"saved={stats['saved_in']:.2f}in "
+            f"h={h_before / inch:.1f}->{h_final / inch:.1f}in",
+            flush=True,
+        )
+    return stats
+
+
 def _vfm_hosts_on_sheet(piezas: list) -> list[tuple[int, Any]]:
     from .venom_hole_fill import _piece_poly
 

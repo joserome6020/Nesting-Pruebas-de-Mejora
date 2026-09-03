@@ -55,6 +55,20 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-03b — GIGA zig-zag: no tumbar inventario (faltan 174)
+- Causa: zig-zag corría sin `placa_w/h` (checker ciego, I fuera de placa)
+  y en torres con patio (P6 BKT) la cascada Y aplastaba invitados; poka
+  expulsaba → EMPAQUE-STOP / faltan N.
+- Placa+kerf se sellan ANTES de close/zigzag. Zig-zag solo en torre
+  VFM (sin patio). Candados patio + sin-placa.
+
+### 2026-09-03 — GIGA Cal 11: zig-zag automático en torres VFM
+- Post-proceso `zigzag_vfm_tower_stack` tras `close_pair`: torres de ≥3
+  VFM-20 escalonan en X (~2.5–6\") con engrane T (gap_y negativo) y
+  cascada Y; opcional pull de otra I desde restos.
+- No toca hojas de 1 par (P1–P5 mixtas con HFM/patio).
+- Candados: escalona X, no-un-par, franja/quinta; `run_regresiones`.
+
 ### 2026-09-01i — Largos: PDF descripción completa + recalcular demanda CSV
 - PDF consumo en piso: columna **DESCRIPCION DEL MATERIAL** con ajuste de
   tipografía y saltos con guiones (sin truncar `...`; mismos anchos de columna).

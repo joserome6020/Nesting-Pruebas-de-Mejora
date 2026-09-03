@@ -77,6 +77,10 @@ class GigaCal11GalvEngine:
             )
             hoja = dict(hoja or {})
             restos = list(restos or [])
+            hoja.setdefault("placa_w", float(request.w_placa or 0))
+            hoja.setdefault("placa_h", float(request.h_placa or 0))
+            hoja.setdefault("kerf_usado", kerf)
+            hoja.setdefault("margin_usado", margin)
             if skip_void:
                 n_exp = 0
                 n_back = 0
@@ -91,11 +95,20 @@ class GigaCal11GalvEngine:
                 except Exception as _cp_exc:
                     close_stats = {"error": str(_cp_exc)}
                     print(f"[GIGA-CAL11] close_pair skip: {_cp_exc}", flush=True)
+                try:
+                    from ..giga_cal11_galv import zigzag_vfm_tower_stack
+
+                    zig_stats = zigzag_vfm_tower_stack(hoja, restos, kerf)
+                except Exception as _zg_exc:
+                    zig_stats = {"error": str(_zg_exc)}
+                    print(f"[GIGA-CAL11] zigzag skip: {_zg_exc}", flush=True)
                 fill_stats = apply_giga_pasillo_fill(
                     hoja, engine_id=cls.META.engine_id, pool=restos
                 )
                 fill_stats = dict(fill_stats)
                 fill_stats["close_pair"] = int(close_stats.get("closed") or 0)
+                fill_stats["zigzag"] = int(zig_stats.get("staggered") or 0)
+                fill_stats["zigzag_pulled"] = int(zig_stats.get("pulled") or 0)
             fill_stats = dict(fill_stats)
             fill_stats["void_first"] = int(vf_stats.get("filled") or 0)
             fill_stats["void_expand"] = int(n_exp)

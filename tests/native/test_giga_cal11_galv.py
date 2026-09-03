@@ -113,6 +113,11 @@ def test_es_motor_nativo_no_overlay_lite():
     assert "restore_unplaced_void_cargo" in src
     assert "partition_vfm_sheet_quota" not in src
     assert "close_stacked_vfm_pairs" in src
+    assert "zigzag_vfm_tower_stack" in src
+    # Placa ANTES del zig-zag: si no, _in_plate queda ciego y poka expulsa.
+    zig_at = src.find("zigzag_vfm_tower_stack")
+    placa_at = src.find('setdefault("placa_w"')
+    assert 0 <= placa_at < zig_at, "placa_w debe setearse antes de zigzag"
     assert "pool=restos" in src
     assert "arga_lite" not in src
     assert "fallback_engine" not in src
@@ -1159,6 +1164,229 @@ def test_pack_torre_vfm_antes_de_inyectar():
     )
 
 
+def _vfm_interlock_profile(w: float, h: float, *, t_h: float | None = None):
+    """Perfil tipo VFM-20: T a altura plena y valles centrados (gap arriba/abajo).
+
+    Como el DXF real: ends ~10\", valleys ~4.8\" centrados, T = h. El gap
+    simétrico permite gap_y negativo al escalonar en X.
+    """
+    from shapely.ops import unary_union
+
+    if t_h is None:
+        t_h = h
+    x_end = 0.08 * w
+    x_low0 = 0.35 * w
+    x_t0 = 0.48 * w
+    x_t1 = 0.52 * w
+    x_low1 = 0.65 * w
+    h_end = 0.83 * h
+    h_low = 0.39 * h
+
+    def _band(x0, x1, hh):
+        y0 = 0.5 * (h - hh)
+        return box(x0, y0, x1, y0 + hh)
+
+    metal = unary_union(
+        [
+            _band(0.0, x_end, h_end),
+            _band(w - x_end, w, h_end),
+            _band(x_end, x_low0, h_low),
+            _band(x_low0, x_t0, h_low),
+            _band(x_t0, x_t1, float(t_h)),
+            _band(x_t1, x_low1, h_low),
+            _band(x_low1, w - x_end, h_low),
+        ]
+    )
+    if metal.geom_type != "Polygon":
+        metal = max(metal.geoms, key=lambda g: g.area)
+    return metal
+
+
+def _aligned_vfm_tower(n: int = 4, *, kerf_in: float = 0.150):
+    """n VFM-20 apiladas alineadas en X (torre sin zig-zag)."""
+    from shapely.affinity import translate as shp_translate
+
+    inch = 25.4
+    kerf = kerf_in * inch
+    w = 78.35 * inch
+    h101 = 12.24 * inch
+    h102 = 11.19 * inch
+    host101 = _vfm_interlock_profile(w, h101)
+    host102 = _vfm_interlock_profile(w, h102, t_h=h102)
+    margin = 0.250 * inch
+    piezas = []
+    y = margin
+    for i in range(n):
+        base = host101 if (i % 2) == 0 else host102
+        nom = "GENE-VFM-20-101" if (i % 2) == 0 else "GENE-VFM-20-102"
+        h = float(base.bounds[3] - base.bounds[1])
+        poly = shp_translate(base, margin, y - float(base.bounds[1]))
+        p = _mk(f"{nom}#{i}", poly)
+        p["_void_uid"] = f"tower{i}"
+        piezas.append(p)
+        y += h + kerf
+    return {
+        "kerf_usado": kerf_in,
+        "margin_usado": 0.250,
+        "placa_w": 120.0 * inch,
+        "placa_h": 48.0 * inch,
+        "piezas": piezas,
+    }
+
+
+def test_zigzag_torre_escalona_x():
+    """≥3 VFM alineadas: zig-zag aplica |dx|≥2\" y baja el alto de pila."""
+    from shapely.ops import unary_union
+
+    from modules.nesting_engine.giga_cal11_galv import zigzag_vfm_tower_stack
+    from modules.nesting_engine.venom_hole_fill import _piece_poly
+
+    inch = 25.4
+    kerf = 0.150 * inch
+    hoja = _aligned_vfm_tower(4)
+    polys0 = [_piece_poly(p) for p in hoja["piezas"]]
+    h0 = float(unary_union(polys0).bounds[3] - unary_union(polys0).bounds[1])
+    st = zigzag_vfm_tower_stack(hoja)
+    assert st.get("staggered", 0) >= 1, st
+    polys1 = [_piece_poly(p) for p in hoja["piezas"]]
+    ordered = sorted(polys1, key=lambda p: float(p.centroid.y))
+    dxs = [
+        abs(float(ordered[i].centroid.x - ordered[i - 1].centroid.x)) / inch
+        for i in range(1, len(ordered))
+    ]
+    assert max(dxs) >= 2.0 - 1e-3, (dxs, st)
+    h1 = float(unary_union(polys1).bounds[3] - unary_union(polys1).bounds[1])
+    assert h1 < h0 - 5.0, (h0, h1, st)
+    for i in range(1, len(ordered)):
+        a, b = ordered[i - 1], ordered[i]
+        inter = float(a.intersection(b).area)
+        assert inter <= 25.0, (i, inter, st)
+        assert float(a.distance(b)) + 1e-3 >= kerf - 0.05, (i, a.distance(b), st)
+
+
+def test_zigzag_no_toca_un_par():
+    """1×101 + 1×102 (hoja mixta tipo P1): zig-zag no escalona."""
+    from shapely.affinity import translate as shp_translate
+
+    from modules.nesting_engine.giga_cal11_galv import zigzag_vfm_tower_stack
+    from modules.nesting_engine.venom_hole_fill import _piece_poly
+
+    inch = 25.4
+    kerf = 0.150 * inch
+    margin = 0.250 * inch
+    host = _h_with_t()
+    h = float(host.bounds[3] - host.bounds[1])
+    p101 = _mk("GENE-VFM-20-101", shp_translate(host, margin, margin))
+    p102 = _mk(
+        "GENE-VFM-20-102",
+        shp_translate(host, margin, margin + h + kerf),
+    )
+    hfm = _mk(
+        "GENE-HFM-10-102",
+        box(
+            margin + 80 * inch,
+            margin,
+            margin + 114.65 * inch,
+            margin + 6.29 * inch,
+        ),
+    )
+    hoja = {
+        "kerf_usado": 0.150,
+        "margin_usado": 0.250,
+        "placa_w": 120.0 * inch,
+        "placa_h": 48.0 * inch,
+        "piezas": [p101, p102, hfm],
+    }
+    cx0 = float(_piece_poly(p102).centroid.x)
+    st = zigzag_vfm_tower_stack(hoja)
+    assert int(st.get("staggered") or 0) == 0, st
+    cx1 = float(_piece_poly(p102).centroid.x)
+    assert abs(cx1 - cx0) < 1.0, (cx0, cx1, st)
+
+
+def test_zigzag_no_toca_torre_con_patio():
+    """4 I + BKT de patio: no escalonar (cascada aplastaba invitados → faltan N)."""
+    from shapely.affinity import translate as shp_translate
+
+    from modules.nesting_engine.giga_cal11_galv import zigzag_vfm_tower_stack
+    from modules.nesting_engine.venom_hole_fill import _piece_poly
+
+    inch = 25.4
+    hoja = _aligned_vfm_tower(4)
+    bkt = _mk(
+        "GENE-BKT-304",
+        shp_translate(box(0.0, 0.0, 3.0 * inch, 3.0 * inch), 90.0 * inch, 20.0 * inch),
+    )
+    hoja["piezas"].append(bkt)
+    cx0 = [
+        float(_piece_poly(p).centroid.x)
+        for p in hoja["piezas"]
+        if "VFM-20" in str(p.get("nombre") or "")
+    ]
+    st = zigzag_vfm_tower_stack(hoja)
+    assert int(st.get("staggered") or 0) == 0, st
+    assert str(st.get("skip") or "").startswith("patio"), st
+    cx1 = [
+        float(_piece_poly(p).centroid.x)
+        for p in hoja["piezas"]
+        if "VFM-20" in str(p.get("nombre") or "")
+    ]
+    assert cx0 == cx1, (cx0, cx1, st)
+
+
+def test_zigzag_sin_placa_no_mueve():
+    """Sin placa_w/h no escalona (checker ciego sacaba I fuera → poka expulsa)."""
+    from modules.nesting_engine.giga_cal11_galv import zigzag_vfm_tower_stack
+    from modules.nesting_engine.venom_hole_fill import _piece_poly
+
+    hoja = _aligned_vfm_tower(4)
+    hoja.pop("placa_w", None)
+    hoja.pop("placa_h", None)
+    cx0 = float(_piece_poly(hoja["piezas"][1]).centroid.x)
+    st = zigzag_vfm_tower_stack(hoja)
+    assert int(st.get("staggered") or 0) == 0, st
+    assert st.get("skip") == "no_plate", st
+    cx1 = float(_piece_poly(hoja["piezas"][1]).centroid.x)
+    assert abs(cx1 - cx0) < 1e-6, (cx0, cx1)
+
+
+def test_zigzag_puede_meter_quinta():
+    """4 I en 120×48 + 1 en restos: tras zig-zag cabe la 5ª o queda franja ≥7\"."""
+    from shapely.affinity import translate as shp_translate
+    from shapely.ops import unary_union
+
+    from modules.nesting_engine.giga_cal11_galv import zigzag_vfm_tower_stack
+    from modules.nesting_engine.venom_hole_fill import _piece_poly
+
+    inch = 25.4
+    hoja = _aligned_vfm_tower(4)
+    extra = _mk(
+        "GENE-VFM-20-101#extra",
+        shp_translate(_vfm_interlock_profile(78.35 * inch, 12.24 * inch), 5000.0, 5000.0),
+    )
+    restos = [extra]
+    st = zigzag_vfm_tower_stack(hoja, restos)
+    n_vfm = sum(
+        1
+        for p in (hoja.get("piezas") or [])
+        if "VFM-20" in str(p.get("nombre") or "").upper()
+    )
+    polys = [
+        _piece_poly(p)
+        for p in (hoja.get("piezas") or [])
+        if "VFM-20" in str(p.get("nombre") or "").upper()
+    ]
+    polys = [p for p in polys if p is not None]
+    u = unary_union(polys)
+    top = float(u.bounds[3])
+    room = float(hoja["placa_h"]) - 0.250 * inch - top
+    assert n_vfm >= 5 or int(st.get("pulled") or 0) >= 1 or room >= 5.5 * inch, (
+        n_vfm,
+        room / inch,
+        st,
+    )
+
+
 if __name__ == "__main__":
     test_detector_cal11_galv_no_a36()
     test_clave_desde_debug_tag()
@@ -1195,4 +1423,9 @@ if __name__ == "__main__":
     test_order_torre_cuando_solo_vfm()
     test_cola_giga_no_achica_placa_con_vfm()
     test_pack_torre_vfm_antes_de_inyectar()
+    test_zigzag_torre_escalona_x()
+    test_zigzag_no_toca_un_par()
+    test_zigzag_no_toca_torre_con_patio()
+    test_zigzag_sin_placa_no_mueve()
+    test_zigzag_puede_meter_quinta()
     print("GIGA_CAL11_GALV PASS")

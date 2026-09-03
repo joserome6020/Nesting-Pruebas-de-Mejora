@@ -285,7 +285,7 @@ REGRESIONES = [
     ),
     (
         "test_giga_cal11_galv.py",
-        "2026-08-19e - Cal 11 Galv: bahía VFM 8.77\" (BKT-304/GS) + canal 3.74\"",
+        "2026-09-03 - Cal 11 Galv: zig-zag torres VFM (≥3 I) + pull 5ª",
     ),
     (
         "test_plasma_offset_todos_calibres.py",
