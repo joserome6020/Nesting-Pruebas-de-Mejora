@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-03c — Ultra: cupo en placa = metal + margen (no kerf)
+- Bug: al Cambiar de placa a PLC058 120×48 (pieza 81.037×47.374, margen
+  0.200, ENTRE PIEZAS 0.250) Ultra rechazaba todo (`placed=0`). Dos causas:
+  (1) variaciones medían AABB **con buffer de kerf** vs `placa−2·margen`;
+  (2) `comprobar_colision` / IFP de placa exigían que el **globo de kerf**
+  cupiera dentro del margen (Lite/base ya usaban solo metal).
+- Fix: Ultra / libnest2d / burke / packer lite — rechazo e IFP de placa con
+  **metal**; kerf solo entre piezas. Candado
+  `test_ultra_plate_fit_metal_not_kerf.py` (1 colocada + 1 resto). Mensaje UI
+  de “sin espacio” ya no habla de kerf en el borde.
+
 ### 2026-09-03b — GIGA zig-zag: no tumbar inventario (faltan 174)
 - Causa: zig-zag corría sin `placa_w/h` (checker ciego, I fuera de placa)
   y en torres con patio (P6 BKT) la cascada Y aplastaba invitados; poka

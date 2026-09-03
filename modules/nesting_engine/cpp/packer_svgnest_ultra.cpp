@@ -45,7 +45,8 @@ struct Variation {
     std::vector<std::vector<Point2D>> poly;
     std::vector<std::vector<Point2D>> poly_buff;
     std::vector<std::vector<Point2D>> marks;
-    PathD outer_norm;
+    PathD outer_norm;   // buffer (kerf) — NFP pieza↔pieza
+    PathD metal_norm;   // metal — IFP contra placa/margen
     double b_minx = 0.0;
     double b_miny = 0.0;
     double b_maxx = 0.0;
@@ -822,13 +823,18 @@ PathsD build_bin_inner_nfp(
     double w_placa,
     double h_placa,
     double margin_px,
-    const PathD& orb_norm) {
-    const Bounds orb_bb = bounds_of_path(orb_norm);
+    const PathD& buff_orb_norm,
+    const PathD& metal_orb_norm) {
+    // Hueco (part-in-part): ya viene encogido por kerf → orb con buffer.
+    // Placa: margen es metal↔borde; el kerf no debe exigir cupo extra en el IFP.
+    const PathD& sheet_orb =
+        !metal_orb_norm.empty() ? metal_orb_norm : buff_orb_norm;
+    const Bounds sheet_orb_bb = bounds_of_path(sheet_orb);
 
     if (hole_limit && hole_limit->active && !hole_limit->eval_paths.empty()) {
         PathsD out;
         for (const auto& hp : hole_limit->eval_paths) {
-            PathsD ifp = compute_inner_nfp(hp, orb_norm);
+            PathsD ifp = compute_inner_nfp(hp, buff_orb_norm);
             out.insert(out.end(), ifp.begin(), ifp.end());
         }
         return out;
@@ -837,7 +843,7 @@ PathsD build_bin_inner_nfp(
     if (sheet_limit.active && !sheet_limit.eval_paths.empty()) {
         PathsD out;
         for (const auto& sp : sheet_limit.eval_paths) {
-            PathsD ifp = compute_inner_nfp(sp, orb_norm);
+            PathsD ifp = compute_inner_nfp(sp, sheet_orb);
             out.insert(out.end(), ifp.begin(), ifp.end());
         }
         if (!out.empty()) {
@@ -846,7 +852,7 @@ PathsD build_bin_inner_nfp(
     }
 
     const Bounds plate{margin_px, margin_px, w_placa - margin_px, h_placa - margin_px};
-    return compute_rect_inner_nfp(plate, orb_bb);
+    return compute_rect_inner_nfp(plate, sheet_orb_bb);
 }
 
 std::vector<int> build_rotation_angles(double step_deg) {
@@ -963,12 +969,16 @@ std::vector<Variation> build_variaciones_fine(
 
         const Bounds mb = bounds_of_rings(poly_rot);
         const Bounds bb = bounds_of_rings(poly_buff);
+        // w/h de variación = buffer (kerf entre piezas). Cupo en placa = METAL vs margen.
+        const double w_metal = mb.maxx - mb.minx;
+        const double h_metal = mb.maxy - mb.miny;
         const double w_p = bb.maxx - bb.minx;
         const double h_p = bb.maxy - bb.miny;
-        if (w_p <= 0.0 || h_p <= 0.0) {
+        if (w_metal <= 0.0 || h_metal <= 0.0 || w_p <= 0.0 || h_p <= 0.0) {
             continue;
         }
-        if (w_p > w_placa - 2.0 * margin_px + 0.1 || h_p > h_placa - 2.0 * margin_px + 0.1) {
+        if (w_metal > w_placa - 2.0 * margin_px + 0.1 ||
+            h_metal > h_placa - 2.0 * margin_px + 0.1) {
             continue;
         }
 
@@ -977,6 +987,7 @@ std::vector<Variation> build_variaciones_fine(
         var.poly_buff = poly_buff;
         var.marks = marks_rot;
         var.outer_norm = normalize_outer_at_origin(poly_buff);
+        var.metal_norm = normalize_outer_at_origin(poly_rot);
         var.b_minx = bb.minx;
         var.b_miny = bb.miny;
         var.b_maxx = bb.maxx;
@@ -1098,9 +1109,15 @@ bool comprobar_colision(
     std::optional<PathsD> moved_buff;
 
     if (limit.active) {
+        // Placa→pieza: solo el METAL vs margen. El buffer de kerf puede entrar
+        // en la franja de margen (no es metal físico).
         moved_exact = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
-        if (cmx < limit.bounds.minx - 0.5 || cmy < limit.bounds.miny - 0.5
-            || cMx > limit.bounds.maxx + 0.5 || cMy > limit.bounds.maxy + 0.5) {
+        const double mmx = pos_x + var.m_minx;
+        const double mmy = pos_y + var.m_miny;
+        const double mMx = pos_x + var.m_maxx;
+        const double mMy = pos_y + var.m_maxy;
+        if (mmx < limit.bounds.minx - 0.5 || mmy < limit.bounds.miny - 0.5
+            || mMx > limit.bounds.maxx + 0.5 || mMy > limit.bounds.maxy + 0.5) {
             return true;
         }
         if (!path_contained_in(*moved_exact, limit.eval_paths)) {
@@ -1249,7 +1266,13 @@ bool colocar_pieza_nfp(
     for (const auto& var : variaciones) {
         // Deepnest placeParts: Inner-NFP del bin/orificio − unión NFP de piezas fijadas.
         PathsD bin_ifp = build_bin_inner_nfp(
-            hole_limit, sheet_limit, w_placa, h_placa, margin_px, var.outer_norm);
+            hole_limit,
+            sheet_limit,
+            w_placa,
+            h_placa,
+            margin_px,
+            var.outer_norm,
+            var.metal_norm);
         PathsD final_nfp =
             subtract_placed_outer_nfps(bin_ifp, state, var.outer_norm, nfp_cache);
 

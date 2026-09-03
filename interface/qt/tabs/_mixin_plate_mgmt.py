@@ -1291,7 +1291,7 @@ class PlateManagementMixin:
         )
 
     def _piezas_sin_espacio_en_placa(self, piezas, w_mm, h_mm, k, m) -> list[dict]:
-        """Piezas cuyo bbox no cabe en la placa (ninguna orientación), con kerf/margen."""
+        """Piezas cuyo bbox metal no cabe en la placa (ninguna orientación) + margen."""
         # "PLACA A PIEZA" es el borde físico final. El kerf se reserva entre
         # piezas en el packer, nunca se añade al margen de la placa.
         edge_margin_mm = max(0.0, float(m or 0.0)) * 25.4
@@ -1343,7 +1343,8 @@ class PlateManagementMixin:
             extra = f"\n… y {len(rechazadas) - 10} más."
         return (
             f"La placa {placa_txt} no puede usarse: {len(rechazadas or [])} pieza(s) {ctx} "
-            f"exceden sus dimensiones con el kerf/margen actual.\n\n"
+            f"exceden el área útil (metal + margen PLACA→PIEZA; el kerf ENTRE PIEZAS "
+            f"no cuenta contra el borde).\n\n"
             f"Piezas que no caben por tamaño:\n"
             + ("\n".join(lineas) if lineas else "  · (sin detalle)")
             + extra

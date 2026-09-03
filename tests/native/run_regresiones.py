@@ -184,6 +184,10 @@ REGRESIONES = [
         "2026-08-18l - packer C++ coloca el metal ≥0.250in de placa (no el buffer de kerf)",
     ),
     (
+        "test_ultra_plate_fit_metal_not_kerf.py",
+        "2026-09-03c - Ultra cupo en placa = metal+margen (no kerf ENTRE PIEZAS; PLC058 120×48)",
+    ),
+    (
         "test_expulsadas_a_pool_poly.py",
         "2026-08-17o - piezas expulsadas por kerf regresan al pool con poly (no KeyError)",
     ),

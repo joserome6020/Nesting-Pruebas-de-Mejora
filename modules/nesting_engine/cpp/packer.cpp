@@ -404,10 +404,16 @@ bool comprobar_colision(
     const double cMy = pos_y + var.b_maxy;
 
     if (limit.active) {
-        if (cmx < limit.bounds.minx || cmy < limit.bounds.miny || cMx > limit.bounds.maxx || cMy > limit.bounds.maxy) {
+        // Placa→pieza: METAL vs margen (kerf solo entre piezas).
+        const double mmx = pos_x + var.m_minx;
+        const double mmy = pos_y + var.m_miny;
+        const double mMx = pos_x + var.m_maxx;
+        const double mMy = pos_y + var.m_maxy;
+        if (mmx < limit.bounds.minx || mmy < limit.bounds.miny || mMx > limit.bounds.maxx
+            || mMy > limit.bounds.maxy) {
             return true;
         }
-        const PathsD moved = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
+        const PathsD moved = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
         if (!path_contained_in(moved, limit.eval_paths)) {
             return true;
         }

@@ -350,12 +350,16 @@ std::vector<Variation> build_variaciones(
 
         const Bounds mb = bounds_of_rings(poly_rot);
         const Bounds bb = bounds_of_rings(poly_buff);
+        // w/h de variación = buffer (kerf entre piezas). Cupo en placa = METAL vs margen.
+        const double w_metal = mb.maxx - mb.minx;
+        const double h_metal = mb.maxy - mb.miny;
         const double w_p = bb.maxx - bb.minx;
         const double h_p = bb.maxy - bb.miny;
-        if (w_p <= 0.0 || h_p <= 0.0) {
+        if (w_metal <= 0.0 || h_metal <= 0.0 || w_p <= 0.0 || h_p <= 0.0) {
             continue;
         }
-        if (w_p > w_placa - 2.0 * margin_px + 0.1 || h_p > h_placa - 2.0 * margin_px + 0.1) {
+        if (w_metal > w_placa - 2.0 * margin_px + 0.1 ||
+            h_metal > h_placa - 2.0 * margin_px + 0.1) {
             continue;
         }
 
@@ -410,10 +414,16 @@ bool comprobar_colision(
     const double cMy = pos_y + var.b_maxy;
 
     if (limit.active) {
-        if (cmx < limit.bounds.minx || cmy < limit.bounds.miny || cMx > limit.bounds.maxx || cMy > limit.bounds.maxy) {
+        // Placa→pieza: METAL vs margen (kerf solo entre piezas).
+        const double mmx = pos_x + var.m_minx;
+        const double mmy = pos_y + var.m_miny;
+        const double mMx = pos_x + var.m_maxx;
+        const double mMy = pos_y + var.m_maxy;
+        if (mmx < limit.bounds.minx || mmy < limit.bounds.miny || mMx > limit.bounds.maxx
+            || mMy > limit.bounds.maxy) {
             return true;
         }
-        const PathsD moved = translate_copy(to_paths_d(var.poly_buff), pos_x, pos_y);
+        const PathsD moved = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
         if (!path_contained_in(moved, limit.eval_paths)) {
             return true;
         }
