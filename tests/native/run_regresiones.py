@@ -81,7 +81,7 @@ REGRESIONES = [
     ),
     (
         "test_job_nombre_vsm.py",
-        "2026-08-06c - GIGA BOARD 5 ↔ GIGABOARD5 resuelve carpeta VSM con AutoDXF",
+        "2026-09-03d - VSM/espacios + SWO-058 job 25432 ATC vs TANKS elige AutoDXF con piezas",
     ),
     (
         "test_renest_galv_incompleto.py",

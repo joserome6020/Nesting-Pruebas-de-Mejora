@@ -9,6 +9,7 @@ import re
 import shutil
 import threading
 import concurrent.futures
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -830,7 +831,8 @@ class TabFiles(QWidget):
         inner_lay = QVBoxLayout(inner)
         inner_lay.setSpacing(8)
         inner_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        inner_lay.addStretch(1)
+        # Sin stretch al inicio: si no, las filas quedan abajo y el diálogo
+        # parece vacío (SWO-058: solo se veía la tarjeta al fondo).
         root = QVBoxLayout(dlg)
         root.setContentsMargins(16, 16, 16, 16)
         root.addWidget(scroll)
@@ -1211,20 +1213,21 @@ class TabFiles(QWidget):
             btn.clicked.connect(lambda _c=False, s=swo: (dlg.accept(), self.procesar_descarga_swo(s)))
             rl.addWidget(btn)
             lay.addWidget(row)
+        lay.addStretch(1)
         dlg.exec()
 
-    def obtener_ruta_real_job(self, ruta_raiz, nombre_job):
-        """Resuelve carpeta de job bajo producto/cliente.
+    def obtener_rutas_reales_job(self, ruta_raiz, nombre_job) -> list[str]:
+        """Todas las carpetas de job bajo producto/cliente (mismo número, varios productos).
 
-        El VSM a veces nombra el job sin espacios (GIGABOARD5) y en red queda
-        un duplicado con espacios (GIGA BOARD 5). Prefiere la carpeta que tenga
-        MODEL CORE FILES/AutoDXF para no tumbar la descarga SWO.
+        Caso SWO-058 / job 25432: existe en ATC_COMPARTMENT y en TANKS; ambas
+        tienen AutoDXF. Devolver todas (AutoDXF primero) para no quedarnos con
+        la primera alfabética vacía de piezas.
         """
         if not os.path.exists(ruta_raiz):
-            return None
+            return []
         job_pedido = str(nombre_job or "").strip()
         if not job_pedido:
-            return None
+            return []
 
         def _compact(s: str) -> str:
             return re.sub(r"[\s_\-]+", "", str(s or "").strip().upper())
@@ -1240,7 +1243,6 @@ class TabFiles(QWidget):
                     ruta_cli = os.path.join(ruta_prod, cliente)
                     if not os.path.isdir(ruta_cli):
                         continue
-                    # Match exacto histórico.
                     ruta_exacta = os.path.join(ruta_cli, job_pedido)
                     if os.path.isdir(ruta_exacta):
                         exactas.append(ruta_exacta)
@@ -1254,12 +1256,11 @@ class TabFiles(QWidget):
                     except Exception:
                         continue
         except Exception:
-            return None
+            return []
 
         def _tiene_autodxf(ruta_job: str) -> bool:
             return os.path.isdir(os.path.join(ruta_job, "MODEL CORE FILES", "AutoDXF"))
 
-        # Orden: equivalentes/exactas con AutoDXF primero (carpeta VSM real).
         vistos, orden = set(), []
         for grupo in (exactas, equivalentes):
             for r in grupo:
@@ -1268,9 +1269,174 @@ class TabFiles(QWidget):
                     vistos.add(k)
                     orden.append(r)
         con_ad = [r for r in orden if _tiene_autodxf(r)]
-        if con_ad:
-            return con_ad[0]
-        return orden[0] if orden else None
+        sin_ad = [r for r in orden if not _tiene_autodxf(r)]
+        return con_ad + sin_ad
+
+    def obtener_ruta_real_job(
+        self, ruta_raiz, nombre_job, items_hint=None, prefer_ruta=None, product_hint=None
+    ):
+        """Resuelve carpeta de job bajo producto/cliente.
+
+        El VSM a veces nombra el job sin espacios (GIGABOARD5) y en red queda
+        un duplicado con espacios (GIGA BOARD 5). Prefiere la carpeta que tenga
+        MODEL CORE FILES/AutoDXF.
+
+        Desempate (SWO-058 / job en ATC y TANKS):
+        1) ``prefer_ruta`` (job root derivado de ``ruta_exportacion`` en BD)
+        2) ``product_hint`` (p. ej. TANKS del VSM / job_data)
+        3) ``items_hint`` → carpeta que resuelve más DXF de la SWO
+        """
+        orden = self.obtener_rutas_reales_job(ruta_raiz, nombre_job)
+        if not orden:
+            return None
+
+        prefer = self._normalizar_ruta(prefer_ruta) if prefer_ruta else ""
+        if prefer:
+            for r in orden:
+                if self._normalizar_ruta(r) == prefer:
+                    return r
+
+        prod = str(product_hint or "").strip().upper()
+        if prod:
+            prod_key = re.sub(r"[^A-Z0-9]+", "", prod)
+            for r in orden:
+                segs = [re.sub(r"[^A-Z0-9]+", "", s.upper()) for s in Path(r).parts]
+                if prod_key and prod_key in segs:
+                    return r
+                # ATC/COMPARTMENT ↔ ATC_COMPARTMENT
+                if "ATC" in prod_key and any(s.startswith("ATC") for s in segs):
+                    return r
+
+        hints = [str(x or "").strip() for x in (items_hint or []) if str(x or "").strip()]
+        if len(orden) > 1 and hints:
+            mejor, mejor_n = orden[0], -1
+            for ruta_job in orden:
+                autodxf = os.path.join(ruta_job, "MODEL CORE FILES", "AutoDXF")
+                if not os.path.isdir(autodxf):
+                    continue
+                n = sum(
+                    1
+                    for it in hints
+                    if self._buscar_dxf_item_en_autodxf(autodxf, it)
+                )
+                if n > mejor_n:
+                    mejor, mejor_n = ruta_job, n
+            if mejor_n > 0:
+                return mejor
+        return orden[0]
+
+    @staticmethod
+    def _job_root_desde_ruta_exportacion(ruta_exportacion: str | None) -> str:
+        """Sube desde ``…/JOB/MODEL CORE FILES/W.O.…`` hasta la carpeta del job."""
+        ruta = str(ruta_exportacion or "").strip()
+        if not ruta:
+            return ""
+        actual = os.path.normpath(ruta)
+        for _ in range(12):
+            base = os.path.basename(actual).strip().lower()
+            padre = os.path.dirname(actual)
+            if base == "model core files" and padre:
+                return padre
+            if not padre or padre == actual:
+                break
+            actual = padre
+        return ""
+
+    @staticmethod
+    def _producto_cliente_desde_job_root(ruta_job: str) -> tuple[str, str]:
+        """De ``…/PRODUCTO/CLIENTE/JOB`` → (producto, cliente)."""
+        try:
+            p = Path(os.path.normpath(str(ruta_job or "")))
+            parts = list(p.parts)
+            if len(parts) < 3:
+                return "", ""
+            return str(parts[-3]), str(parts[-2])
+        except Exception:
+            return "", ""
+
+    def _ordenar_rutas_job_preferidas(
+        self, rutas_job: list[str], prefer_ruta: str | None = None, product_hint: str | None = None
+    ) -> list[str]:
+        if not rutas_job:
+            return []
+        prefer = self._normalizar_ruta(prefer_ruta) if prefer_ruta else ""
+        prod = str(product_hint or "").strip().upper()
+        prod_key = re.sub(r"[^A-Z0-9]+", "", prod) if prod else ""
+
+        def _score(ruta: str) -> tuple[int, str]:
+            rn = self._normalizar_ruta(ruta)
+            score = 0
+            if prefer and rn == prefer:
+                score += 100
+            if prod_key:
+                segs = [re.sub(r"[^A-Z0-9]+", "", s.upper()) for s in Path(ruta).parts]
+                if prod_key in segs:
+                    score += 50
+                elif "ATC" in prod_key and any(s.startswith("ATC") for s in segs):
+                    score += 50
+            return (-score, rn)
+
+        return sorted(rutas_job, key=_score)
+
+    def _buscar_dxf_item_en_jobs(
+        self, rutas_job, item, prefer_ruta=None, product_hint=None
+    ) -> str:
+        """Busca el DXF del item; prioriza carpeta BD (ruta_exportacion / producto)."""
+        ordenadas = self._ordenar_rutas_job_preferidas(
+            list(rutas_job or []), prefer_ruta=prefer_ruta, product_hint=product_hint
+        )
+        for ruta_job in ordenadas:
+            autodxf = os.path.join(ruta_job, "MODEL CORE FILES", "AutoDXF")
+            hit = self._buscar_dxf_item_en_autodxf(autodxf, item)
+            if hit:
+                return hit
+        return ""
+
+    def _validar_origen_swo(
+        self,
+        *,
+        prefer_ruta: str,
+        product_hint: str,
+        items: list,
+    ) -> dict:
+        """Resume qué se pidió y desde qué producto/carpeta se resolvieron los DXF."""
+        prod_esperado, cli_esperado = self._producto_cliente_desde_job_root(prefer_ruta)
+        if product_hint and not prod_esperado:
+            prod_esperado = product_hint
+        origenes: dict[str, int] = {}
+        mismatch = 0
+        for tup in items or []:
+            ruta_dxf = tup[5] if len(tup) > 5 else ""
+            root = ""
+            actual = os.path.normpath(str(ruta_dxf or ""))
+            for _ in range(16):
+                if os.path.basename(actual).strip().lower() == "model core files":
+                    root = os.path.dirname(actual)
+                    break
+                padre = os.path.dirname(actual)
+                if not padre or padre == actual:
+                    break
+                actual = padre
+            prod, cli = self._producto_cliente_desde_job_root(root)
+            clave = f"{prod}/{cli}" if prod else (root or "?")
+            origenes[clave] = origenes.get(clave, 0) + 1
+            if prefer_ruta and root and self._normalizar_ruta(root) != self._normalizar_ruta(
+                prefer_ruta
+            ):
+                mismatch += 1
+            elif prod_esperado and prod and prod.upper() != prod_esperado.upper():
+                # ATC/COMPARTMENT vs ATC_COMPARTMENT
+                a = re.sub(r"[^A-Z0-9]+", "", prod.upper())
+                b = re.sub(r"[^A-Z0-9]+", "", prod_esperado.upper())
+                if a != b and not (a.startswith("ATC") and b.startswith("ATC")):
+                    mismatch += 1
+        return {
+            "producto": prod_esperado or product_hint or "",
+            "cliente": cli_esperado or "",
+            "carpeta": prefer_ruta or "",
+            "origenes": origenes,
+            "mismatch": mismatch,
+        }
 
     def procesar_descarga_swo(self, swo_id):
         self.app.abrir_ventana_carga(f"Descargando {swo_id}...")
@@ -1285,8 +1451,11 @@ class TabFiles(QWidget):
             con = psycopg2.connect(**cred)
             cur = con.cursor(cursor_factory=RealDictCursor)
             cur.execute(
-                "SELECT job, work_order, calibre, item, COUNT(*) as qty FROM reporte_cortes "
-                "WHERE super_work_order = %s AND estatus = 'Pendiente SWO' GROUP BY job, work_order, calibre, item",
+                "SELECT job, work_order, calibre, item, COUNT(*) as qty, "
+                "MAX(NULLIF(TRIM(ruta_exportacion), '')) AS ruta_exportacion "
+                "FROM reporte_cortes "
+                "WHERE super_work_order = %s AND estatus = 'Pendiente SWO' "
+                "GROUP BY job, work_order, calibre, item",
                 (swo_id,),
             )
             items_db = cur.fetchall()
@@ -1294,11 +1463,39 @@ class TabFiles(QWidget):
             con.close()
             items_procesados, errores, prefijos = [], 0, set()
             self.app.meta_pdf_por_ruta = {}
+            items_hint = [str(r.get("item") or "").strip() for r in items_db]
+            # Fuente de verdad VSM/BD: ruta_exportacion (SWO-058 → TANKS\VANTRAN\25432)
+            prefer_por_job: dict[str, str] = {}
+            product_por_job: dict[str, str] = {}
+            for row in items_db:
+                job = str(row.get("job") or "").strip()
+                if not job or job in prefer_por_job:
+                    continue
+                root = self._job_root_desde_ruta_exportacion(row.get("ruta_exportacion"))
+                if root:
+                    prefer_por_job[job] = root
+                    prod, _cli = self._producto_cliente_desde_job_root(root)
+                    if prod:
+                        product_por_job[job] = prod
+            rutas_por_job: dict[str, list[str]] = {}
             for row in items_db:
                 job, work_order, item = row["job"], row["work_order"], row["item"]
                 prefijo_adn = work_order.strip().upper()
+                if job not in rutas_por_job:
+                    rutas_por_job[job] = self.obtener_rutas_reales_job(
+                        config.RUTA_SERVIDOR_RAIZ, job
+                    )
+                rutas_job = rutas_por_job[job]
+                prefer_ruta = prefer_por_job.get(job, "")
+                product_hint = product_por_job.get(job, "")
                 if prefijo_adn not in prefijos:
-                    ruta_base_job = self.obtener_ruta_real_job(config.RUTA_SERVIDOR_RAIZ, job)
+                    ruta_base_job = self.obtener_ruta_real_job(
+                        config.RUTA_SERVIDOR_RAIZ,
+                        job,
+                        items_hint=items_hint,
+                        prefer_ruta=prefer_ruta or None,
+                        product_hint=product_hint or None,
+                    )
                     c_cli = c_job_com = c_prod = "N/A"
                     if ruta_base_job:
                         archivos_csv = glob.glob(os.path.join(ruta_base_job, f"job_data_{job}.csv"))
@@ -1318,30 +1515,62 @@ class TabFiles(QWidget):
                                         c_job_com = datos[enc.index("JOB")].strip()
                             except Exception:
                                 pass
+                    if product_hint and (not c_prod or c_prod == "N/A"):
+                        c_prod = product_hint
                     registrar_diccionario_swo(swo_id, prefijo_adn, c_cli, c_job_com, c_prod, cred)
                     prefijos.add(prefijo_adn)
+                    if ruta_base_job and job not in prefer_por_job:
+                        prefer_por_job[job] = ruta_base_job
+                        product_por_job[job] = c_prod if c_prod != "N/A" else product_hint
                 partes_cal = row["calibre"].split("_")
                 cal_num = partes_cal[0]
                 mat = partes_cal[1] if len(partes_cal) > 1 else "CARBONO"
-                ruta_base_job = self.obtener_ruta_real_job(config.RUTA_SERVIDOR_RAIZ, job)
-                ruta_dxf = ""
-                if ruta_base_job:
-                    ruta_dxf = self._buscar_dxf_item_en_autodxf(os.path.join(ruta_base_job, "MODEL CORE FILES", "AutoDXF"), item)
+                ruta_dxf = self._buscar_dxf_item_en_jobs(
+                    rutas_job,
+                    item,
+                    prefer_ruta=prefer_ruta or None,
+                    product_hint=product_hint or None,
+                )
                 if ruta_dxf:
                     item_pref = f"{prefijo_adn}__{item}"
                     ruta_norm = self._normalizar_ruta(ruta_dxf)
-                    self.app.meta_pdf_por_ruta[ruta_norm] = {"job": job, "item": item, "work_order": prefijo_adn}
+                    self.app.meta_pdf_por_ruta[ruta_norm] = {
+                        "job": job,
+                        "item": item,
+                        "work_order": prefijo_adn,
+                        "producto": product_hint,
+                        "carpeta_job": prefer_ruta,
+                    }
                     items_procesados.append((item_pref, mat, str(row["qty"]), cal_num, "LISTO", ruta_dxf))
                 else:
                     errores += 1
-            self._ui(self.finalizar_descarga_swo, swo_id, items_procesados, errores)
+            prefer_txt = next(iter(prefer_por_job.values()), "")
+            product_txt = next(iter(product_por_job.values()), "")
+            validacion = self._validar_origen_swo(
+                prefer_ruta=prefer_txt,
+                product_hint=product_txt,
+                items=items_procesados,
+            )
+            self._ui(
+                self.finalizar_descarga_swo,
+                swo_id,
+                items_procesados,
+                errores,
+                validacion,
+            )
         except Exception as e:
             self._ui(self.error_descarga_swo, str(e))
 
-    def finalizar_descarga_swo(self, swo_id, items, errores):
+    def finalizar_descarga_swo(self, swo_id, items, errores, validacion=None):
         self.app.cerrar_ventana_carga()
         if not items:
-            QMessageBox.critical(self, "Fallo Crítico", "No se encontró archivos .dxf para esta SWO.")
+            QMessageBox.critical(
+                self,
+                "Fallo Crítico",
+                "No se encontró archivos .dxf para esta SWO.\n"
+                "Revisa que el job exista bajo el producto correcto "
+                "(p. ej. TANKS vs ATC_COMPARTMENT) y que AutoDXF tenga las piezas.",
+            )
             return
         if errores > 0:
             QMessageBox.warning(self, "Advertencia", f"Faltaron {errores} archivos en la red.")
@@ -1349,7 +1578,30 @@ class TabFiles(QWidget):
         self.app.multiplicador_tanques = 1
         self.app.cargar_datos_parts(items)
         self.app.ir_a_tab("PARTS")
-        QMessageBox.information(self, "SWO Descargada", f"¡{swo_id} inyectada con éxito!")
+        val = validacion or {}
+        prod = val.get("producto") or "?"
+        cli = val.get("cliente") or "?"
+        carpeta = val.get("carpeta") or "?"
+        origenes = val.get("origenes") or {}
+        origen_txt = ", ".join(f"{k}×{n}" for k, n in origenes.items()) or "—"
+        mismatch = int(val.get("mismatch") or 0)
+        detalle = (
+            f"¡{swo_id} inyectada con éxito!\n\n"
+            f"Pedido / origen BD: {prod} · {cli}\n"
+            f"Carpeta job: {carpeta}\n"
+            f"Piezas resueltas: {len(items)}\n"
+            f"DXF desde: {origen_txt}"
+        )
+        if mismatch:
+            QMessageBox.warning(
+                self,
+                "SWO con origen mixto",
+                detalle
+                + f"\n\n⚠ {mismatch} DXF no coinciden con la carpeta BD "
+                f"(posible cruce ATC/TANKS). Revisa PARTS antes de nestear.",
+            )
+        else:
+            QMessageBox.information(self, "SWO Descargada", detalle)
 
     def error_descarga_swo(self, err):
         self.app.cerrar_ventana_carga()

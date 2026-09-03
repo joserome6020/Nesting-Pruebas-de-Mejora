@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-03d — SWO-058: job 25432 ATC vs TANKS (DXF en el producto correcto)
+- Síntoma: bandeja mostraba SWO-058 pero DESCARGAR → «No se encontró archivos
+  .dxf» (o lista vacía visual). Job `25432` existe en ATC_COMPARTMENT y TANKS;
+  ANS tomaba ATC (AutoDXF sin esas piezas). Piezas reales están en TANKS.
+- Fuente de verdad: `ruta_exportacion` en BD
+  (`…\TANKS\VANTRAN\25432\MODEL CORE FILES\…`) + `job_data` Producto=TANKS
+  (coincide con VSM «25432 (VANTRAN - TANKS)»).
+- Fix: multi-ruta + `prefer_ruta`/`product_hint` desde BD; validación al
+  terminar (producto/cliente/carpeta/origen DXF; warning si hay cruce ATC).
+  Diálogo SWO sin stretch al inicio. Candados en `test_job_nombre_vsm.py`.
+
 ### 2026-09-03c — Ultra: cupo en placa = metal + margen (no kerf)
 - Bug: al Cambiar de placa a PLC058 120×48 (pieza 81.037×47.374, margen
   0.200, ENTRE PIEZAS 0.250) Ultra rechazaba todo (`placed=0`). Dos causas:
