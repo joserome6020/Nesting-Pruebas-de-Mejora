@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -128,12 +129,69 @@ def load_cyptube_bridge_prefs() -> dict[str, Any]:
     return prefs
 
 
+def _same_exe(a: str, b: str) -> bool:
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except Exception:
+        return False
+
+
+def _venv_python_beside_cyptube_main(main_py: str) -> str:
+    if not main_py:
+        return ""
+    root = Path(main_py).resolve().parent
+    for candidate in (
+        root / ".venv" / "Scripts" / "python.exe",
+        root / "venv" / "Scripts" / "python.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return ""
+
+
 def resolve_python_exe(prefs: dict[str, Any] | None = None) -> str:
+    """
+    Intérprete para lanzar ``cyptube_main``.
+
+    Con ANS empaquetado (.exe), ``sys.executable`` es el Suite — no Python.
+    En VM hay que configurar ``python_exe`` o tener ``.venv`` junto al repo CypTube.
+    """
     data = prefs if isinstance(prefs, dict) else load_cyptube_bridge_prefs()
     configured = str(data.get("python_exe") or "").strip()
     if configured and os.path.isfile(configured):
         return configured
-    return sys.executable or "python"
+
+    main_py = str(data.get("cyptube_main") or "").strip()
+    venv_py = _venv_python_beside_cyptube_main(main_py)
+    if venv_py:
+        return venv_py
+
+    for name in ("python", "python3"):
+        found = shutil.which(name)
+        if found and os.path.isfile(found):
+            return found
+
+    exe = sys.executable or ""
+    if exe and os.path.isfile(exe) and not getattr(sys, "frozen", False):
+        return exe
+
+    return "python"
+
+
+def python_exe_usable_for_cyptube(prefs: dict[str, Any] | None = None) -> tuple[str, str]:
+    """Returns (python_exe, error_reason). error_reason vacío si OK."""
+    data = prefs if isinstance(prefs, dict) else load_cyptube_bridge_prefs()
+    py = resolve_python_exe(data)
+    if not py or py == "python":
+        return py, (
+            "python_exe no configurado y no hay .venv ni python en PATH "
+            "(obligatorio en VM con ANS .exe)"
+        )
+    if getattr(sys, "frozen", False) and _same_exe(py, sys.executable):
+        return py, "python_exe apunta al .exe del ANS, no a Python"
+    if not os.path.isfile(py):
+        return py, f"python_exe no encontrado: {py}"
+    return py, ""
 
 
 def _norm_key(path: str) -> str:
@@ -294,6 +352,19 @@ def launch_cyptube_auto_nest(
         )
 
     cmd = build_auto_nest_cmd(nest_dir, prefs=data)
+    py_exe, py_err = python_exe_usable_for_cyptube(data)
+    if py_err:
+        msg = f"python inválido para CypTube: {py_err}"
+        log(f"[CyPTube] SKIP — {msg}")
+        return CyptubeBridgeResult(
+            launched=False,
+            skipped=True,
+            reason=msg,
+            cmd=cmd,
+            destino=destino,
+            nesteos_dir=nest_dir,
+        )
+
     cwd = str(Path(main_py).resolve().parent)
     runner = popen or subprocess.Popen
     delay_s = max(0.0, float(data.get("launch_delay_s") or 0.0))

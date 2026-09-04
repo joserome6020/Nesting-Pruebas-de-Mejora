@@ -125,7 +125,7 @@ REGRESIONES = [
     ),
     (
         "test_cyptube_bridge.py",
-        "2026-09-01 - ANS post-export dispara CypTube auto-nest (Modo B)",
+        "2026-09-01/09-04 - CypTube Modo B + python_exe usable en ANS .exe (no frozen)",
     ),
     (
         "test_ui_scale.py",

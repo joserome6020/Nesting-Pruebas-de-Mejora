@@ -203,6 +203,70 @@ def test_path_maps_remap_servidor() -> None:
     assert out.lower().endswith(r"nesteos de cobre")
 
 
+def test_resolve_python_prefiere_venv_junto_a_main() -> None:
+    from modules.dxf_export.cyptube_bridge import resolve_python_exe
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "CypTube"
+        root.mkdir()
+        main = root / "main.py"
+        main.write_text("#", encoding="utf-8")
+        venv_py = root / ".venv" / "Scripts" / "python.exe"
+        venv_py.parent.mkdir(parents=True)
+        venv_py.write_bytes(b"")
+        resolved = resolve_python_exe({"cyptube_main": str(main), "python_exe": ""})
+    assert Path(resolved).resolve() == venv_py.resolve()
+
+
+def test_resolve_python_no_usa_ans_exe_cuando_frozen(monkeypatch) -> None:
+    from modules.dxf_export import cyptube_bridge as bridge
+
+    fake_ans = r"C:\Program Files\Arga\Arga Nesting Suite.exe"
+    monkeypatch.setattr(bridge.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bridge.sys, "executable", fake_ans)
+    monkeypatch.setattr(bridge.shutil, "which", lambda _name: None)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        main = Path(tmp) / "main.py"
+        main.write_text("#", encoding="utf-8")
+        resolved = bridge.resolve_python_exe(
+            {"cyptube_main": str(main), "python_exe": ""}
+        )
+    assert resolved == "python"
+    assert not bridge._same_exe(resolved, fake_ans)
+
+
+def test_launch_skip_si_python_invalido_en_frozen(monkeypatch) -> None:
+    from modules.dxf_export import cyptube_bridge as bridge
+
+    fake_ans = r"C:\Program Files\Arga\Arga Nesting Suite.exe"
+    monkeypatch.setattr(bridge.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bridge.sys, "executable", fake_ans)
+    monkeypatch.setattr(bridge.shutil, "which", lambda _name: None)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        nest = Path(tmp) / "NESTEOS DE COBRE"
+        nest.mkdir()
+        (nest / "cyptube_verticales.json").write_text("{}", encoding="utf-8")
+        main = Path(tmp) / "main.py"
+        main.write_text("#", encoding="utf-8")
+
+        logs: list[str] = []
+        result = bridge.launch_cyptube_auto_nest(
+            nest,
+            log_fn=logs.append,
+            prefs={
+                "enabled": True,
+                "cyptube_main": str(main),
+                "python_exe": "",
+                "skip_wait": True,
+                "new_console": False,
+            },
+        )
+    assert result.skipped and not result.launched
+    assert any("python inválido" in m.lower() or "python_exe" in m for m in logs)
+
+
 def test_config_default_file_existe() -> None:
     cfg = ROOT / "_config" / "cyptube_bridge.json"
     assert cfg.is_file(), cfg
@@ -218,5 +282,6 @@ if __name__ == "__main__":
     test_launch_delay_programa_hilo()
     test_servidor_unc_pasa_al_cmd_sin_romper()
     test_path_maps_remap_servidor()
+    test_resolve_python_prefiere_venv_junto_a_main()
     test_config_default_file_existe()
     print("[OK] CyPTube bridge auto-nest")

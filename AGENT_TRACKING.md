@@ -55,6 +55,12 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-04 — CypTube: Python usable en ANS .exe (VM)
+- `resolve_python_exe` ya no cae en `sys.executable` del Suite frozen.
+  Prefiere `python_exe` config, `.venv` junto a CypTube, o PATH; skip
+  claro si no hay intérprete válido. Candados en `test_cyptube_bridge.py`.
+  (Sin release nuevo; entra en el próximo.)
+
 ### 2026-09-03d — SWO-058: job 25432 ATC vs TANKS (DXF en el producto correcto)
 - Síntoma: bandeja mostraba SWO-058 pero DESCARGAR → «No se encontró archivos
   .dxf» (o lista vacía visual). Job `25432` existe en ATC_COMPARTMENT y TANKS;
