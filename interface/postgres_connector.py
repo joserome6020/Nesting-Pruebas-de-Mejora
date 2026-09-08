@@ -518,7 +518,7 @@ def _asegurar_tablas_pqart(cursor):
             nombre_wo TEXT NOT NULL,
             nombre_dxf TEXT NOT NULL,
             ruta TEXT NOT NULL,
-            tipo_corte VARCHAR(20) NOT NULL,
+            tipo_corte VARCHAR(20) NOT NULL DEFAULT '',
             procesado_con_swo VARCHAR(20) NOT NULL DEFAULT 'NO procesado',
             ls TEXT NOT NULL DEFAULT 'Pendiente',
             sheet_uid TEXT,
@@ -530,7 +530,7 @@ def _asegurar_tablas_pqart(cursor):
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT chk_pqart_wo_tipo_corte
-                CHECK (tipo_corte IN ('CamaLaser', 'RobotLaser', 'Plasma')),
+                CHECK (tipo_corte IN ('', 'CamaLaser', 'RobotLaser', 'Plasma')),
             CONSTRAINT chk_pqart_wo_procesado_swo
                 CHECK (procesado_con_swo IN ('Procesado', 'NO procesado'))
         )
@@ -542,7 +542,7 @@ def _asegurar_tablas_pqart(cursor):
             nombre_swo TEXT NOT NULL,
             nombre_dxf TEXT NOT NULL,
             ruta TEXT NOT NULL,
-            tipo_corte VARCHAR(20) NOT NULL,
+            tipo_corte VARCHAR(20) NOT NULL DEFAULT '',
             ls TEXT NOT NULL DEFAULT 'Pendiente',
             sheet_uid TEXT,
             sheet_code TEXT,
@@ -553,7 +553,7 @@ def _asegurar_tablas_pqart(cursor):
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             CONSTRAINT chk_pqart_swo_tipo_corte
-                CHECK (tipo_corte IN ('CamaLaser', 'RobotLaser', 'Plasma'))
+                CHECK (tipo_corte IN ('', 'CamaLaser', 'RobotLaser', 'Plasma'))
         )
     """)
 
@@ -585,6 +585,34 @@ def _asegurar_tablas_pqart(cursor):
         ALTER TABLE public.pqart_swo
         ADD CONSTRAINT chk_pqart_swo_origen_proceso
         CHECK (origen_proceso_pqart IN ('Pendiente', 'Servidor', 'Local', 'Ambas'))
+    """)
+
+    # tipo_corte vacío: ANS ya no clasifica; otro proceso llena CamaLaser/RobotLaser/Plasma.
+    cursor.execute("""
+        ALTER TABLE public.pqart_wo
+        DROP CONSTRAINT IF EXISTS chk_pqart_wo_tipo_corte
+    """)
+    cursor.execute("""
+        ALTER TABLE public.pqart_wo
+        ALTER COLUMN tipo_corte SET DEFAULT ''
+    """)
+    cursor.execute("""
+        ALTER TABLE public.pqart_wo
+        ADD CONSTRAINT chk_pqart_wo_tipo_corte
+        CHECK (tipo_corte IN ('', 'CamaLaser', 'RobotLaser', 'Plasma'))
+    """)
+    cursor.execute("""
+        ALTER TABLE public.pqart_swo
+        DROP CONSTRAINT IF EXISTS chk_pqart_swo_tipo_corte
+    """)
+    cursor.execute("""
+        ALTER TABLE public.pqart_swo
+        ALTER COLUMN tipo_corte SET DEFAULT ''
+    """)
+    cursor.execute("""
+        ALTER TABLE public.pqart_swo
+        ADD CONSTRAINT chk_pqart_swo_tipo_corte
+        CHECK (tipo_corte IN ('', 'CamaLaser', 'RobotLaser', 'Plasma'))
     """)
 
     cursor.execute("""

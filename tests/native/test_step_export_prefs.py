@@ -19,8 +19,9 @@ def main() -> int:
     assert path.is_file()
     loaded = sep.load_step_export_prefs()
     assert loaded["nesteos_cobre"] is False
-    assert loaded["robot_laser"] is True
+    assert loaded["nestee_dxf"] is True
     assert sep.step_enabled_for_label("NESTEOS DE COBRE") is False
+    assert sep.step_enabled_for_label("NESTEO DXF") is True
     assert sep.step_enabled_for_label("ROBOT LASER + MINI NEST") is True
     assert sep.step_enabled_for_label("ROBOT LASER A") is True
     # restore defaults

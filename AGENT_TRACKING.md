@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-08b — Acero: NESTEO DXF unificado + tipo_corte PQART vacío
+- Carpetas CAMA/ROBOT LASER/PLASMA → una sola `NESTING/NESTEO DXF/{DXF,STEP}`.
+- Export DXF+3D, Crear STEPs (`clasificar_familia`), Ver STEP (`engine.step_paths`)
+  y OCCT/FreeCAD apuntan a esa carpeta (1 job acero, sin 4× conversión).
+- `pqart_*.tipo_corte` queda vacío (`''`); constraint admite vacío + legacy.
+- Plasma en la misma carpeta usa sufijo `_PLASMA.dxf`. Cobre sin cambios.
+- Candados: `test_nestee_dxf_unificado.py`, despachador NESTEO DXF.
+
 ### 2026-09-08 — Amada/FIXTURA: barrenos vs rotación PARTS (RLG)
 - Causa: ROTAR 90° en PARTS acomoda el nest (canal ~5\"), pero el clone de
   CUT_INNER del DXF fuente seguía en orientación vertical → fuera de la hoja

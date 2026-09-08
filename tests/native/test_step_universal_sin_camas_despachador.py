@@ -53,12 +53,14 @@ def test_legacy_sigue_creando_cama_a_b_si_flag_off():
 
 def test_universal_incluye_cama_laser_y_cobre_sin_camas():
     with mock.patch("despachador_nocturno._step_universal_sin_camas", return_value=True):
+        assert clasificar_familia("NESTEO DXF") == "STEEL"
         assert clasificar_familia("CAMA LASER SIN MINI NEST") == "CAMA_LASER"
         assert clasificar_familia("ROBOT LASER + MINI NEST") == "LASER"
         assert clasificar_familia("ROBOT PLASMA") == "PLASMA"
         assert clasificar_familia("NESTEOS DE COBRE") == "COBRE"
     with mock.patch("despachador_nocturno._step_universal_sin_camas", return_value=False):
         assert clasificar_familia("CAMA LASER SIN MINI NEST") is None
+        assert clasificar_familia("NESTEO DXF") == "STEEL"
 
     with tempfile.TemporaryDirectory() as tmp:
         destinos = resolver_destinos_step_cobre(tmp)
@@ -67,8 +69,26 @@ def test_universal_incluye_cama_laser_y_cobre_sin_camas():
         assert float(destinos[0]["off_x"]) == 0.0
 
 
+def test_descubrir_familias_nestee_dxf():
+    from despachador_nocturno import descubrir_familias
+
+    with tempfile.TemporaryDirectory() as tmp:
+        nest = Path(tmp) / "NESTING"
+        fam = nest / "NESTEO DXF"
+        (fam / "DXF").mkdir(parents=True)
+        (fam / "STEP").mkdir(parents=True)
+        (nest / "NESTEOS DE COBRE" / "DXF").mkdir(parents=True)
+        halladas = descubrir_familias(str(nest))
+        tipos = {f["tipo"] for f in halladas}
+        nombres = {f["nombre"] for f in halladas}
+        assert "STEEL" in tipos
+        assert "COBRE" in tipos
+        assert "NESTEO DXF" in nombres
+
+
 if __name__ == "__main__":
     test_universal_un_destino_plano_sin_offset()
     test_legacy_sigue_creando_cama_a_b_si_flag_off()
     test_universal_incluye_cama_laser_y_cobre_sin_camas()
+    test_descubrir_familias_nestee_dxf()
     print("OK test_step_universal_sin_camas_despachador")

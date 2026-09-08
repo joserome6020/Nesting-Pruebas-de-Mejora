@@ -8,29 +8,39 @@ from typing import Any
 
 # Clave interna → etiqueta de carpeta (misma que exporter / árbol NESTING).
 STEP_FOLDER_SPECS: tuple[tuple[str, str], ...] = (
-    ("cama_laser_12kw", "CAMA LASER 12 KW SIN MINI NEST"),
-    ("cama_laser", "CAMA LASER SIN MINI NEST"),
+    ("nestee_dxf", "NESTEO DXF"),
     ("nesteos_cobre", "NESTEOS DE COBRE"),
-    ("robot_laser", "ROBOT LASER + MINI NEST"),
-    ("robot_plasma", "ROBOT PLASMA"),
 )
 
 _DEFAULTS: dict[str, bool] = {k: True for k, _ in STEP_FOLDER_SPECS}
 
+_LEGACY_STEEL_KEYS = (
+    "cama_laser",
+    "cama_laser_12kw",
+    "robot_laser",
+    "robot_plasma",
+)
+
 _LABEL_TO_KEY = {label.upper(): key for key, label in STEP_FOLDER_SPECS}
-# Aliases cortos usados en logs / estimar
+# Aliases cortos usados en logs / estimar + carpetas legacy.
 _LABEL_TO_KEY.update(
     {
-        "CAMA LASER": "cama_laser",
-        "CAMA LASER 12KW": "cama_laser_12kw",
-        "ROBOT LASER": "robot_laser",
-        "ROBOT PLASMA": "robot_plasma",
+        "NESTEO DXF": "nestee_dxf",
+        "NESTEO DXF A": "nestee_dxf",
+        "NESTEO DXF B": "nestee_dxf",
+        "CAMA LASER": "nestee_dxf",
+        "CAMA LASER 12KW": "nestee_dxf",
+        "CAMA LASER SIN MINI NEST": "nestee_dxf",
+        "CAMA LASER 12 KW SIN MINI NEST": "nestee_dxf",
+        "ROBOT LASER": "nestee_dxf",
+        "ROBOT LASER + MINI NEST": "nestee_dxf",
+        "ROBOT LASER A": "nestee_dxf",
+        "ROBOT LASER B": "nestee_dxf",
+        "ROBOT PLASMA": "nestee_dxf",
+        "ROBOT PLASMA A": "nestee_dxf",
+        "ROBOT PLASMA B": "nestee_dxf",
         "NESTEOS DE COBRE": "nesteos_cobre",
         "NESTEOS DE COBRE STEP": "nesteos_cobre",
-        "ROBOT LASER A": "robot_laser",
-        "ROBOT LASER B": "robot_laser",
-        "ROBOT PLASMA A": "robot_plasma",
-        "ROBOT PLASMA B": "robot_plasma",
     }
 )
 
@@ -64,6 +74,9 @@ def load_step_export_prefs() -> dict[str, bool]:
     for key in _DEFAULTS:
         if key in raw:
             out[key] = bool(raw[key])
+    # Migración prefs viejas (4 carpetas acero → nestee_dxf).
+    if "nestee_dxf" not in raw and any(k in raw for k in _LEGACY_STEEL_KEYS):
+        out["nestee_dxf"] = any(bool(raw.get(k, True)) for k in _LEGACY_STEEL_KEYS)
     return out
 
 
@@ -75,6 +88,8 @@ def save_step_export_prefs(prefs: dict[str, Any] | None) -> Path:
         for key in _DEFAULTS:
             if key in prefs:
                 merged[key] = bool(prefs[key])
+        if "nestee_dxf" not in prefs and any(k in prefs for k in _LEGACY_STEEL_KEYS):
+            merged["nestee_dxf"] = any(bool(prefs.get(k, True)) for k in _LEGACY_STEEL_KEYS)
     path.write_text(
         json.dumps(merged, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -85,6 +100,8 @@ def save_step_export_prefs(prefs: dict[str, Any] | None) -> Path:
 def step_folder_enabled(key: str, prefs: dict[str, bool] | None = None) -> bool:
     p = prefs if prefs is not None else load_step_export_prefs()
     k = str(key or "").strip().lower()
+    if k in _LEGACY_STEEL_KEYS:
+        k = "nestee_dxf"
     if k not in _DEFAULTS:
         return True
     return bool(p.get(k, True))
@@ -100,11 +117,12 @@ def step_enabled_for_label(label: str, prefs: dict[str, bool] | None = None) -> 
         # Prefijo flexible (p.ej. "CAMA LASER SIN …")
         su = s.upper()
         for lab, k in (
-            ("CAMA LASER 12 KW", "cama_laser_12kw"),
-            ("CAMA LASER", "cama_laser"),
+            ("NESTEO DXF", "nestee_dxf"),
+            ("CAMA LASER 12 KW", "nestee_dxf"),
+            ("CAMA LASER", "nestee_dxf"),
             ("NESTEOS DE COBRE", "nesteos_cobre"),
-            ("ROBOT LASER", "robot_laser"),
-            ("ROBOT PLASMA", "robot_plasma"),
+            ("ROBOT LASER", "nestee_dxf"),
+            ("ROBOT PLASMA", "nestee_dxf"),
         ):
             if su.startswith(lab):
                 key = k

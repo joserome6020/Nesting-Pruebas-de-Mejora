@@ -209,11 +209,8 @@ def lanzar_occt_robotica(
     Flujo normal: robot A/B; CAMA LASER solo DXF; cobre según formato 3D.
     """
     from .exporter import (
-        RUTA_CAMA_LASER,
-        RUTA_CAMA_LASER_12KW,
+        RUTA_NESTEO_DXF,
         RUTA_NESTEOS_COBRE,
-        RUTA_ROBOT_LASER,
-        RUTA_ROBOT_PLASMA,
         _cu_dxf_requiere_3d,
         _listar_dxfs_en_carpeta,
         _localizar_carpeta_dxf,
@@ -250,11 +247,12 @@ def lanzar_occt_robotica(
             rutas.get(dxf_key, ""),
             job_root,
             {
-                "cama_laser_dxf": RUTA_CAMA_LASER,
+                "nestee_dxf": RUTA_NESTEO_DXF,
+                "cama_laser_dxf": RUTA_NESTEO_DXF,
                 "nesteos_cobre_dxf": RUTA_NESTEOS_COBRE,
-                "cama_laser_12kw_dxf": RUTA_CAMA_LASER_12KW,
-                "robot_laser_dxf": RUTA_ROBOT_LASER,
-                "robot_plasma_dxf": RUTA_ROBOT_PLASMA,
+                "cama_laser_12kw_dxf": RUTA_NESTEO_DXF,
+                "robot_laser_dxf": RUTA_NESTEO_DXF,
+                "robot_plasma_dxf": RUTA_NESTEO_DXF,
             }.get(dxf_key, ""),
         )
         return dxf_dir, _listar_dxfs_en_carpeta(dxf_dir)
@@ -288,55 +286,32 @@ def lanzar_occt_robotica(
     if universal:
         print(
             "[STEP][OCCT] Overlay STEP_UNIVERSAL_SIN_CAMAS activo: "
-            "todas las carpetas DXF acero → 1 STEP sin desfase de camas"
+            "NESTEO DXF → 1 STEP sin desfase de camas"
         )
-        for etiqueta, dxf_key, step_key in (
-            ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
-            ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
-            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step"),
-            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step"),
-        ):
-            if not _step_ok(etiqueta):
-                continue
-            if not rutas.get(dxf_key) and not rutas.get(step_key):
-                continue
-            dxf_dir, candidatos = _dxfs(dxf_key)
+        if rutas.get("nestee_dxf") and _step_ok("NESTEO DXF"):
+            dxf_dir, candidatos = _dxfs("nestee_dxf")
             jobs.append(
                 (
-                    etiqueta,
+                    "NESTEO DXF",
                     list(candidatos),
-                    rutas.get(step_key, ""),
+                    rutas.get("nestee_step", ""),
                     "STEEL",
                     0.0,
                     0.0,
                     0.0,
-                    "NONE",  # coords DXF 1:1
+                    "NONE",
                     dxf_dir,
                 )
             )
     else:
-        # Robot: jobs emparejados A+B (1 build → 2 camas).
-        if rutas.get("robot_laser_dxf") and _step_ok("ROBOT LASER"):
-            dxf_dir, candidatos = _dxfs("robot_laser_dxf")
+        if rutas.get("nestee_dxf") and _step_ok("NESTEO DXF"):
+            dxf_dir, candidatos = _dxfs("nestee_dxf")
             robot_jobs.append(
                 (
-                    "ROBOT LASER",
+                    "NESTEO DXF",
                     list(candidatos),
-                    rutas.get("robot_laser_step_A", ""),
-                    rutas.get("robot_laser_step_B", ""),
-                    "STEEL",
-                    dxf_dir,
-                )
-            )
-
-        if rutas.get("robot_plasma_dxf") and _step_ok("ROBOT PLASMA"):
-            dxf_dir, candidatos = _dxfs("robot_plasma_dxf")
-            robot_jobs.append(
-                (
-                    "ROBOT PLASMA",
-                    list(candidatos),
-                    rutas.get("robot_plasma_step_A", ""),
-                    rutas.get("robot_plasma_step_B", ""),
+                    rutas.get("nestee_step_A", "") or rutas.get("robot_laser_step_A", ""),
+                    rutas.get("nestee_step_B", "") or rutas.get("robot_laser_step_B", ""),
                     "STEEL",
                     dxf_dir,
                 )

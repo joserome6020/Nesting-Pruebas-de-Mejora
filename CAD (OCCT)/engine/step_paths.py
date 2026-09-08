@@ -6,22 +6,27 @@ import re
 from pathlib import Path
 
 _STEP_REL_DIRS = (
-    # Universal (plano) + cobre
+    # Layout actual
     ("NESTEOS DE COBRE", "STEP"),
+    ("NESTEO DXF", "STEP"),
+    # Legacy (exports viejos en disco)
     ("CAMA LASER SIN MINI NEST", "STEP"),
     ("CAMA LASER 12 KW SIN MINI NEST", "STEP"),
     ("ROBOT LASER + MINI NEST", "STEP"),
     ("ROBOT PLASMA", "STEP"),
-    # Legacy Cama A/B (por si quedan exports viejos)
     ("ROBOT LASER + MINI NEST", "STEP", "Cama A"),
     ("ROBOT LASER + MINI NEST", "STEP", "Cama B"),
     ("ROBOT PLASMA", "STEP", "Cama A"),
     ("ROBOT PLASMA", "STEP", "Cama B"),
+    ("NESTEO DXF", "STEP", "Cama A"),
+    ("NESTEO DXF", "STEP", "Cama B"),
 )
 
 # Familias DXF convertibles (paridad exporter / STEP_UNIVERSAL_SIN_CAMAS).
 _DXF_FAMILIAS = (
     "NESTEOS DE COBRE",
+    "NESTEO DXF",
+    # Legacy
     "CAMA LASER SIN MINI NEST",
     "CAMA LASER 12 KW SIN MINI NEST",
     "ROBOT LASER + MINI NEST",

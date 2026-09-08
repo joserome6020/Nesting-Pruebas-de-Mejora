@@ -73,7 +73,11 @@ REGRESIONES = [
     ),
     (
         "test_step_universal_sin_camas_despachador.py",
-        "2026-08-20m - Crear STEPs/despachador: 1 STEP plano sin Cama A/B ni offsets",
+        "2026-08-20m/09-08 - Crear STEPs: 1 STEP plano; reconoce NESTEO DXF",
+    ),
+    (
+        "test_nestee_dxf_unificado.py",
+        "2026-09-08 - acero NESTEO DXF/{DXF,STEP}; tipo_corte PQART vacío",
     ),
     (
         "test_export_sin_lista_largos.py",

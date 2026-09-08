@@ -34,6 +34,8 @@ except Exception:
 OUTER_LAYERS_DEFAULT = ("CUT_OUTER", "OUTER_CUT", "IV_OUTER_PROFILE", "OUTER", "CORTE_EXTERNO")
 INNER_LAYERS_DEFAULT = ("CUT_INNER", "INNER_CUT", "IV_INTERIOR_PROFILES")
 NESTING_DXF_SEGMENTS = (
+    ("NESTEO DXF", "DXF"),
+    # Legacy (exports viejos)
     ("CAMA LASER SIN MINI NEST", "DXF"),
     ("CAMA LASER 12 KW SIN MINI NEST", "DXF"),
     ("ROBOT LASER + MINI NEST", "DXF"),
@@ -775,19 +777,28 @@ def _find_nesting_dxf_anchor(path: Path) -> Optional[int]:
 
 def _infer_robot_plasma_output(src: Path) -> Optional[Path]:
     """
-    Convierte una ruta de DXF de nesting a la ruta equivalente de ROBOT PLASMA/DXF.
-    Ejemplo:
-      .../ROBOT LASER + MINI NEST/DXF/file.dxf
-      -> .../ROBOT PLASMA/DXF/file.dxf
+    Destino compensado plasma bajo NESTEO DXF/DXF (o carpeta legacy).
+    Si ya está en NESTEO DXF, escribe *_PLASMA.dxf en la misma carpeta.
     """
     idx = _find_nesting_dxf_anchor(src)
     if idx is None:
         return None
 
     parts = list(src.parts)
-    parts[idx] = "ROBOT PLASMA"
+    fam = str(parts[idx] or "").upper()
+    if fam == "NESTEO DXF":
+        stem = src.stem
+        if not stem.upper().endswith("_PLASMA"):
+            return src.with_name(f"{stem}_PLASMA{src.suffix}")
+        return src
+
+    parts[idx] = "NESTEO DXF"
     parts[idx + 1] = "DXF"
-    return Path(*parts)
+    out = Path(*parts)
+    stem = out.stem
+    if not stem.upper().endswith("_PLASMA"):
+        out = out.with_name(f"{stem}_PLASMA{out.suffix}")
+    return out
 
 
 def infer_thickness_from_exported_dxf(input_dxf: Path) -> Optional[float]:

@@ -257,7 +257,7 @@ def _seleccionar_job_y_wo(parent, *, modo_servidor: bool) -> Path | None:
             if not wos:
                 vacio = QLabel(
                     "Este job no tiene W.O. con DXF de nesting convertibles "
-                    "(ROBOT LASER / PLASMA / NESTEOS DE COBRE)."
+                    "(NESTEO DXF / NESTEOS DE COBRE; también carpetas legacy)."
                 )
                 vacio.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};padding:12px;")
                 vacio.setWordWrap(True)
@@ -581,7 +581,7 @@ def abrir_crear_steps(tab) -> None:
         f"{ruta_nesting}\n\n"
         "Modo: 1 STEP por DXF (carpeta STEP plana), coords 1:1 "
         "sin Cama A/B ni offsets — igual que Exportar 3D del ANS.\n"
-        "Familias: CAMA LASER, ROBOT LASER/PLASMA, NESTEOS DE COBRE.\n"
+        "Familias: NESTEO DXF (nuevo) + legacy CAMA/ROBOT; NESTEOS DE COBRE.\n"
         f"Motor: {motor_txt}\n\n"
         "¿Continuar?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,

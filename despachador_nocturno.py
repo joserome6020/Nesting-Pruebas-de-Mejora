@@ -338,10 +338,13 @@ def clasificar_familia(nombre_carpeta: str):
     if "NESTEOS DE COBRE" in nombre:
         return "COBRE"
 
+    # Acero globalizado (layout actual).
+    if "NESTEO DXF" in nombre:
+        return "STEEL"
+
     universal = _step_universal_sin_camas()
 
-    # Overlay universal: CAMA LASER también genera 1 STEP (coords 1:1).
-    # Legacy: CAMA LASER solo DXF de corte.
+    # Legacy en disco: carpetas viejas siguen convirtiendo STEP.
     if "CAMA LASER" in nombre:
         return "CAMA_LASER" if universal else None
 
@@ -380,8 +383,8 @@ def resolver_destinos_step_cobre(step_root: str):
 def descubrir_familias(ruta_nesting: str):
     """
     Detecta carpetas con conversión STEP dentro de NESTING.
-    Universal: NESTEOS DE COBRE, CAMA LASER, ROBOT LASER, ROBOT PLASMA.
-    Legacy: NESTEOS DE COBRE, ROBOT LASER, ROBOT PLASMA (sin CAMA LASER).
+    Actual: NESTEOS DE COBRE + NESTEO DXF.
+    Legacy: CAMA LASER / ROBOT LASER / ROBOT PLASMA (exports viejos).
     """
     ruta_nesting = norm_path(ruta_nesting)
     familias = []
@@ -795,7 +798,10 @@ def procesar_ruta_nesting(
         dbg(f"DESTINOS STEP => {fam['destinos_step']}")
 
     if not familias:
-        dbg("❌ No se detectó ninguna subcarpeta candidata (NESTEOS DE COBRE / CAMA LASER / ROBOT LASER / ROBOT PLASMA) dentro de NESTING.")
+        dbg(
+            "❌ No se detectó ninguna subcarpeta candidata dentro de NESTING "
+            "(NESTEO DXF / NESTEOS DE COBRE, o legacy CAMA LASER / ROBOT LASER / ROBOT PLASMA)."
+        )
         return {
             "ok": False,
             "familias_detectadas": 0,

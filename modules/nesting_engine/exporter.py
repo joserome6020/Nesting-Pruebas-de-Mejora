@@ -5,6 +5,9 @@ import shutil
 from shapely.geometry import Polygon, MultiPolygon
 
 
+# Carpeta física única de acero bajo NESTING/ (DXF + STEP).
+RUTA_NESTEO_DXF = "NESTEO DXF"
+# Etiquetas lógicas (LS-READY / plasma / logs). Ya no crean carpetas propias.
 RUTA_CAMA_LASER = "CAMA LASER SIN MINI NEST"
 RUTA_CAMA_LASER_12KW = "CAMA LASER 12 KW SIN MINI NEST"
 RUTA_NESTEOS_COBRE = "NESTEOS DE COBRE"
@@ -13,6 +16,33 @@ RUTA_COBRE_VERTICAL = "VERTICAL"
 RUTA_COBRE_FIXTURA = "FIXTURA"
 RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
+
+
+def _es_familia_acero_nest(nombre_carpeta: str) -> bool:
+    u = str(nombre_carpeta or "").strip().upper()
+    if not u or RUTA_NESTEOS_COBRE.upper() in u:
+        return False
+    if u == RUTA_NESTEO_DXF.upper() or "NESTEO DXF" in u:
+        return True
+    return u in {
+        RUTA_CAMA_LASER.upper(),
+        RUTA_CAMA_LASER_12KW.upper(),
+        RUTA_ROBOT_LASER.upper(),
+        RUTA_ROBOT_PLASMA.upper(),
+    }
+
+
+def _nombre_dxf_plasma_unificado(nombre_archivo: str) -> str:
+    """Evita colisión láser/plasma en la misma carpeta NESTEO DXF/DXF."""
+    nom = str(nombre_archivo or "").strip()
+    if not nom:
+        return "NEST_PLASMA.dxf"
+    stem, ext = os.path.splitext(nom)
+    if not ext:
+        ext = ".dxf"
+    if stem.upper().endswith("_PLASMA"):
+        return f"{stem}{ext}"
+    return f"{stem}_PLASMA{ext}"
 REPORTE_PDF_NESTING = "REPORTE DE NESTEO PDF"
 ARCHIVO_ARGANEST_NESTING = "ARCHIVO DE NESTEO ARGANEST"
 
@@ -456,16 +486,12 @@ def _auditar_steps_en_rutas(
     if universal:
         familias = [
             ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
-            ("CAMA LASER", "cama_laser_dxf", "cama_laser_step"),
-            ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step"),
-            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step"),
-            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step"),
+            ("NESTEO DXF", "nestee_dxf", "nestee_step"),
         ]
     else:
         familias = [
             ("NESTEOS DE COBRE", "nesteos_cobre_dxf", "nesteos_cobre_step"),
-            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step_A"),
-            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step_A"),
+            ("NESTEO DXF", "nestee_dxf", "nestee_step_A"),
         ]
     resumen: dict[str, dict[str, int]] = {}
     fmt_map = {str(k): str(v).lower() for k, v in (cu_formato_por_dxf or {}).items()}
@@ -629,10 +655,12 @@ def _step_dir_key_for_familia(etiqueta: str) -> str:
     universal = step_universal_sin_camas_activo()
     mapping = {
         "NESTEOS DE COBRE": "nesteos_cobre_step",
-        "CAMA LASER": "cama_laser_step",
-        "CAMA LASER 12KW": "cama_laser_12kw_step",
-        "ROBOT LASER": "robot_laser_step" if universal else "robot_laser_step_A",
-        "ROBOT PLASMA": "robot_plasma_step" if universal else "robot_plasma_step_A",
+        "NESTEO DXF": "nestee_step" if universal else "nestee_step_A",
+        # Alias legacy → carpeta unificada
+        "CAMA LASER": "nestee_step" if universal else "nestee_step_A",
+        "CAMA LASER 12KW": "nestee_step" if universal else "nestee_step_A",
+        "ROBOT LASER": "nestee_step" if universal else "nestee_step_A",
+        "ROBOT PLASMA": "nestee_step" if universal else "nestee_step_A",
     }
     return mapping.get(etiqueta, "")
 
@@ -640,10 +668,11 @@ def _step_dir_key_for_familia(etiqueta: str) -> str:
 def _dxf_dir_key_for_familia(etiqueta: str) -> str:
     mapping = {
         "NESTEOS DE COBRE": "nesteos_cobre_dxf",
-        "CAMA LASER": "cama_laser_dxf",
-        "CAMA LASER 12KW": "cama_laser_12kw_dxf",
-        "ROBOT LASER": "robot_laser_dxf",
-        "ROBOT PLASMA": "robot_plasma_dxf",
+        "NESTEO DXF": "nestee_dxf",
+        "CAMA LASER": "nestee_dxf",
+        "CAMA LASER 12KW": "nestee_dxf",
+        "ROBOT LASER": "nestee_dxf",
+        "ROBOT PLASMA": "nestee_dxf",
     }
     return mapping.get(etiqueta, "")
 
@@ -733,8 +762,7 @@ def _validar_steps_tras_export(
             from .nest_poka_yoke import validar_step_cama_ab_pares
 
             for etiqueta, key_a, key_b in (
-                ("ROBOT LASER", "robot_laser_step_A", "robot_laser_step_B"),
-                ("ROBOT PLASMA", "robot_plasma_step_A", "robot_plasma_step_B"),
+                ("NESTEO DXF", "nestee_step_A", "nestee_step_B"),
             ):
                 if not step_enabled_for_label(etiqueta):
                     continue
@@ -1033,25 +1061,9 @@ def _inyectar_metadata_hoja(
     )
 
 def _normalizar_tipo_corte_pqart(nombre_carpeta: str) -> str:
-    carpeta = str(nombre_carpeta or "").strip().upper()
-
-    if carpeta in {
-        RUTA_NESTEOS_COBRE.upper(),
-        RUTA_CAMA_LASER.upper(),
-        RUTA_CAMA_LASER_12KW.upper(),
-        RUTA_COBRE_VERTICAL.upper(),
-        RUTA_COBRE_AMADA.upper(),
-        RUTA_COBRE_FIXTURA.upper(),
-    }:
-        return "CamaLaser"
-
-    if carpeta == RUTA_ROBOT_LASER.upper():
-        return "RobotLaser"
-
-    if carpeta == RUTA_ROBOT_PLASMA.upper():
-        return "Plasma"
-
-    return "CamaLaser"
+    """ANS ya no clasifica CamaLaser/RobotLaser/Plasma: otro proceso llena tipo_corte."""
+    _ = nombre_carpeta
+    return ""
 
 
 def _sanitize_ring_coords(ring, decimals=4):
@@ -1207,11 +1219,12 @@ def lanzar_freecad_robotica(
             rutas.get(dxf_key, ""),
             job_root,
             {
-                "cama_laser_dxf": RUTA_CAMA_LASER,
+                "nestee_dxf": RUTA_NESTEO_DXF,
+                "cama_laser_dxf": RUTA_NESTEO_DXF,
                 "nesteos_cobre_dxf": RUTA_NESTEOS_COBRE,
-                "cama_laser_12kw_dxf": RUTA_CAMA_LASER_12KW,
-                "robot_laser_dxf": RUTA_ROBOT_LASER,
-                "robot_plasma_dxf": RUTA_ROBOT_PLASMA,
+                "cama_laser_12kw_dxf": RUTA_NESTEO_DXF,
+                "robot_laser_dxf": RUTA_NESTEO_DXF,
+                "robot_plasma_dxf": RUTA_NESTEO_DXF,
             }.get(dxf_key, ""),
         )
         out_dir = os.path.normpath(str(rutas.get(out_key or step_key, "") or "").strip())
@@ -1299,27 +1312,17 @@ def lanzar_freecad_robotica(
             )
 
     if universal:
-        # Overlay: 1 STEP por DXF de acero, coords DXF 1:1 (origen NONE, sin A/B).
+        # Overlay: 1 STEP por DXF de acero en NESTEO DXF (coords 1:1).
         print(
             "[STEP] Overlay STEP_UNIVERSAL_SIN_CAMAS activo: "
-            "todas las carpetas DXF acero → 1 STEP sin desfase de camas"
+            "NESTEO DXF → 1 STEP sin desfase de camas"
         )
-        acero_jobs = (
-            ("CAMA LASER", "cama_laser_dxf", "cama_laser_step", "0.0"),
-            ("CAMA LASER 12KW", "cama_laser_12kw_dxf", "cama_laser_12kw_step", "0.0"),
-            ("ROBOT LASER", "robot_laser_dxf", "robot_laser_step", "0.0"),
-            ("ROBOT PLASMA", "robot_plasma_dxf", "robot_plasma_step", str(plasma_off)),
-        )
-        for etiqueta, dxf_key, step_key, plasma_env in acero_jobs:
-            if not _step_ok(etiqueta):
-                continue
-            if not rutas.get(dxf_key) and not rutas.get(step_key):
-                continue
-            os.environ["FREECAD_PLASMA_OFFSET"] = plasma_env
+        if rutas.get("nestee_dxf") and _step_ok("NESTEO DXF"):
+            os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
             _convertir(
-                etiqueta,
-                dxf_key,
-                step_key,
+                "NESTEO DXF",
+                "nestee_dxf",
+                "nestee_step",
                 "NONE",
                 0.0,
                 0.0,
@@ -1328,47 +1331,22 @@ def lanzar_freecad_robotica(
                 material="STEEL",
             )
     else:
-        # Flujo normal: CAMA LASER solo DXF; robot A/B con ancla + offset.
-        # CAMA LASER (acero): solo DXF — no genera STEP.
-
-        # ROBOT LASER
-        if rutas.get("robot_laser_dxf") and _step_ok("ROBOT LASER"):
+        # Legacy: un DXF acero → Cama A/B bajo NESTEO DXF/STEP.
+        if rutas.get("nestee_dxf") and _step_ok("NESTEO DXF"):
             os.environ["FREECAD_PLASMA_OFFSET"] = "0.0"
             _convertir(
-                "ROBOT LASER A",
-                "robot_laser_dxf",
-                "robot_laser_step_A",
+                "NESTEO DXF A",
+                "nestee_dxf",
+                "nestee_step_A",
                 "TR",
                 4235, -1015, -700,
                 prefer_verde=True,
                 material="STEEL",
             )
             _convertir(
-                "ROBOT LASER B",
-                "robot_laser_dxf",
-                "robot_laser_step_B",
-                "BR",
-                4235, 840, -700,
-                prefer_verde=True,
-                material="STEEL",
-            )
-
-        # ROBOT PLASMA
-        if rutas.get("robot_plasma_dxf") and _step_ok("ROBOT PLASMA"):
-            os.environ["FREECAD_PLASMA_OFFSET"] = str(plasma_off)
-            _convertir(
-                "ROBOT PLASMA A",
-                "robot_plasma_dxf",
-                "robot_plasma_step_A",
-                "TR",
-                4235, -1015, -700,
-                prefer_verde=True,
-                material="STEEL",
-            )
-            _convertir(
-                "ROBOT PLASMA B",
-                "robot_plasma_dxf",
-                "robot_plasma_step_B",
+                "NESTEO DXF B",
+                "nestee_dxf",
+                "nestee_step_B",
                 "BR",
                 4235, 840, -700,
                 prefer_verde=True,
@@ -1487,46 +1465,43 @@ def exportar_resultados_a_dxf(
             RUTA_COBRE_FIXTURA,
         ),
         "nesteos_cobre_step": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "STEP"),
-        "cama_laser_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER, "DXF"),
-        "cama_laser_12kw_dxf": os.path.join(job_root_dir, RUTA_CAMA_LASER_12KW, "DXF"),
-        "robot_laser_dxf": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "DXF"),
+        # Acero globalizado: una sola carpeta física NESTEO DXF/{DXF,STEP}.
+        "nestee_dxf": os.path.join(job_root_dir, RUTA_NESTEO_DXF, "DXF"),
         "robot_laser_json_A": os.path.join(
-            job_root_dir, RUTA_ROBOT_LASER, "JSON", "Cama A"
+            job_root_dir, RUTA_NESTEO_DXF, "JSON", "Cama A"
         ),
         "robot_laser_json_B": os.path.join(
-            job_root_dir, RUTA_ROBOT_LASER, "JSON", "Cama B"
+            job_root_dir, RUTA_NESTEO_DXF, "JSON", "Cama B"
         ),
-        "robot_plasma_dxf": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "DXF"),
     }
+    # Alias legacy: mismos paths físicos (evita 4× conversión y callers viejos).
+    for _k in (
+        "cama_laser_dxf",
+        "cama_laser_12kw_dxf",
+        "robot_laser_dxf",
+        "robot_plasma_dxf",
+    ):
+        rutas[_k] = rutas["nestee_dxf"]
     if step_universal_sin_camas_activo():
-        # Overlay: STEP plano por familia (sin Cama A/B).
-        rutas.update(
-            {
-                "cama_laser_step": os.path.join(job_root_dir, RUTA_CAMA_LASER, "STEP"),
-                "cama_laser_12kw_step": os.path.join(
-                    job_root_dir, RUTA_CAMA_LASER_12KW, "STEP"
-                ),
-                "robot_laser_step": os.path.join(job_root_dir, RUTA_ROBOT_LASER, "STEP"),
-                "robot_plasma_step": os.path.join(job_root_dir, RUTA_ROBOT_PLASMA, "STEP"),
-            }
-        )
+        rutas["nestee_step"] = os.path.join(job_root_dir, RUTA_NESTEO_DXF, "STEP")
+        for _k in (
+            "cama_laser_step",
+            "cama_laser_12kw_step",
+            "robot_laser_step",
+            "robot_plasma_step",
+        ):
+            rutas[_k] = rutas["nestee_step"]
     else:
-        rutas.update(
-            {
-                "robot_laser_step_A": os.path.join(
-                    job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama A"
-                ),
-                "robot_laser_step_B": os.path.join(
-                    job_root_dir, RUTA_ROBOT_LASER, "STEP", "Cama B"
-                ),
-                "robot_plasma_step_A": os.path.join(
-                    job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama A"
-                ),
-                "robot_plasma_step_B": os.path.join(
-                    job_root_dir, RUTA_ROBOT_PLASMA, "STEP", "Cama B"
-                ),
-            }
+        rutas["nestee_step_A"] = os.path.join(
+            job_root_dir, RUTA_NESTEO_DXF, "STEP", "Cama A"
         )
+        rutas["nestee_step_B"] = os.path.join(
+            job_root_dir, RUTA_NESTEO_DXF, "STEP", "Cama B"
+        )
+        rutas["robot_laser_step_A"] = rutas["nestee_step_A"]
+        rutas["robot_laser_step_B"] = rutas["nestee_step_B"]
+        rutas["robot_plasma_step_A"] = rutas["nestee_step_A"]
+        rutas["robot_plasma_step_B"] = rutas["nestee_step_B"]
 
     for r in rutas.values():
         os.makedirs(r, exist_ok=True)
@@ -1915,12 +1890,9 @@ def exportar_resultados_a_dxf(
                 # RTZCU de barra Amada: a DXF/STEP normal (barrenado Amada es por pieza).
                 if carpeta_principal == RUTA_NESTEOS_COBRE:
                     path_principal = os.path.join(rutas["nesteos_cobre_dxf"], nombre_archivo)
-                elif carpeta_principal == RUTA_CAMA_LASER:
-                    path_principal = os.path.join(rutas["cama_laser_dxf"], nombre_archivo)
-                elif carpeta_principal == RUTA_CAMA_LASER_12KW:
-                    path_principal = os.path.join(rutas["cama_laser_12kw_dxf"], nombre_archivo)
                 else:
-                    path_principal = os.path.join(rutas["robot_laser_dxf"], nombre_archivo)
+                    # Acero: siempre NESTEO DXF/DXF (sin las 4 carpetas de canal).
+                    path_principal = os.path.join(rutas["nestee_dxf"], nombre_archivo)
 
                 try:
                     if es_cu_sin_gap_dxf:
@@ -2134,14 +2106,15 @@ def exportar_resultados_a_dxf(
                     })
 
             if generar_plasma_hoja and lista_plasma:
-                path_plasma = os.path.join(rutas["robot_plasma_dxf"], nombre_archivo)
-                log(f"-> EXPORT PLASMA [{RUTA_ROBOT_PLASMA}]: {path_plasma}")
+                nombre_plasma = _nombre_dxf_plasma_unificado(nombre_archivo)
+                path_plasma = os.path.join(rutas["nestee_dxf"], nombre_plasma)
+                log(f"-> EXPORT PLASMA [{RUTA_NESTEO_DXF}]: {path_plasma}")
                 export_nest_to_dxf(
                     path_plasma,
                     sheet_info,
                     lista_plasma,
-                    title=f"{RUTA_ROBOT_PLASMA} | {clave}",
-                    canal=RUTA_ROBOT_PLASMA,
+                    title=f"{RUTA_NESTEO_DXF} | {clave}",
+                    canal=RUTA_NESTEO_DXF,
                     strict=True,
                 )
 
