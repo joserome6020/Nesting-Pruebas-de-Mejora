@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-08 — Amada/FIXTURA: barrenos vs rotación PARTS (RLG)
+- Causa: ROTAR 90° en PARTS acomoda el nest (canal ~5\"), pero el clone de
+  CUT_INNER del DXF fuente seguía en orientación vertical → fuera de la hoja
+  engañada (+10\") y aborto `Geometría de corte fuera de la barra`.
+- Fix: `orient_amada_strip_canal_as_y` + rotación 90° al clonar barrenos fuente;
+  si aún quedan fuera, fallback a barrenos del nest.
+- Candado: `test_amada_rlg_parts_vertical_source_holes_inside_sheet` /
+  `test_amada_rlg_nest_rotado_fuente_vertical`.
+
 ### 2026-09-04 — CypTube: Python usable en ANS .exe (VM)
 - `resolve_python_exe` ya no cae en `sys.executable` del Suite frozen.
   Prefiere `python_exe` config, `.venv` junto a CypTube, o PATH; skip

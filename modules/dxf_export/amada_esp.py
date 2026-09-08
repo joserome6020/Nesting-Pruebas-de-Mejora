@@ -53,26 +53,69 @@ def _shift_ring_xy(ring: Sequence, dx: float, dy: float) -> list[tuple[float, fl
     return out
 
 
+def _rotate_ring_90_ccw(ring: Sequence) -> list[tuple[float, float]]:
+    """(x, y) → (−y, x)."""
+    out: list[tuple[float, float]] = []
+    for pt in ring or []:
+        try:
+            out.append((-float(pt[1]), float(pt[0])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def orient_amada_strip_canal_as_y(
+    outer: Sequence,
+    holes: Sequence | None = None,
+    *,
+    canal_mm: float = 5.0 * _IN_TO_MM,
+) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]], bool]:
+    """
+    Deja el lado más cercano al canal Amada (5\") como alto Y.
+
+    PARTS a veces muestra 5×9.5 (Y largo); Amada/FIXTURA necesita largo en X y
+    ~5\" en Y + colchón 10\". Si no se rota, barrenos del DXF fuente (ya en
+    orientación tira) quedan fuera del rectángulo engañado.
+    """
+    bb = _ring_bbox(outer)
+    if bb is None:
+        return [], [], False
+    minx, miny, maxx, maxy = bb
+    w = float(maxx) - float(minx)
+    h = float(maxy) - float(miny)
+    need_rot = abs(h - float(canal_mm)) > abs(w - float(canal_mm))
+    if not need_rot:
+        outer_o = _shift_ring_xy(outer, -minx, -miny)
+        holes_o = [_shift_ring_xy(hh, -minx, -miny) for hh in (holes or []) if hh]
+        return outer_o, holes_o, False
+
+    outer_r = _rotate_ring_90_ccw(outer)
+    holes_r = [_rotate_ring_90_ccw(hh) for hh in (holes or []) if hh]
+    bb2 = _ring_bbox(outer_r)
+    if bb2 is None:
+        return [], [], False
+    dx, dy = -float(bb2[0]), -float(bb2[1])
+    outer_o = _shift_ring_xy(outer_r, dx, dy)
+    holes_o = [_shift_ring_xy(hh, dx, dy) for hh in holes_r]
+    return outer_o, holes_o, True
+
+
 def build_amada_esp_padded_geometry(
     outer: Sequence,
     holes: Sequence | None = None,
     *,
     padding_in: float = AMADA_ESP_SOFT_PADDING_IN,
+    canal_mm: float = 5.0 * _IN_TO_MM,
 ) -> tuple[list[tuple[float, float]], list[list[tuple[float, float]]], float, float]:
     """
-    Normaliza la pieza al origen, coloca el colchón de 10\" abajo y sube
-    barrenos a la banda superior (5\" reales de cobre).
+    Normaliza la pieza al origen, orienta canal 5\" en Y, coloca el colchón de
+    10\" abajo y sube barrenos a la banda superior (5\" reales de cobre).
 
     Devuelve (outer_padded, holes_shifted, largo_mm, alto_total_mm).
     """
-    bb = _ring_bbox(outer)
-    if bb is None:
-        return [], [], 0.0, 0.0
-    minx, miny, maxx, maxy = bb
-    dx, dy = -float(minx), -float(miny)
-    outer_o = _shift_ring_xy(outer, dx, dy)
-    holes_o = [_shift_ring_xy(h, dx, dy) for h in (holes or [])]
-
+    outer_o, holes_o, _rot = orient_amada_strip_canal_as_y(
+        outer, holes, canal_mm=canal_mm
+    )
     bb2 = _ring_bbox(outer_o)
     if bb2 is None:
         return [], [], 0.0, 0.0
@@ -145,6 +188,94 @@ def _write_amada_inner_preserved(msp, entity, layer: str) -> int:
     return 0
 
 
+def _source_outer_bbox_in(part_doc) -> tuple[float, float, float, float] | None:
+    """BBox del CUT_OUTER en unidades del archivo (pulgadas en Processed Files)."""
+    from ezdxf import bbox as ezdxf_bbox
+
+    from modules.nest_exporter import _clasificar_capa
+
+    staged = []
+    for entity in part_doc.modelspace():
+        if _clasificar_capa(str(getattr(entity.dxf, "layer", "") or "")) != "outer":
+            continue
+        if entity.dxftype() not in (
+            "LWPOLYLINE",
+            "POLYLINE",
+            "LINE",
+            "ARC",
+            "CIRCLE",
+            "ELLIPSE",
+            "SPLINE",
+        ):
+            continue
+        staged.append(entity)
+    if not staged:
+        return None
+    try:
+        ext = ezdxf_bbox.extents(staged)
+        return (
+            float(ext.extmin.x),
+            float(ext.extmin.y),
+            float(ext.extmax.x),
+            float(ext.extmax.y),
+        )
+    except Exception:
+        return None
+
+
+def _amada_source_to_strip_matrix(
+    *,
+    ox_in: float,
+    oy_in: float,
+    src_w_in: float,
+    src_h_in: float,
+    pad_mm: float,
+    canal_mm: float = 5.0 * _IN_TO_MM,
+) -> Matrix44:
+    """
+    Origen → (opcional) 90° CCW si el DXF fuente trae el canal en X
+    (p. ej. PARTS 5×9.5 vertical) → mm → sube colchón +10\".
+
+    Misma lógica que orient_amada_strip_canal_as_y: Amada quiere ~5\" en Y.
+
+    Nota: en ezdxf, ``A @ B`` aplica A primero (izquierda→derecha).
+    """
+    need_rot = abs(float(src_h_in) * _IN_TO_MM - float(canal_mm)) > abs(
+        float(src_w_in) * _IN_TO_MM - float(canal_mm)
+    )
+    m = Matrix44.translate(-float(ox_in), -float(oy_in), 0.0)
+    if need_rot:
+        m = m @ Matrix44.z_rotate(math.radians(90.0))
+        # Tras R90 CCW el bbox queda en (−h, 0)–(0, w); empujar a origen.
+        m = m @ Matrix44.translate(float(src_h_in), 0.0, 0.0)
+    m = m @ Matrix44.scale(_IN_TO_MM, _IN_TO_MM, _IN_TO_MM)
+    m = m @ Matrix44.translate(0.0, float(pad_mm), 0.0)
+    return m
+
+
+def _entities_inside_amada_sheet(
+    entities,
+    sheet_len: float,
+    sheet_w: float,
+    *,
+    margin_mm: float = 1.5,
+) -> bool:
+    if sheet_len <= 0.5 or sheet_w <= 0.5:
+        return True
+    from ezdxf import bbox as ezdxf_bbox
+
+    try:
+        ext = ezdxf_bbox.extents(list(entities))
+    except Exception:
+        return True
+    return (
+        float(ext.extmin.x) >= -margin_mm
+        and float(ext.extmin.y) >= -margin_mm
+        and float(ext.extmax.x) <= float(sheet_len) + margin_mm
+        and float(ext.extmax.y) <= float(sheet_w) + margin_mm
+    )
+
+
 def export_amada_holes_from_source_dxf(
     msp,
     doc,
@@ -154,18 +285,24 @@ def export_amada_holes_from_source_dxf(
     placement: dict | None = None,
 ) -> bool:
     """
-    Clona CUT_INNER del Processed Files 1:1 (círculos + ranuras con bulge).
-    Escala pulgadas→mm, normaliza al origen del outer y sube barrenos al colchón +10\".
-    """
-    import ezdxf
+    Clona CUT_INNER del Processed Files (círculos + ranuras con bulge).
 
+    Escala pulgadas→mm, alinea orientación al canal Amada (~5\" en Y) aunque
+    PARTS haya rotado el nest y el DXF fuente siga en vertical, normaliza al
+    origen del outer y sube barrenos al colchón +10\". Si tras el clone quedan
+    fuera de la hoja engañada, falla para que el caller use barrenos del nest.
+    """
     from modules.nest_exporter import (
         _clasificar_capa,
         _dxf_outer_origin_mm,
         _import_layers_from_source,
+        _msp_count,
+        _msp_snapshot,
     )
 
     try:
+        import ezdxf  # noqa: F401
+
         part_doc = ezdxf.readfile(str(ruta))
     except Exception:
         return False
@@ -179,16 +316,30 @@ def export_amada_holes_from_source_dxf(
     if not inners:
         return False
 
-    ox_mm, oy_mm = _dxf_outer_origin_mm(str(ruta)) or (0.0, 0.0)
-    ox_in = float(ox_mm) / _IN_TO_MM
-    oy_in = float(oy_mm) / _IN_TO_MM
-    # ezdxf transform aplica el factor derecho primero: T_orig @ S @ T_pad.
-    m = (
-        Matrix44.translate(-ox_in, -oy_in, 0.0)
-        @ Matrix44.scale(_IN_TO_MM, _IN_TO_MM, _IN_TO_MM)
-        @ Matrix44.translate(0.0, float(pad_mm), 0.0)
-    )
+    bb = _source_outer_bbox_in(part_doc)
+    if bb is not None:
+        ox_in, oy_in = float(bb[0]), float(bb[1])
+        src_w_in = max(1e-9, float(bb[2]) - float(bb[0]))
+        src_h_in = max(1e-9, float(bb[3]) - float(bb[1]))
+        m = _amada_source_to_strip_matrix(
+            ox_in=ox_in,
+            oy_in=oy_in,
+            src_w_in=src_w_in,
+            src_h_in=src_h_in,
+            pad_mm=pad_mm,
+        )
+    else:
+        ox_mm, oy_mm = _dxf_outer_origin_mm(str(ruta)) or (0.0, 0.0)
+        ox_in = float(ox_mm) / _IN_TO_MM
+        oy_in = float(oy_mm) / _IN_TO_MM
+        # Sin outer medible: solo origen + escala + pad (sin rotar).
+        m = (
+            Matrix44.translate(-ox_in, -oy_in, 0.0)
+            @ Matrix44.scale(_IN_TO_MM, _IN_TO_MM, _IN_TO_MM)
+            @ Matrix44.translate(0.0, float(pad_mm), 0.0)
+        )
 
+    count_before = _msp_count(msp)
     added = 0
     for ent in inners:
         try:
@@ -199,6 +350,19 @@ def export_amada_holes_from_source_dxf(
             continue
     if added <= 0:
         return False
+
+    new_ents = _msp_snapshot(msp)[count_before:]
+    place = placement if isinstance(placement, dict) else {}
+    sheet_l = float(place.get("cu_bar_l_mm") or 0.0)
+    sheet_w = float(place.get("cu_bar_w_mm") or 0.0)
+    if new_ents and not _entities_inside_amada_sheet(new_ents, sheet_l, sheet_w):
+        for e in new_ents:
+            try:
+                msp.delete_entity(e)
+            except Exception:
+                pass
+        return False
+
     _import_layers_from_source(part_doc, doc, {"CUT_INNER"})
     return True
 

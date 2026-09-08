@@ -299,6 +299,244 @@ def test_amada_barrenos_source_dxf_escala_pulgadas_a_mm() -> None:
         )
 
 
+def test_amada_rlg_parts_vertical_source_holes_inside_sheet() -> None:
+    """
+    Candado RLG-J-13-4KA-S: PARTS en 5×9.525 (canal en X); Amada necesita
+    tira 9.525×5 + colchón 10\". El DXF fuente sigue vertical — los barrenos
+    clonados deben rotar con el strip o el export abortaba fuera de hoja.
+    """
+    from modules.nest_exporter import DxfExportValidationError
+
+    canal_in = 5.0
+    largo_in = 9.525
+    hole_r_in = 0.218
+    # 2×3 barrenos en el marco vertical PARTS (X=canal, Y=largo).
+    holes_xy_in = [
+        (1.5, 1.5),
+        (3.5, 1.5),
+        (1.5, 4.75),
+        (3.5, 4.75),
+        (1.5, 8.0),
+        (3.5, 8.0),
+    ]
+    pad_mm = AMADA_ESP_SOFT_PADDING_IN * MM
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src_path = os.path.join(tmp, "RLG-J-13-4KA-S, CU, QTY 1, Cal 0.25.dxf")
+        src = ezdxf.new("R2000")
+        src.layers.new("CUT_INNER", dxfattribs={"color": 3})
+        src.layers.new("CUT_OUTER", dxfattribs={"color": 1})
+        msp = src.modelspace()
+        msp.add_lwpolyline(
+            [
+                (0, 0),
+                (canal_in, 0),
+                (canal_in, largo_in),
+                (0, largo_in),
+            ],
+            close=True,
+            dxfattribs={"layer": "CUT_OUTER"},
+        )
+        for cx, cy in holes_xy_in:
+            msp.add_circle((cx, cy), hole_r_in, dxfattribs={"layer": "CUT_INNER"})
+        src.saveas(src_path)
+
+        # Nest / PARTS: misma orientación vertical 5×9.525 (antes de Amada).
+        outer_mm = [
+            (0.0, 0.0),
+            (canal_in * MM, 0.0),
+            (canal_in * MM, largo_in * MM),
+            (0.0, largo_in * MM),
+        ]
+        holes_mm = [
+            [
+                ((cx - hole_r_in) * MM, (cy - hole_r_in) * MM),
+                ((cx + hole_r_in) * MM, (cy - hole_r_in) * MM),
+                ((cx + hole_r_in) * MM, (cy + hole_r_in) * MM),
+                ((cx - hole_r_in) * MM, (cy + hole_r_in) * MM),
+            ]
+            for cx, cy in holes_xy_in
+        ]
+        outer_p, holes_p, len_out, alto_out = build_amada_esp_padded_geometry(
+            outer_mm, holes_mm
+        )
+        assert math.isclose(len_out, largo_in * MM, abs_tol=0.5), (
+            f"Amada debe poner largo en X (~{largo_in}\"), got {len_out / MM:.3f}\""
+        )
+        assert math.isclose(alto_out, canal_in * MM + pad_mm, abs_tol=0.5), (
+            f"alto Amada debe ser canal+10\", got {alto_out / MM:.3f}\""
+        )
+
+        placement = {
+            "part_name": "RLG-J-13-4KA-S",
+            "outer": outer_p,
+            "holes": holes_p,
+            "marks": [],
+            "ruta": src_path,
+            "ruta_origen": src_path,
+            "cu_amada_outer_padded": True,
+            "cu_amada_pieza_export": True,
+            "cu_largos_piece": True,
+            "cu_bar_w_mm": alto_out,
+            "cu_bar_l_mm": len_out,
+            "cu_especial_vertical": True,
+            "omit_cut_cu": True,
+            "closed": True,
+            "orig_minx": 0.0,
+            "orig_miny": 0.0,
+            "shift_x": 0.0,
+            "shift_y": 0.0,
+            "rot_deg": 0.0,
+            "rot_origin_cx": 0.0,
+            "rot_origin_cy": 0.0,
+        }
+        sheet = {
+            "modo_largos_cu": True,
+            "cu_export_amada": True,
+            "cu_modo_separacion_barra": "con_gap",
+            "export_3d_format": "dxf",
+            "length": len_out,
+            "width": alto_out,
+            "Length": len_out,
+            "Width": alto_out,
+            "cu_rtz_activo": False,
+            "cu_rtz_inicio_mm": 0.0,
+        }
+        out = os.path.join(tmp, "NESTING_0.25_RLG_J_13_4KA_S.dxf")
+        try:
+            export_cobre_hoja_to_dxf(
+                out,
+                sheet,
+                [placement],
+                title="AMADA/FIXTURA | RLG",
+                draw_holes=True,
+                draw_marks=False,
+                strict=True,
+                force_horizontal=True,
+            )
+        except DxfExportValidationError as exc:
+            raise AssertionError(
+                f"FIXTURA RLG no debe abortar por barrenos fuera de hoja: {exc}"
+            ) from exc
+
+        doc = ezdxf.readfile(out)
+        circles = [
+            e
+            for e in doc.modelspace()
+            if str(getattr(e.dxf, "layer", "") or "").upper() == "CUT_INNER"
+            and e.dxftype() == "CIRCLE"
+        ]
+        assert len(circles) == 6, f"esperaba 6 barrenos, hay {len(circles)}"
+        for c in circles:
+            assert float(c.dxf.center.y) >= pad_mm - 0.5
+            assert float(c.dxf.center.y) <= alto_out + 0.5
+            assert float(c.dxf.center.x) >= -0.5
+            assert float(c.dxf.center.x) <= len_out + 0.5
+            # Tras rotar 90° CCW: (x,y)_src → (largo−y, x) en marco tira.
+            # cy_src≈1.5 → X≈(9.525-1.5)*25.4; cy_src≈8 → X menor.
+            assert float(c.dxf.center.y) <= pad_mm + canal_in * MM + 0.5
+
+
+def test_amada_rlg_nest_rotado_fuente_vertical() -> None:
+    """Nest ya con canal en Y (ROTAR 90° PARTS) + DXF fuente aún 5×9.525 vertical."""
+    from modules.nest_exporter import DxfExportValidationError
+
+    canal_in = 5.0
+    largo_in = 9.525
+    hole_r_in = 0.218
+    holes_xy_in = [
+        (1.5, 1.5),
+        (3.5, 1.5),
+        (1.5, 4.75),
+        (3.5, 4.75),
+        (1.5, 8.0),
+        (3.5, 8.0),
+    ]
+    pad_mm = AMADA_ESP_SOFT_PADDING_IN * MM
+    with tempfile.TemporaryDirectory() as tmp:
+        src_path = os.path.join(tmp, "RLG-J-13-4KA-S.dxf")
+        src = ezdxf.new("R2000")
+        src.layers.new("CUT_INNER", dxfattribs={"color": 3})
+        src.layers.new("CUT_OUTER", dxfattribs={"color": 1})
+        msp = src.modelspace()
+        msp.add_lwpolyline(
+            [(0, 0), (canal_in, 0), (canal_in, largo_in), (0, largo_in)],
+            close=True,
+            dxfattribs={"layer": "CUT_OUTER"},
+        )
+        for cx, cy in holes_xy_in:
+            msp.add_circle((cx, cy), hole_r_in, dxfattribs={"layer": "CUT_INNER"})
+        src.saveas(src_path)
+
+        outer_nest = [
+            (0.0, 0.0),
+            (largo_in * MM, 0.0),
+            (largo_in * MM, canal_in * MM),
+            (0.0, canal_in * MM),
+        ]
+        outer_p, holes_p, len_out, alto_out = build_amada_esp_padded_geometry(
+            outer_nest, []
+        )
+        placement = {
+            "part_name": "RLG-J-13-4KA-S",
+            "outer": outer_p,
+            "holes": holes_p,
+            "marks": [],
+            "ruta": src_path,
+            "ruta_origen": src_path,
+            "cu_amada_outer_padded": True,
+            "cu_amada_pieza_export": True,
+            "cu_largos_piece": True,
+            "cu_bar_w_mm": alto_out,
+            "cu_bar_l_mm": len_out,
+            "cu_especial_vertical": True,
+            "omit_cut_cu": True,
+            "closed": True,
+            "orig_minx": 0.0,
+            "orig_miny": 0.0,
+            "shift_x": 0.0,
+            "shift_y": 0.0,
+            "rot_deg": 0.0,
+            "rot_origin_cx": 0.0,
+            "rot_origin_cy": 0.0,
+        }
+        sheet = {
+            "modo_largos_cu": True,
+            "cu_export_amada": True,
+            "cu_modo_separacion_barra": "con_gap",
+            "export_3d_format": "dxf",
+            "length": len_out,
+            "width": alto_out,
+            "Length": len_out,
+            "Width": alto_out,
+        }
+        out = os.path.join(tmp, "NESTING_RLG_ROT.dxf")
+        try:
+            export_cobre_hoja_to_dxf(
+                out,
+                sheet,
+                [placement],
+                title="AMADA/FIXTURA | RLG rot",
+                draw_holes=True,
+                draw_marks=False,
+                strict=True,
+                force_horizontal=True,
+            )
+        except DxfExportValidationError as exc:
+            raise AssertionError(
+                f"Nest rotado + fuente vertical no debe abortar: {exc}"
+            ) from exc
+        circles = [
+            e
+            for e in ezdxf.readfile(out).modelspace()
+            if e.dxftype() == "CIRCLE"
+        ]
+        assert len(circles) == 6
+        for c in circles:
+            assert pad_mm - 0.5 <= float(c.dxf.center.y) <= alto_out + 0.5
+            assert -0.5 <= float(c.dxf.center.x) <= len_out + 0.5
+
+
 def test_cobre_export_limmax_cubre_geometria() -> None:
     """AutoCAD: LIMMAX y VPORT *Active deben cubrir la barra (no A4 / no centro 0,0)."""
     bar_l = 900.0
