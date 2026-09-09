@@ -501,28 +501,35 @@ def _auditar_steps_en_rutas(
         candidatos_dxf = _listar_dxfs_en_carpeta(dxf_dir) if dxf_dir else []
         n_dxf = len(candidatos_dxf)
         n_dxf_3d = n_dxf
-        if fmt_map and etiqueta == "NESTEOS DE COBRE":
-            n_dxf_3d = sum(
-                1
-                for p in candidatos_dxf
-                if _cu_dxf_requiere_3d(fmt_map.get(os.path.basename(p), "step"))
-            )
         n_step = 0
-        if dxf_dir and fmt_map and etiqueta == "NESTEOS DE COBRE":
-            try:
-                from freecad_runner import _cad_path_for_dxf
+        if etiqueta == "NESTEOS DE COBRE":
+            # Cobre: solo los DXF del manifiesto (con_gap / RTZCU) piden STEP.
+            # Default "dxf" si no están en fmt_map — evita contar leftovers/CyPTube
+            # Corte-Marcaje como "con 3D" mientras OCCT los salta (0 STEP falso).
+            if not fmt_map:
+                n_dxf_3d = 0
+            else:
+                n_dxf_3d = sum(
+                    1
+                    for p in candidatos_dxf
+                    if _cu_dxf_requiere_3d(
+                        fmt_map.get(os.path.basename(p), "dxf")
+                    )
+                )
+            if dxf_dir and fmt_map and step_dir:
+                try:
+                    from freecad_runner import _cad_path_for_dxf
 
-                for dxf_path in candidatos_dxf:
-                    nombre = os.path.basename(dxf_path)
-                    fmt = fmt_map.get(nombre, "step")
-                    if not _cu_dxf_requiere_3d(fmt):
-                        continue
-                    # Solo STEP (IGES ya no se genera).
-                    cad_path = _cad_path_for_dxf(dxf_path, step_dir, "step")
-                    if os.path.isfile(cad_path) and os.path.getsize(cad_path) > 512:
-                        n_step += 1
-            except Exception:
-                pass
+                    for dxf_path in candidatos_dxf:
+                        nombre = os.path.basename(dxf_path)
+                        fmt = fmt_map.get(nombre, "dxf")
+                        if not _cu_dxf_requiere_3d(fmt):
+                            continue
+                        cad_path = _cad_path_for_dxf(dxf_path, step_dir, "step")
+                        if os.path.isfile(cad_path) and os.path.getsize(cad_path) > 512:
+                            n_step += 1
+                except Exception:
+                    pass
         else:
             if step_dir and os.path.isdir(step_dir):
                 n_step = len(glob.glob(os.path.join(step_dir, "*.step")))
@@ -734,7 +741,7 @@ def _validar_steps_tras_export(
                     for dxf_path in _listar_dxfs_en_carpeta(dxf_dir):
                         nombre = os.path.basename(dxf_path)
                         if fmt_map and etiqueta == "NESTEOS DE COBRE":
-                            fmt = fmt_map.get(nombre, "step")
+                            fmt = fmt_map.get(nombre, "dxf")
                             if not _cu_dxf_requiere_3d(fmt):
                                 continue
                         if not step_dir:
@@ -1573,13 +1580,6 @@ def exportar_resultados_a_dxf(
             es_cu_rtz_virtual = bool(hoja.get("cu_rtz_virtual"))
             es_cu_hoja = bool(hoja.get("modo_largos_cu"))
             es_cu_especial = es_cu_hoja and _hoja_cobre_es_especial(hoja)
-            es_cu_sin_gap_dxf = (
-                es_cu_hoja
-                and not es_cu_rtz_virtual
-                and str(hoja.get("cu_modo_separacion_barra") or "").strip().lower()
-                == "sin_gap"
-                and str(hoja.get("export_3d_format") or "dxf").strip().lower() == "dxf"
-            )
 
             if es_swo_export and swo_ref.upper().startswith("SWO"):
                 order_label = swo_ref
@@ -1621,6 +1621,17 @@ def exportar_resultados_a_dxf(
                         f"hoja {hoja.get('sheet_code') or sheet_seq}: RTZCU → "
                         f"con_gap / STEP (horizontal, CUT_OUTER cerrado; sin vertical CyPTube)"
                     )
+
+            # Después de fijar export_3d_format (incl. cu_force_dxf_step → step).
+            # Antes se evaluaba con el valor viejo/default y podía abrir CyPTube
+            # con force STEPs, o al revés cerrarlo mal.
+            es_cu_sin_gap_dxf = (
+                es_cu_hoja
+                and not es_cu_rtz_virtual
+                and str(hoja.get("cu_modo_separacion_barra") or "").strip().lower()
+                == "sin_gap"
+                and str(hoja.get("export_3d_format") or "dxf").strip().lower() == "dxf"
+            )
 
             sheet_info = {
                 "length": float(w_mm),

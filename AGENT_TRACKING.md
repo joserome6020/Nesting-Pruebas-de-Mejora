@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-09 — Cobre STEP: auditoría no inventa «DXF con 3D»
+- Bug: con carpeta `NESTEOS DE COBRE/DXF` llena (leftovers) y manifiesto
+  `cu_formato_por_dxf` vacío o parcial, la auditoría usaba default `step` →
+  mensaje falso «N DXF con 3D, 0 STEP» y abortaba el export aunque OCCT
+  correctamente saltara esos DXF (solo-DXF / CyPTube / fuera del mapa).
+- Fix: cobre sin mapa → `dxf_3d=0`; fuera del mapa → default `dxf`.
+- CyPTube: el switch «solo STEPs» (`cu_force_dxf_step`) sigue desactivando
+  `sin_gap` a propósito (no es regresión). Gate CyPTube se evalúa *después*
+  de fijar `export_3d_format`.
+- Candado: `test_cobre_step_audit_fmt_map.py`.
+
 ### 2026-09-08b — Acero: NESTEO DXF unificado + tipo_corte PQART vacío
 - Carpetas CAMA/ROBOT LASER/PLASMA → una sola `NESTING/NESTEO DXF/{DXF,STEP}`.
 - Export DXF+3D, Crear STEPs (`clasificar_familia`), Ver STEP (`engine.step_paths`)
