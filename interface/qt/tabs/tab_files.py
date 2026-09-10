@@ -1103,6 +1103,24 @@ class TabFiles(QWidget):
 
     def procesar_seleccion(self, job_info):
         job_name = str(job_info.get("job_name") or "job")
+        try:
+            from modules.nesting_engine.api_client import cad_review_permite_nestear
+
+            ok_cad, msg_cad = cad_review_permite_nestear(job_name)
+            if not ok_cad:
+                QMessageBox.critical(
+                    self,
+                    "REV. CAD — no se puede importar",
+                    msg_cad,
+                )
+                return
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "REV. CAD — no se puede importar",
+                f"Error al validar REV. CAD:\n{exc}",
+            )
+            return
         if hasattr(self.app, "abrir_ventana_carga"):
             self.app.abrir_ventana_carga(f"Importando {job_name}…")
         threading.Thread(

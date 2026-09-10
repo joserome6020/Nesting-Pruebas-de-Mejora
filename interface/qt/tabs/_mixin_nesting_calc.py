@@ -441,6 +441,27 @@ class NestingCalcMixin:
         if self._bloquear_si_dxf_no_apto(titulo="DXF no aptos — no se puede nestear"):
             return
 
+        # Gate REV. CAD: solo jobs que existen en VSM; manual/FS libre.
+        try:
+            from modules.nesting_engine.api_client import cad_review_permite_nestear
+
+            job_act = str(getattr(self.app, "job_activo", "") or "").strip()
+            ok_cad, msg_cad = cad_review_permite_nestear(job_act)
+            if not ok_cad:
+                QMessageBox.critical(
+                    self,
+                    "REV. CAD — no se puede nestear",
+                    msg_cad,
+                )
+                return
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "REV. CAD — no se puede nestear",
+                f"Error al validar REV. CAD:\n{exc}",
+            )
+            return
+
         if self._tiene_nesting_activo():
             resp = QMessageBox.question(
                 self,
