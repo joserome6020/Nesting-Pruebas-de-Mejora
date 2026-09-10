@@ -77,9 +77,19 @@ REGRESIONES = [
     ),
     (
         "test_nestee_dxf_unificado.py",
+        "2026-09-08 - acero NESTEO DXF/{DXF,STEP} unificado",
+    ),
+    (
         "test_pqart_tipo_corte_vacio.py",
+        "2026-09-09 - PQART CHECK permite tipo_corte vacío",
+    ),
+    (
         "test_cobre_step_audit_fmt_map.py",
-        "2026-09-08 - acero NESTEO DXF/{DXF,STEP}; tipo_corte PQART vacío",
+        "2026-09-09 - cobre STEP audit: mapa vacío ≠ todos 3D",
+    ),
+    (
+        "test_vsm_auth_complete_401.py",
+        "2026-09-10 - VSM /complete 401: auth + skip si WO ya fusionadas",
     ),
     (
         "test_export_sin_lista_largos.py",

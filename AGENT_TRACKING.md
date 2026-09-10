@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-10b — VSM :8010 auth + no tumbar export si WO ya fusionadas
+- pi_client: login cookie/Bearer (CENTRALIZED_AUTH_* /
+  centralized_auth.local.json); /complete 401 con WO 100% en SWO → OK
+  (Reanudar sync / export SWO no aborta).
+- Candado 	est_vsm_auth_complete_401.py. Fix: HTTP 401 no se reintenta
+  (HTTPError es subclase de URLError).
+- Skip también si el JobRead ya trae historial de fusión a SWO (sin PATCH).
+- Tarjetón UI: marcar Ingeniería Finalizado en VSM (la BD Docker del :8010
+  no es la del host :5437; creds nuevas ahí no autentican el API).
+
 ### 2026-09-10 — PQART tipo_corte vacío + barra barra DXF multilote
 - Causa del `chk_pqart_wo_tipo_corte`: ANS escribe `tipo_corte=''` (NESTEO DXF),
   pero `_asegurar_tablas_pqart` nunca se llamaba → BD viva seguía sin admitir `''`.

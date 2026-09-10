@@ -125,6 +125,7 @@ _LEGACY_MUTABLE_ENTRIES: tuple[tuple[str, bool], ...] = (
     ("historial_jobs.json", False),
     ("inventario_remanentes.csv", False),
     ("herinox_sync.local.json", False),
+    ("centralized_auth.local.json", False),
     ("configuracion_nesting.json", False),
     ("Plates.xlsx", False),
     ("cache", True),
@@ -321,6 +322,18 @@ HERINOX_API_BASE_URL = os.getenv("HERINOX_API_BASE_URL", "http://192.168.2.80:40
 # Recomendado: definirlas como variables de entorno del sistema.
 HERINOX_SYNC_EMAIL = os.getenv("HERINOX_SYNC_EMAIL", "").strip()
 HERINOX_SYNC_PASSWORD = os.getenv("HERINOX_SYNC_PASSWORD", "").strip()
+
+# =========================================================
+# --- VSM / CentralizedSystem (tablero Nesting :8010) ---
+# =========================================================
+# Mutaciones (/jobs/.../complete, auto-advance SWO) exigen sesión.
+# Env o archivo local (gitignored), mismo patrón que Herinox.
+CENTRALIZED_AUTH_SETTINGS_FILE = ruta_persistente("centralized_auth.local.json")
+CENTRALIZED_AUTH_EMAIL = os.getenv("CENTRALIZED_AUTH_EMAIL", "").strip()
+CENTRALIZED_AUTH_PASSWORD = os.getenv("CENTRALIZED_AUTH_PASSWORD", "").strip()
+CENTRALIZED_BASE_URL = os.getenv(
+    "CENTRALIZED_BASE_URL", "http://192.168.2.80:8010"
+).strip().rstrip("/")
 
 # Timeout de llamadas HTTP.
 HERINOX_SYNC_TIMEOUT_SECONDS = int(os.getenv("HERINOX_SYNC_TIMEOUT_SECONDS", "8"))

@@ -33,6 +33,7 @@ _ref_oficial/
 Contexto_ArgaNestingSuite.txt
 Contexto_Rapido/
 herinox_sync.local.json
+centralized_auth.local.json
 
 # Builds temporales C++
 modules/nesting_engine/cpp/build_*/
@@ -49,6 +50,7 @@ Plates.xlsx
 
 # Generated local config & database files
 herinox_sync.local.json
+centralized_auth.local.json
 historial_jobs.json
 inventario_remanentes.csv
 

@@ -1,4 +1,6 @@
+import http.cookiejar
 import json
+import os
 import re
 import time
 import urllib.request
@@ -7,7 +9,10 @@ import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 
-CENTRALIZED_BASE_URL = "http://192.168.2.80:8003"
+# VSM / Nesting board productivo (:8010 exige sesión para mutaciones).
+CENTRALIZED_BASE_URL = os.getenv(
+    "CENTRALIZED_BASE_URL", "http://192.168.2.80:8010"
+).rstrip("/")
 CONTPAQ_PO_SWO_URL = "http://192.168.2.80:8006/run"
 CONTPAQ_PO_VALIDATE_URL = "http://192.168.2.80:8006/validate"
 CONTPAQ_PO_WO_URL = "http://192.168.2.80:8005/crearPedido/"
@@ -16,6 +21,14 @@ WEB_REPORTE_URL = "http://192.168.2.80:8000/api/reportes/guardar"
 # Reintentos ante timeouts/caídas momentáneas de red (muy comunes en LAN).
 _API_RETRIES = 3
 _API_RETRY_SLEEP_S = 1.25
+
+# Sesión VSM (cookie httponly + Bearer opcional vía ?para_iframe=true).
+_CENTRALIZED_COOKIE_JAR = http.cookiejar.CookieJar()
+_CENTRALIZED_OPENER = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(_CENTRALIZED_COOKIE_JAR)
+)
+_CENTRALIZED_BEARER: str | None = None
+_CENTRALIZED_LOGIN_OK = False
 
 
 @dataclass(frozen=True)
@@ -79,9 +92,10 @@ def _json_export_safe(value):
 
 
 def _is_retryable_http_error(exc: Exception) -> bool:
+    # HTTPError es subclase de URLError: hay que filtrar 4xx antes del catch-all.
+    if isinstance(exc, urllib.error.HTTPError):
+        return int(getattr(exc, "code", 0) or 0) >= 500
     if isinstance(exc, (TimeoutError, urllib.error.URLError)):
-        return True
-    if isinstance(exc, urllib.error.HTTPError) and int(getattr(exc, "code", 0) or 0) >= 500:
         return True
     msg = str(exc or "").lower()
     return any(
@@ -117,6 +131,187 @@ def _with_retries(operation_label: str, fn, *, retries: int = _API_RETRIES):
     if last_exc:
         raise last_exc
     raise RuntimeError(f"{operation_label}: sin resultado")
+
+
+def _centralized_auth_settings_path() -> Path:
+    try:
+        import config
+
+        return Path(config.ruta_persistente("centralized_auth.local.json"))
+    except Exception:
+        return Path(__file__).resolve().parents[2] / "centralized_auth.local.json"
+
+
+def _load_centralized_creds() -> tuple[str, str]:
+    """Credenciales VSM: env CENTRALIZED_AUTH_* o centralized_auth.local.json."""
+    email = os.getenv("CENTRALIZED_AUTH_EMAIL", "").strip()
+    password = os.getenv("CENTRALIZED_AUTH_PASSWORD", "").strip()
+    if email and password:
+        return email, password
+    path = _centralized_auth_settings_path()
+    if not path.is_file():
+        return email, password
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        print(f"[CENTRALIZED][AUTH] No se pudo leer {path.name}: {exc}")
+        return email, password
+    if not isinstance(data, dict):
+        return email, password
+    email = email or str(data.get("email") or data.get("usuario") or "").strip()
+    password = password or str(data.get("password") or data.get("clave") or "").strip()
+    return email, password
+
+
+def ensure_centralized_session(*, force: bool = False) -> bool:
+    """
+    Login VSM (POST /auth/login?para_iframe=true).
+
+    Devuelve True si hay sesión usable (cookie y/o Bearer). Sin credenciales
+    configuradas devuelve False sin lanzar — las lecturas públicas siguen OK.
+    """
+    global _CENTRALIZED_BEARER, _CENTRALIZED_LOGIN_OK
+    if _CENTRALIZED_LOGIN_OK and not force:
+        return True
+
+    email, password = _load_centralized_creds()
+    if not email or not password:
+        _CENTRALIZED_LOGIN_OK = False
+        _CENTRALIZED_BEARER = None
+        return False
+
+    url = f"{CENTRALIZED_BASE_URL}/auth/login?para_iframe=true"
+    payload = json.dumps({"email": email, "password": password}).encode("utf-8")
+    req = urllib.request.Request(url, data=payload, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with _CENTRALIZED_OPENER.open(req, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            body = json.loads(raw) if raw.strip() else {}
+            if not _http_ok(resp.getcode()):
+                print(
+                    f"[CENTRALIZED][AUTH] Login HTTP {resp.getcode()} "
+                    f"para {email!r}."
+                )
+                _CENTRALIZED_LOGIN_OK = False
+                return False
+            token = body.get("access_token") if isinstance(body, dict) else None
+            _CENTRALIZED_BEARER = str(token).strip() if token else None
+            _CENTRALIZED_LOGIN_OK = True
+            print(f"[CENTRALIZED][AUTH] Sesión VSM OK ({email}).")
+            return True
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", errors="replace")[:240]
+        print(f"[CENTRALIZED][AUTH] Login HTTP {err.code}: {detail}")
+        _CENTRALIZED_LOGIN_OK = False
+        _CENTRALIZED_BEARER = None
+        return False
+    except Exception as exc:
+        print(f"[CENTRALIZED][AUTH] Login falló: {exc}")
+        _CENTRALIZED_LOGIN_OK = False
+        _CENTRALIZED_BEARER = None
+        return False
+
+
+def _apply_centralized_auth_headers(req: urllib.request.Request) -> None:
+    if _CENTRALIZED_BEARER:
+        req.add_header("Authorization", f"Bearer {_CENTRALIZED_BEARER}")
+
+
+def _centralized_urlopen(req: urllib.request.Request, timeout: float):
+    """Abre URL con cookie jar; ante 401 fuerza re-login una vez y reintenta."""
+    ensure_centralized_session()
+    _apply_centralized_auth_headers(req)
+    try:
+        return _CENTRALIZED_OPENER.open(req, timeout=timeout)
+    except urllib.error.HTTPError as err:
+        if int(getattr(err, "code", 0) or 0) != 401:
+            raise
+        # Releer el cuerpo para no dejar el socket a medias; luego reauth.
+        try:
+            err.read()
+        except Exception:
+            pass
+        if not ensure_centralized_session(force=True):
+            raise
+        # urllib.Request no permite mutar body fácilmente: reconstruir.
+        data = req.data
+        method = req.get_method()
+        headers = {k: v for k, v in req.header_items() if k.lower() != "authorization"}
+        req2 = urllib.request.Request(req.full_url, data=data, method=method)
+        for k, v in headers.items():
+            req2.add_header(k, v)
+        _apply_centralized_auth_headers(req2)
+        return _CENTRALIZED_OPENER.open(req2, timeout=timeout)
+
+
+def _nesting_db_conf() -> dict:
+    try:
+        import config
+
+        return {
+            "host": getattr(config, "NESTING_DB_HOST", "192.168.2.80"),
+            "dbname": getattr(config, "NESTING_DB_NAME", "nestingpro_db"),
+            "user": getattr(config, "NESTING_DB_USER", "postgres"),
+            "password": getattr(config, "NESTING_DB_PASSWORD", "nesting123"),
+            "port": getattr(config, "NESTING_DB_PORT", "5433"),
+            "connect_timeout": 8,
+        }
+    except Exception:
+        return {
+            "host": "192.168.2.80",
+            "dbname": "nestingpro_db",
+            "user": "postgres",
+            "password": "nesting123",
+            "port": "5433",
+            "connect_timeout": 8,
+        }
+
+
+def job_nesting_totalmente_fusionado(job_number: str) -> bool:
+    """
+    True si el job ya no tiene WO pendientes de fusión en nestingpro_db.
+
+    Todas las WO del job tienen ``super_work_order`` (p. ej. Pendiente SWO).
+    Sirve para no tumbar export SWO cuando VSM /complete responde 401 pero el
+    tablero de fusión ya se resolvió a mano.
+    """
+    job = str(job_number or "").strip()
+    if not job:
+        return False
+    try:
+        import psycopg2
+    except Exception:
+        return False
+    try:
+        with psycopg2.connect(**_nesting_db_conf()) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      COUNT(DISTINCT BTRIM(work_order)) AS total_wo,
+                      COUNT(DISTINCT BTRIM(work_order)) FILTER (
+                        WHERE NULLIF(BTRIM(COALESCE(super_work_order, '')), '') IS NOT NULL
+                      ) AS fused_wo,
+                      COUNT(DISTINCT BTRIM(work_order)) FILTER (
+                        WHERE NULLIF(BTRIM(COALESCE(super_work_order, '')), '') IS NULL
+                          AND COALESCE(estatus, '') ILIKE 'Pendiente%%'
+                          AND COALESCE(estatus, '') NOT ILIKE 'Pendiente SWO%%'
+                      ) AS pending_fuse
+                    FROM reporte_cortes
+                    WHERE BTRIM(job) = %s
+                      AND NULLIF(BTRIM(COALESCE(work_order, '')), '') IS NOT NULL
+                    """,
+                    (job,),
+                )
+                row = cur.fetchone() or (0, 0, 0)
+                total_wo = int(row[0] or 0)
+                fused_wo = int(row[1] or 0)
+                pending_fuse = int(row[2] or 0)
+                return total_wo > 0 and fused_wo >= total_wo and pending_fuse == 0
+    except Exception as exc:
+        print(f"[CENTRALIZED][WARN] No se pudo auditar fusión de '{job}': {exc}")
+        return False
 
 
 def enviar_reporte_a_api(nombre_swo, datos_resultados):
@@ -155,7 +350,12 @@ def _patch_json(url, payload_dict, timeout=8, *, incluir_respuesta: bool = False
         data = json.dumps(payload_dict).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="PATCH")
         req.add_header("Content-Type", "application/json")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        opener = (
+            _centralized_urlopen
+            if str(url).startswith(CENTRALIZED_BASE_URL)
+            else urllib.request.urlopen
+        )
+        with opener(req, timeout=timeout) as resp:
             code = resp.getcode()
             raw = resp.read().decode("utf-8")
             body = json.loads(raw) if raw.strip() else {}
@@ -171,8 +371,13 @@ def _post_json(url, payload_dict, timeout=15):
         data = json.dumps(payload_dict).encode("utf-8")
         req = urllib.request.Request(url, data=data, method="POST")
         req.add_header("Content-Type", "application/json")
+        opener = (
+            _centralized_urlopen
+            if str(url).startswith(CENTRALIZED_BASE_URL)
+            else urllib.request.urlopen
+        )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with opener(req, timeout=timeout) as resp:
                 raw = resp.read().decode("utf-8")
                 body = json.loads(raw) if raw.strip() else {}
                 return resp.getcode(), body
@@ -285,7 +490,12 @@ def avanzar_swo_centralizado(swo_id):
 def _get_json(url, timeout=8):
     def _once():
         req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        opener = (
+            _centralized_urlopen
+            if str(url).startswith(CENTRALIZED_BASE_URL)
+            else urllib.request.urlopen
+        )
+        with opener(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     return _with_retries(f"GET {url}", _once)
@@ -484,6 +694,77 @@ def resolver_job_centralizado(job_number: str) -> tuple[str | None, dict | None]
     return resolved or None, mejor
 
 
+def cad_review_permite_nestear(job_number: str) -> tuple[bool, str]:
+    """
+    Gate REV. CAD para jobs del VSM.
+
+    - Job NO existe en VSM (manual / solo carpeta en el 80) → ALLOW.
+    - Job SÍ existe en VSM → exige cad_review_status == 'released'.
+    - Error de red / API → DENY (fail-closed para jobs VSM ambiguos).
+
+    Returns:
+        (ok, mensaje) — ok=False → bloquear import/nest; mensaje para UI.
+    """
+    job = str(job_number or "").strip()
+    placeholders = {"", "NESTING", "JOB", "PENDIENTE"}
+    if not job or job.upper() in placeholders:
+        return True, ""
+
+    try:
+        resolved, data = resolver_job_centralizado(job)
+    except Exception as exc:
+        return (
+            False,
+            "No se pudo consultar el VSM para REV. CAD.\n"
+            f"Job: {job}\nError: {exc}\n\n"
+            "Si el trabajo pertenece al VSM, verifique la API (:8010) "
+            "y que REV. CAD esté Liberado.\n"
+            "Trabajos manuales (fuera del VSM) no deberían fallar aquí; "
+            "revise la conexión o el número de job.",
+        )
+
+    if not resolved or not data:
+        # No está en CentralizedSystem → nestear libre (FS / manual).
+        return True, ""
+
+    status = str(data.get("cad_review_status") or "pending").strip().lower()
+    if status == "released":
+        return True, ""
+
+    label = {
+        "pending": "pendiente",
+        "rejected": "rechazado",
+        "in_progress": "en progreso",
+    }.get(status, status or "pendiente")
+
+    return (
+        False,
+        f"No se puede nestear el job VSM '{resolved}' sin REV. CAD Liberado.\n"
+        f"Estado actual: {label}.\n\n"
+        "Complete la revisión en Ingeniería (VSM) y Acepte/Liberar "
+        "antes de importar o nestear.\n"
+        "Jobs cargados solo en el servidor (fuera del VSM) no requieren esto.",
+    )
+
+
+def _job_historial_ya_fusionado(data: dict | None) -> bool:
+    """True si el JobRead ya muestra etapas/notas de fusión a SWO en VSM."""
+    if not isinstance(data, dict):
+        return False
+    for entry in data.get("history") or []:
+        if not isinstance(entry, dict):
+            continue
+        stage = str(entry.get("stage") or "").strip().lower()
+        notes = str(entry.get("notes") or "")
+        notes_l = notes.lower()
+        if stage in {"nesting", "fusion", "production", "exported"}:
+            return True
+        if "fusi" in notes_l and "swo" in notes_l:
+            return True
+    status = str(data.get("status") or "").strip().lower()
+    return bool(status and status not in {"pending", "inventor"})
+
+
 def _job_ingenieria_finalizada(data: dict | None) -> bool:
     """
     Reconoce la finalización con el mismo contrato que usa VSM.
@@ -600,6 +881,20 @@ def avanzar_job_centralizado(job_number):
                 f"Ya estaba en estado '{job_status}'.",
             )
 
+        if _job_historial_ya_fusionado(data) or job_nesting_totalmente_fusionado(
+            job_number
+        ):
+            print(
+                f"[CENTRALIZED] Job '{job_number}' ya tiene fusión a SWO "
+                "(historial VSM y/o nesting). Se omite /complete."
+            )
+            return ApiOperationResult(
+                True,
+                "avance VSM Job",
+                str(job_number).strip(),
+                "Ya fusionado a SWO; no se requiere /complete de Ingeniería.",
+            )
+
         if job_status == "pending":
             print(f"[CENTRALIZED] Moviendo Job '{job_number}' de pending -> inventor...")
             code = _patch_json(
@@ -617,22 +912,79 @@ def avanzar_job_centralizado(job_number):
             print(f"[CENTRALIZED] Job '{job_number}' movido a Ingenieria En Proceso.")
 
         print(f"[CENTRALIZED] Marcando Job '{job_number}' como Ingenieria Finalizado...")
-        complete_result = _patch_json(
-            f"{base_url}/jobs/{job_id}/complete",
-            {},
-            incluir_respuesta=True,
-        )
+        try:
+            complete_result = _patch_json(
+                f"{base_url}/jobs/{job_id}/complete",
+                {},
+                incluir_respuesta=True,
+            )
+        except urllib.error.HTTPError as err:
+            code = int(getattr(err, "code", 0) or 0)
+            raw = ""
+            try:
+                raw = err.read().decode("utf-8", errors="replace")
+            except Exception:
+                raw = str(err)
+            if code == 401 and job_nesting_totalmente_fusionado(job_number):
+                print(
+                    f"[CENTRALIZED][WARN] /complete 401 para '{job_number}', pero "
+                    "todas sus WO ya están fusionadas a SWO en nesting. "
+                    "Se omite el avance del tarjetón VSM."
+                )
+                return ApiOperationResult(
+                    True,
+                    "avance VSM Job",
+                    str(job_number).strip(),
+                    "WO ya fusionadas; /complete omitido tras 401 (configure "
+                    "CENTRALIZED_AUTH_* para mover el tarjetón).",
+                    code,
+                )
+            detail = raw[:240] or "No se pudo completar ingeniería."
+            if code == 401:
+                detail = (
+                    "VSM respondió 401 (No autenticado) en /complete. "
+                    "Configure CENTRALIZED_AUTH_EMAIL/PASSWORD o "
+                    "centralized_auth.local.json. "
+                    f"Detalle: {detail}"
+                )
+            return ApiOperationResult(
+                False,
+                "avance VSM Job",
+                str(job_number).strip(),
+                detail,
+                code,
+            )
         if isinstance(complete_result, tuple):
             code, complete_body = complete_result
         else:
             # Compatibilidad con mocks/implementaciones anteriores.
             code, complete_body = complete_result, {}
         if not _http_ok(code):
+            if int(code or 0) == 401 and job_nesting_totalmente_fusionado(job_number):
+                print(
+                    f"[CENTRALIZED][WARN] /complete HTTP {code} para '{job_number}', "
+                    "pero nesting ya tiene todas las WO fusionadas a SWO."
+                )
+                return ApiOperationResult(
+                    True,
+                    "avance VSM Job",
+                    str(job_number).strip(),
+                    "WO ya fusionadas; /complete no autenticado omitido.",
+                    code,
+                    complete_body if isinstance(complete_body, dict) else None,
+                )
+            detail = "No se pudo completar ingeniería."
+            if int(code or 0) == 401:
+                detail = (
+                    "VSM 401 en /complete: falta sesión. "
+                    "Configure CENTRALIZED_AUTH_EMAIL/PASSWORD o "
+                    "centralized_auth.local.json."
+                )
             return ApiOperationResult(
                 False,
                 "avance VSM Job",
                 str(job_number).strip(),
-                "No se pudo completar ingeniería.",
+                detail,
                 code,
             )
 
