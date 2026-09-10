@@ -34,6 +34,23 @@ def test_estimar_dxf_sin_gap_solo_corte():
     assert _dxfs_por_hoja_en_export("0.25_CU", _hoja_sin_gap(), cu_sin_marcaje=False) == 2
 
 
+def test_estimar_dxf_acero_una_por_placa():
+    """NESTEO DXF unificado: 1 DXF por placa (no ×4 carpetas legacy)."""
+    hojas = [
+        {
+            "placa_w": 3048.0,
+            "placa_h": 1524.0,
+            "piezas": [{"nombre": f"P{i}", "poligonos": [[(0, 0), (10, 0), (10, 10), (0, 10)]]}],
+        }
+        for i in range(39)
+    ]
+    res = {"0.0747_A 36": {"hojas": hojas}}
+    d, _ = estimar_conteos_export(res, generar_step=False, cu_sin_marcaje=True)
+    assert d == 39, d
+    assert _dxfs_por_hoja_en_export("0.0747_A 36", hojas[0], cu_sin_marcaje=True) == 1
+
+
 if __name__ == "__main__":
     test_estimar_dxf_sin_gap_solo_corte()
+    test_estimar_dxf_acero_una_por_placa()
     print("[OK] export DXF count estimate")

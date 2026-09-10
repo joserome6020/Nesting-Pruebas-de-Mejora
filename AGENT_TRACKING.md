@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-10 — PQART tipo_corte vacío + barra barra DXF multilote
+- Causa del `chk_pqart_wo_tipo_corte`: ANS escribe `tipo_corte=''` (NESTEO DXF),
+  pero `_asegurar_tablas_pqart` nunca se llamaba → BD viva seguía sin admitir `''`.
+- Fix: llamar la migración al inicio de `guardar_nesting_en_postgresql` (ya
+  aplicada en nestingpro_db). Candado `test_pqart_tipo_corte_vacio.py`.
+- Barra DXF: reenvía `dxf_total` del exporter; log por lote; mensaje
+  `Lote i/n` para no confundir PLACAS del lote visible con el total multilote.
+  Candado acero 1 DXF/placa en `test_export_dxf_count_estimate.py`.
+
 ### 2026-09-09 — Cobre STEP: auditoría no inventa «DXF con 3D»
 - Bug: con carpeta `NESTEOS DE COBRE/DXF` llena (leftovers) y manifiesto
   `cu_formato_por_dxf` vacío o parcial, la auditoría usaba default `step` →

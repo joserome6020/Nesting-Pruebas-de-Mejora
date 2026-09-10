@@ -77,6 +77,7 @@ REGRESIONES = [
     ),
     (
         "test_nestee_dxf_unificado.py",
+        "test_pqart_tipo_corte_vacio.py",
         "test_cobre_step_audit_fmt_map.py",
         "2026-09-08 - acero NESTEO DXF/{DXF,STEP}; tipo_corte PQART vacío",
     ),

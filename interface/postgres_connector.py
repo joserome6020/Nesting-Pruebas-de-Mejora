@@ -962,6 +962,11 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
         contador_rtz_sobrante = inicializar_contador_rtz_sobrante(resultados_motor)
         contador_rtzc_sobrante = inicializar_contador_rtzc_sobrante(resultados_motor)
 
+        # Migrar CHECK tipo_corte ('' permitido). Antes _asegurar_tablas_pqart
+        # existía pero nunca se llamaba → BD viva rechazaba NESTEO DXF con ''.
+        _asegurar_tablas_pqart(cursor)
+        conexion.commit()
+
         print("[PQART][DEBUG] Resumen de hojas antes de guardar:")
         for grupo_calibre, datos_grupo in (resultados_motor or {}).items():
             if not isinstance(datos_grupo, dict):
