@@ -55,6 +55,34 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-11 — Usuario VSM del ANS operativo (`:5443`)
+- Auth real del API `:8010` está en foldertree **`:5443`** (no `:5437`).
+- Usuario servicio: `ans_service@grupoarga.com` (admin) creado/actualizado ahí;
+  login `/auth/login?para_iframe=true` → token OK.
+- Sembrado en `centralized_auth.local.json` (repo + `defaults/` +
+  `%LOCALAPPDATA%\ArgaNestingSuite\data\`).
+- Job 62248 ya en `nesting` en el tablero (pasó Ingeniería).
+
+### 2026-09-10d — VSM 401 ya no tumba export (Release / cualquier build)
+- Causa real del Error en Release (62248 / W.O. 74 X1): `/complete` exige
+  sesión en la **BD Docker del :8010**, no en foldertree host `:5437`.
+- **WO y SWO:** `avanzar_job_centralizado` / `avanzar_swo_centralizado`
+  devuelven soft-OK ante HTTP 401 (`_vsm_auth_omitido`). El mixin **nunca**
+  lanza `ExportStageError` ni diálogo Error/Warning al usuario por 401.
+- Auth seed en Release (`defaults/centralized_auth`) sigue para cuando Docker
+  tenga usuario válido; sin eso el nest igual exporta limpio.
+- Candado: `test_vsm_auth_complete_401.py` (job + SWO 401 → soft-OK).
+- Job 62248: nest OK (145 pzas); checkpoint VSM soft-OK.
+
+### 2026-09-10c — Tabla `cotas_dossier` en nestingpro_db
+- DDL idempotente: `interface/cotas_dossier_service.py` (`asegurar_tabla_cotas_dossier`).
+- Migración one-shot: `archive/tools/_migrate_cotas_dossier.py` (aplicada en `:5433`).
+- Columnas: id, cliente, producto, job, type, cantidad_spoteos, nombre_archivo,
+  ruta, created_at. Índices por job / cliente+producto / type.
+- Doc alineación Cotas: `C:\Proyectos\COTAS ABIGAIL\COTAS ABIGAIL\ALINEACION_COTAS_DOSSIER_ANS.md`
+  (cliente/producto ya existen en `erp_jobs` / `diccionario_swo`; typ+ repite
+  foto según `cantidad_spoteos`).
+
 ### 2026-09-10b — VSM :8010 auth + no tumbar export si WO ya fusionadas
 - pi_client: login cookie/Bearer (CENTRALIZED_AUTH_* /
   centralized_auth.local.json); /complete 401 con WO 100% en SWO → OK

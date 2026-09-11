@@ -44,6 +44,8 @@ CUT_GAPS_CONFIG = ROOT / "_config" / "cut_gaps_table.json"
 AMADA_BARRENOS_CONFIG = ROOT / "_config" / "amada_barrenos_catalog.json"
 CYPTUBE_BRIDGE_CONFIG = ROOT / "_config" / "cyptube_bridge.json"
 NEST_ENGINE_CONFIG_JSON = ROOT / "configuracion_nesting.json"
+CENTRALIZED_AUTH_LOCAL = ROOT / "centralized_auth.local.json"
+CENTRALIZED_AUTH_DEFAULTS = ROOT / "defaults" / "centralized_auth.local.json"
 ICO_SIZES = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 BRANDING_PNG_PRESERVE = (
     "arga_nesting_logo.png",
@@ -892,6 +894,29 @@ def _pyinstaller_collect_args() -> list[str]:
     return args
 
 
+def _ensure_centralized_auth_defaults() -> Path | None:
+    """
+    Plantilla VSM auth para el Release.
+
+    Copia ``centralized_auth.local.json`` (gitignored) a ``defaults/`` para
+    que el bootstrap del .exe la siembre en %%LOCALAPPDATA%%\\ArgaNestingSuite\\data.
+    Sin esto el PATCH /complete del VSM vuelve a 401 en PCs frescas.
+    """
+    src = CENTRALIZED_AUTH_LOCAL if CENTRALIZED_AUTH_LOCAL.is_file() else None
+    if src is None and CENTRALIZED_AUTH_DEFAULTS.is_file():
+        return CENTRALIZED_AUTH_DEFAULTS
+    if src is None:
+        return None
+    CENTRALIZED_AUTH_DEFAULTS.parent.mkdir(parents=True, exist_ok=True)
+    if (
+        not CENTRALIZED_AUTH_DEFAULTS.is_file()
+        or CENTRALIZED_AUTH_DEFAULTS.read_bytes() != src.read_bytes()
+    ):
+        shutil.copy2(src, CENTRALIZED_AUTH_DEFAULTS)
+        print(f"[OK] defaults/centralized_auth.local.json ← {src.name}")
+    return CENTRALIZED_AUTH_DEFAULTS
+
+
 def _pyinstaller_data_args() -> list[str]:
     args: list[str] = []
     # Recursos empaquetados del bundle. Los mutables van a `defaults/<rel>`
@@ -899,6 +924,7 @@ def _pyinstaller_data_args() -> list[str]:
     # `config.asegurar_archivo_persistente` la primera vez al data_dir del
     # usuario. Nunca se leen directamente en runtime, siempre pasando por
     # el data_dir persistente.
+    auth_defaults = _ensure_centralized_auth_defaults()
     data_pairs = [
         (SPLASH_JPEG, "."),
         (MACRO, "."),
@@ -916,6 +942,8 @@ def _pyinstaller_data_args() -> list[str]:
         (AMADA_BARRENOS_CONFIG, "defaults/_config"),
         (CYPTUBE_BRIDGE_CONFIG, "defaults/_config"),
     ]
+    if auth_defaults is not None and auth_defaults.is_file():
+        data_pairs.append((auth_defaults, "defaults"))
     for src, dest in data_pairs:
         if src.exists():
             args += ["--add-data", f"{src};{dest}"]
@@ -933,6 +961,11 @@ def _pyinstaller_data_args() -> list[str]:
             print("[WARN] _config/amada_barrenos_catalog.json no encontrado; se omite del bundle.")
         elif src.name == "cyptube_bridge.json":
             print("[WARN] _config/cyptube_bridge.json no encontrado; se omite del bundle.")
+        elif src.name == "centralized_auth.local.json":
+            print(
+                "[WARN] centralized_auth.local.json ausente: el Release "
+                "fallará VSM /complete con 401 en PCs sin auth sembrada."
+            )
     # Solo los DXF de fixtura productivos (no scripts _sim).
     for dxf in FIXTURA_AMADA_DXFS:
         if dxf.is_file():
@@ -1134,6 +1167,7 @@ def seed_persistent_sidecars(
         seed_targets = {
             "inventario_remanentes.csv": dist_root / "inventario_remanentes.csv",
             "configuracion_nesting.json": dist_root / "configuracion_nesting.json",
+            "centralized_auth.local.json": dist_root / "centralized_auth.local.json",
             "_config/step_export_folders.json": dist_root / "_config" / "step_export_folders.json",
             "_config/nest_runtime.json": dist_root / "_config" / "nest_runtime.json",
             "_config/cut_gaps_table.json": dist_root / "_config" / "cut_gaps_table.json",
@@ -1145,15 +1179,18 @@ def seed_persistent_sidecars(
         seed_targets = {
             "inventario_remanentes.csv": defaults_root / "inventario_remanentes.csv",
             "configuracion_nesting.json": defaults_root / "configuracion_nesting.json",
+            "centralized_auth.local.json": defaults_root / "centralized_auth.local.json",
             "_config/step_export_folders.json": defaults_root / "_config" / "step_export_folders.json",
             "_config/nest_runtime.json": defaults_root / "_config" / "nest_runtime.json",
             "_config/cut_gaps_table.json": defaults_root / "_config" / "cut_gaps_table.json",
             "_config/amada_barrenos_catalog.json": defaults_root / "_config" / "amada_barrenos_catalog.json",
             "_config/cyptube_bridge.json": defaults_root / "_config" / "cyptube_bridge.json",
         }
+    auth_src = _ensure_centralized_auth_defaults()
     sources = {
         "inventario_remanentes.csv": ROOT / "inventario_remanentes.csv",
         "configuracion_nesting.json": NEST_ENGINE_CONFIG_JSON,
+        "centralized_auth.local.json": auth_src or CENTRALIZED_AUTH_DEFAULTS,
         "_config/step_export_folders.json": STEP_EXPORT_CONFIG,
         "_config/nest_runtime.json": NEST_RUNTIME_CONFIG,
         "_config/cut_gaps_table.json": CUT_GAPS_CONFIG,
@@ -1494,6 +1531,10 @@ def print_deploy_checklist(exe_path: Path, onefile: bool = False):
                 "defaults/_config/cyptube_bridge.json",
                 (dist / "defaults" / "_config" / "cyptube_bridge.json").is_file(),
             ),
+            (
+                "defaults/centralized_auth.local.json",
+                (dist / "defaults" / "centralized_auth.local.json").is_file(),
+            ),
         ])
     layout = "onefile" if onefile else "onedir"
     print(f"\n=== CHECKLIST DESPLIEGUE ({layout}) ===")
@@ -1507,6 +1548,7 @@ def print_deploy_checklist(exe_path: Path, onefile: bool = False):
     else:
         print("[WARN] Faltan archivos sidecar; revisa el build.")
     print("=" * 72)
+    return ok_all
 
 
 NATIVE_ICON_HANDLER_CLSID = "{A31F8C2E-9B74-4D6A-8E15-2C70F4A9D813}"
@@ -2124,6 +2166,13 @@ def main():
     validate_suite_manifest()
     if args.release:
         ensure_ans_closed_for_release()
+        if _ensure_centralized_auth_defaults() is None:
+            raise SystemExit(
+                "Release abortado: falta centralized_auth.local.json "
+                "(raíz del repo o defaults/). Sin eso el .exe vuelve a 401 "
+                "en VSM /complete. Corre: "
+                "py -3.14 archive/tools/_ensure_vsm_auth_and_fix_62248.py"
+            )
 
     if not args.skip_deps:
         ensure_build_dependencies()
@@ -2192,11 +2241,20 @@ def main():
         )
     else:
         print("[WARN] Verificación estricta omitida (--allow-no-core).")
-    print_deploy_checklist(exe_path, onefile=onefile_mode)
+    checklist_ok = print_deploy_checklist(exe_path, onefile=onefile_mode)
     if args.release:
         if onefile_mode:
             print("[WARN] --release ignorado en modo --onefile (el canal usa onedir).")
         else:
+            auth_in_dist = (
+                exe_path.parent / "defaults" / "centralized_auth.local.json"
+            ).is_file()
+            if not auth_in_dist or not checklist_ok:
+                raise SystemExit(
+                    "Release abortado: checklist incompleto o falta "
+                    "defaults/centralized_auth.local.json en el dist "
+                    "(VSM /complete 401 en PCs nuevas)."
+                )
             write_release_artifacts(
                 exe_path,
                 manifest_path,

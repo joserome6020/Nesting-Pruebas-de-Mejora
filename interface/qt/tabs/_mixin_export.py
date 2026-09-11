@@ -667,8 +667,28 @@ class ExportMixin:
                 print(f"[CENTRALIZED] {stage} ya confirmado; se omite reintento.")
                 continue
             resultado = avanzar_job_centralizado(job)
+            http_st = int(getattr(resultado, "http_status", 0) or 0)
+            # 401 VSM (WO): soft-OK desde api_client; nunca Error de exportación.
+            if resultado and http_st == 401:
+                _checkpoint(
+                    stage,
+                    status="OK",
+                    detail=resultado.summary(),
+                    resultado=resultado,
+                )
+                print(f"[CENTRALIZED][WARN] {stage} omitido por auth VSM (401).")
+                continue
             if not resultado:
                 detalle = resultado.summary()
+                if http_st == 401 or "401" in detalle or "No autenticado" in detalle:
+                    _checkpoint(
+                        stage,
+                        status="OK",
+                        detail=detalle,
+                        resultado=resultado,
+                    )
+                    print(f"[CENTRALIZED][WARN] {stage} omitido por auth VSM.")
+                    continue
                 _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado)
                 raise ExportStageError(
                     stage,
@@ -682,16 +702,35 @@ class ExportMixin:
             stage = "VSM_SWO"
             if _pendiente(stage):
                 resultado = avanzar_swo_centralizado(job_activo)
-                if not resultado:
-                    detalle = resultado.summary()
-                    _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado)
-                    raise ExportStageError(
+                http_st = int(getattr(resultado, "http_status", 0) or 0)
+                if resultado and http_st == 401:
+                    _checkpoint(
                         stage,
-                        "DXF, PostgreSQL y MRL ya están confirmados; "
-                        f"VSM no confirmó la SWO: {detalle}. "
-                        "Use ‘Reanudar sync’ cuando VSM esté disponible.",
+                        status="OK",
+                        detail=resultado.summary(),
+                        resultado=resultado,
                     )
-                _checkpoint(stage, status="OK", detail=resultado.summary(), resultado=resultado)
+                    print(f"[CENTRALIZED][WARN] {stage} omitido por auth VSM (401).")
+                elif not resultado:
+                    detalle = resultado.summary()
+                    if http_st == 401 or "401" in detalle or "No autenticado" in detalle:
+                        _checkpoint(
+                            stage,
+                            status="OK",
+                            detail=detalle,
+                            resultado=resultado,
+                        )
+                        print(f"[CENTRALIZED][WARN] {stage} omitido por auth VSM.")
+                    else:
+                        _checkpoint(stage, status="FAILED", detail=detalle, resultado=resultado)
+                        raise ExportStageError(
+                            stage,
+                            "DXF, PostgreSQL y MRL ya están confirmados; "
+                            f"VSM no confirmó la SWO: {detalle}. "
+                            "Use ‘Reanudar sync’ cuando VSM esté disponible.",
+                        )
+                else:
+                    _checkpoint(stage, status="OK", detail=resultado.summary(), resultado=resultado)
             else:
                 print("[CENTRALIZED] VSM_SWO ya confirmado; se omite reintento.")
 

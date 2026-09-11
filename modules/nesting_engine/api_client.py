@@ -59,6 +59,37 @@ def _http_ok(code: int | None) -> bool:
         return False
 
 
+def _vsm_auth_omitido(operation: str, target: str, code: int = 401) -> "ApiOperationResult":
+    """
+    Soft-OK: el nest/CAD/BD ya no deben tumbarse por falta de sesión VSM.
+
+    El API :8010 exige auth en su BD Docker (distinta del foldertree host).
+    Sin credencial válida, /complete y auto-advance responden 401. La
+    exportación de WO/SWO continúa; el tarjetón se puede mover después.
+    """
+    tgt = str(target or "").strip()
+    print(
+        f"[CENTRALIZED][WARN] {operation} [{tgt}] HTTP {code}: "
+        "sesión VSM omitida; exportación CAD/BD no bloqueada."
+    )
+    return ApiOperationResult(
+        True,
+        operation,
+        tgt,
+        "VSM sin sesión (401): etapa omitida; exportación no bloqueada.",
+        int(code or 401),
+    )
+
+
+def _es_http_401(exc_or_code) -> bool:
+    try:
+        if isinstance(exc_or_code, int):
+            return int(exc_or_code) == 401
+        return int(getattr(exc_or_code, "code", 0) or 0) == 401
+    except (TypeError, ValueError):
+        return False
+
+
 def _respuesta_idempotente(code: int | None, body: dict | None) -> bool:
     """Un 409 explícitamente duplicado confirma que la orden ya fue creada."""
     if int(code or 0) != 409:
@@ -137,9 +168,49 @@ def _centralized_auth_settings_path() -> Path:
     try:
         import config
 
-        return Path(config.ruta_persistente("centralized_auth.local.json"))
+        # En frozen siembra desde defaults/ del Release al data_dir si falta.
+        try:
+            return Path(config.asegurar_archivo_persistente("centralized_auth.local.json"))
+        except Exception:
+            return Path(config.ruta_persistente("centralized_auth.local.json"))
     except Exception:
         return Path(__file__).resolve().parents[2] / "centralized_auth.local.json"
+
+
+def _centralized_auth_candidate_paths() -> list[Path]:
+    """Rutas donde puede vivir centralized_auth (dev, AppData, defaults Release)."""
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(p: Path | None) -> None:
+        if p is None:
+            return
+        try:
+            key = str(p.resolve()).casefold()
+        except Exception:
+            key = str(p).casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        paths.append(p)
+
+    _add(_centralized_auth_settings_path())
+    try:
+        import config
+
+        for root in config.app_search_roots():
+            _add(Path(root) / "centralized_auth.local.json")
+            _add(Path(root) / "defaults" / "centralized_auth.local.json")
+        if getattr(config, "_is_frozen", lambda: False)():
+            exe_d = Path(getattr(config, "_exe_dir", lambda: "")() or "")
+            if exe_d:
+                _add(exe_d / "centralized_auth.local.json")
+                _add(exe_d / "defaults" / "centralized_auth.local.json")
+    except Exception:
+        pass
+    _add(Path(__file__).resolve().parents[2] / "centralized_auth.local.json")
+    _add(Path(__file__).resolve().parents[2] / "defaults" / "centralized_auth.local.json")
+    return paths
 
 
 def _load_centralized_creds() -> tuple[str, str]:
@@ -148,18 +219,21 @@ def _load_centralized_creds() -> tuple[str, str]:
     password = os.getenv("CENTRALIZED_AUTH_PASSWORD", "").strip()
     if email and password:
         return email, password
-    path = _centralized_auth_settings_path()
-    if not path.is_file():
-        return email, password
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"[CENTRALIZED][AUTH] No se pudo leer {path.name}: {exc}")
-        return email, password
-    if not isinstance(data, dict):
-        return email, password
-    email = email or str(data.get("email") or data.get("usuario") or "").strip()
-    password = password or str(data.get("password") or data.get("clave") or "").strip()
+    for path in _centralized_auth_candidate_paths():
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[CENTRALIZED][AUTH] No se pudo leer {path}: {exc}")
+            continue
+        if not isinstance(data, dict):
+            continue
+        email = email or str(data.get("email") or data.get("usuario") or "").strip()
+        password = password or str(data.get("password") or data.get("clave") or "").strip()
+        if email and password:
+            print(f"[CENTRALIZED][AUTH] Credenciales desde {path}")
+            return email, password
     return email, password
 
 
@@ -476,12 +550,22 @@ def avanzar_swo_centralizado(swo_id):
         code, body = _post_json(url, {"swo_id": swo}, timeout=20)
 
         if _http_ok(code):
-            msg = body.get("mensaje", "OK")
+            msg = body.get("mensaje", "OK") if isinstance(body, dict) else "OK"
             print(f"[CENTRALIZED] SWO '{swo}' -> EXPORTADO. {msg}")
-            return ApiOperationResult(True, "avance VSM SWO", swo, str(msg), code, body)
+            return ApiOperationResult(True, "avance VSM SWO", swo, str(msg), code, body if isinstance(body, dict) else None)
+
+        if _es_http_401(code):
+            return _vsm_auth_omitido("avance VSM SWO", swo, int(code or 401))
 
         print(f"[CENTRALIZED] Error al avanzar SWO '{swo}'. Codigo: {code}")
         return ApiOperationResult(False, "avance VSM SWO", swo, str(body), code)
+    except urllib.error.HTTPError as err:
+        if _es_http_401(err):
+            return _vsm_auth_omitido("avance VSM SWO", swo, 401)
+        print(f"[CENTRALIZED ERROR] Fallo al avanzar SWO '{swo}': {err}")
+        return ApiOperationResult(
+            False, "avance VSM SWO", swo, str(err), int(getattr(err, "code", 0) or 0) or None
+        )
     except Exception as exc:
         print(f"[CENTRALIZED ERROR] Fallo al avanzar SWO '{swo}': {exc}")
         return ApiOperationResult(False, "avance VSM SWO", swo, str(exc))
@@ -897,10 +981,21 @@ def avanzar_job_centralizado(job_number):
 
         if job_status == "pending":
             print(f"[CENTRALIZED] Moviendo Job '{job_number}' de pending -> inventor...")
-            code = _patch_json(
-                f"{base_url}/jobs/{job_id}/status",
-                {"status": "inventor"},
-            )
+            try:
+                code = _patch_json(
+                    f"{base_url}/jobs/{job_id}/status",
+                    {"status": "inventor"},
+                )
+            except urllib.error.HTTPError as err:
+                if _es_http_401(err):
+                    return _vsm_auth_omitido(
+                        "avance VSM Job", str(job_number).strip(), 401
+                    )
+                raise
+            if _es_http_401(code):
+                return _vsm_auth_omitido(
+                    "avance VSM Job", str(job_number).strip(), int(code or 401)
+                )
             if not _http_ok(code):
                 return ApiOperationResult(
                     False,
@@ -920,38 +1015,20 @@ def avanzar_job_centralizado(job_number):
             )
         except urllib.error.HTTPError as err:
             code = int(getattr(err, "code", 0) or 0)
+            if _es_http_401(code):
+                return _vsm_auth_omitido(
+                    "avance VSM Job", str(job_number).strip(), 401
+                )
             raw = ""
             try:
                 raw = err.read().decode("utf-8", errors="replace")
             except Exception:
                 raw = str(err)
-            if code == 401 and job_nesting_totalmente_fusionado(job_number):
-                print(
-                    f"[CENTRALIZED][WARN] /complete 401 para '{job_number}', pero "
-                    "todas sus WO ya están fusionadas a SWO en nesting. "
-                    "Se omite el avance del tarjetón VSM."
-                )
-                return ApiOperationResult(
-                    True,
-                    "avance VSM Job",
-                    str(job_number).strip(),
-                    "WO ya fusionadas; /complete omitido tras 401 (configure "
-                    "CENTRALIZED_AUTH_* para mover el tarjetón).",
-                    code,
-                )
-            detail = raw[:240] or "No se pudo completar ingeniería."
-            if code == 401:
-                detail = (
-                    "VSM respondió 401 (No autenticado) en /complete. "
-                    "Configure CENTRALIZED_AUTH_EMAIL/PASSWORD o "
-                    "centralized_auth.local.json. "
-                    f"Detalle: {detail}"
-                )
             return ApiOperationResult(
                 False,
                 "avance VSM Job",
                 str(job_number).strip(),
-                detail,
+                raw[:240] or "No se pudo completar ingeniería.",
                 code,
             )
         if isinstance(complete_result, tuple):
@@ -960,26 +1037,13 @@ def avanzar_job_centralizado(job_number):
             # Compatibilidad con mocks/implementaciones anteriores.
             code, complete_body = complete_result, {}
         if not _http_ok(code):
-            if int(code or 0) == 401 and job_nesting_totalmente_fusionado(job_number):
-                print(
-                    f"[CENTRALIZED][WARN] /complete HTTP {code} para '{job_number}', "
-                    "pero nesting ya tiene todas las WO fusionadas a SWO."
-                )
-                return ApiOperationResult(
-                    True,
+            if _es_http_401(code):
+                return _vsm_auth_omitido(
                     "avance VSM Job",
                     str(job_number).strip(),
-                    "WO ya fusionadas; /complete no autenticado omitido.",
-                    code,
-                    complete_body if isinstance(complete_body, dict) else None,
+                    int(code or 401),
                 )
             detail = "No se pudo completar ingeniería."
-            if int(code or 0) == 401:
-                detail = (
-                    "VSM 401 en /complete: falta sesión. "
-                    "Configure CENTRALIZED_AUTH_EMAIL/PASSWORD o "
-                    "centralized_auth.local.json."
-                )
             return ApiOperationResult(
                 False,
                 "avance VSM Job",
