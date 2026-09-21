@@ -17,6 +17,37 @@ BRANDING_DIR = os.path.join(BASE_DIR, "assets", "branding")
 LOGO_ICON1_PATH = os.path.join(BRANDING_DIR, "logo_icon1.png")
 LOGO_MAIN_PATH = os.path.join(BRANDING_DIR, "logo_main.png")
 
+
+def _win_long_path(path: str) -> str:
+    """Prefijo \\?\\ para superar MAX_PATH (260) en Windows al escribir PDF."""
+    texto = str(path or "").strip()
+    if not texto or os.name != "nt":
+        return texto
+    if texto.startswith("\\\\?\\"):
+        return texto
+    # UNC: \\server\share\... -> \\?\UNC\server\share\...
+    if texto.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + texto[2:]
+    return "\\\\?\\" + os.path.abspath(texto)
+
+
+def _asegurar_ruta_escritura(path: str) -> str:
+    """Crea el directorio padre y, si la ruta es larga, abre con \\?\\."""
+    texto = str(path or "").strip()
+    if not texto:
+        raise ValueError("ruta PDF vacía")
+    parent = os.path.dirname(texto)
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError:
+            # Carpetas profundas / OneDrive: reintentar con long-path.
+            os.makedirs(_win_long_path(parent), exist_ok=True)
+    # ReportLab/open fallan con Errno 2 si len >= ~260 sin prefijo.
+    if os.name == "nt" and len(texto) >= 240:
+        return _win_long_path(texto)
+    return texto
+
 def _to_float(value, default=0.0):
     try:
         if value is None or value == "":
@@ -1352,7 +1383,8 @@ def exportar_pdf_nesting(
     if not plates:
         raise ValueError("No hay placas para exportar a PDF.")
 
-    c = canvas.Canvas(ruta_pdf, pagesize=LETTER)
+    ruta_pdf_write = _asegurar_ruta_escritura(ruta_pdf)
+    c = canvas.Canvas(ruta_pdf_write, pagesize=LETTER)
     width, height = LETTER
 
     title_color = colors.HexColor("#0F172A")

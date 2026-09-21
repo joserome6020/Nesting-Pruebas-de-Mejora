@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_pdf_long_path.py",
+        "2026-09-21 - PDF nest: rutas >260 (UNC/OneDrive) Errno 2 → prefijo \\\\?\\",
+    ),
+    (
         "test_correo_po_nombre_reporte.py",
         "2026-08-31b - PO ContPAQ: nombreReporte vacío = correo no enviado (GAM 13040)",
     ),

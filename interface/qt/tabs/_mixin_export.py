@@ -182,12 +182,13 @@ class ExportMixin:
     ) -> str:
         job = str(job_activo or getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
         carpeta_pdf = self._ruta_carpeta_reporte_pdf_nesting(ruta_export_base)
-        os.makedirs(carpeta_pdf, exist_ok=True)
+        from reporte_pdf_nesting import _asegurar_ruta_escritura, _win_long_path
 
         nombre_pdf = self._nombre_archivo_export_lote(job, n_wo, extension=".pdf").replace(
             "Nesting_", "Nesting_Reporte_", 1
         )
         ruta_pdf = os.path.join(carpeta_pdf, nombre_pdf)
+        _asegurar_ruta_escritura(ruta_pdf)
 
         exportar_pdf_nesting(
             resultados_nesting=mini_resultados,
@@ -197,6 +198,8 @@ class ExportMixin:
             job_fallback=job,
             work_order_label=str(n_wo),
         )
+        if not os.path.isfile(ruta_pdf) and not os.path.isfile(_win_long_path(ruta_pdf)):
+            raise RuntimeError(f"No se escribió el PDF: {ruta_pdf}")
         return ruta_pdf
 
     def _exportar_arganest_en_carpeta_export(
@@ -1360,7 +1363,10 @@ class ExportMixin:
                         job_activo=job_activo,
                     )
                     if not os.path.isfile(ruta_pdf_auto):
-                        raise RuntimeError(f"{n_wo}: no se creó el reporte PDF oficial.")
+                        from reporte_pdf_nesting import _win_long_path
+
+                        if not os.path.isfile(_win_long_path(ruta_pdf_auto)):
+                            raise RuntimeError(f"{n_wo}: no se creó el reporte PDF oficial.")
                     print(f"[PDF][EXPORT] Reporte automático: {ruta_pdf_auto}")
 
                     ruta_arganest_auto = self._exportar_arganest_en_carpeta_export(

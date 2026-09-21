@@ -55,6 +55,13 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-21 — PDF nest: rutas >260 (UNC/OneDrive) ya no dan Errno 2
+- Causa: job largo (`06-70-1612COMPARTMENT261093`) + `Nesting_Reporte_…pdf`
+  supera MAX_PATH; `Canvas`/`open` fallaba en servidor y Nesteos Locales.
+- Fix: `reporte_pdf_nesting._asegurar_ruta_escritura` con `\\?\` / `\\?\UNC\`;
+  export auto en `_mixin_export` valida isfile long-path.
+- Candado: `tests/native/test_pdf_long_path.py`.
+
 ### 2026-09-11 — Usuario VSM del ANS operativo (`:5443`)
 - Auth real del API `:8010` está en foldertree **`:5443`** (no `:5437`).
 - Usuario servicio: `ans_service@grupoarga.com` (admin) creado/actualizado ahí;
