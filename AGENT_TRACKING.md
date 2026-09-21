@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-21b — Export UNC: `.arganest` WinError 3 + PDF long-path en bundle
+- Causa real del Error en Release (W.O. 83 / job largo): `guardar_workspace_payload`
+  hacía `os.replace(tmp→.arganest)` sin `\\?\UNC\`; el fix PDF solo no bastaba.
+- Además `reporte_pdf_nesting.py` no iba como dato suelto en el zip (solo PYZ).
+- Fix: `modules/win_long_path.py` compartido; arganest + mixin + PDF; `--add-data`
+  de los `reporte_pdf_*.py`; smoke verifica helpers.
+- Candado: `tests/native/test_pdf_long_path.py` (UNC rename mock).
+
 ### 2026-09-21 — PDF nest: rutas >260 (UNC/OneDrive) ya no dan Errno 2
 - Causa: job largo (`06-70-1612COMPARTMENT261093`) + `Nesting_Reporte_…pdf`
   supera MAX_PATH; `Canvas`/`open` fallaba en servidor y Nesteos Locales.

@@ -182,13 +182,13 @@ class ExportMixin:
     ) -> str:
         job = str(job_activo or getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
         carpeta_pdf = self._ruta_carpeta_reporte_pdf_nesting(ruta_export_base)
-        from reporte_pdf_nesting import _asegurar_ruta_escritura, _win_long_path
+        from modules.win_long_path import asegurar_ruta_escritura, win_long_path
 
         nombre_pdf = self._nombre_archivo_export_lote(job, n_wo, extension=".pdf").replace(
             "Nesting_", "Nesting_Reporte_", 1
         )
         ruta_pdf = os.path.join(carpeta_pdf, nombre_pdf)
-        _asegurar_ruta_escritura(ruta_pdf)
+        asegurar_ruta_escritura(ruta_pdf)
 
         exportar_pdf_nesting(
             resultados_nesting=mini_resultados,
@@ -198,7 +198,7 @@ class ExportMixin:
             job_fallback=job,
             work_order_label=str(n_wo),
         )
-        if not os.path.isfile(ruta_pdf) and not os.path.isfile(_win_long_path(ruta_pdf)):
+        if not os.path.isfile(ruta_pdf) and not os.path.isfile(win_long_path(ruta_pdf)):
             raise RuntimeError(f"No se escribió el PDF: {ruta_pdf}")
         return ruta_pdf
 
@@ -214,10 +214,12 @@ class ExportMixin:
     ) -> str:
         job = str(job_activo or getattr(self.app, "job_activo", "NESTING")).strip() or "NESTING"
         carpeta_arganest = self._ruta_carpeta_arganest_nesting(ruta_export_base)
-        os.makedirs(carpeta_arganest, exist_ok=True)
+        from modules.win_long_path import asegurar_ruta_escritura, win_long_path
 
         nombre_arganest = self._nombre_archivo_export_lote(job, n_wo, extension=".arganest")
         ruta_arganest = os.path.join(carpeta_arganest, nombre_arganest)
+        # UNC profundas: makedirs + write sin \\?\ → WinError 3 en os.replace.
+        asegurar_ruta_escritura(ruta_arganest)
 
         payload = construir_payload_workspace_lote_export(
             self,
@@ -232,6 +234,8 @@ class ExportMixin:
         except Exception:
             pass
         guardar_workspace_payload(payload, ruta_arganest)
+        if not os.path.isfile(ruta_arganest) and not os.path.isfile(win_long_path(ruta_arganest)):
+            raise RuntimeError(f"No se escribió el .arganest: {ruta_arganest}")
         return ruta_arganest
 
     def exportar_reporte_pdf_nesting(self):
@@ -1363,9 +1367,9 @@ class ExportMixin:
                         job_activo=job_activo,
                     )
                     if not os.path.isfile(ruta_pdf_auto):
-                        from reporte_pdf_nesting import _win_long_path
+                        from modules.win_long_path import win_long_path
 
-                        if not os.path.isfile(_win_long_path(ruta_pdf_auto)):
+                        if not os.path.isfile(win_long_path(ruta_pdf_auto)):
                             raise RuntimeError(f"{n_wo}: no se creó el reporte PDF oficial.")
                     print(f"[PDF][EXPORT] Reporte automático: {ruta_pdf_auto}")
 
@@ -1378,7 +1382,10 @@ class ExportMixin:
                         job_activo=job_activo,
                     )
                     if not os.path.isfile(ruta_arganest_auto):
-                        raise RuntimeError(f"{n_wo}: no se creó el workspace .arganest.")
+                        from modules.win_long_path import win_long_path
+
+                        if not os.path.isfile(win_long_path(ruta_arganest_auto)):
+                            raise RuntimeError(f"{n_wo}: no se creó el workspace .arganest.")
                     print(f"[ARGANEST][EXPORT] Workspace automático: {ruta_arganest_auto}")
                     tipo_checkpoint_lote = "SWO_LOTE" if es_swo_flag else "WO"
                     _registrar_checkpoint(

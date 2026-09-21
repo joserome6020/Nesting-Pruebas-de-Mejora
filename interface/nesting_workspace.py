@@ -750,17 +750,28 @@ def construir_payload_workspace(tab):
 def guardar_workspace_payload(payload, ruta_archivo):
     import tempfile
 
+    from modules.win_long_path import asegurar_ruta_escritura, needs_win_long_path, win_long_path
+
     if isinstance(payload, dict) and not payload.get("workspace_material_kind"):
         try:
             payload["workspace_material_kind"] = clasificar_material_workspace(payload)
         except Exception:
             payload["workspace_material_kind"] = MATERIAL_KIND_STEEL
 
-    carpeta = os.path.dirname(os.path.abspath(ruta_archivo))
-    if carpeta:
-        os.makedirs(carpeta, exist_ok=True)
+    ruta_destino = str(ruta_archivo or "").strip()
+    if not ruta_destino:
+        raise ValueError("ruta .arganest vacía")
 
-    ext = os.path.splitext(str(ruta_archivo))[1].lower()
+    # UNC crudas no deben pasar por abspath (rompe el prefijo \\server).
+    if ruta_destino.startswith("\\\\") or ruta_destino.startswith("//"):
+        carpeta = os.path.dirname(ruta_destino)
+    else:
+        carpeta = os.path.dirname(os.path.abspath(ruta_destino))
+
+    # Crea carpeta (con \\?\ si MAX_PATH) antes del tmp+replace.
+    asegurar_ruta_escritura(ruta_destino)
+
+    ext = os.path.splitext(ruta_destino)[1].lower()
     json_text = json.dumps(
         payload,
         ensure_ascii=False,
@@ -768,10 +779,17 @@ def guardar_workspace_payload(payload, ruta_archivo):
     )
 
     # Poka-yoke: escritura atómica (tmp + replace) para no truncar .arganest.
+    # En UNC largas, mkstemp(dir=UNC) puede fallar: tmp local + replace long-path.
+    use_long = needs_win_long_path(ruta_destino) or (
+        bool(carpeta) and needs_win_long_path(carpeta)
+    )
+    tmp_dir = None
+    if carpeta and not use_long:
+        tmp_dir = carpeta
     fd, tmp_path = tempfile.mkstemp(
         prefix=".arganest_",
         suffix=".tmp",
-        dir=carpeta or None,
+        dir=tmp_dir,
     )
     try:
         os.close(fd)
@@ -781,10 +799,23 @@ def guardar_workspace_payload(payload, ruta_archivo):
         else:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 f.write(json_text)
-        os.replace(tmp_path, ruta_archivo)
+        src = win_long_path(tmp_path) if use_long else tmp_path
+        dst = win_long_path(ruta_destino) if use_long else ruta_destino
+        try:
+            os.replace(src, dst)
+        except OSError:
+            # Cross-volume / UNC: copy+replace con long-path.
+            import shutil
+
+            shutil.copyfile(tmp_path, dst)
+            try:
+                os.remove(win_long_path(tmp_path) if use_long else tmp_path)
+            except OSError:
+                pass
+            tmp_path = ""
     except Exception:
         try:
-            if os.path.isfile(tmp_path):
+            if tmp_path and os.path.isfile(tmp_path):
                 os.remove(tmp_path)
         except OSError:
             pass

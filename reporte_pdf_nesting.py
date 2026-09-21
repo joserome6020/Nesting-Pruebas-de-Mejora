@@ -18,36 +18,11 @@ LOGO_ICON1_PATH = os.path.join(BRANDING_DIR, "logo_icon1.png")
 LOGO_MAIN_PATH = os.path.join(BRANDING_DIR, "logo_main.png")
 
 
-def _win_long_path(path: str) -> str:
-    """Prefijo \\?\\ para superar MAX_PATH (260) en Windows al escribir PDF."""
-    texto = str(path or "").strip()
-    if not texto or os.name != "nt":
-        return texto
-    if texto.startswith("\\\\?\\"):
-        return texto
-    # UNC: \\server\share\... -> \\?\UNC\server\share\...
-    if texto.startswith("\\\\"):
-        return "\\\\?\\UNC\\" + texto[2:]
-    return "\\\\?\\" + os.path.abspath(texto)
-
-
-def _asegurar_ruta_escritura(path: str) -> str:
-    """Crea el directorio padre y, si la ruta es larga, abre con \\?\\."""
-    texto = str(path or "").strip()
-    if not texto:
-        raise ValueError("ruta PDF vacía")
-    parent = os.path.dirname(texto)
-    if parent:
-        try:
-            os.makedirs(parent, exist_ok=True)
-        except OSError:
-            # Carpetas profundas / OneDrive: reintentar con long-path.
-            os.makedirs(_win_long_path(parent), exist_ok=True)
-    # ReportLab/open fallan con Errno 2 si len >= ~260 sin prefijo.
-    if os.name == "nt" and len(texto) >= 240:
-        return _win_long_path(texto)
-    return texto
-
+# Long-path compartido (PDF + .arganest + export UNC). Re-export para imports legacy.
+from modules.win_long_path import (  # noqa: E402
+    asegurar_ruta_escritura as _asegurar_ruta_escritura,
+    win_long_path as _win_long_path,
+)
 def _to_float(value, default=0.0):
     try:
         if value is None or value == "":

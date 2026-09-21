@@ -67,6 +67,7 @@ HIDDEN_IMPORTS = (
     "reporte_pdf_nesting",
     "reporte_pdf_nesteo_largos_piso",
     "reporte_pdf_lista_largos",
+    "modules.win_long_path",
     # Largos + material requerido (NESTEO DE LARGOS / MRL)
     "catalogo_largos",
     "lista_largos_material_requerido",
@@ -246,6 +247,9 @@ CRITICAL_SUITE_FILES = (
     ROOT / "interface" / "qt" / "widgets" / "largos_tira_canvas.py",
     ROOT / "interface" / "qt" / "widgets" / "largos_perfil_draw.py",
     ROOT / "interface" / "qt" / "widgets" / "herinox_switch.py",
+    ROOT / "reporte_pdf_nesting.py",
+    ROOT / "modules" / "win_long_path.py",
+    ROOT / "interface" / "nesting_workspace.py",
     ROOT / "modules" / "win_dll_bootstrap.py",
     ROOT / "modules" / "nesting_engine" / "algorithm_bridge.py",
     ROOT / "modules" / "nesting_engine" / "arga_nest_core_bridge.py",
@@ -278,6 +282,8 @@ CRITICAL_SUITE_FILES = (
 SMOKE_IMPORT_MODULES = (
     "catalogo_largos",
     "lista_largos_material_requerido",
+    "reporte_pdf_nesting",
+    "modules.win_long_path",
     "interface.largos_nesting_service",
     "interface.qt.dialogs.largos_nesting_modal",
     "interface.qt.dialogs.support_inbox",
@@ -707,6 +713,15 @@ def smoke_test_imports(*, require_core: bool = True):
     for mod in SMOKE_IMPORT_MODULES:
         importlib.import_module(mod)
         print(f"[OK] import {mod}")
+    # Candado Release: PDF/.arganest long-path deben existir en el bundle.
+    from modules.win_long_path import asegurar_ruta_escritura, win_long_path
+    from reporte_pdf_nesting import _asegurar_ruta_escritura, _win_long_path
+
+    probe = r"\\192.168.2.80\share\a" + ("x" * 240) + ".pdf"
+    assert win_long_path(probe).startswith("\\\\?\\UNC\\"), win_long_path(probe)
+    assert _win_long_path(probe).startswith("\\\\?\\UNC\\"), _win_long_path(probe)
+    assert callable(asegurar_ruta_escritura) and callable(_asegurar_ruta_escritura)
+    print("[OK] long-path helpers (win_long_path / reporte_pdf_nesting)")
     try:
         from modules.nesting_engine.algorithm_bridge import engine_name
 
@@ -933,6 +948,12 @@ def _pyinstaller_data_args() -> list[str]:
         (ROOT / "CAD (OCCT)" / "engine", "engine"),
         (ROOT / "assets", "assets"),
         (ROOT / "_config", "_config"),
+        # Root PDF modules: deben ir sueltos (no solo PYZ) para paridad Release.
+        (ROOT / "reporte_pdf_nesting.py", "."),
+        (ROOT / "reporte_pdf_nesteo_largos_piso.py", "."),
+        (ROOT / "reporte_pdf_lista_largos.py", "."),
+        (ROOT / "catalogo_largos.py", "."),
+        (ROOT / "lista_largos_material_requerido.py", "."),
         # Plantillas dentro del bundle (canónicas para bootstrap del data_dir).
         (ROOT / "inventario_remanentes.csv", "defaults"),
         (NEST_ENGINE_CONFIG_JSON, "defaults"),
