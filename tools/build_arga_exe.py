@@ -1681,9 +1681,37 @@ def _deploy_icon_assets(dist_dir: Path, local_icon_dir: Path) -> Path:
         dll = _native_icon_handler_dll() if _native_icon_handler_dll().is_file() else None
 
     deployed_dll = local_icon_dir / "ArgaIconHandler.dll"
+    dist_dll = handler_dir / "ArgaIconHandler.dll"
+
+    def _copy_retry(src: Path, dst: Path, *, label: str, attempts: int = 5) -> bool:
+        last_exc: Exception | None = None
+        for i in range(attempts):
+            try:
+                shutil.copy2(src, dst)
+                return True
+            except OSError as exc:
+                last_exc = exc
+                # WinError 32: archivo en uso (Explorer/IconHandler). Reintentar.
+                if getattr(exc, "winerror", None) == 32 or getattr(exc, "errno", None) == 13:
+                    time.sleep(0.4 * (i + 1))
+                    continue
+                break
+        print(f"[WARN] No se pudo copiar {label} → {dst}: {last_exc}")
+        return False
+
     if dll is not None and dll.is_file():
-        shutil.copy2(dll, deployed_dll)
-        shutil.copy2(dll, handler_dir / "ArgaIconHandler.dll")
+        # Primero dist/ (checklist Release); LocalAppData puede estar bloqueado.
+        if not _copy_retry(dll, dist_dll, label="IconHandler→dist"):
+            raise RuntimeError(
+                f"No se pudo sembrar icon_handler/ArgaIconHandler.dll en {dist_dll}"
+            )
+        if not _copy_retry(dll, deployed_dll, label="IconHandler→LocalAppData"):
+            # Dist ya tiene la DLL; el registro local puede reutilizarse luego.
+            print(
+                "[WARN] LocalAppData IconHandler bloqueado; "
+                "dist/icon_handler OK (Release puede continuar)."
+            )
+            deployed_dll = dist_dll
 
     for ico_name in (
         "arga_archivo_nesteo.ico",
@@ -1692,23 +1720,26 @@ def _deploy_icon_assets(dist_dir: Path, local_icon_dir: Path) -> Path:
     ):
         src_ico = dist_dir / ico_name
         if src_ico.is_file():
-            shutil.copy2(src_ico, local_icon_dir / ico_name)
-            shutil.copy2(src_ico, handler_dir / ico_name)
+            _copy_retry(src_ico, local_icon_dir / ico_name, label=ico_name)
+            _copy_retry(src_ico, handler_dir / ico_name, label=ico_name)
 
-    _run(
-        [
-            "reg",
-            "add",
-            r"HKCU\Software\ArgaNesting",
-            "/v",
-            "IconDir",
-            "/t",
-            "REG_SZ",
-            "/d",
-            str(local_icon_dir.resolve()),
-            "/f",
-        ]
-    )
+    try:
+        _run(
+            [
+                "reg",
+                "add",
+                r"HKCU\Software\ArgaNesting",
+                "/v",
+                "IconDir",
+                "/t",
+                "REG_SZ",
+                "/d",
+                str(local_icon_dir.resolve()),
+                "/f",
+            ]
+        )
+    except Exception as exc:
+        print(f"[WARN] No se pudo escribir IconDir en registro: {exc}")
     return deployed_dll
 
 
