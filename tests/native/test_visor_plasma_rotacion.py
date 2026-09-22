@@ -77,15 +77,33 @@ def test_emphasis_persiste_estado() -> None:
 
 
 def test_renderizar_reaplica_emphasis() -> None:
-    """renderizar_dxf debe reaplicar el énfasis si estaba encendido."""
-    fn = _find_method(_CLASE_VISOR, "renderizar_dxf")
-    fuente = ast.unparse(fn)
-    assert "_plasma_emphasis_on" in fuente, (
-        "renderizar_dxf debe consultar _plasma_emphasis_on"
+    """Tras cargar el modelo se reaplica el énfasis si estaba encendido.
+
+    `renderizar_dxf` es async: la restauración vive en `_aplicar_render_dxf`
+    (y en `_renderizar_dxf_sync` para tests).
+    """
+    fn_async = _find_method(_CLASE_VISOR, "renderizar_dxf")
+    fuente_async = ast.unparse(fn_async)
+    assert "_plasma_emphasis_on" in fuente_async, (
+        "renderizar_dxf debe resetear/consultar _plasma_emphasis_on"
     )
-    assert "set_plasma_contour_emphasis" in fuente or (
-        _calls_self_method(fn, "set_plasma_contour_emphasis")
-    ), "renderizar_dxf debe llamar a set_plasma_contour_emphasis para restaurar"
+    apply_names = ("_aplicar_render_dxf", "_renderizar_dxf_sync")
+    restored = False
+    for name in apply_names:
+        try:
+            fn = _find_method(_CLASE_VISOR, name)
+        except AssertionError:
+            continue
+        fuente = ast.unparse(fn)
+        if "set_plasma_contour_emphasis" in fuente or _calls_self_method(
+            fn, "set_plasma_contour_emphasis"
+        ):
+            restored = True
+            break
+    assert restored, (
+        "aplicar_render_dxf / renderizar_dxf_sync debe llamar a "
+        "set_plasma_contour_emphasis para restaurar"
+    )
 
 
 def test_cambio_de_pieza_resetea_emphasis() -> None:
@@ -169,7 +187,9 @@ def _run_state_machine() -> None:
         )
         clase = getattr(vis_mod, _CLASE_VISOR)
         v.set_plasma_contour_emphasis = clase.set_plasma_contour_emphasis.__get__(v)
-        v.renderizar_dxf = clase.renderizar_dxf.__get__(v)
+        # Ruta síncrona: el render async spawna hilo y necesita _aplicar_render_dxf.
+        v.renderizar_dxf = clase._renderizar_dxf_sync.__get__(v)
+        v._aplicar_render_dxf = clase._aplicar_render_dxf.__get__(v)
         v._reaplicar_overlay_plasma = lambda: None
         v.limpiar_lienzo = lambda: v._cad.calls.append(("limpiar_lienzo", (), {}))
         v._snapshot_metricas_ui = lambda: None

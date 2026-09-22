@@ -1,7 +1,7 @@
 """Tabla `cotas_dossier` en nestingpro_db — evidencias/fotos del dossier de cotas.
 
 Solo esquema (CREATE IF NOT EXISTS). La escritura/lectura la hará el proyecto
-COTAS ABIGAIL al integrar spoteos / typ+ / FYP.
+COTAS ABIGAIL al integrar spoteos / TYP.
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ def asegurar_tabla_cotas_dossier(db_config: dict | None = None) -> None:
                         CHECK (cantidad_spoteos >= 0),
                     nombre_archivo      TEXT NOT NULL DEFAULT '',
                     ruta                TEXT NOT NULL DEFAULT '',
+                    clasificacion       TEXT NOT NULL DEFAULT '',
                     created_at          TIMESTAMP NOT NULL DEFAULT NOW()
                 )
                 """
@@ -53,6 +54,7 @@ def asegurar_tabla_cotas_dossier(db_config: dict | None = None) -> None:
                     ADD COLUMN IF NOT EXISTS cantidad_spoteos INTEGER NOT NULL DEFAULT 1,
                     ADD COLUMN IF NOT EXISTS nombre_archivo TEXT NOT NULL DEFAULT '',
                     ADD COLUMN IF NOT EXISTS ruta TEXT NOT NULL DEFAULT '',
+                    ADD COLUMN IF NOT EXISTS clasificacion TEXT NOT NULL DEFAULT '',
                     ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT NOW()
                 """
             )
@@ -78,5 +80,17 @@ def asegurar_tabla_cotas_dossier(db_config: dict | None = None) -> None:
                 """
                 CREATE INDEX IF NOT EXISTS idx_cotas_dossier_job_type
                 ON public.cotas_dossier (job, type)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_cotas_dossier_clasificacion
+                ON public.cotas_dossier (clasificacion)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_cotas_dossier_job_clasificacion
+                ON public.cotas_dossier (job, clasificacion)
                 """
             )

@@ -270,7 +270,7 @@ def main() -> int:
     assert all(p.get("nombre") != "GUEST" for p in hoja_t["piezas"])
 
     # --- Galv 0.105: 6.29 mm al borde es ILEGAL (tabla 6.35 mm / 0.250").
-    # El packer C++ debe colocar ≥0.250"; pokayoke AVISA, no empuja.
+    # Validar AVISA; repair NUDGEA al 0.250" (SWO-076) sin expulsar.
     sivc = box(6.29, 50.0, 206.29, 150.0)
     otra = box(400.0, 50.0, 600.0, 150.0)
     hoja_galv = {
@@ -303,11 +303,14 @@ def main() -> int:
     okg, detg, expg = reparar_separacion_minima_hoja(
         hoja_galv, 0.15, margin_in=0.25, clave="0.105_GALVANIZADO"
     )
-    assert okg is False and "margen_placa" in detg, (okg, detg, expg)
+    assert okg is True and "ok_separado" in str(detg), (okg, detg, expg)
     assert len(expg) == 0, f"no expulsar por margen placa: {detg}"
     minx_despues = float(hoja_galv["piezas"][0]["poly"].bounds[0])
-    assert abs(minx_despues - minx_antes) < 1e-9, (
-        f"pokayoke no debe empujar: {minx_antes} → {minx_despues}"
+    assert minx_despues >= 0.250 * 25.4 - 1e-6, (
+        f"nudge debe llevar metal a ≥0.250\": {minx_antes} → {minx_despues}"
+    )
+    assert minx_despues > minx_antes + 1e-6, (
+        f"nudge debe empujar: {minx_antes} → {minx_despues}"
     )
 
     # --- Nest desparramado (Ultra 18%): gravedad debe juntar al origen, kerf tabla ---

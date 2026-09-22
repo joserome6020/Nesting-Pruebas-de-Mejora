@@ -577,14 +577,16 @@ def _refine_placement_matrix(
     """
     Ajusta solo traslación para que el bbox del DXF fuente coincida con el nest.
     El nest define posición; el DXF fuente conserva arcos/círculos nativos.
+
+    Siempre corrige el min-corner (no “close enough” con ALIGN_TOL_MM=8):
+    0.635 mm de error (=0.025\") pasaba el tol y dejaba margen placa a 0.225\".
     """
+    del tol  # la corrección es exacta; tol solo existía para el early-out viejo
     if not outer_bounds:
         return m
     align_bounds = _nest_bounds_for_matrix_check(outer_bounds, sheet)
     src_bounds = _transformed_outer_bounds(part_doc, m)
     if not src_bounds:
-        return m
-    if _position_close(align_bounds, src_bounds, tol=max(tol, ALIGN_TOL_MM)):
         return m
     dx = float(align_bounds[0]) - float(src_bounds[0])
     dy = float(align_bounds[1]) - float(src_bounds[1])

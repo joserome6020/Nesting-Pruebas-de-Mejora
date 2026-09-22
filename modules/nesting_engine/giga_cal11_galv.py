@@ -1704,10 +1704,10 @@ def fill_vfm_open_channels(hoja: dict, pool: list | None = None) -> dict[str, An
             return True
         b = poly.bounds
         return (
-            b[0] >= margin_mm - 0.6
-            and b[1] >= margin_mm - 0.6
-            and b[2] <= placa_w - margin_mm + 0.6
-            and b[3] <= placa_h - margin_mm + 0.6
+            b[0] >= margin_mm - 0.05
+            and b[1] >= margin_mm - 0.05
+            and b[2] <= placa_w - margin_mm + 0.05
+            and b[3] <= placa_h - margin_mm + 0.05
         )
 
     def _all_metal(skip_idx: int | None) -> list:

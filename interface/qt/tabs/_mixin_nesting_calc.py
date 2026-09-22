@@ -1621,35 +1621,40 @@ class NestingCalcMixin:
         offset_mm = 0.0
         ruta_plasma = ""
 
-        if plasma_parts:
+        if compensar and ruta and not es_material_cobre(material):
+            # Única vía productiva: DXF OUTER+/INNER− (paridad AutoCAD).
+            # Nunca buffer sobre el polígono del nest (doble stock / unidades).
             thk = self.app.motor_nesting._parse_thickness_value(calibre)
             if thk is None:
                 thk = float(self.app.motor_nesting._extraer_numero(calibre) or 0.0)
-            offset_mm = float(compute_plasma_offset_mm(float(thk or 0.0)))
+            offset_mm = float(
+                offset_mm_forzado
+                if offset_mm_forzado is not None
+                else compute_plasma_offset_mm(float(thk or 0.0))
+            )
             if offset_mm <= 0:
                 raise RuntimeError(
                     f"No se pudo calcular la compensación plasma de {src.get('nombre')!r}."
                 )
             if not hasattr(self.app, "plasma_dxf_por_ruta") or self.app.plasma_dxf_por_ruta is None:
                 self.app.plasma_dxf_por_ruta = {}
+            clave_lookup = clave_ruta
             ruta_plasma, error = asegurar_dxf_plasma_compensado(ruta, offset_mm)
             if not ruta_plasma:
                 cached = str(
                     (getattr(self.app, "plasma_dxf_por_ruta", None) or {}).get(
-                        clave_ruta, ""
+                        clave_lookup, ""
                     )
                     or ""
                 )
                 if cached and os.path.isfile(cached):
-                    # Workspace/renest: el origen puede no estar; reusar el DXF
-                    # compensado ya mapeado en PARTS.
                     ruta_plasma, error = cached, ""
             if not ruta_plasma:
                 raise RuntimeError(
                     f"No se pudo restaurar compensación plasma de "
                     f"{src.get('nombre')!r}: {error or 'DXF compensado no disponible.'}"
                 )
-            self.app.plasma_dxf_por_ruta[clave_ruta] = ruta_plasma
+            self.app.plasma_dxf_por_ruta[clave_lookup] = ruta_plasma
             poly_p, marks_p = self.app.motor_nesting.recuperar_geometria_robusta(ruta_plasma)
             if poly_p is None or poly_p.is_empty:
                 raise RuntimeError(
@@ -1658,21 +1663,12 @@ class NestingCalcMixin:
             poly = poly_p
             if marks_p is not None:
                 marks = marks_p
+            plasma_parts = True
         elif compensar:
-            offset_mm = float(
-                offset_mm_forzado
-                if offset_mm_forzado is not None
-                else (self._offset_compensacion_mm_desde_clave(calibre) or 0.0)
+            raise RuntimeError(
+                f"No hay ruta DXF para compensar {src.get('nombre')!r} "
+                "(se rechaza buffer sobre el nest: riesgo de stock ×25)."
             )
-            comp = self._aplicar_compensacion_poligono(poly, offset_mm)
-            if comp is None or comp.is_empty:
-                raise RuntimeError(
-                    f"No se pudo aplicar compensación plasma a {src.get('nombre')!r}."
-                )
-            from shapely import affinity
-
-            mx, my, _, _ = comp.bounds
-            poly = affinity.translate(comp, -mx, -my)
 
         # BLOQUEAR ORIEN (PARTS): hornear rotación y fijar grain_locked.
         # Sin esto, renest calibre/placa reconstruía el DXF en 0° y el motor
@@ -1733,17 +1729,22 @@ class NestingCalcMixin:
         """
         Construye lista completa de piezas del calibre con compensación parcial/global.
         cupos_compensar_por_nombre: dict nombre->cantidad de instancias a compensar.
+
+        Usa el mismo pipeline DXF (OUTER+/INNER−) que PARTS / nest completo —
+        nunca ``buffer(mm)`` sobre el polígono del nest (doble stock o unidades).
         """
         conteo_total = self._contar_piezas_reales_grupo(clave)
         if not conteo_total:
             return [], {}
-        # PARTS conserva la ruta original necesaria para recuperar el DXF plasma;
-        # el nest previo puede venir de una transferencia antigua sin esa ruta.
         fuente = self._construir_fuente_geometria_por_nombre(clave, prefer_dxf=True)
         if not fuente:
             return [], {}
 
-        cupos = {str(k): int(v) for k, v in (cupos_compensar_por_nombre or {}).items() if int(v or 0) > 0}
+        cupos = {
+            str(k): int(v)
+            for k, v in (cupos_compensar_por_nombre or {}).items()
+            if int(v or 0) > 0
+        }
         compensados_reales = {}
         piezas_out = []
         for nom, total in conteo_total.items():
@@ -1753,35 +1754,18 @@ class NestingCalcMixin:
             cupo_nom = int(cupos.get(nom, 0))
             for i in range(int(total)):
                 aplicar_comp = i < cupo_nom and float(offset_mm or 0.0) > 0
-                poly_use = src["poly_base"]
-                area_use = src["area_base"]
-                if aplicar_comp:
-                    comp = self._aplicar_compensacion_poligono(src["poly_base"], float(offset_mm))
-                    if comp is None or comp.is_empty:
-                        # Si no se puede compensar esta pieza, mantenemos base para no romper el lote.
-                        aplicar_comp = False
-                    else:
-                        poly_use = comp
-                        area_use = float(comp.area)
-                        compensados_reales[nom] = compensados_reales.get(nom, 0) + 1
-
-                item = {
-                    "nombre": src["nombre"],
-                    "poly": copy.deepcopy(poly_use),
-                    "marks": copy.deepcopy(src["marks_base"]),
-                    "area": area_use,
-                    "calibre": src["calibre"],
-                    "material": src["material"],
-                    "ruta": src["ruta"],
-                }
-                if aplicar_comp:
-                    # Este metadata es contrato de seguridad: el polygon que
-                    # entra al packer YA es el contorno final de corte. Si se
-                    # pierde, al reabrir un .arganest sólo queda una heurística
-                    # de bbox que confundía una rotación de 90° con un offset.
-                    item["plasma_compensada_manual"] = True
-                    item["plasma_offset_mm_manual"] = float(offset_mm)
-                    item["plasma_fuente_ya_compensada"] = True
+                try:
+                    item = self._pieza_pack_desde_fuente(
+                        src,
+                        forzar_compensacion_plasma=bool(aplicar_comp),
+                        offset_mm_forzado=float(offset_mm) if aplicar_comp else None,
+                    )
+                except RuntimeError:
+                    # Sin DXF usable: no inventar stock con buffer; pieza base.
+                    item = self._pieza_pack_desde_fuente(src)
+                    aplicar_comp = False
+                if aplicar_comp or item.get("plasma_compensada_manual"):
+                    compensados_reales[nom] = compensados_reales.get(nom, 0) + 1
                 piezas_out.append(item)
         return piezas_out, compensados_reales
 
@@ -2014,9 +1998,20 @@ class NestingCalcMixin:
         return QMessageBox.information(
             self,
             "Plasma",
-            "La compensación plasma ya no se hace por placa.\n\n"
-            "Márcala en PARTS → columna ESP. (piezas de acero). "
-            "Al nestear irán compensadas en placas solo-plasma.",
+            "La compensación plasma se marca en PARTS → columna ESP.\n\n"
+            "Luego hay que nestear de nuevo (recomendado: EJECUTAR NESTING "
+            "completo, o renestear el calibre) para separar placas solo-plasma "
+            "con stock 1/16\" por lado — paridad AutoCAD.\n"
+            "Renestear sólo una placa NO separa plasma/láser.",
+        )
+
+    def compensar_calibre_completo(self, clave):
+        return QMessageBox.information(
+            self,
+            "Plasma",
+            "La compensación plasma se marca en PARTS → columna ESP.\n\n"
+            "Selecciona las piezas y vuelve a nestear (calibre o nest completo). "
+            "El stock es 0.0625\" (1/16\") por lado, como en AutoCAD OFFSET.",
         )
 
     def _build_piezas_para_renest_calibre(self, clave):
@@ -2307,14 +2302,6 @@ class NestingCalcMixin:
                     reset_active_engine_id(engine_token)
 
         threading.Thread(target=worker, daemon=True).start()
-
-    def compensar_calibre_completo(self, clave):
-        return QMessageBox.information(
-            self,
-            "Plasma",
-            "La compensación plasma ya no se hace por calibre.\n\n"
-            "Selecciona las piezas en PARTS → ESP. y vuelve a nestear.",
-        )
 
     def _opciones_motores_renest(self):
         """Lista (engine_id, etiqueta) de motores listos para renesteo de acero."""

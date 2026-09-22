@@ -1111,13 +1111,16 @@ bool comprobar_colision(
     if (limit.active) {
         // Placa→pieza: solo el METAL vs margen. El buffer de kerf puede entrar
         // en la franja de margen (no es metal físico).
+        // Epsilon geométrico ~0.05 mm — NUNCA 0.5 mm (eso dejaba metal a
+        // ~0.230" / 0.225" cuando la tabla pide 0.250").
+        constexpr double kPlateEpsMm = 0.05;
         moved_exact = translate_copy(to_paths_d(var.poly), pos_x, pos_y);
         const double mmx = pos_x + var.m_minx;
         const double mmy = pos_y + var.m_miny;
         const double mMx = pos_x + var.m_maxx;
         const double mMy = pos_y + var.m_maxy;
-        if (mmx < limit.bounds.minx - 0.5 || mmy < limit.bounds.miny - 0.5
-            || mMx > limit.bounds.maxx + 0.5 || mMy > limit.bounds.maxy + 0.5) {
+        if (mmx < limit.bounds.minx - kPlateEpsMm || mmy < limit.bounds.miny - kPlateEpsMm
+            || mMx > limit.bounds.maxx + kPlateEpsMm || mMy > limit.bounds.maxy + kPlateEpsMm) {
             return true;
         }
         if (!path_contained_in(*moved_exact, limit.eval_paths)) {
@@ -1307,9 +1310,13 @@ bool colocar_pieza_nfp(
         cand_xy.reserve(anclajes.size());
         std::vector<std::pair<double, double>> cand_pxpy;
         cand_pxpy.reserve(anclajes.size());
+        // IFP de placa se calcula con metal_norm (bbox-min @ origen). Anclar
+        // con b_minx (globo kerf) desplazaba el metal y, con holguras viejas,
+        // dejaba margen placa corto. Huecos siguen usando buffer vía hole_limit.
+        const bool anclar_metal = (hole_limit == nullptr);
         for (const auto& anclaje : anclajes) {
-            double px = anclaje.first - var.b_minx;
-            double py = anclaje.second - var.b_miny;
+            double px = anclaje.first - (anclar_metal ? var.m_minx : var.b_minx);
+            double py = anclaje.second - (anclar_metal ? var.m_miny : var.b_miny);
             clamp_placement_to_plate_margin(
                 px,
                 py,

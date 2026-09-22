@@ -44,6 +44,7 @@ def main() -> int:
         "cantidad_spoteos",
         "nombre_archivo",
         "ruta",
+        "clasificacion",
         "created_at",
     }
     got = {r[0] for r in rows}

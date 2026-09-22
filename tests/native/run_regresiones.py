@@ -320,6 +320,18 @@ REGRESIONES = [
         "2026-08-19t - offset plasma 0.0625\" por lado en todos los calibres",
     ),
     (
+        "test_plasma_offset_unidades_insunits.py",
+        "2026-09-22 - INSUNITS=mm con geometría en pulgadas no infla stock ×25",
+    ),
+    (
+        "test_plasma_export_dxf_vs_nest.py",
+        "2026-09-22c - Plasma Compensated ≠ nest no se oculta como margen placa",
+    ),
+    (
+        "test_margen_placa_0_225_nudge.py",
+        "2026-09-22e - Margen placa 0.225\"/0.230\" → nudge a 0.250\" (SWO-076)",
+    ),
+    (
         "test_plasma_transfer_sigue_compensada.py",
         "2026-08-20a - mudar pieza plasma no dobla L/W (77.37≠77.50)",
     ),

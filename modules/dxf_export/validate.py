@@ -258,29 +258,64 @@ def validate_plasma_piece(
     nest_b = _poly_bounds_mm(p.get("outer") or p.get("outer_poly"))
     cut_b = _entities_bbox_mm(outer_ents)
     off = float(offset_mm or 0.0)
-    if nest_b and cut_b and off > 0:
+    # Siempre cotejar nest↔corte. Con offset=0 (fuente ya en Plasma Compensated)
+    # antes se saltaba este chequeo y un DXF inflado solo reventaba después como
+    # "margen placa X max" (caso SWO-076 Placa Base: nest 5928 vs corte 6334).
+    if nest_b and cut_b:
         nw = float(nest_b[2]) - float(nest_b[0])
         nh = float(nest_b[3]) - float(nest_b[1])
         cw = float(cut_b[2]) - float(cut_b[0])
         ch = float(cut_b[3]) - float(cut_b[1])
-        exp = 2.0 * off
-        tol = max(1.5, off * 0.5)
-        dw = cw - nw
-        dh = ch - nh
-        if abs(dw - exp) > tol or abs(dh - exp) > tol:
-            issues.append(
-                f"medidas vs nest: nest {nw:.1f}x{nh:.1f} mm, "
-                f"corte {cw:.1f}x{ch:.1f} mm "
-                f"(delta {dw:.2f}x{dh:.2f} mm; esperado ~+{exp:.2f} mm por lado)"
-            )
         nest_pos = (float(nest_b[0]), float(nest_b[1]))
         cut_pos = (float(cut_b[0]), float(cut_b[1]))
         shift_err = math.hypot(cut_pos[0] - nest_pos[0], cut_pos[1] - nest_pos[1])
-        if shift_err > max(2.0, off * 1.5):
-            issues.append(
-                f"posición min-corner desplazada {shift_err:.2f} mm respecto al nest "
-                f"(esperado ~{off:.2f} mm por desfase exterior)"
+        if off > 0:
+            exp = 2.0 * off
+            tol = max(1.5, off * 0.5)
+            dw = cw - nw
+            dh = ch - nh
+            if abs(dw - exp) > tol or abs(dh - exp) > tol:
+                issues.append(
+                    f"medidas vs nest: nest {nw:.1f}x{nh:.1f} mm, "
+                    f"corte {cw:.1f}x{ch:.1f} mm "
+                    f"(delta {dw:.2f}x{dh:.2f} mm; esperado ~+{exp:.2f} mm por lado)"
+                )
+            if shift_err > max(2.0, off * 1.5):
+                issues.append(
+                    f"posición min-corner desplazada {shift_err:.2f} mm respecto al nest "
+                    f"(esperado ~{off:.2f} mm por desfase exterior)"
+                )
+        else:
+            from modules.nesting_engine.geometry_parser import ESCALA_DXF
+
+            tol = max(3.0, 0.02 * max(nw, nh, cw, ch, 1.0))
+            scale = float(ESCALA_DXF) if float(ESCALA_DXF) > 0 else 25.4
+
+            def _size_ok(a_w: float, a_h: float, b_w: float, b_h: float) -> bool:
+                same = abs(a_w - b_w) <= tol and abs(a_h - b_h) <= tol
+                swapped = abs(a_w - b_h) <= tol and abs(a_h - b_w) <= tol
+                return same or swapped
+
+            compatible = (
+                _size_ok(nw, nh, cw, ch)
+                or _size_ok(nw * scale, nh * scale, cw, ch)
+                or _size_ok(nw, nh, cw * scale, ch * scale)
             )
+            if not compatible:
+                issues.append(
+                    f"DXF fuente ≠ nest: nest {nw:.1f}x{nh:.1f} mm, "
+                    f"corte {cw:.1f}x{ch:.1f} mm "
+                    f"(regenere Plasma Compensated y renestee)"
+                )
+            elif shift_err > tol:
+                # Si el mismatch era solo de unidades (10\" vs 254 mm), el
+                # min-corner también puede estar en escalas distintas: no
+                # marcarlo como desplazamiento real.
+                ratio = max(cw, ch, 1.0) / max(nw, nh, 1.0)
+                if not (scale / 1.1 <= ratio <= scale * 1.1 or 1.0 / (scale * 1.1) <= ratio <= 1.1 / scale):
+                    issues.append(
+                        f"posición min-corner desplazada {shift_err:.2f} mm respecto al nest"
+                    )
 
     if sheet and cut_b:
         from modules.nesting_engine.geometry_parser import ESCALA_DXF
@@ -302,21 +337,24 @@ def validate_plasma_piece(
             # DXF CUT_OUTER debe respetarla completa: restar `off` aquí
             # validaría un nest nominal y permitiría que la compensación
             # invada el margen real.
+            # Epsilon ~0.05 mm (≈0.002"). 0.5 mm dejaba pasar ~0.230"/0.225"
+            # cuando la TABLA GAPS pide 0.250" placa→pieza.
+            margen_eps = 0.05
             margen_min = margin_mm
-            if float(cut_b[0]) < margen_min - 0.5:
+            if float(cut_b[0]) < margen_min - margen_eps:
                 issues.append(
                     f"margen placa X: corte minX={cut_b[0]:.1f} mm < margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[1]) < margen_min - 0.5:
+            if float(cut_b[1]) < margen_min - margen_eps:
                 issues.append(
                     f"margen placa Y: corte minY={cut_b[1]:.1f} mm < margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[2]) > sl - margen_min + 0.5:
+            if float(cut_b[2]) > sl - margen_min + margen_eps:
                 issues.append(
                     f"margen placa X max: corte maxX={cut_b[2]:.1f} > "
                     f"placa {sl:.1f} - margen {margen_min:.1f} mm"
                 )
-            if float(cut_b[3]) > sw - margen_min + 0.5:
+            if float(cut_b[3]) > sw - margen_min + margen_eps:
                 issues.append(
                     f"margen placa Y max: corte maxY={cut_b[3]:.1f} > "
                     f"placa {sw:.1f} - margen {margen_min:.1f} mm"

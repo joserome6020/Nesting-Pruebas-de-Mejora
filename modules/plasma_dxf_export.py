@@ -1338,6 +1338,124 @@ def _try_plasma_source_export(
     return False
 
 
+def _nest_outer_size_mm(p: dict) -> tuple[float, float] | None:
+    outer = p.get("outer") or p.get("outer_poly") or []
+    xs: list[float] = []
+    ys: list[float] = []
+    for pt in outer:
+        if isinstance(pt, (list, tuple)) and len(pt) >= 2:
+            try:
+                xs.append(float(pt[0]))
+                ys.append(float(pt[1]))
+            except (TypeError, ValueError):
+                continue
+    if not xs:
+        return None
+    return (max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _dxf_outer_size_mm(ruta: str) -> tuple[float, float] | None:
+    """BBox del contorno exterior del DXF fuente, en mm.
+
+    Detecta pulgadas vs mm por geometría (mismo criterio que el compensador).
+    Antes siempre hacía ×25.4 y mentía si el archivo ya venía en mm.
+    """
+    if not ruta or not os.path.isfile(ruta):
+        return None
+    try:
+        part_doc = ezdxf.readfile(ruta)
+    except Exception:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for entity in part_doc.modelspace():
+        if _clasificar_capa(str(entity.dxf.layer)) != "outer":
+            continue
+        try:
+            from ezdxf import bbox as ezdxf_bbox
+
+            ext = ezdxf_bbox.extents([entity])
+            xs.extend([float(ext.extmin.x), float(ext.extmax.x)])
+            ys.extend([float(ext.extmin.y), float(ext.extmax.y)])
+        except Exception:
+            continue
+    if not xs:
+        return None
+    w_u = max(xs) - min(xs)
+    h_u = max(ys) - min(ys)
+    max_dim = max(w_u, h_u)
+    # Pieza tipo tanque en pulgadas (0.5\" … 200\").
+    if 0.5 <= max_dim <= 200.0:
+        return w_u * float(ESCALA_DXF), h_u * float(ESCALA_DXF)
+    # Claramente mm (p. ej. 1679 mm).
+    if max_dim >= 250.0:
+        return w_u, h_u
+    # Default planta AutoDXF = pulgadas.
+    return w_u * float(ESCALA_DXF), h_u * float(ESCALA_DXF)
+
+
+def _sizes_match_mm(
+    nest_wh: tuple[float, float] | None,
+    dxf_wh: tuple[float, float] | None,
+    *,
+    max_ratio: float = 1.08,
+) -> bool:
+    """True si el DXF y el nest miden lo mismo (acepta rotación 90°).
+
+    También acepta la misma geometría en inch↔mm: fixtures de test y DXFs
+    leídos con heurística distinta no deben disparar el fallback facetado
+    (perdería ARC nativos). Un DXF realmente inflado (p.ej. +16\") no cae
+    en factor ≈25.4 y sigue yendo a heal/fallback.
+    """
+    if not nest_wh or not dxf_wh:
+        return True
+    nw, nh = float(nest_wh[0]), float(nest_wh[1])
+    dw, dh = float(dxf_wh[0]), float(dxf_wh[1])
+    if nw < 1.0 or nh < 1.0 or dw < 1.0 or dh < 1.0:
+        return True
+
+    def _pair_ok(a: float, b: float) -> bool:
+        return (a / max_ratio) <= b <= (a * max_ratio)
+
+    def _orient_ok(a_w: float, a_h: float, b_w: float, b_h: float) -> bool:
+        same = _pair_ok(a_w, b_w) and _pair_ok(a_h, b_h)
+        swapped = _pair_ok(a_w, b_h) and _pair_ok(a_h, b_w)
+        return same or swapped
+
+    if _orient_ok(nw, nh, dw, dh):
+        return True
+    # Misma pieza, unidades distintas (10\" nest vs 254 mm DXF o al revés).
+    scale = float(ESCALA_DXF) if float(ESCALA_DXF) > 0 else 25.4
+    return _orient_ok(nw * scale, nh * scale, dw, dh) or _orient_ok(
+        nw, nh, dw * scale, dh * scale
+    )
+
+
+def _regenerar_plasma_desde_origen(
+    ruta_plasma: str, *, offset_mm: float
+) -> str | None:
+    """Fuerza un Plasma Compensated limpio desde el DXF Processed (sin stock)."""
+    try:
+        from modules.plasma_compensator import (
+            asegurar_dxf_plasma_compensado,
+            compute_plasma_offset_mm,
+            resolver_origen_dxf_sin_compensar,
+        )
+
+        origen = resolver_origen_dxf_sin_compensar(ruta_plasma)
+        if not origen.is_file():
+            return None
+        off = float(offset_mm or 0.0)
+        if off <= 0.0:
+            off = float(compute_plasma_offset_mm(0.25))
+        out, _err = asegurar_dxf_plasma_compensado(origen, off, forzar=True)
+        if out and os.path.isfile(str(out)):
+            return str(out)
+    except Exception:
+        return None
+    return None
+
+
 def export_plasma_placement(
     msp,
     doc,
@@ -1415,6 +1533,81 @@ def export_plasma_placement(
                 _msp_snapshot,
             )
 
+            nest_wh = _nest_outer_size_mm(p)
+            dxf_wh = _dxf_outer_size_mm(ruta_plasma)
+            if not _sizes_match_mm(nest_wh, dxf_wh):
+                off_heal = float(
+                    p.get("plasma_offset_mm_manual")
+                    or offset_mm
+                    or 0.0
+                )
+                healed = _regenerar_plasma_desde_origen(
+                    ruta_plasma, offset_mm=off_heal
+                )
+                if healed:
+                    log(
+                        f"    plasma[{nom}]: Plasma Compensated no empataba nest "
+                        f"(dxf={dxf_wh}, nest={nest_wh}); regenerado",
+                        level="WARN",
+                    )
+                    ruta_plasma = healed
+                    p["ruta_plasma"] = healed
+                    dxf_wh = _dxf_outer_size_mm(ruta_plasma)
+                if not _sizes_match_mm(nest_wh, dxf_wh):
+                    # DXF en disco sigue inflado/distinto (caso Placa Base +16\").
+                    # El nest YA cabe en placa: exportar el polígono anidado y
+                    # no tumbar el lote entero. Marcas del DXF malo se omiten.
+                    log(
+                        f"    plasma[{nom}]: DXF Plasma Compensated sigue ≠ nest "
+                        f"(dxf={dxf_wh}, nest={nest_wh}); "
+                        "exportando contorno del nest (fail-open geométrico)",
+                        level="WARN",
+                    )
+                    ok_fb = _export_plasma_polygon_fallback(
+                        msp, p, draw_holes=draw_holes, draw_marks=False
+                    )
+                    if ok_fb:
+                        new_ents = _msp_snapshot(msp)[count_before:]
+                        issues_fb = validate_plasma_piece(
+                            p,
+                            new_ents,
+                            offset_mm=0.0,
+                            sheet=sheet,
+                            all_piece_bounds=all_piece_bounds,
+                        )
+                        # Ignorar "DXF fuente ≠ nest" (no hay fuente 1:1).
+                        issues_fb = [
+                            i
+                            for i in (issues_fb or [])
+                            if "DXF fuente ≠ nest" not in str(i)
+                        ]
+                        if issues_fb:
+                            for iss in issues_fb:
+                                log(
+                                    f"    plasma[{nom}] FAIL: {iss}",
+                                    level="ERROR",
+                                )
+                            p["_plasma_validation_error"] = (
+                                f"plasma inválido: {issues_fb[0]}. "
+                                "Renestee esta placa con la compensación activa."
+                            )
+                            return False
+                        log(
+                            f"    plasma[{nom}]: fallback polígono nest OK "
+                            f"(DXF compensado descartado por tamaño)",
+                            level="WARN",
+                        )
+                        return True
+                    p["_plasma_validation_error"] = (
+                        "plasma inválido: DXF Plasma Compensated no coincide "
+                        "con el nest tras regenerar. Renestee con ESP. activo."
+                    )
+                    log(
+                        f"    plasma[{nom}] FAIL: {p['_plasma_validation_error']}",
+                        level="ERROR",
+                    )
+                    return False
+
             p_compensada = dict(p)
             p_compensada["ruta"] = ruta_plasma
             _export_source_dxf_at_placement(
@@ -1443,6 +1636,29 @@ def export_plasma_placement(
                 sheet=sheet,
                 all_piece_bounds=all_piece_bounds,
             )
+            if issues and any("DXF fuente ≠ nest" in str(i) for i in issues):
+                # Segundo intento: regenerar y re-exportar (archivo stale en disco).
+                _msp_destroy_entities(new_ents)
+                healed = _regenerar_plasma_desde_origen(
+                    ruta_plasma,
+                    offset_mm=float(p.get("plasma_offset_mm_manual") or 0.0),
+                )
+                if healed:
+                    ruta_plasma = healed
+                    p["ruta_plasma"] = healed
+                    p_compensada = dict(p)
+                    p_compensada["ruta"] = healed
+                    _export_source_dxf_at_placement(
+                        msp, doc, p_compensada, draw_marks=draw_marks, strict=False
+                    )
+                    new_ents = _msp_snapshot(msp)[count_before:]
+                    issues = validate_plasma_piece(
+                        p,
+                        new_ents,
+                        offset_mm=0.0,
+                        sheet=sheet,
+                        all_piece_bounds=all_piece_bounds,
+                    )
             if issues:
                 for iss in issues:
                     log(f"    plasma[{nom}] FAIL: {iss}", level="ERROR")

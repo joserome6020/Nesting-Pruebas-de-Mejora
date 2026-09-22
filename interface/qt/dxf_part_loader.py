@@ -151,7 +151,7 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
     # queda vacío y el énfasis plasma (rojo + "+X"") no se pinta.
     outer_line_arc_raw: list = []
     inner_line_arc_raw: list = []
-    distancia_suavizado = 0.05 * (model.factor_conversion / 25.4)
+    distancia_suavizado = 0.005 * (model.factor_conversion / 25.4)
     _max_poly_pts = int(__import__("os").getenv("ARGA_VISOR_MAX_POLY_PTS", "1200"))
     vertice_total = 0
 
@@ -295,7 +295,7 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
     for layer_c, rcx0, rcy0, rr in circulos_raw:
         rcx, rcy = rotar_punto(rcx0, rcy0, cx, cy, rot) if rot else (rcx0, rcy0)
         if es_cut_layer(layer_c) or model.render_all_layers or es_outer_layer(layer_c) or es_inner_layer(layer_c):
-            nang = 48
+            nang = 128
             poly_circ = [
                 (
                     rcx + rr * math.cos(2 * math.pi * k / nang),

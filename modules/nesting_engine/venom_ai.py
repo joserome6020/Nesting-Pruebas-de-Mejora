@@ -376,11 +376,20 @@ def _try_import_venom_core():
     return None
 
 
-def _try_venom_core_coarse(items: list, vx: float, vy: float, kerf_mm: float, placa_w: float, placa_h: float) -> int:
+def _try_venom_core_coarse(
+    items: list,
+    vx: float,
+    vy: float,
+    kerf_mm: float,
+    placa_w: float,
+    placa_h: float,
+    *,
+    plate_inset_mm: float | None = None,
+) -> int:
     """
     Prefase AABB con venom_core. Devuelve #piezas movidas.
     Fallo silencioso si el .pyd no carga (el polish Shapely sigue).
-    Compatible con .pyd viejo (sin plate_w/h) y nuevo.
+    Compatible con .pyd viejo (sin plate_w/h / plate_margin_mm) y nuevo.
     """
     venom_core = _try_import_venom_core()
     if venom_core is None or not hasattr(venom_core, "compact_plate") or not items:
@@ -390,6 +399,17 @@ def _try_venom_core_coarse(items: list, vx: float, vy: float, kerf_mm: float, pl
     mag = max(abs(vx), abs(vy), 1e-6)
     step_vx = vx / mag
     step_vy = vy / mag
+
+    try:
+        from .cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
+
+        edge = float(
+            plate_inset_mm
+            if plate_inset_mm is not None
+            else (PLATE_TO_PIECE_DEFAULT_IN * 25.4)
+        )
+    except Exception:
+        edge = float(plate_inset_mm) if plate_inset_mm is not None else (0.250 * 25.4)
 
     pieces_data = []
     for item in items:
@@ -401,17 +421,18 @@ def _try_venom_core_coarse(items: list, vx: float, vy: float, kerf_mm: float, pl
 
         fn = venom_core.compact_plate
         params = inspect.signature(fn).parameters
+        kwargs = {
+            "pieces_data": pieces_data,
+            "vx": float(step_vx),
+            "vy": float(step_vy),
+            "kerf_mm": float(kerf_mm),
+        }
         if "plate_w" in params:
-            results = fn(
-                pieces_data,
-                float(step_vx),
-                float(step_vy),
-                float(kerf_mm),
-                float(placa_w),
-                float(placa_h),
-            )
-        else:
-            results = fn(pieces_data, float(step_vx), float(step_vy), float(kerf_mm))
+            kwargs["plate_w"] = float(placa_w)
+            kwargs["plate_h"] = float(placa_h)
+        if "plate_margin_mm" in params:
+            kwargs["plate_margin_mm"] = float(edge)
+        results = fn(**kwargs)
     except Exception:
         return 0
 
@@ -429,20 +450,20 @@ def _try_venom_core_coarse(items: list, vx: float, vy: float, kerf_mm: float, pl
         item = by_id.get(pid)
         if not item:
             continue
-        # Clamp suave a placa (el C++ antiguo no conoce max bounds).
+        # Clamp suave a placa CON margen de tabla (no al canto 0 / kerf/2).
         b = item["poly"].bounds
         new_minx = b[0] + sx
         new_miny = b[1] + sy
         new_maxx = b[2] + sx
         new_maxy = b[3] + sy
-        if placa_w > 0 and new_maxx > placa_w:
-            sx -= new_maxx - placa_w
-        if placa_h > 0 and new_maxy > placa_h:
-            sy -= new_maxy - placa_h
-        if new_minx < 0:
-            sx -= new_minx
-        if new_miny < 0:
-            sy -= new_miny
+        if placa_w > 0 and new_maxx > placa_w - edge:
+            sx -= new_maxx - (placa_w - edge)
+        if placa_h > 0 and new_maxy > placa_h - edge:
+            sy -= new_maxy - (placa_h - edge)
+        if new_minx < edge:
+            sx += edge - new_minx
+        if new_miny < edge:
+            sy += edge - new_miny
         if abs(sx) < 1e-9 and abs(sy) < 1e-9:
             continue
         item["poly"] = affinity.translate(item["poly"], sx, sy)
@@ -590,7 +611,9 @@ def apply_smart_polisher(
             _translate_piece_data(item["p"], global_dx, global_dy)
 
     # --- Coarse AABB (venom_core) ---
-    coarse_moved = _try_venom_core_coarse(items, vx, vy, kerf_mm, placa_w, placa_h)
+    coarse_moved = _try_venom_core_coarse(
+        items, vx, vy, kerf_mm, placa_w, placa_h, plate_inset_mm=plate_inset
+    )
 
     nudges_totales = 0
     mm_ahorrados_x = 0.0

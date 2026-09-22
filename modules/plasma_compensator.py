@@ -61,7 +61,11 @@ def resolver_dxf_plasma(ruta_origen: str | Path, offset_mm: float) -> tuple[str 
 
 
 def aplicar_compensacion_poligono(poly, offset_mm: float):
-    """Offset exterior para geometría nesting (mm). None si falla."""
+    """Offset exterior sobre geometría nesting (coords en mm). None si falla.
+
+    Preferir siempre el pipeline DXF (``asegurar_dxf_plasma_compensado``).
+    Este helper es solo last-resort y asume polígonos ya en mm (×25.4 del DXF).
+    """
     try:
         from modules.plasma_offset2d import offset_simple_ring
 
@@ -135,9 +139,102 @@ def ruta_dxf_plasma_compensado(ruta_origen: str | Path) -> Path:
     parent = src.parent
     if parent.name.lower() == "processed files":
         out_dir = parent / "Plasma Compensated"
+    elif parent.name.lower() == "plasma compensated":
+        # Ya estamos dentro del destino: no anidar otra carpeta.
+        out_dir = parent
     else:
         out_dir = parent / "Plasma Compensated"
     return out_dir / src.name
+
+
+def resolver_origen_dxf_sin_compensar(ruta: str | Path) -> Path:
+    """
+    Si ``ruta`` ya apunta a Plasma Compensated/foo.dxf, regresa el Processed
+    original (hermano). Evita compensar dos veces el mismo archivo.
+    """
+    src = Path(str(ruta or ""))
+    parent = src.parent
+    if parent.name.lower() != "plasma compensated":
+        return src
+    sibling = parent.parent / src.name
+    if sibling.is_file():
+        return sibling
+    # Fallback: Processed Files/foo.dxf un nivel arriba del compensado.
+    processed = parent.parent
+    if processed.name.lower() == "processed files":
+        cand = processed / src.name
+        if cand.is_file():
+            return cand
+    return src
+
+
+def _bbox_outer_dxf_units(doc, *, outer_set: set | None = None) -> tuple[float, float] | None:
+    """(ancho, alto) del contorno OUTER en unidades crudas del DXF."""
+    try:
+        from modules.plasma_occt_offset import specs_bbox, specs_from_dxf_entities
+
+        outer_set = outer_set or _normalize_layers(OUTER_LAYERS_DEFAULT)
+        pools = _pools_por_rol(doc, outer_set=outer_set, inner_set=set())
+        outer = pools.get("outer") or []
+        if not outer:
+            return None
+        return specs_bbox(specs_from_dxf_entities(outer))
+    except Exception:
+        return None
+
+
+def resolver_off_dxf_plasma(doc, offset_mm: float) -> tuple[float, str, float]:
+    """
+    Convierte offset_mm → unidades del DXF con detección geométrica.
+
+    Bug de planta: DXF en pulgadas con ``$INSUNITS=4`` (mm) hacía
+    ``off_dxf = 1.5875`` sobre coords en pulgadas → +1.59\" por lado
+    (×25.4 del stock real 0.0625\"). Paridad AutoCAD: stock fijo 1/16\" por lado.
+
+    Returns:
+        (off_dxf, unidad_detectada, unit_to_mm)
+    """
+    off_mm = float(offset_mm or 0.0)
+    off_in = off_mm / 25.4  # regla planta: 0.0625\"
+    bbox = _bbox_outer_dxf_units(doc)
+    max_dim = 0.0
+    if bbox is not None:
+        try:
+            max_dim = max(float(bbox[0]), float(bbox[1]))
+        except Exception:
+            max_dim = 0.0
+
+    # Geometría tipo pieza de tanque en pulgadas (0.5\" … 200\").
+    if 0.5 <= max_dim <= 200.0:
+        return off_in, "inch(geom)", 25.4
+    # Pieza claramente en mm (p. ej. 254 mm = 10\").
+    if max_dim >= 250.0:
+        return off_mm, "mm(geom)", 1.0
+
+    insunits = int(doc.header.get("$INSUNITS", 0) or 0)
+    if insunits == 4:
+        unit_to_mm = 1.0
+        label = "mm(insunits)"
+    elif insunits == 5:
+        unit_to_mm = 10.0
+        label = "cm(insunits)"
+    elif insunits == 1:
+        unit_to_mm = 25.4
+        label = "inch(insunits)"
+    else:
+        # Unitless / desconocido: flujo ARGA Processed = pulgadas.
+        unit_to_mm = 25.4
+        label = "inch(default)"
+
+    off_dxf = off_mm / unit_to_mm
+    # Techo duro: jamás más de 0.20\" de stock por lado (regla es 0.0625\").
+    techo_in = 0.20
+    if unit_to_mm >= 25.0 and off_dxf > techo_in:
+        return off_in, f"{label}->cap_inch", 25.4
+    if unit_to_mm < 2.0 and off_dxf > techo_in * 25.4:
+        # Header decía mm pero el offset quedó absurdo → forzar pulgadas.
+        return off_in, f"{label}->cap_inch", 25.4
+    return off_dxf, label, unit_to_mm
 
 
 def asegurar_dxf_plasma_compensado(
@@ -156,12 +253,19 @@ def asegurar_dxf_plasma_compensado(
         write_version_sidecar,
     )
 
-    src = Path(str(ruta_origen or ""))
+    src = resolver_origen_dxf_sin_compensar(ruta_origen)
     if not src.is_file():
         return None, f"No existe el DXF origen:\n{src}"
     off = float(offset_mm or 0.0)
     if off <= 0:
         return None, "Offset plasma inválido."
+    # Stock planta: 0.0625\" (±1 %) — rechazar callers con mm mal escalados.
+    off_in = off / 25.4
+    if off_in > 0.20:
+        return None, (
+            f"Offset plasma fuera de rango ({off_in:.4f}\" por lado); "
+            "esperado 0.0625\" (1/16\")."
+        )
     dst = ruta_dxf_plasma_compensado(src)
     try:
         if not forzar and compensated_dxf_is_current(src, dst, offset_mm=off):
@@ -572,16 +676,9 @@ def compensate_dxf_for_plasma(
     outer_set = _normalize_layers(outer_layers)
     inner_set = _normalize_layers(inner_layers)
 
-    insunits = int(doc.header.get("$INSUNITS", 0) or 0)
-    if insunits == 4:
-        unit_to_mm = 1.0
-    elif insunits == 5:
-        unit_to_mm = 10.0
-    elif insunits == 1:
-        unit_to_mm = 25.4
-    else:
-        unit_to_mm = 25.4
-    off_dxf = float(offset_mm) / unit_to_mm
+    off_dxf, unit_label, unit_to_mm = resolver_off_dxf_plasma(doc, float(offset_mm))
+    if abs(off_dxf) <= 0:
+        raise RuntimeError("PLASMA: offset en unidades DXF inválido.")
 
     exact = _compensate_dxf_occt_exact(
         doc,
@@ -620,6 +717,7 @@ def compensate_dxf_for_plasma(
         "circles": circles,
         "offset_dxf": off_dxf,
         "unit_to_mm": unit_to_mm,
+        "unit_label": unit_label,
         "backend": backend,
         "algo": PLASMA_OFFSET_ALGO_VERSION,
     }

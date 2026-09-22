@@ -37,16 +37,22 @@ bool checkCollisionWithKerf(const PieceBox& p1, const PieceBox& p2, double kerf_
 
 // Función principal de pulido (Nudging) expuesta a Python.
 // plate_w/plate_h opcionales (<=0 = sin límite superior).
+// plate_margin_mm: distancia mínima metal↔orilla (TABLA GAPS = 0.250" → 6.35 mm).
+// Antes se usaba kerf_half como orilla y el metal quedaba a ~kerf/2 del canto.
 std::vector<std::tuple<int, double, double>> compact_plate(
         std::vector<std::tuple<int, double, double, double, double>> pieces_data, 
         double vx, 
         double vy,
         double kerf_mm,
         double plate_w = 0.0,
-        double plate_h = 0.0) {
+        double plate_h = 0.0,
+        double plate_margin_mm = -1.0) {
     
     std::vector<PieceBox> pieces;
     double kerf_half = std::max(0.0, kerf_mm / 2.0);
+    // Margen placa: si no viene, NO degradar a kerf/2 (bug SWO-076 ~0.225").
+    // Usar 0.250" = 6.35 mm como default de planta.
+    const double edge = (plate_margin_mm >= 0.0) ? plate_margin_mm : (0.250 * 25.4);
     
     for (const auto& data : pieces_data) {
         pieces.push_back({
@@ -79,8 +85,8 @@ std::vector<std::tuple<int, double, double>> compact_plate(
             double new_minX = pieces[i].minX + vx;
             double new_maxX = pieces[i].maxX + vx;
             const bool x_in_plate =
-                (new_minX >= kerf_half) &&
-                (plate_w <= 0.0 || new_maxX <= plate_w - kerf_half);
+                (new_minX >= edge) &&
+                (plate_w <= 0.0 || new_maxX <= plate_w - edge);
             if (x_in_plate) {
                 pieces[i].minX += vx;
                 pieces[i].maxX += vx;
@@ -108,8 +114,8 @@ std::vector<std::tuple<int, double, double>> compact_plate(
             double new_minY = pieces[i].minY + vy;
             double new_maxY = pieces[i].maxY + vy;
             const bool y_in_plate =
-                (new_minY >= kerf_half) &&
-                (plate_h <= 0.0 || new_maxY <= plate_h - kerf_half);
+                (new_minY >= edge) &&
+                (plate_h <= 0.0 || new_maxY <= plate_h - edge);
             if (y_in_plate) {
                 pieces[i].minY += vy;
                 pieces[i].maxY += vy;
@@ -152,5 +158,6 @@ PYBIND11_MODULE(venom_core, m) {
           py::arg("vy"),
           py::arg("kerf_mm") = 0.0,
           py::arg("plate_w") = 0.0,
-          py::arg("plate_h") = 0.0);
+          py::arg("plate_h") = 0.0,
+          py::arg("plate_margin_mm") = -1.0);
 }

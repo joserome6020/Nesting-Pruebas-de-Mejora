@@ -55,6 +55,48 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-22g — Release: margen 0.250\" + export plasma robusto
+- Empaqueta fixes 22e/22f (margen placa, fallback Placa Base).
+- `_sizes_match_mm` / validate aceptan inch↔mm (no tumbar ARC nativos en fixtures).
+- Prefs GIGA: env `ARGA_GIGA_CAL11_GALV` se reaplica aunque el JSON esté cacheado.
+- Candados: nudge margen actualizado; visor emphasis en ruta sync post-async.
+
+### 2026-09-22f — Placa Base: DXF inflado no tumba export (fallback nest)
+- W.O. 89 Placa Base: nest 66.125\" vs Plasma Compensated ~82\" (+16\") tras regen.
+- Antes: FAIL duro y abortaba la hoja H7.
+- Ahora: si tras regenerar sigue ≠ nest → exporta contorno del nest (cabe en
+  placa) y sigue el lote; avisa en log.
+- `_dxf_outer_size_mm` detecta pulgadas/mm por geometría (no siempre ×25.4).
+- Candado: `test_export_fallback_poligono_si_dxf_sigue_inflado`.
+
+### 2026-09-22e — Margen placa 0.250\" estricto (SWO-076 plasma)
+- Export medía metal a **0.225\"/0.230\"** del canto (tabla **0.250\"**).
+- Causas: holgura **0.5 mm** en Ultra; Venom coarse usaba kerf/2 como orilla;
+  refine de export saltaba correcciones < 8 mm (`ALIGN_TOL`).
+- Fix: epsilon placa 0.05 mm; IFP placa ancla con metal (`m_minx`); Venom
+  respeta margen tabla; refine siempre alinea min-corner; pokayoke **nudge**
+  margen corto → 0.250\".
+- Candado: `tests/native/test_margen_placa_0_225_nudge.py`.
+
+### 2026-09-22d — Plasma export falso positivo por rotación 90° + PARTS curvas
+- `BRACE A 90 S3`: nest girado (h×w) vs DXF (w×h) tumbaba export tras “regenerar”.
+- Fix: `_sizes_match_mm` acepta orientación intercambiada.
+- PARTS detalle: énfasis plasma rojo usaba `outer_rings` facetados (0.05");
+  ahora path nativo ARC/CIRCLE/bulges + flatten 0.005".
+
+### 2026-09-22c — Plasma export: DXF≠nest no se disfraza de margen placa
+- Caso SWO-076 H7 `Placa Base`: nest maxX=5928 mm OK en placa 240"; CUT 6334 mm.
+- Causa: Plasma Compensated stale/inflado; con `offset=0` el validador saltaba nest↔corte.
+- Fix: siempre cotejar nest↔CUT; si no empatan, regenerar Plasma Compensated forzado.
+- Candado: `tests/native/test_plasma_export_dxf_vs_nest.py`.
+
+### 2026-09-22b — Plasma: stock 1/16\" real (no ×25 por INSUNITS)
+- Causa reportada en SWO: piezas “compensadas” crecían desmedido.
+- `$INSUNITS=mm` con DXF en pulgadas aplicaba 1.59\"/lado en vez de 0.0625\".
+- Fix: detectar unidad por bbox; techo 0.20\"; no re-compensar Plasma Compensated/;
+  renest usa solo pipeline DXF (no buffer sobre el nest).
+- Candado: `tests/native/test_plasma_offset_unidades_insunits.py`.
+
 ### 2026-09-22 — Escenarios MES: costo estimado incluye largos/MRL
 - Antes: “Costo Estimado” del análisis de lotes era solo placas; el modal
   Costos del nesteo sumaba MRL después → parecía inconsistencia.

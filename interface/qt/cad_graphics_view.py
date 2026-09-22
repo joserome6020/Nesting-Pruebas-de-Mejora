@@ -344,7 +344,7 @@ class CadPartGraphicsView(QGraphicsView):
                     poly = poly.buffer(0)
                 if poly.is_empty:
                     continue
-                buff = poly.buffer(off_scene, join_style=1, quad_segs=16)
+                buff = poly.buffer(off_scene, join_style=1, quad_segs=64)
                 if buff is None or buff.is_empty:
                     continue
                 geoms = list(buff.geoms) if hasattr(buff, "geoms") else [buff]
@@ -390,13 +390,10 @@ class CadPartGraphicsView(QGraphicsView):
         }
 
     def emphasize_plasma_outers(self, *, label: str | None = None) -> None:
-        """Contorno rojo grueso sobre OUTER del modelo (DXF ya compensado)."""
+        """Contorno rojo grueso sobre OUTER — arcos nativos, no anillos facetados."""
         self.clear_plasma_overlay()
         model = self._model
         if model is None:
-            return
-        rings = list(getattr(model, "outer_rings", None) or [])
-        if not rings:
             return
 
         pen = QPen(QColor("#FF1A1A"))
@@ -405,27 +402,96 @@ class CadPartGraphicsView(QGraphicsView):
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
-        minx = miny = float("inf")
-        maxx = maxy = float("-inf")
-        for ring in rings:
-            if len(ring) < 3:
-                continue
-            path = self._path_from_pts(ring, closed=True)
-            item = QGraphicsPathItem(path)
-            item.setPen(pen)
-            item.setBrush(Qt.BrushStyle.NoBrush)
-            item.setZValue(Z_PLASMA)
-            self._scene.addItem(item)
-            self._plasma_items.append(item)
-            xs = [p[0] for p in ring]
-            ys = [p[1] for p in ring]
-            minx = min(minx, min(xs))
-            maxx = max(maxx, max(xs))
-            miny = min(miny, min(ys))
-            maxy = max(maxy, max(ys))
+        path = self._outer_path_nativo(model)
+        if path is None or path.isEmpty():
+            # Fallback: anillos densificados (ya afinados en el loader).
+            rings = list(getattr(model, "outer_rings", None) or [])
+            path = QPainterPath()
+            for ring in rings:
+                if len(ring) < 3:
+                    continue
+                path.addPath(self._path_from_pts(ring, closed=True))
 
-        if label and minx < maxx:
-            self._agregar_label_plasma(str(label), (minx + maxx) * 0.5, maxy)
+        if path.isEmpty():
+            return
+
+        item = QGraphicsPathItem(path)
+        item.setPen(pen)
+        item.setBrush(Qt.BrushStyle.NoBrush)
+        item.setZValue(Z_PLASMA)
+        self._scene.addItem(item)
+        self._plasma_items.append(item)
+
+        br = path.boundingRect()
+        if label and br.width() > 0 and br.height() > 0:
+            self._agregar_label_plasma(
+                str(label), br.center().x(), br.bottom()
+            )
+
+    def _outer_path_nativo(self, model: DxfPartModel) -> QPainterPath | None:
+        """OUTER en coords de escena con ARC/CIRCLE/bulges (sin facetado grosero)."""
+        msp = getattr(model, "msp", None)
+        if msp is None:
+            return None
+        try:
+            from ezdxf import path as ezdxf_path
+            from modules.nesting_engine.geometry_parser import _clasificar_capa
+        except Exception:
+            return None
+
+        out = QPainterPath()
+        # 0.005" (o equiv. mm) → curvas suaves en el detalle PARTS.
+        flat = 0.005
+        found = False
+        for entity in msp:
+            try:
+                if _clasificar_capa(str(entity.dxf.layer)) != "outer":
+                    continue
+                typ = entity.dxftype()
+                if typ == "CIRCLE":
+                    c = entity.dxf.center
+                    r = float(entity.dxf.radius)
+                    if r <= 1e-12:
+                        continue
+                    cx, cy = float(c.x), float(c.y)
+                    out.moveTo(cx + r, cy)
+                    out.arcTo(cx - r, cy - r, 2.0 * r, 2.0 * r, 0.0, 360.0)
+                    out.closeSubpath()
+                    found = True
+                    continue
+                if typ == "ARC":
+                    c = entity.dxf.center
+                    r = float(entity.dxf.radius)
+                    if r <= 1e-12:
+                        continue
+                    cx, cy = float(c.x), float(c.y)
+                    sa = float(entity.dxf.start_angle)
+                    ea = float(entity.dxf.end_angle)
+                    span = (ea - sa) % 360.0 or 360.0
+                    out.arcMoveTo(cx - r, cy - r, 2.0 * r, 2.0 * r, sa)
+                    out.arcTo(cx - r, cy - r, 2.0 * r, 2.0 * r, sa, span)
+                    found = True
+                    continue
+                if typ == "LINE":
+                    s, e = entity.dxf.start, entity.dxf.end
+                    out.moveTo(float(s.x), float(s.y))
+                    out.lineTo(float(e.x), float(e.y))
+                    found = True
+                    continue
+                if typ in ("LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE"):
+                    p = ezdxf_path.make_path(entity)
+                    verts = list(p.flattening(distance=flat))
+                    if len(verts) < 2:
+                        continue
+                    out.moveTo(float(verts[0][0]), float(verts[0][1]))
+                    for v in verts[1:]:
+                        out.lineTo(float(v[0]), float(v[1]))
+                    if p.is_closed:
+                        out.closeSubpath()
+                    found = True
+            except Exception:
+                continue
+        return out if found else None
 
     def _agregar_label_plasma(self, label: str, cx_scene: float, top_scene: float) -> None:
         """Coloca el texto '+X"' sobre la pieza con tamaño cosmético.

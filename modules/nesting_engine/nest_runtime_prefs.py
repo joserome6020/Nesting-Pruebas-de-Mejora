@@ -64,6 +64,58 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
     return out
 
 
+def _apply_env_overrides(prefs: dict[str, Any]) -> dict[str, Any]:
+    """Env gana siempre (worker/CI/tests); se reaplica aunque el JSON esté cacheado."""
+    out = copy.deepcopy(prefs)
+    env_prefer = (os.environ.get("ARGA_NEST_RUNTIME") or "").strip()
+    env_host = (os.environ.get("ARGA_NEST_SPARK_HOST") or "").strip()
+    env_port = (os.environ.get("ARGA_NEST_SPARK_PORT") or "").strip()
+    env_cu = (os.environ.get("ARGA_CU_FORCE_DXF_STEP") or "").strip().lower()
+    env_cu_mark = (os.environ.get("ARGA_CU_SIN_MARCAJE") or "").strip().lower()
+    env_giga = (os.environ.get("ARGA_GIGA_CAL11_GALV") or "").strip().lower()
+    env_step = (os.environ.get("ARGA_STEP_FEEDSTOCK") or "").strip().lower()
+    if env_prefer:
+        out["prefer"] = normalize_prefer(env_prefer)
+    if env_host:
+        spark = dict(out.get("spark") or {})
+        spark["host"] = env_host
+        out["spark"] = spark
+    if env_port:
+        try:
+            spark = dict(out.get("spark") or {})
+            spark["port"] = int(env_port)
+            out["spark"] = spark
+        except ValueError:
+            pass
+    if env_cu in ("1", "true", "on", "yes"):
+        out["cu_force_dxf_step"] = True
+    elif env_cu in ("0", "false", "off", "no"):
+        out["cu_force_dxf_step"] = False
+    if env_cu_mark in ("1", "true", "on", "yes"):
+        out["cu_sin_marcaje"] = True
+    elif env_cu_mark in ("0", "false", "off", "no"):
+        out["cu_sin_marcaje"] = False
+    if env_giga in ("1", "true", "on", "yes"):
+        out["giga_cal11_galv"] = True
+    elif env_giga in ("0", "false", "off", "no"):
+        out["giga_cal11_galv"] = False
+    if env_step in ("1", "true", "on", "yes"):
+        out["step_feedstock_enabled"] = True
+    elif env_step in ("0", "false", "off", "no"):
+        out["step_feedstock_enabled"] = False
+    out["prefer"] = normalize_prefer(str(out.get("prefer") or "local"))
+    out["cu_force_dxf_step"] = bool(out.get("cu_force_dxf_step"))
+    out["cu_sin_marcaje"] = bool(out.get("cu_sin_marcaje"))
+    out["giga_cal11_galv"] = bool(out.get("giga_cal11_galv"))
+    out["step_feedstock_enabled"] = bool(out.get("step_feedstock_enabled"))
+    out["exportar_a_servidor"] = bool(out.get("exportar_a_servidor", True))
+    spark = dict(out.get("spark") or {})
+    for key, value in _DEFAULTS["spark"].items():
+        spark.setdefault(key, value)
+    out["spark"] = spark
+    return out
+
+
 def load_nest_runtime_prefs() -> dict[str, Any]:
     global _PREFS_CACHE_MTIME, _PREFS_CACHE_DATA
     path = config_path()
@@ -72,7 +124,8 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
     except OSError:
         mtime = 0.0
     if _PREFS_CACHE_DATA is not None and _PREFS_CACHE_MTIME == mtime:
-        return copy.deepcopy(_PREFS_CACHE_DATA)
+        # Cache = disco+defaults; env se reaplica por si cambió en runtime (tests/CI).
+        return _apply_env_overrides(_PREFS_CACHE_DATA)
 
     prefs = copy.deepcopy(_DEFAULTS)
     if path.is_file():
@@ -82,40 +135,6 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
                 prefs = _deep_merge(prefs, raw)
         except Exception:
             pass
-
-    # Variables de entorno son el override final para worker/CI/diagnóstico.
-    env_prefer = (os.environ.get("ARGA_NEST_RUNTIME") or "").strip()
-    env_host = (os.environ.get("ARGA_NEST_SPARK_HOST") or "").strip()
-    env_port = (os.environ.get("ARGA_NEST_SPARK_PORT") or "").strip()
-    env_cu = (os.environ.get("ARGA_CU_FORCE_DXF_STEP") or "").strip().lower()
-    env_cu_mark = (os.environ.get("ARGA_CU_SIN_MARCAJE") or "").strip().lower()
-    env_giga = (os.environ.get("ARGA_GIGA_CAL11_GALV") or "").strip().lower()
-    env_step = (os.environ.get("ARGA_STEP_FEEDSTOCK") or "").strip().lower()
-    if env_prefer:
-        prefs["prefer"] = normalize_prefer(env_prefer)
-    if env_host:
-        prefs["spark"]["host"] = env_host
-    if env_port:
-        try:
-            prefs["spark"]["port"] = int(env_port)
-        except ValueError:
-            pass
-    if env_cu in ("1", "true", "on", "yes"):
-        prefs["cu_force_dxf_step"] = True
-    elif env_cu in ("0", "false", "off", "no"):
-        prefs["cu_force_dxf_step"] = False
-    if env_cu_mark in ("1", "true", "on", "yes"):
-        prefs["cu_sin_marcaje"] = True
-    elif env_cu_mark in ("0", "false", "off", "no"):
-        prefs["cu_sin_marcaje"] = False
-    if env_giga in ("1", "true", "on", "yes"):
-        prefs["giga_cal11_galv"] = True
-    elif env_giga in ("0", "false", "off", "no"):
-        prefs["giga_cal11_galv"] = False
-    if env_step in ("1", "true", "on", "yes"):
-        prefs["step_feedstock_enabled"] = True
-    elif env_step in ("0", "false", "off", "no"):
-        prefs["step_feedstock_enabled"] = False
 
     prefs["prefer"] = normalize_prefer(str(prefs.get("prefer") or "local"))
     prefs["cu_force_dxf_step"] = bool(prefs.get("cu_force_dxf_step"))
@@ -129,7 +148,7 @@ def load_nest_runtime_prefs() -> dict[str, Any]:
     prefs["spark"] = spark
     _PREFS_CACHE_MTIME = mtime
     _PREFS_CACHE_DATA = copy.deepcopy(prefs)
-    return copy.deepcopy(prefs)
+    return _apply_env_overrides(prefs)
 
 
 def save_nest_runtime_prefs(prefs: dict[str, Any]) -> Path:

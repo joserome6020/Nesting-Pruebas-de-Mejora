@@ -848,6 +848,101 @@ def colocar_piezas_cerca_origen(
     return leftover
 
 
+def _intentar_reparar_margen_placa(
+    hoja: dict,
+    *,
+    margin_in: float,
+    w_placa: float,
+    h_placa: float,
+) -> int:
+    """Empuja piezas cuyo metal invade el margen 0.250\" hacia el interior.
+
+    Caso real SWO-076: metal a 0.225\"/0.230\" por holguras del packer/export.
+    No expulsa: solo traslada lo justo para cumplir la tabla.
+    """
+    from shapely import affinity
+
+    from .geometry_parser import reconstruir_poly_seguro
+    from .sheet_integrity import _es_pieza_real_nombre
+
+    margin_mm = max(0.0, float(margin_in) * 25.4)
+    w = float(w_placa or 0.0)
+    h = float(h_placa or 0.0)
+    if margin_mm <= 0 or w <= 0 or h <= 0:
+        return 0
+
+    moved = 0
+    piezas = list(hoja.get("piezas") or [])
+    for p in piezas:
+        nom = str((p or {}).get("nombre") or "")
+        if not _es_pieza_real_nombre(nom):
+            continue
+        poly = (p or {}).get("poly")
+        if poly is None or getattr(poly, "is_empty", True):
+            try:
+                poly = reconstruir_poly_seguro((p or {}).get("poligonos") or [])
+            except Exception:
+                poly = None
+        if poly is None or getattr(poly, "is_empty", True):
+            continue
+        try:
+            minx, miny, maxx, maxy = (float(v) for v in poly.bounds)
+        except Exception:
+            continue
+        dx = dy = 0.0
+        if minx + 1e-6 < margin_mm:
+            dx = margin_mm - minx
+        elif maxx > w - margin_mm + 1e-6:
+            dx = (w - margin_mm) - maxx
+        if miny + 1e-6 < margin_mm:
+            dy = margin_mm - miny
+        elif maxy > h - margin_mm + 1e-6:
+            dy = (h - margin_mm) - maxy
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            continue
+        # Pieza más ancha que el útil: no se puede corregir solo con traslación.
+        pw = maxx - minx
+        ph = maxy - miny
+        if pw > w - 2.0 * margin_mm + 1e-6 or ph > h - 2.0 * margin_mm + 1e-6:
+            continue
+        new_poly = affinity.translate(poly, dx, dy)
+        nb = new_poly.bounds
+        if (
+            float(nb[0]) + 1e-6 < margin_mm
+            or float(nb[1]) + 1e-6 < margin_mm
+            or float(nb[2]) > w - margin_mm + 1e-6
+            or float(nb[3]) > h - margin_mm + 1e-6
+        ):
+            continue
+        p["poly"] = new_poly
+        if p.get("poly_exact") is not None:
+            try:
+                p["poly_exact"] = affinity.translate(p["poly_exact"], dx, dy)
+            except Exception:
+                p["poly_exact"] = new_poly
+        try:
+            p["poligonos"] = [
+                list(new_poly.exterior.coords),
+                *[list(r.coords) for r in new_poly.interiors],
+            ]
+        except Exception:
+            pass
+        for key in ("shift_x", "pos_x", "x"):
+            if key in p:
+                try:
+                    p[key] = float(p[key]) + dx
+                except Exception:
+                    pass
+        for key in ("shift_y", "pos_y", "y"):
+            if key in p:
+                try:
+                    p[key] = float(p[key]) + dy
+                except Exception:
+                    pass
+        moved += 1
+    return moved
+
+
 def reparar_separacion_minima_hoja(
     hoja: dict,
     kerf_in: float | None = None,
@@ -917,7 +1012,20 @@ def reparar_separacion_minima_hoja(
                 return True, f"ok_separado nudges={nudged}", expulsadas
             return True, detail, expulsadas
         if str(detail).startswith("margen_placa"):
-            # El nest ya debía respetar 0.250"; no empujar post-facto.
+            # Empujar metal al 0.250" de tabla (SWO-076: 0.225"/0.230" cortos).
+            n = _intentar_reparar_margen_placa(
+                hoja,
+                margin_in=margin_eff,
+                w_placa=w_eff,
+                h_placa=h_eff,
+            )
+            if n > 0:
+                nudged += n
+                print(
+                    f"[POKA-MARGEN-NUDGE] piezas={n} → margen_tabla={margin_eff:.3f}in",
+                    flush=True,
+                )
+                continue
             return False, detail, expulsadas
         det_l = str(detail or "")
         es_solape = det_l.startswith("solape_metal")
