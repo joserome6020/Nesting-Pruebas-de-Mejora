@@ -60,6 +60,9 @@ código viejo. Un bug sin candado vuelve.
   Costos del nesteo sumaba MRL después → parecía inconsistencia.
 - Ahora: al armar escenarios se estima MRL por factor X y se suma
   `costo = placas + largos×N_lotes`. El modal muestra el desglose.
+- Concordancia 100% con Costos: si ya hay `plan_largos_por_lote` vivo
+  (Canal+Solera), MES usa ese total y escala el resto; ya no re-estima
+  omitiendo perfiles baratos (p. ej. SLC042 $385 → 3×13 faltaban $1,155).
 - `.arganest` guarda/restaura `plan_largos_por_lote` (+ exclusiones) para
   que al abrir, Costos del nesteo ya traiga perfiles.
 - Candado: `tests/native/test_escenarios_costo_largos.py`.

@@ -1247,14 +1247,91 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
     return planes
 
 
+def _costos_largos_desde_planes_vivos(
+    app, factores: list[int]
+) -> dict[int, dict[str, Any]]:
+    """
+    Misma fuente que «Costos del nesteo»: plan_largos_por_lote + exclusiones.
+
+    Si ya hay lote(s) activo(s), el modal MES debe cuadrar 1:1 con ese desglose
+    (Canal + Solera, etc.) y no con una re-estimación incompleta.
+    """
+    from interface.nesting_costos import calcular_costos_largos_desde_plan
+
+    unicos = {int(k) for k in factores}
+    multilote = getattr(app, "resultados_multilote", None) or []
+    planes = getattr(app, "plan_largos_por_lote", None) or {}
+    if not planes:
+        return {}
+
+    # Acumular por factor (varios lotes X13 → un costo unitario representativo).
+    por_k: dict[int, dict[str, Any]] = {}
+    for idx, orden in enumerate(multilote):
+        try:
+            k = max(1, int((orden or {}).get("lote_k") or 0))
+        except Exception:
+            continue
+        if k not in unicos:
+            continue
+        plan = planes.get(int(idx))
+        if not isinstance(plan, dict) or not (plan.get("data") or {}):
+            continue
+        excl = obtener_exclusiones_mrl_unidades(app, int(idx))
+        costo = calcular_costos_largos_desde_plan(plan, unidades_excluidas_mrl=excl)
+        mxn = float(costo.get("total_mxn") or 0.0)
+        barras = int(costo.get("barras_total") or 0)
+        if mxn <= 0 and barras <= 0:
+            continue
+        # Conservar el primero positivo (cada lote Xk debería ser equivalente).
+        if k not in por_k:
+            por_k[k] = {"total_mxn": mxn, "barras_total": barras, "fuente": "vivo"}
+    return por_k
+
+
+def _escalar_costos_largos_por_factor(
+    vivos: dict[int, dict[str, Any]], factores: list[int]
+) -> dict[int, dict[str, Any]]:
+    """Rellena factores faltantes con proporción lineal tanques (demanda MRL ∝ X)."""
+    if not vivos:
+        return {}
+    sum_c = 0.0
+    sum_k = 0
+    sum_b = 0
+    for k, v in vivos.items():
+        mxn = float((v or {}).get("total_mxn") or 0.0)
+        if mxn <= 0:
+            continue
+        sum_c += mxn
+        sum_k += int(k)
+        sum_b += int((v or {}).get("barras_total") or 0)
+    if sum_k <= 0 or sum_c <= 0:
+        return dict(vivos)
+
+    por_tanque = sum_c / float(sum_k)
+    barras_por_tanque = sum_b / float(sum_k) if sum_b > 0 else 0.0
+    out: dict[int, dict[str, Any]] = {}
+    for k in factores:
+        if k in vivos and float((vivos[k] or {}).get("total_mxn") or 0.0) > 0:
+            out[k] = dict(vivos[k])
+            continue
+        out[k] = {
+            "total_mxn": por_tanque * float(k),
+            "barras_total": int(round(barras_por_tanque * float(k))),
+            "fuente": "escala_vivo",
+        }
+    return out
+
+
 def estimar_costos_largos_por_factores(
     app, factores: list[int]
 ) -> dict[int, dict[str, Any]]:
     """
     Estima costo MRL por factor X (lote_k) para el modal de escenarios.
 
-    No deja planes en app: guarda/restaura plan_largos_* para no contaminar
-    el estado previo al SELECCIONAR un escenario.
+    Prioridad:
+    1) Planes vivos del nesteo (cuadran con Costos del nesteo).
+    2) Escala lineal desde esos planes para factores aún no nesteados.
+    3) Re-cálculo aislado por factor (sin contaminar plan_largos_* de app).
     """
     from interface.nesting_costos import calcular_costos_largos_desde_plan
 
@@ -1271,6 +1348,20 @@ def estimar_costos_largos_por_factores(
     if not unicos:
         return {}
 
+    # 1+2: anclar al plan real cuando exista (evita omitir Solera/etc.).
+    try:
+        vivos = _costos_largos_desde_planes_vivos(app, unicos)
+        if vivos:
+            out = _escalar_costos_largos_por_factor(vivos, unicos)
+            print(
+                f"[LARGOS_NESTING] estimar desde planes vivos: "
+                f"vivos={ {k: round(float(v.get('total_mxn') or 0), 2) for k, v in vivos.items()} } "
+                f"out={ {k: round(float(v.get('total_mxn') or 0), 2) for k, v in out.items()} }"
+            )
+            return out
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] Lectura planes vivos falló: {exc}")
+
     prev = {
         "planes": getattr(app, "plan_largos_por_lote", None),
         "excl": getattr(app, "exclusiones_largos_pedido_por_lote", None),
@@ -1279,23 +1370,20 @@ def estimar_costos_largos_por_factores(
         "sin": getattr(app, "plan_largos_sin_demanda_por_lote", None),
         "err": getattr(app, "plan_largos_error", None),
     }
-    out: dict[int, dict[str, Any]] = {k: {"total_mxn": 0.0, "barras_total": 0} for k in unicos}
+    out = {k: {"total_mxn": 0.0, "barras_total": 0, "fuente": "estimado"} for k in unicos}
     try:
-        fake = [{"lote_k": k} for k in unicos]
-        planes = calcular_planes_largos_nesting(app, fake)
+        # Un factor por pasada: evita que varios planes compartan/agoten stock
+        # en la misma conexión y omitan perfiles (p. ej. Solera).
         job = str(getattr(app, "job_activo", "") or "").strip()
-        sin = getattr(app, "plan_largos_sin_demanda_por_lote", None) or set()
-        err = getattr(app, "plan_largos_error", None)
-        print(
-            f"[LARGOS_NESTING] estimar factores={unicos} job={job!r} "
-            f"planes={list((planes or {}).keys())} sin_demanda={sorted(sin)} err={err}"
-        )
-        for idx, k in enumerate(unicos):
-            plan = planes.get(int(idx)) if isinstance(planes, dict) else None
+        print(f"[LARGOS_NESTING] estimar factores={unicos} job={job!r} (aislado)")
+        for k in unicos:
+            planes = calcular_planes_largos_nesting(app, [{"lote_k": k}])
+            plan = planes.get(0) if isinstance(planes, dict) else None
             costo = calcular_costos_largos_desde_plan(plan)
             out[k] = {
                 "total_mxn": float(costo.get("total_mxn") or 0.0),
                 "barras_total": int(costo.get("barras_total") or 0),
+                "fuente": "estimado",
             }
             print(
                 f"[LARGOS_NESTING]   k={k}X → "
