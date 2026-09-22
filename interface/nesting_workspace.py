@@ -261,6 +261,34 @@ def _deepcopy_jsonsafe(obj):
     return _json_safe(cloned)
 
 
+def _serializar_plan_largos_por_lote(planes) -> dict:
+    """Planes MRL a dict JSON-safe indexado por lote (str keys)."""
+    out: dict = {}
+    if not isinstance(planes, dict):
+        return out
+    for k, plan in planes.items():
+        try:
+            idx = str(int(k))
+        except Exception:
+            idx = str(k)
+        out[idx] = _deepcopy_jsonsafe(plan)
+    return out
+
+
+def _deserializar_plan_largos_por_lote(raw) -> dict:
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, plan in raw.items():
+        try:
+            idx = int(k)
+        except Exception:
+            continue
+        if isinstance(plan, dict):
+            out[idx] = plan
+    return out
+
+
 def _normalizar_fila_pieza(fila):
     """
     Convierte cualquier fila a la estructura estándar:
@@ -728,6 +756,19 @@ def construir_payload_workspace(tab):
         },
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
+        # Largos/MRL: al reabrir, Costos del nesteo y modal Largos usan el mismo plan.
+        "plan_largos_por_lote": _serializar_plan_largos_por_lote(
+            getattr(tab.app, "plan_largos_por_lote", None)
+        ),
+        "plan_largos_job": str(getattr(tab.app, "plan_largos_job", "") or ""),
+        "plan_largos_sin_demanda_por_lote": sorted(
+            int(i) for i in (getattr(tab.app, "plan_largos_sin_demanda_por_lote", None) or set())
+        ),
+        "plan_largos_error": getattr(tab.app, "plan_largos_error", None),
+        "exclusiones_mrl_unidades_por_lote": {
+            str(int(k)): sorted(str(x) for x in (v or set()))
+            for k, v in (getattr(tab.app, "exclusiones_mrl_unidades_por_lote", None) or {}).items()
+        },
         "dxf_export_cache": dxf_export_cache,
         "ui_state": _construir_ui_state_workspace(
             tab, multilote, lote_idx=int(getattr(tab, "lote_actual_idx", 0) or 0)
@@ -1187,6 +1228,32 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         tab.app.orientacion_corte_bloqueada_por_ruta = {}
     tab.app.job_activo = payload.get("job_activo", "NESTING")
     tab.app.ultimos_escenarios = payload.get("ultimos_escenarios", []) or []
+
+    # Largos/MRL persistidos: Costos del nesteo al abrir ya incluye perfiles.
+    try:
+        tab.app.plan_largos_por_lote = _deserializar_plan_largos_por_lote(
+            payload.get("plan_largos_por_lote")
+        )
+    except Exception:
+        tab.app.plan_largos_por_lote = {}
+    tab.app.plan_largos_job = str(
+        payload.get("plan_largos_job") or payload.get("job_activo") or ""
+    ).strip()
+    try:
+        tab.app.plan_largos_sin_demanda_por_lote = {
+            int(i) for i in (payload.get("plan_largos_sin_demanda_por_lote") or [])
+        }
+    except Exception:
+        tab.app.plan_largos_sin_demanda_por_lote = set()
+    tab.app.plan_largos_error = payload.get("plan_largos_error")
+    try:
+        raw_excl = payload.get("exclusiones_mrl_unidades_por_lote") or {}
+        tab.app.exclusiones_mrl_unidades_por_lote = {
+            int(k): {str(x) for x in (v or [])}
+            for k, v in raw_excl.items()
+        }
+    except Exception:
+        tab.app.exclusiones_mrl_unidades_por_lote = {}
 
     raw_wo_map = payload.get("wo_reales_por_lote", {}) or {}
     try:

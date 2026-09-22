@@ -1010,7 +1010,8 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
     tit.setStyleSheet(f"font-weight:700;font-size:15px;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(tit)
     sub = QLabel(
-        "Estrategias de corte optimizadas para minimizar el costo operativo.",
+        "Estrategias de corte optimizadas. Costo estimado = placas"
+        " + largos/MRL (si la WO tiene demanda).",
         alignment=Qt.AlignmentFlag.AlignCenter,
     )
     sub.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};")
@@ -1036,7 +1037,21 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
         lbl_t = QLabel(f"{title_prefix}{lotes_str}")
         lbl_t.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
         txt_lay.addWidget(lbl_t)
-        lbl_d = QLabel(f"Eficiencia: {item['efi']:.1f}%  |  Costo Estimado: ${item['costo']:,.2f}")
+        costo_total = float(item.get("costo") or 0.0)
+        costo_placas = float(item.get("costo_placas", costo_total) or 0.0)
+        costo_largos = float(item.get("costo_largos") or 0.0)
+        if costo_largos > 0.005:
+            detalle_costo = (
+                f"Eficiencia: {item['efi']:.1f}%  |  "
+                f"Costo Estimado: ${costo_total:,.2f} "
+                f"(placas ${costo_placas:,.2f} + largos ${costo_largos:,.2f})"
+            )
+        else:
+            detalle_costo = (
+                f"Eficiencia: {item['efi']:.1f}%  |  "
+                f"Costo Estimado: ${costo_total:,.2f}"
+            )
+        lbl_d = QLabel(detalle_costo)
         lbl_d.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-weight:600;")
         txt_lay.addWidget(lbl_d)
         card_lay.addWidget(txt, 1)

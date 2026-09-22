@@ -52,14 +52,13 @@ def _etiqueta_origen(costo_emp: float, costo_prov: float) -> str:
     return "RET"
 
 
-def calcular_costos_largos_desde_app(
-    app,
-    lote_idx: int | None = None,
+def calcular_costos_largos_desde_plan(
+    plan: dict[str, Any] | None,
     *,
-    tab=None,
+    unidades_excluidas_mrl: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Costo MRL de largos del lote activo (respeta exclusiones del modal largos)."""
-    if app is None:
+    """Costo MRL a partir de un plan ya calculado (sin tocar estado de app)."""
+    if not isinstance(plan, dict) or not (plan.get("data") or {}):
         return {"total_mxn": 0.0, "barras_total": 0, "lineas": []}
     try:
         from catalogo_largos import (
@@ -67,29 +66,15 @@ def calcular_costos_largos_desde_app(
             etiqueta_tipo_perfil_mrl,
         )
         from interface.largos_nesting_service import (
-            obtener_exclusiones_mrl_unidades,
             previsualizar_pedido_mrl,
-            resolver_plan_largos_para_tab,
             resumir_plan_largos,
         )
     except ImportError:
         return {"total_mxn": 0.0, "barras_total": 0, "lineas": []}
 
-    plan = None
-    idx = int(lote_idx if lote_idx is not None else 0)
-    if tab is not None:
-        plan = resolver_plan_largos_para_tab(app, tab)
-        idx = int(getattr(tab, "lote_actual_idx", idx) or idx)
-    if not plan:
-        planes = getattr(app, "plan_largos_por_lote", None) or {}
-        plan = planes.get(idx)
-    if not isinstance(plan, dict) or not (plan.get("data") or {}):
-        return {"total_mxn": 0.0, "barras_total": 0, "lineas": []}
-
-    excl = obtener_exclusiones_mrl_unidades(app, idx)
+    excl = set(unidades_excluidas_mrl or ())
     filas = previsualizar_pedido_mrl(plan, unidades_excluidas_mrl=excl)
     catalogo = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
-
     resumen = resumir_plan_largos(plan, unidades_excluidas_mrl=excl)
     barras = int(resumen.get("mrl_barras_comerciales") or 0)
     if barras <= 0:
@@ -123,6 +108,35 @@ def calcular_costos_largos_desde_app(
         )
     lineas.sort(key=lambda r: (str(r.get("clave_display") or ""), str(r.get("clave") or "")))
     return {"total_mxn": total, "barras_total": barras, "lineas": lineas}
+
+
+def calcular_costos_largos_desde_app(
+    app,
+    lote_idx: int | None = None,
+    *,
+    tab=None,
+) -> dict[str, Any]:
+    """Costo MRL de largos del lote activo (respeta exclusiones del modal largos)."""
+    if app is None:
+        return {"total_mxn": 0.0, "barras_total": 0, "lineas": []}
+    try:
+        from interface.largos_nesting_service import (
+            obtener_exclusiones_mrl_unidades,
+            resolver_plan_largos_para_tab,
+        )
+    except ImportError:
+        return {"total_mxn": 0.0, "barras_total": 0, "lineas": []}
+
+    plan = None
+    idx = int(lote_idx if lote_idx is not None else 0)
+    if tab is not None:
+        plan = resolver_plan_largos_para_tab(app, tab)
+        idx = int(getattr(tab, "lote_actual_idx", idx) or idx)
+    if not plan:
+        planes = getattr(app, "plan_largos_por_lote", None) or {}
+        plan = planes.get(idx)
+    excl = obtener_exclusiones_mrl_unidades(app, idx)
+    return calcular_costos_largos_desde_plan(plan, unidades_excluidas_mrl=excl)
 
 
 def calcular_reporte_costos(

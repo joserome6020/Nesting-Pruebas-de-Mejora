@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_escenarios_costo_largos.py",
+        "2026-09-22 - Escenarios MES: costo estimado = placas + largos/MRL",
+    ),
+    (
         "test_pdf_long_path.py",
         "2026-09-21 - PDF nest: rutas >260 (UNC/OneDrive) Errno 2 → prefijo \\\\?\\",
     ),

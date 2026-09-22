@@ -622,8 +622,8 @@ class NestingCalcMixin:
                     pass
 
             # Cobre 100%: barras largas deterministas -> nesteo directo, sin
-            # análisis de lotes MES (los escenarios optimizan costo de placa,
-            # que no aplica al cobre). La cantidad se coloca tal cual.
+            # análisis de lotes MES. La cantidad se coloca tal cual.
+            # (Acero T>=4: escenarios incluyen placas + largos/MRL si hay demanda.)
             if T < 4 or self._wo_solo_cobre():
                 datos_base = self._clonar_datos_partes_edicion(
                     getattr(self.app, "datos_partes_actuales", [])
@@ -732,13 +732,39 @@ class NestingCalcMixin:
                     return
 
             escenarios_resultados = []
+            # Largos por factor X: mismo criterio que tras SELECCIONAR, para
+            # comparar escenarios con placas + MRL cuando la WO tiene demanda.
+            costos_largos_por_k: dict = {}
+            try:
+                from interface.largos_nesting_service import (
+                    estimar_costos_largos_por_factores,
+                )
+
+                receptor_en_vivo("Estimando costo de largos por escenario…", 0.97)
+                costos_largos_por_k = estimar_costos_largos_por_factores(
+                    self.app, ks_necesarios
+                )
+            except Exception as exc_largos_esc:
+                print(f"[LARGOS_NESTING][WARN] Escenarios sin largos: {exc_largos_esc}")
+                costos_largos_por_k = {}
+
             for esc in escenarios:
-                res_esc_list, costo_esc, efi_esc = ensamblar_escenario(esc, nestings_precalculados)
+                res_esc_list, costo_placas, efi_esc = ensamblar_escenario(
+                    esc, nestings_precalculados
+                )
+                costo_largos = 0.0
+                for k, mult in esc:
+                    info_k = costos_largos_por_k.get(int(k)) or {}
+                    costo_largos += float(info_k.get("total_mxn") or 0.0) * max(
+                        1, int(mult or 1)
+                    )
                 escenarios_resultados.append({
                     "config": esc,
                     "resultados": res_esc_list,
-                    "costo": costo_esc,
-                    "efi": efi_esc
+                    "costo": float(costo_placas) + float(costo_largos),
+                    "costo_placas": float(costo_placas),
+                    "costo_largos": float(costo_largos),
+                    "efi": efi_esc,
                 })
 
             escenarios_resultados.sort(key=lambda x: x["costo"])

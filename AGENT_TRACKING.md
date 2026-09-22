@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-22 — Escenarios MES: costo estimado incluye largos/MRL
+- Antes: “Costo Estimado” del análisis de lotes era solo placas; el modal
+  Costos del nesteo sumaba MRL después → parecía inconsistencia.
+- Ahora: al armar escenarios se estima MRL por factor X y se suma
+  `costo = placas + largos×N_lotes`. El modal muestra el desglose.
+- `.arganest` guarda/restaura `plan_largos_por_lote` (+ exclusiones) para
+  que al abrir, Costos del nesteo ya traiga perfiles.
+- Candado: `tests/native/test_escenarios_costo_largos.py`.
+
 ### 2026-09-21b — Export UNC: `.arganest` WinError 3 + PDF long-path en bundle
 - Causa real del Error en Release (W.O. 83 / job largo): `guardar_workspace_payload`
   hacía `os.replace(tmp→.arganest)` sin `\\?\UNC\`; el fix PDF solo no bastaba.

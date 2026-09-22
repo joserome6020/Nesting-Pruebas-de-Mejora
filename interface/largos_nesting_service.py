@@ -1247,6 +1247,68 @@ def calcular_planes_largos_nesting(app, resultados_list: list) -> dict[int, dict
     return planes
 
 
+def estimar_costos_largos_por_factores(
+    app, factores: list[int]
+) -> dict[int, dict[str, Any]]:
+    """
+    Estima costo MRL por factor X (lote_k) para el modal de escenarios.
+
+    No deja planes en app: guarda/restaura plan_largos_* para no contaminar
+    el estado previo al SELECCIONAR un escenario.
+    """
+    from interface.nesting_costos import calcular_costos_largos_desde_plan
+
+    unicos: list[int] = []
+    vistos: set[int] = set()
+    for f in factores or []:
+        try:
+            k = max(1, int(f or 1))
+        except Exception:
+            k = 1
+        if k not in vistos:
+            vistos.add(k)
+            unicos.append(k)
+    if not unicos:
+        return {}
+
+    prev = {
+        "planes": getattr(app, "plan_largos_por_lote", None),
+        "excl": getattr(app, "exclusiones_largos_pedido_por_lote", None),
+        "mrl": getattr(app, "exclusiones_mrl_unidades_por_lote", None),
+        "job": getattr(app, "plan_largos_job", None),
+        "sin": getattr(app, "plan_largos_sin_demanda_por_lote", None),
+        "err": getattr(app, "plan_largos_error", None),
+    }
+    out: dict[int, dict[str, Any]] = {k: {"total_mxn": 0.0, "barras_total": 0} for k in unicos}
+    try:
+        fake = [{"lote_k": k} for k in unicos]
+        planes = calcular_planes_largos_nesting(app, fake)
+        for idx, k in enumerate(unicos):
+            plan = planes.get(int(idx)) if isinstance(planes, dict) else None
+            costo = calcular_costos_largos_desde_plan(plan)
+            out[k] = {
+                "total_mxn": float(costo.get("total_mxn") or 0.0),
+                "barras_total": int(costo.get("barras_total") or 0),
+            }
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] Estimación escenarios falló: {exc}")
+    finally:
+        if prev["planes"] is None:
+            if hasattr(app, "plan_largos_por_lote"):
+                try:
+                    delattr(app, "plan_largos_por_lote")
+                except Exception:
+                    app.plan_largos_por_lote = {}
+        else:
+            app.plan_largos_por_lote = prev["planes"]
+        app.exclusiones_largos_pedido_por_lote = prev["excl"] if prev["excl"] is not None else {}
+        app.exclusiones_mrl_unidades_por_lote = prev["mrl"] if prev["mrl"] is not None else {}
+        app.plan_largos_job = prev["job"] if prev["job"] is not None else ""
+        app.plan_largos_sin_demanda_por_lote = prev["sin"] if prev["sin"] is not None else set()
+        app.plan_largos_error = prev["err"]
+    return out
+
+
 def _plan_largos_valido(plan: dict[str, Any] | None) -> bool:
     """Un plan solo es utilizable cuando contiene al menos una tira de corte."""
     return bool(
