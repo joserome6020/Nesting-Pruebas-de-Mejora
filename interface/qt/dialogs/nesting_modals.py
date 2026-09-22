@@ -7,6 +7,7 @@ import copy
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -994,10 +995,90 @@ def abrir_modal_costos(parent):
     dlg.show()
 
 
+def _enriquecer_escenarios_con_largos(parent, escenarios_resultados):
+    """
+    Suma MRL al Costo Estimado al mostrar el modal (hilo UI).
+
+    Así funciona tanto en el primer nest como al reabrir “Ver lotes” con
+    escenarios viejos que solo traían placas.
+    """
+    if not escenarios_resultados:
+        return escenarios_resultados
+    app = getattr(parent, "app", None)
+    if app is None:
+        return escenarios_resultados
+    try:
+        from interface.largos_nesting_service import estimar_costos_largos_por_factores
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] No se pudo importar estimación: {exc}")
+        return escenarios_resultados
+
+    ks: list[int] = []
+    vistos: set[int] = set()
+    for item in escenarios_resultados:
+        for k, _mult in item.get("config") or []:
+            try:
+                ik = int(k)
+            except Exception:
+                continue
+            if ik not in vistos:
+                vistos.add(ik)
+                ks.append(ik)
+    if not ks:
+        return escenarios_resultados
+
+    try:
+        costos_k = estimar_costos_largos_por_factores(app, ks) or {}
+    except Exception as exc:
+        print(f"[LARGOS_NESTING][WARN] Enriquecer escenarios falló: {exc}")
+        return escenarios_resultados
+
+    total_mrl = sum(float((v or {}).get("total_mxn") or 0.0) for v in costos_k.values())
+    print(
+        f"[LARGOS_NESTING] Enriquecer escenarios: factores={ks} "
+        f"mrl_unitarios={ {k: float((costos_k.get(k) or {}).get('total_mxn') or 0.0):.2f} for k in ks }} "
+        f"suma_unit={total_mrl:.2f}"
+    )
+
+    for item in escenarios_resultados:
+        if "costo_placas" in item:
+            placas = float(item.get("costo_placas") or 0.0)
+        else:
+            # Escenarios viejos: "costo" era solo placas.
+            placas = float(item.get("costo") or 0.0)
+        largos = 0.0
+        for k, mult in item.get("config") or []:
+            try:
+                ik = int(k)
+                im = max(1, int(mult or 1))
+            except Exception:
+                continue
+            largos += float((costos_k.get(ik) or {}).get("total_mxn") or 0.0) * im
+        item["costo_placas"] = placas
+        item["costo_largos"] = largos
+        item["costo"] = placas + largos
+
+    escenarios_resultados.sort(key=lambda x: float(x.get("costo") or 0.0))
+    return escenarios_resultados
+
+
 def mostrar_modal_escenarios(parent, escenarios_resultados):
     if hasattr(parent.app, "cerrar_ventana_carga"):
         parent.app.cerrar_ventana_carga()
     parent.btn_run_nest.setEnabled(True)
+
+    escenarios_resultados = list(escenarios_resultados or [])
+    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    try:
+        escenarios_resultados = _enriquecer_escenarios_con_largos(
+            parent, escenarios_resultados
+        )
+    finally:
+        QApplication.restoreOverrideCursor()
+    try:
+        parent.app.ultimos_escenarios = escenarios_resultados
+    except Exception:
+        pass
 
     dlg = QDialog(parent)
     dlg.setWindowTitle("Análisis MES de Lotes")
@@ -1050,6 +1131,7 @@ def mostrar_modal_escenarios(parent, escenarios_resultados):
             detalle_costo = (
                 f"Eficiencia: {item['efi']:.1f}%  |  "
                 f"Costo Estimado: ${costo_total:,.2f}"
+                f"{'  · sin demanda de largos' if not any(float(x.get('costo_largos') or 0) > 0 for x in escenarios_resultados) else ''}"
             )
         lbl_d = QLabel(detalle_costo)
         lbl_d.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-weight:600;")

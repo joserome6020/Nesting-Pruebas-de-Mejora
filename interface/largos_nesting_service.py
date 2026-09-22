@@ -1283,6 +1283,13 @@ def estimar_costos_largos_por_factores(
     try:
         fake = [{"lote_k": k} for k in unicos]
         planes = calcular_planes_largos_nesting(app, fake)
+        job = str(getattr(app, "job_activo", "") or "").strip()
+        sin = getattr(app, "plan_largos_sin_demanda_por_lote", None) or set()
+        err = getattr(app, "plan_largos_error", None)
+        print(
+            f"[LARGOS_NESTING] estimar factores={unicos} job={job!r} "
+            f"planes={list((planes or {}).keys())} sin_demanda={sorted(sin)} err={err}"
+        )
         for idx, k in enumerate(unicos):
             plan = planes.get(int(idx)) if isinstance(planes, dict) else None
             costo = calcular_costos_largos_desde_plan(plan)
@@ -1290,6 +1297,11 @@ def estimar_costos_largos_por_factores(
                 "total_mxn": float(costo.get("total_mxn") or 0.0),
                 "barras_total": int(costo.get("barras_total") or 0),
             }
+            print(
+                f"[LARGOS_NESTING]   k={k}X → "
+                f"${out[k]['total_mxn']:,.2f} barras={out[k]['barras_total']} "
+                f"plan={'si' if plan else 'no'}"
+            )
     except Exception as exc:
         print(f"[LARGOS_NESTING][WARN] Estimación escenarios falló: {exc}")
     finally:
