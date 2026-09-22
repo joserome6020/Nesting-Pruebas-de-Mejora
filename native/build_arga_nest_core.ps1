@@ -107,10 +107,14 @@ Write-Host "CUDA CMake flag: ARGA_NEST_ENABLE_CUDA=$cudaFlag"
 
 Push-Location $BuildDir
 try {
+    # Python_ROOT_DIR evita que FindPython (Development.Module) falle o
+    # enganche otro runtime cuando hay varias instalaciones (3.13 + 3.14).
+    $PythonRoot = Split-Path -Parent $PythonExe
     $cmakeArgs = @(
         "-G", $Generator
     ) + $ArchArgs + @(
         "-DPython_EXECUTABLE=$PythonExe",
+        "-DPython_ROOT_DIR=$PythonRoot",
         "-DARGA_NEST_ENABLE_CUDA=$cudaFlag",
         "-DARGA_NEST_BUILD_WORKER=ON",
         $CoreDir
