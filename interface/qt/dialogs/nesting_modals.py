@@ -1034,10 +1034,12 @@ def _enriquecer_escenarios_con_largos(parent, escenarios_resultados):
         return escenarios_resultados
 
     total_mrl = sum(float((v or {}).get("total_mxn") or 0.0) for v in costos_k.values())
+    mrl_unit = {
+        k: float((costos_k.get(k) or {}).get("total_mxn") or 0.0) for k in ks
+    }
     print(
         f"[LARGOS_NESTING] Enriquecer escenarios: factores={ks} "
-        f"mrl_unitarios={ {k: float((costos_k.get(k) or {}).get('total_mxn') or 0.0):.2f} for k in ks }} "
-        f"suma_unit={total_mrl:.2f}"
+        f"mrl_unitarios={mrl_unit} suma_unit={total_mrl:.2f}"
     )
 
     for item in escenarios_resultados:
