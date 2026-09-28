@@ -55,6 +55,20 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-28 — Plasma: radios facetados → LINE+ARC (SWO-076-H2)
+- `SWO-076_0.1875_SWO-076-H2_PLASMA.dxf`: 20 piezas 150.75×77.09 con R 7/16"
+  salieron con 600 vértices c/u (micro-segmentos 0.06 mm; 12,204 vértices).
+- Causa 1: `_ring_is_rectilinear` evaluaba cada faceta sola (tol 0.55) →
+  radio "rectilíneo" → `_export_ring_exact` escribía cada faceta como LINE.
+  Fix: tramos diagonales consecutivos se acumulan.
+- Causa 2: `export_ring_native` cortaba el arco por un punto casi duplicado
+  (retroceso 0.0013°) y recorría el anillo cerrado hasta 4× (cortes
+  duplicados). Fix: jitter angular relativo, arranque en arista más larga,
+  contador de segmentos consumidos.
+- DXF de planta corregido a mano (324 vértices, Hausdorff 0.003 mm).
+- Candado: `test_plasma_radio_facetado_arcos.py` (anillo real en JSON).
+- Build: sin módulos/assets nuevos para el .exe (solo lógica + test).
+
 ### 2026-09-22g — Release: margen 0.250\" + export plasma robusto
 - Empaqueta fixes 22e/22f (margen placa, fallback Placa Base).
 - `_sizes_match_mm` / validate aceptan inch↔mm (no tumbar ARC nativos en fixtures).

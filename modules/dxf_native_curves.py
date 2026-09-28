@@ -167,9 +167,10 @@ def _is_monotonic_arc(pts: Sequence[Point], cx: float, cy: float, r: float, tol:
     if abs(sweep) < math.radians(1.5):
         return False
     dtheta = sweep / max(len(pts) - 1, 1)
+    jitter = max(1e-9, abs(dtheta) * 0.25)
     for i in range(1, len(ang)):
         step = ang[i] - ang[i - 1]
-        if abs(step) < 1e-9:
+        if abs(step) < jitter:
             continue
         if step * sweep < 0:
             return False
@@ -330,10 +331,12 @@ def _arc_fits_segment(
     return _near(p0) and _near(p1)
 
 
-def _longest_arc_from(pts: List[Point], i: int, n: int) -> Tuple[int, Optional[Tuple]]:
+def _longest_arc_from(
+    pts: List[Point], i: int, n: int, limit: Optional[int] = None
+) -> Tuple[int, Optional[Tuple]]:
     best_len = 1
     best_arc = None
-    max_span = min(n - 1, 240)
+    max_span = min(n - 1, 400, limit if limit is not None else n - 1)
     for span in range(2, max_span + 1):
         seg = [pts[(i + k) % n] for k in range(span + 1)]
         arc = _fit_arc_segment(seg)
@@ -456,34 +459,29 @@ def export_ring_native(
 
     n = len(pts)
     if closed:
+        # Arrancar en la arista más larga evita partir un radio en la costura.
+        seg_len = [
+            math.hypot(pts[(k + 1) % n][0] - pts[k][0], pts[(k + 1) % n][1] - pts[k][1])
+            for k in range(n)
+        ]
+        k0 = max(range(n), key=seg_len.__getitem__)
+        pts = pts[k0:] + pts[:k0]
         i = 0
-        guard = 0
-        while guard < n * 4:
-            guard += 1
-            span, arc = _longest_arc_from(pts, i, n)
+        consumed = 0
+        while consumed < n:
+            remaining = n - consumed
+            span, arc = _longest_arc_from(pts, i, n, limit=remaining)
             if arc and span >= 2:
-                kind = arc[0]
-                if kind == "circle" and span >= n - 1:
+                if arc[0] == "circle" and span >= n - 1:
                     msp.add_circle((arc[1], arc[2]), arc[3], dxfattribs={"layer": layer})
                     return True
-                if kind == "circle":
-                    _add_arc(msp, arc[1], arc[2], arc[3], arc[5], arc[6], arc[4], layer)
-                    i = (i + span) % n
-                    if i == 0:
-                        break
-                    continue
                 _add_arc(msp, arc[1], arc[2], arc[3], arc[5], arc[6], arc[4], layer)
-                i = (i + span) % n
-                if i == 0:
-                    break
-                continue
-            line_span = _max_collinear_span(pts, i, n)
-            j = (i + line_span) % n
-            _add_line(msp, pts[i], pts[j], layer)
-            i = j
-            if i == 0:
-                break
-        return guard > 0
+            else:
+                span = max(1, min(_max_collinear_span(pts, i, n), remaining))
+                _add_line(msp, pts[i], pts[(i + span) % n], layer)
+            i = (i + span) % n
+            consumed += span
+        return True
 
     i = 0
     while i < n - 1:

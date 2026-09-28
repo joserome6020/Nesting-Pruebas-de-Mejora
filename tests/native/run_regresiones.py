@@ -264,6 +264,10 @@ REGRESIONES = [
         "2026-08-14o - export plasma reconoce IV_OUTER_PROFILE/IV_INTERIOR_PROFILES (flat pattern chapa)",
     ),
     (
+        "test_plasma_radio_facetado_arcos.py",
+        "2026-09-28 - SWO-076-H2 plasma: radio facetado → LINE+ARC (no 300 LINE ni anillo x4)",
+    ),
+    (
         "test_plasma_export_rectilineo_escalones.py",
         "2026-08-14p - perfiles rectilíneos con escalones no inventan ARC ni duplican LINE (OP-1010-211)",
     ),

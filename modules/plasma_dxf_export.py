@@ -1176,23 +1176,46 @@ def _ring_is_rectilinear(pts, tol: float = 0.55) -> bool:
     ``tol`` está en las mismas unidades que los puntos (pulgadas antes del
     placement) y absorbe ruido de DXF sin convertir una diagonal real en un
     segmento ortogonal.
+
+    Los tramos diagonales consecutivos se evalúan acumulados: un radio
+    facetado en micro-segmentos (cada uno < ``tol`` en X y Y) sigue siendo
+    una curva, no ruido ortogonal.
     """
     ring = [(float(p[0]), float(p[1])) for p in (pts or []) if len(p) >= 2]
     if len(ring) >= 2 and _points_near(ring[0], ring[-1], tol=tol * 0.01):
         ring = ring[:-1]
     if len(ring) < 3:
         return False
-    non_degenerate = 0
+    eps = tol * 0.01
+    n = len(ring)
+    segs = []
     for i, (x0, y0) in enumerate(ring):
-        x1, y1 = ring[(i + 1) % len(ring)]
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
-        if dx <= tol * 0.01 and dy <= tol * 0.01:
+        x1, y1 = ring[(i + 1) % n]
+        segs.append((x1 - x0, y1 - y0))
+    non_degenerate = 0
+    for dx, dy in segs:
+        if abs(dx) <= eps and abs(dy) <= eps:
             continue
         non_degenerate += 1
-        if dx > tol and dy > tol:
+        if abs(dx) > tol and abs(dy) > tol:
             return False
-    return non_degenerate >= 3
+    if non_degenerate < 3:
+        return False
+    diag = [abs(dx) > eps and abs(dy) > eps for dx, dy in segs]
+    if all(diag):
+        return False
+    start = next(i for i in range(n) if not diag[i])
+    acc_x = acc_y = 0.0
+    for k in range(1, n + 1):
+        i = (start + k) % n
+        if not diag[i]:
+            acc_x = acc_y = 0.0
+            continue
+        acc_x += segs[i][0]
+        acc_y += segs[i][1]
+        if abs(acc_x) > tol and abs(acc_y) > tol:
+            return False
+    return True
 
 
 def _outer_export_line_exact(ring, *, tol: float = 0.55) -> bool:
