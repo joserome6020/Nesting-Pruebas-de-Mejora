@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_largos_mrl_barras_reales_swo097.py",
+        "2026-09-28d - MRL largos: barras reales de 240\" (476\" en tira 480\" = 3 barras, SWO-097)",
+    ),
+    (
         "test_escenarios_costo_largos.py",
         "2026-09-22 - Escenarios MES: costo estimado = placas + largos/MRL",
     ),

@@ -258,6 +258,23 @@ def _slots_comerciales_en_tira(largo_stock: float, largo_com: float) -> int:
     return max(1, math.ceil(stock / largo_com))
 
 
+def barras_comerciales_necesarias(tiras: list[dict], largo_com: float) -> int:
+    """Barras comerciales (ej. 240\") a pedir para las tiras STOCK de un material.
+
+    ceil(tira/comercial) no basta: una pieza no puede cruzar la unión entre dos
+    barras, así que 476\" que caben en una tira de 480\" pueden necesitar 3×240\".
+    """
+    tiras = [b for b in (tiras or []) if b.get("cortes")]
+    slots = sum(
+        _slots_comerciales_en_tira(float(b.get("largo_stock") or 0), largo_com) for b in tiras
+    )
+    largo_com = float(largo_com or 0)
+    if largo_com <= 0 or not any(float(b.get("largo_stock") or 0) > largo_com + 1e-6 for b in tiras):
+        return slots
+    cortes = [c for b in tiras for c in (b.get("cortes") or [])]
+    return max(slots, len(_repartir_piezas_en_barras_comerciales(cortes, largo_com, slots)))
+
+
 def vista_barra_para_unidad_mrl(
     barra: dict,
     largo_comercial: float,
@@ -283,7 +300,7 @@ def vista_barra_para_unidad_mrl(
 
     cortes_origen = list(barra.get("cortes") or [])
     idx_local = int(unit_idx_en_tira if unit_idx_en_tira is not None else unit_idx)
-    n_slices = _slots_comerciales_en_tira(stock_origen, largo_com)
+    n_slices = int(n_slots_tira) if n_slots_tira else _slots_comerciales_en_tira(stock_origen, largo_com)
 
     if cortes_slot is not None:
         cortes_vista = _cap_cortes_a_util(cortes_slot, largo_com)
@@ -889,6 +906,21 @@ def listar_unidades_mrl_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
         # comerciales pedidas. Partir tira-por-tira omitía piezas del mapa.
         n_pedido = max(len(units), 1)
         packs = _repartir_piezas_en_barras_comerciales(todos_cortes, largo_com, n_pedido)
+        extra = min(len(packs), n_pedido) - len(slots)
+        if extra > 0 and slots:
+            ultima = slots[-1]["nesting_key"]
+            n_ultima = sum(1 for s in slots if s["nesting_key"] == ultima) + extra
+            for s in slots:
+                if s["nesting_key"] == ultima:
+                    s["n_slots_tira"] = n_ultima
+            for k in range(extra):
+                slots.append(
+                    {
+                        "nesting_key": ultima,
+                        "unit_idx_en_tira": n_ultima - extra + k + 1,
+                        "n_slots_tira": n_ultima,
+                    }
+                )
         if len(packs) > n_pedido:
             huerfanas = sum(len(p) for p in packs[n_pedido:])
             print(
@@ -962,18 +994,14 @@ def auditar_consumo_plan(plan: dict[str, Any]) -> dict[str, Any]:
     for mat, units in units_por_mat.items():
         mrl_qty = mrl_por_mat.get(mat, 0)
         n_units = len(units)
-        n_slots_mat = sum(
-            _slots_comerciales_en_tira(
-                float(b.get("largo_stock") or 0),
-                float(units[0].get("largo") or 0) if units else 0.0,
-            )
-            for _mk, b in [
-                (bar_key(material, bar_idx), barra)
-                for material, bar_idx, barra in iter_barras_plan(plan)
+        n_slots_mat = barras_comerciales_necesarias(
+            [
+                barra
+                for material, _bar_idx, barra in iter_barras_plan(plan)
                 if str(material or "").strip() == mat
                 and str(barra.get("source") or "STOCK").upper() == "STOCK"
-                and (barra.get("cortes") or [])
-            ]
+            ],
+            float(units[0].get("largo") or 0) if units else 0.0,
         )
         slots_calc += n_slots_mat
         p_slot = sum(len(u.get("cortes_slot") or []) for u in units)

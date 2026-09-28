@@ -213,6 +213,7 @@ def agregar_filas_desde_plan(
         return largo_cat_por_material[material]
 
     for material, barras in _iter_barras_por_material(plan):
+        tiras = []
         for bar_idx, barra in enumerate(barras):
             bar_key = f"{material}::{bar_idx}"
             if bar_key in excluir:
@@ -222,19 +223,18 @@ def agregar_filas_desde_plan(
                 continue
             if not (barra.get("cortes") or []):
                 continue
-            largo_stock = float(barra.get("largo_stock") or 0)
-            if largo_stock <= 0:
+            if float(barra.get("largo_stock") or 0) <= 0:
                 continue
-            try:
-                from interface.largos_nesting_service import _slots_comerciales_en_tira
+            tiras.append(barra)
+        if not tiras:
+            continue
+        try:
+            from interface.largos_nesting_service import barras_comerciales_necesarias
 
-                largo_cat = _largo_cat_material(material)
-                n_slots = _slots_comerciales_en_tira(largo_stock, largo_cat)
-            except Exception:
-                n_slots = 1
-            if material not in acumulado:
-                acumulado[material] = {"material": material, "total_slots": 0}
-            acumulado[material]["total_slots"] += max(1, n_slots)
+            total_slots = barras_comerciales_necesarias(tiras, _largo_cat_material(material))
+        except Exception:
+            total_slots = len(tiras)
+        acumulado[material] = {"material": material, "total_slots": max(1, total_slots)}
 
     filas: List[Dict[str, Any]] = []
     for item in acumulado.values():

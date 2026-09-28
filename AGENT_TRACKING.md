@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-28d — MRL largos: barras reales de 240" (SWO-097)
+- SWO-097 (job 261091, W.O. 121 X1): SLC046 = 5×64" + 6×26" = 476" cabe en
+  una tira de 480", pero el pedido contaba `ceil(480/240)=2` barras. Una pieza
+  no cruza la unión entre barras: `REFUERZO SEG 4 #2` no salía ni en el mapa
+  ni en el pedido. Nuevo `barras_comerciales_necesarias()` (FFD global por
+  material) es la única cuenta para `agregar_filas_desde_plan`, las unidades
+  del modal y `auditar_consumo_plan`; la barra extra hereda el mapa de la
+  última tira. Candado `test_largos_mrl_barras_reales_swo097.py`.
+- Dato suelto del job 261091: CSV del AutoDXF (SEG 2 ×4, SEG 4 ×2) difiere de
+  `lista_largos_job` (3/3); JACKING PAD viene duplicado en el CSV.
+
 ### 2026-09-28c — Release: RTZ manual/placas/láser + fixtures plasma en mm
 - Entra al repo el trabajo 2026-09-24b…j (RTZ manual, switch RTZ, DXF
   abierto = FALLO, láser fail-closed) con `rtz_manual_promote.py` y candados.
