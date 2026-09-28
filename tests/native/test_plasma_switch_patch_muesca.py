@@ -88,8 +88,9 @@ def _centros_inner(ruta: Path) -> list[tuple[float, float, float]]:
 
 
 def _inner_bbox(ruta: Path) -> tuple[float, float, float, float, float, float]:
-    """(minx, miny, maxx, maxy, cx, cy) del CUT_INNER (arcos nativos o densificado)."""
+    """(minx, miny, maxx, maxy, cx, cy) del CUT_INNER (arcos nativos o bulges)."""
     import ezdxf  # type: ignore
+    from ezdxf import bbox as ezbbox  # type: ignore
 
     doc = ezdxf.readfile(ruta)
     xs: list[float] = []
@@ -98,9 +99,9 @@ def _inner_bbox(ruta: Path) -> tuple[float, float, float, float, float, float]:
         if str(e.dxf.layer or "").upper() != "CUT_INNER":
             continue
         if e.dxftype() == "LWPOLYLINE":
-            for x, y, *_ in e.get_points("xy"):
-                xs.append(float(x))
-                ys.append(float(y))
+            ext = ezbbox.extents([e])
+            xs.extend([float(ext.extmin.x), float(ext.extmax.x)])
+            ys.extend([float(ext.extmin.y), float(ext.extmax.y)])
         elif e.dxftype() in {"CIRCLE", "ARC"}:
             c = e.dxf.center
             r = float(e.dxf.radius)
@@ -147,8 +148,8 @@ def test_switch_patch_barreno_no_se_espeja_al_compensar() -> None:
                 muescas,
                 despues,
             )
-        # Con 0.0625\" Clipper densifica el inner (sin ARC nativo). El bug
-        # original era el espejo: el barreno grande saltaba debajo de la muesca.
+        # Con 0.0625\" el inner sale por Clipper2 (reconstruido a bulges). El
+        # bug original era el espejo: el barreno grande saltaba bajo la muesca.
         _minx, miny, _maxx, maxy, _cx, cy = _inner_bbox(dst)
         assert cy > 1.70, ("el inner se espejó hacia la muesca", cy, miny, maxy)
         assert maxy > 2.35, ("falta el barreno grande arriba", cy, miny, maxy)

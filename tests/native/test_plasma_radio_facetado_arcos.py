@@ -13,6 +13,10 @@ Causas:
    (retroceso de 0.0013°) y, al no caer justo en el índice 0, recorría el
    anillo cerrado hasta 4 veces (2400 entidades para 600 puntos = cortes
    duplicados).
+3. Origen del facetado: el Plasma Compensated de «BRACE A 90 New, QTY 20»
+   (TANK261138) lo escribió el respaldo Clipper2 (601 vértices) porque OCCT
+   rechazaba la polilínea cuando su primer vértice abre un arco (bulge). La
+   misma pieza en TANK25502 empieza en recta y salía bien por OCCT.
 """
 from __future__ import annotations
 
@@ -74,6 +78,111 @@ def test_export_ring_native_una_vuelta_con_arcos() -> None:
     )
 
 
+# Processed Files/BRACE A 90 New, A 36, QTY 20, Cal 0.1875.dxf (pulgadas).
+BRACE_TANK261138 = [
+    (5.81, -0.0, 0.414214), (5.435, 0.375, 0.0), (0.375, 0.375, 0.414214),
+    (-0.0, -0.0, 0.0), (-0.0, -2.535, 0.0), (5.81, -2.535, 0.0), (5.81, -0.0, 0.0),
+]
+OFF_IN = 1.5875 / 25.4
+
+
+def _brace_src(tmp: Path) -> Path:
+    import ezdxf  # type: ignore
+
+    doc = ezdxf.new("R2018")
+    doc.header["$INSUNITS"] = 1
+    doc.modelspace().add_lwpolyline(
+        [(x, y, 0, 0, b) for x, y, b in BRACE_TANK261138],
+        format="xyseb",
+        close=True,
+        dxfattribs={"layer": "CUT_OUTER"},
+    )
+    src = tmp / "BRACE A 90 New, A 36, QTY 20, Cal 0.1875.dxf"
+    doc.saveas(src)
+    return src
+
+
+def _outer_compensado(dst: Path):
+    import ezdxf  # type: ignore
+
+    ents = [e for e in ezdxf.readfile(dst).modelspace() if e.dxf.layer == "CUT_OUTER"]
+    assert len(ents) == 1 and ents[0].dxftype() == "LWPOLYLINE", ents
+    return list(ents[0].get_points("xyseb"))
+
+
+def _assert_brace_compensado(pts) -> None:
+    assert len(pts) <= 8, f"compensado facetado: {len(pts)} vértices"
+    radios = [p for p in pts if abs(p[4] - math.tan(math.radians(90) / 4)) < 1e-3]
+    assert len(radios) == 2, f"se esperaban 2 arcos de 90°: {pts}"
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    assert abs((max(xs) - min(xs)) - (5.81 + 2 * OFF_IN)) < 1e-3
+    assert abs((max(ys) - min(ys)) - (2.91 + 2 * OFF_IN)) < 1e-3
+
+
+def test_occt_compensa_polilinea_que_inicia_en_arco() -> None:
+    import tempfile
+
+    from modules.plasma_compensator import compensate_dxf_for_plasma
+    from modules.plasma_occt_offset import occt_available
+
+    if not occt_available():
+        print("SKIP: OCCT no disponible")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        src = _brace_src(Path(td))
+        dst = Path(td) / "out.dxf"
+        st = compensate_dxf_for_plasma(src, dst, offset_mm=1.5875)
+        assert st["backend"] == "occt", (
+            f"OCCT debe compensar la pieza aunque inicie en arco; backend={st['backend']}"
+        )
+        _assert_brace_compensado(_outer_compensado(dst))
+
+
+def test_fallback_clipper_escribe_bulges() -> None:
+    import tempfile
+
+    import modules.plasma_occt_offset as occt
+    from modules.plasma_compensator import compensate_dxf_for_plasma
+    from modules.plasma_offset_clipper import clipper_disponible
+
+    if not clipper_disponible():
+        print("SKIP: pyclipr no disponible")
+        return
+    original = occt.occt_available
+    occt.occt_available = lambda: False
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            src = _brace_src(Path(td))
+            dst = Path(td) / "out.dxf"
+            st = compensate_dxf_for_plasma(src, dst, offset_mm=1.5875)
+            assert st["backend"] == "clipper2", st
+            _assert_brace_compensado(_outer_compensado(dst))
+    finally:
+        occt.occt_available = original
+
+
+def test_ring_to_bulge_vertices_anillo_real() -> None:
+    import ezdxf  # type: ignore
+    from ezdxf import path as ezpath  # type: ignore
+
+    from modules.dxf_native_curves import ring_to_bulge_vertices
+
+    ring = _ring()
+    verts = ring_to_bulge_vertices(ring, tol=0.0159)
+    assert len(verts) == 6, verts
+    assert sum(1 for v in verts if abs(v[2] - 0.41421) < 1e-3) == 2, verts
+    doc = ezdxf.new()
+    lw = doc.modelspace().add_lwpolyline(
+        [(x, y, 0, 0, b) for x, y, b in verts], format="xyseb", close=True
+    )
+    from shapely.geometry import LineString, Point
+
+    flat = LineString([(q.x, q.y) for q in ezpath.make_path(lw).flattening(0.001)])
+    dev = max(flat.distance(Point(p)) for p in ring)
+    assert dev < 0.02, f"desviación {dev:.4f} mm vs anillo original"
+
+
 def test_perfil_escalonado_sigue_rectilineo() -> None:
     from modules.plasma_dxf_export import _outer_export_line_exact
 
@@ -89,5 +198,8 @@ def test_perfil_escalonado_sigue_rectilineo() -> None:
 if __name__ == "__main__":
     test_radio_facetado_no_es_rectilineo()
     test_export_ring_native_una_vuelta_con_arcos()
+    test_occt_compensa_polilinea_que_inicia_en_arco()
+    test_fallback_clipper_escribe_bulges()
+    test_ring_to_bulge_vertices_anillo_real()
     test_perfil_escalonado_sigue_rectilineo()
     print("OK plasma_radio_facetado_arcos")

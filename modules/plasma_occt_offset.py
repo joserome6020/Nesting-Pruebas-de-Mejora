@@ -484,6 +484,20 @@ def _edge_from_entity(entity):
     raise ValueError(f"Entidad no soportada por wire OCCT: {typ}")
 
 
+def _rotar_inicio_en_recta(points: list) -> list:
+    """El wire debe arrancar en un tramo recto: si la polilínea empieza en un
+    vértice con bulge, el offset OCCT sale correcto pero su conversión a DXF
+    no empata el wire y se rechaza (SWO-076 BRACE A 90 New → Clipper2 facetado).
+    """
+    n = len(points)
+    for i in range(n):
+        x0, y0, bulge = points[i]
+        x1, y1, _ = points[(i + 1) % n]
+        if abs(bulge) <= 1e-12 and math.hypot(x1 - x0, y1 - y0) > 1e-12:
+            return points[i:] + points[:i]
+    return points
+
+
 def _polyline_edges(entity) -> list:
     typ = entity.dxftype()
     if typ not in ("LWPOLYLINE", "POLYLINE"):
@@ -508,6 +522,7 @@ def _polyline_edges(entity) -> list:
     # bulges: dos arcos ya cierran el contorno.
     if len(points) < 2:
         raise ValueError("Polilínea con menos de dos vértices")
+    points = _rotar_inicio_en_recta(points)
 
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
     from OCP.GC import GC_MakeArcOfCircle

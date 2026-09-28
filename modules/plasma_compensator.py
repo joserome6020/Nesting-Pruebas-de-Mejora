@@ -489,9 +489,12 @@ def _compensate_dxf_occt_exact(
             attrs["color"] = color
         if linetype is not None:
             attrs["linetype"] = linetype
-        # Clipper2 devuelve segmentos rectos; format 'xy' basta y el visor calcula
-        # el área correctamente porque la polilínea queda cerrada.
-        msp.add_lwpolyline(pts, format="xy", close=True, dxfattribs=attrs)
+        # Clipper2 devuelve el contorno muestreado: los radios se reconstruyen
+        # como bulge para no mandar cientos de micro-segmentos al CAM.
+        from modules.dxf_native_curves import ring_to_bulge_vertices
+
+        verts = ring_to_bulge_vertices(pts, tol=max(abs(float(delta)) * 0.01, 1e-6))
+        msp.add_lwpolyline(verts, format="xyb", close=True, dxfattribs=attrs)
         return ""
 
     changed = skipped = circles = 0

@@ -55,6 +55,22 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-28b — Plasma Compensated: blindaje contra compensados facetados
+- Origen real de SWO-076-H2: `Plasma Compensated/BRACE A 90 New, QTY 20`
+  (TANK261138) salió por **Clipper2** (601 vértices): OCCT rechazaba la
+  polilínea porque su primer vértice abre un arco (bulge) → "lazos de
+  esquina". La misma pieza de TANK25502 empieza en recta y salía por OCCT.
+- Fix OCCT: `_rotar_inicio_en_recta` en `plasma_occt_offset._polyline_edges`.
+- Red de seguridad: el fallback Clipper2 reconstruye radios como bulge con
+  `dxf_native_curves.ring_to_bulge_vertices` (tol = 1 % del offset).
+- `PLASMA_OFFSET_ALGO_VERSION` → `offset2d-v9-inicio-recto-clipper-bulge`:
+  todos los Plasma Compensated en disco se regeneran al próximo uso.
+- `test_plasma_switch_patch_muesca`: bbox del inner con bulges (antes asumía
+  Clipper densificado).
+- Candado ampliado: `test_plasma_radio_facetado_arcos.py` (OCCT inicia en
+  arco, fallback Clipper2 con bulges, refit del anillo real).
+- Build: sin cambios (`dxf_native_curves` ya empaquetado).
+
 ### 2026-09-28 — Plasma: radios facetados → LINE+ARC (SWO-076-H2)
 - `SWO-076_0.1875_SWO-076-H2_PLASMA.dxf`: 20 piezas 150.75×77.09 con R 7/16"
   salieron con 600 vértices c/u (micro-segmentos 0.06 mm; 12,204 vértices).

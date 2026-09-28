@@ -348,6 +348,91 @@ def _longest_arc_from(
     return best_len, best_arc
 
 
+def _arc_run_bulge(run: Sequence[Point], tol: float) -> Tuple[bool, Optional[float]]:
+    """(sigue_en_arco, bulge). ``sigue_en_arco`` False = ningún arco contiene el
+    tramo; bulge None = aún casi recto (se puede seguir creciendo)."""
+    p0, pm, p1 = run[0], run[len(run) // 2], run[-1]
+    if max(_point_line_dist(x, y, p0[0], p0[1], p1[0], p1[1]) for x, y in run) <= tol:
+        return True, None
+    circ = circle_from_three_points(p0, pm, p1)
+    if not circ:
+        return False, None
+    cx, cy, r = circ
+    if max(abs(math.hypot(x - cx, y - cy) - r) for x, y in run) > tol:
+        return False, None
+    for (xa, ya), (xb, yb) in zip(run, run[1:]):
+        if abs(math.hypot((xa + xb) * 0.5 - cx, (ya + yb) * 0.5 - cy) - r) > tol:
+            return False, None
+    ang = _angles_unwrapped(run, cx, cy)
+    sweep = ang[-1] - ang[0]
+    if abs(sweep) >= math.radians(350.0):
+        return False, None
+    jitter = abs(sweep) / (len(run) - 1) * 0.25
+    for i in range(1, len(ang)):
+        step = ang[i] - ang[i - 1]
+        if abs(step) >= jitter and step * sweep < 0:
+            return False, None
+    return True, math.tan(sweep / 4.0)
+
+
+def ring_to_bulge_vertices(points: Iterable, *, tol: float) -> List[Tuple[float, float, float]]:
+    """
+    Anillo cerrado facetado → vértices LWPOLYLINE ``(x, y, bulge)``.
+    Los tramos que caen en un arco (±``tol``, unidades del anillo) se reducen a
+    un vértice con bulge; los colineales se fusionan.
+    """
+    pts = normalize_ring(points, closed=True)
+    n = len(pts)
+    if n < 4:
+        return [(x, y, 0.0) for x, y in pts]
+    seg_len = [math.dist(pts[k], pts[(k + 1) % n]) for k in range(n)]
+    k0 = max(range(n), key=seg_len.__getitem__)
+    pts = pts[k0:] + pts[:k0]
+    ring = pts + [pts[0]]
+
+    def _recta_ok(a: int, b: int) -> bool:
+        (x1, y1), (x2, y2) = ring[a], ring[b]
+        return all(
+            _point_line_dist(ring[k][0], ring[k][1], x1, y1, x2, y2) <= tol
+            for k in range(a + 1, b)
+        )
+
+    out: List[Tuple[float, float, float]] = []
+    linea_desde = -1
+    i = 0
+    while i < n:
+        best_j, best_b = 0, 0.0
+        j = i + 3
+        while j <= n:
+            sigue, b = _arc_run_bulge(ring[i : j + 1], tol)
+            if not sigue:
+                break
+            if b is not None:
+                best_j, best_b = j, b
+            j += 1
+        if best_j:
+            # La recta previa absorbe facetas casi tangentes; el arco las recupera.
+            k = i
+            while linea_desde >= 0 and k - 1 > linea_desde:
+                sigue, b = _arc_run_bulge(ring[k - 1 : best_j + 1], tol)
+                if not sigue or b is None:
+                    break
+                k, best_b = k - 1, b
+            if k == linea_desde:
+                out.pop()
+            out.append((ring[k][0], ring[k][1], best_b))
+            linea_desde = -1
+            i = best_j
+            continue
+        j = i + 1
+        while j < n and _recta_ok(i, j + 1):
+            j += 1
+        out.append((ring[i][0], ring[i][1], 0.0))
+        linea_desde = i
+        i = j
+    return out
+
+
 def _bulge_semicircle() -> float:
     """Bulge DXF para arco semicircular (180°)."""
     return math.tan(math.pi / 4.0)
