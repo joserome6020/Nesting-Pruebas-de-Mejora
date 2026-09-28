@@ -247,6 +247,196 @@ class PlateManagementMixin:
         self.visor.limpiar_seleccion_piezas()
         self.on_piece_selected()
 
+    def panel_nestear_como_rtz(self):
+        """Promueve la selección actual de la madre a RTZ natural(es) sin re-nest."""
+        from modules.nesting_engine.rtz_manual_promote import (
+            max_rtz_counter,
+            promote_selection_to_rtz,
+        )
+
+        try:
+            clave = self.clave_actual
+            hoja_visor = getattr(self.visor, "hoja_actual_data", None)
+            if hoja_visor is None:
+                hoja_visor = self.hoja_actual_data
+            if not self._ctx_tiene_resultados(clave):
+                return
+            if not self._ctx_hoja_valida(hoja_visor, "Nestear como RTZ"):
+                return
+            if self._es_grupo_cobre(clave) or bool((hoja_visor or {}).get("modo_largos_cu")):
+                return QMessageBox.information(
+                    self,
+                    "Como RTZ",
+                    "Nestear como RTZ aplica solo a placas de acero (no cobre).",
+                )
+
+            raw_indices = sorted(
+                getattr(self.visor, "piezas_seleccionadas_indices", None) or []
+            )
+            if not raw_indices and getattr(self.visor, "idx_pieza_seleccionada", -1) >= 0:
+                raw_indices = [int(self.visor.idx_pieza_seleccionada)]
+            indices_ok = []
+            for idx in raw_indices:
+                p = self.visor._pieza_at(idx) if hasattr(self.visor, "_pieza_at") else None
+                if p is None:
+                    continue
+                if hasattr(self.visor, "_es_pieza_seleccionable") and not self.visor._es_pieza_seleccionable(
+                    p.get("nombre", "")
+                ):
+                    continue
+                indices_ok.append(idx)
+            if not indices_ok:
+                return QMessageBox.warning(
+                    self,
+                    "Como RTZ",
+                    "Seleccione al menos una pieza física en la placa madre.",
+                )
+
+            hojas = ((self.app.resultados_nesting or {}).get(clave) or {}).get("hojas")
+            if not isinstance(hojas, list) or not hojas:
+                return QMessageBox.warning(
+                    self,
+                    "Como RTZ",
+                    "No hay hojas en el resultado de nesting de este calibre.",
+                )
+
+            madre_idx = self._idx_hoja_en_lista(hojas, hoja_visor)
+            if madre_idx is None:
+                return QMessageBox.warning(
+                    self,
+                    "Como RTZ",
+                    "No se encontró la placa activa en el grupo de nesting.\n"
+                    "Haga clic en la placa en la lista izquierda e intente de nuevo.",
+                )
+            # Misma referencia que el visor: la selección y la mutación coinciden.
+            if hojas[madre_idx] is not hoja_visor:
+                hojas[madre_idx] = hoja_visor
+            hoja = hoja_visor
+
+            calibre = str(clave).split("_", 1)[0].strip() or "NA"
+            wo = self._order_label_para_rtz() or "W.O."
+            contador = max_rtz_counter(hojas) + 1
+            resultado = promote_selection_to_rtz(
+                hoja,
+                indices_ok,
+                hojas_grupo=hojas,
+                calibre=calibre,
+                wo_name=wo,
+                contador_rtz=contador,
+            )
+            if not resultado.get("ok"):
+                motivo = str(resultado.get("motivo") or "No se pudo crear el RTZ.")
+                rejected = resultado.get("skipped_rejected") or []
+                virtual = resultado.get("skipped_virtual") or []
+                extra_parts = []
+                if rejected:
+                    extra_parts.append(
+                        "Fallaron al construir RTZ: " + "; ".join(rejected[:6])
+                    )
+                if virtual:
+                    extra_parts.append(
+                        "Overlays virtuales ignorados: " + ", ".join(virtual[:6])
+                    )
+                extra = ("\n\n" + "\n".join(extra_parts)) if extra_parts else ""
+                return QMessageBox.warning(
+                    self,
+                    "Como RTZ",
+                    f"{motivo}{extra}",
+                )
+
+            try:
+                sincronizar_overlays_grupo(hojas)
+            except Exception:
+                pass
+            try:
+                self._replicar_lote_activo_a_gemelos()
+            except Exception:
+                pass
+
+            placa_id_madre = str(hoja.get("placa_id") or "")
+            rtz_ids = list(resultado.get("rtz_ids") or [])
+            self.procesar_lista_hojas(self.app.resultados_nesting)
+
+            # Tras procesar: localizar el primer RTZ nuevo y abrirlo (lo que el usuario espera ver).
+            hojas2 = ((self.app.resultados_nesting or {}).get(clave) or {}).get("hojas") or []
+            rtz_mostrar = None
+            for rid in rtz_ids:
+                for h in hojas2:
+                    if (
+                        isinstance(h, dict)
+                        and h.get("es_retazo")
+                        and str(h.get("placa_id") or "") == str(rid)
+                    ):
+                        rtz_mostrar = h
+                        break
+                if rtz_mostrar is not None:
+                    break
+            if rtz_mostrar is None:
+                for h in hojas2:
+                    if (
+                        isinstance(h, dict)
+                        and h.get("es_retazo")
+                        and str(h.get("origen_placa") or "") == placa_id_madre
+                    ):
+                        rtz_mostrar = h
+                        break
+
+            try:
+                self.visor.limpiar_seleccion_piezas()
+            except Exception:
+                pass
+
+            hoja_abrir = rtz_mostrar
+            if hoja_abrir is None:
+                for h in hojas2:
+                    if (
+                        isinstance(h, dict)
+                        and not h.get("es_retazo")
+                        and str(h.get("placa_id") or "") == placa_id_madre
+                    ):
+                        hoja_abrir = h
+                        break
+            if hoja_abrir is None:
+                hoja_abrir = hoja
+
+            # dibujar_hoja_full actualiza visor.hoja_actual_data / clave_actual
+            # (TabNesting.hoja_actual_data es property sin setter).
+            try:
+                self.dibujar_hoja_full(hoja_abrir, clave)
+            except Exception:
+                try:
+                    self.visor.dibujar_hoja_full(hoja_abrir, clave, preserve_view=False)
+                except Exception:
+                    pass
+            self.on_piece_selected()
+
+            n_sel = int(resultado.get("n_seleccionadas") or 0)
+            n_rtz = int(resultado.get("n_rtz") or len(rtz_ids) or 0)
+            n_pzas = int(resultado.get("n_piezas") or 0)
+            avisos = resultado.get("avisos_estructurales") or []
+            gap_mm = float(resultado.get("gap_mm") or 0.0)
+            msg = (
+                f"Seleccionadas: {n_sel}\n"
+                f"RTZ creados (1 por pieza): {n_rtz}\n"
+                f"Gap kerf vs madre: {gap_mm/25.4:.3f}\"\n"
+                f"IDs: {', '.join(rtz_ids[:8])}{'…' if len(rtz_ids) > 8 else ''}"
+            )
+            if avisos:
+                msg += (
+                    "\n\nAviso: promoviste piezas estructurales "
+                    "(TOP COVER / PLACA BASE / PREFORMADOS):\n"
+                    + ", ".join(avisos[:6])
+                )
+            if n_sel != n_rtz:
+                msg += f"\n\nERROR interno: {n_sel} seleccionadas ≠ {n_rtz} RTZ."
+            QMessageBox.information(self, "Como RTZ", msg)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Como RTZ",
+                f"Error al crear RTZ desde la selección:\n{exc}",
+            )
+
     def panel_ajustar_vista(self):
         if self.hoja_actual_data and self.clave_actual:
             self.visor.dibujar_hoja_full(

@@ -1022,15 +1022,22 @@ def _inyectar_metadata_hoja(
     placa_w = _safe_float(hoja.get("placa_w", 0.0), 0.0) or 0.0
     placa_h = _safe_float(hoja.get("placa_h", 0.0), 0.0) or 0.0
 
-    if hoja.get("cu_rtz_virtual"):
+    pid_up = str(hoja.get("placa_id") or "").strip().upper()
+    es_rtz_nom = pid_up.startswith("RTZ")
+    if hoja.get("cu_rtz_virtual") or bool(hoja.get("es_retazo")) or es_rtz_nom:
+        # RTZ / RTZCU: el DXF y el pie de PDF usan el mismo id del reporte
+        # (RTZ23-0.25-15.0x21.0-SWO-068), no SWO-068-H48.
         sheet_code = str(
             hoja.get("placa_id")
             or hoja.get("cu_rtz_id")
+            or hoja.get("sheet_display_name")
             or hoja.get("sheet_code")
             or f"{order_label}-H{sheet_seq}"
         ).strip()
     else:
-        sheet_code = str(hoja.get("sheet_code") or f"{order_label}-H{sheet_seq}")
+        # Madre: respetar sheet_code ya asignado (no renumerar a H1 al reexportar 1 hoja).
+        prev = str(hoja.get("sheet_code") or "").strip()
+        sheet_code = prev or f"{order_label}-H{sheet_seq}"
     default_sheet_uid = (
         f"{_slug_token(order_label)}__"
         f"{_slug_token(thickness_name)}__"
@@ -1858,11 +1865,12 @@ def exportar_resultados_a_dxf(
                         "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                     })
 
-            if es_cu_rtz_virtual:
-                # RTZCU{n}-H{m}: nunca heredar un W.O.-H* stale del numerador global.
+            if es_cu_rtz_virtual or es_retazo or str(hoja.get("placa_id") or "").upper().startswith("RTZ"):
+                # Misma nomenclatura que el reporte / placa_id (no H##).
                 sheet_code = str(
                     hoja.get("placa_id")
                     or hoja.get("cu_rtz_id")
+                    or hoja.get("sheet_display_name")
                     or hoja.get("sheet_code")
                     or f"{order_label}-H{sheet_seq}"
                 ).strip()

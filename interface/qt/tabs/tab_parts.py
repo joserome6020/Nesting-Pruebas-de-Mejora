@@ -344,6 +344,7 @@ class TabParts(QWidget, TimerHost):
         self._material_fila_actual = None
         self.visor.set_persist_rotation_hook(self._persistir_orientacion_vista)
         self.visor.set_orientation_lock_hook(self._persistir_bloqueo_orientacion_corte)
+        self.visor.set_forzar_rtz_hook(self._persistir_forzar_rtz)
         vis_lay.addWidget(self.frame_black_visor, 1)
         splitter.addWidget(frame_visor_bg)
         splitter.setStretchFactor(0, 3)
@@ -551,6 +552,8 @@ class TabParts(QWidget, TimerHost):
         if thumbnails_async and thumb_queue:
             self._iniciar_thumbnails_async(thumb_queue)
         self._actualizar_lbl_piezas_nestear(datos)
+        # Reaplicar FALLO de auditoría previa mientras revalida (evita flash LISTO).
+        self._aplicar_estados_auditoria_filas()
         self._iniciar_auditoria_dxf_async(datos)
         QTimer.singleShot(0, self._sync_parts_header_scrollbar)
 
@@ -799,14 +802,12 @@ class TabParts(QWidget, TimerHost):
 
         lbl_estado = info.get("lbl_estado")
         if lbl_estado is not None:
-            es_cu = self._es_material_cobre(mat_new)
-            es_plasma = (not es_cu) and self._plasma_guardada(ruta)
-            if es_plasma:
-                lbl_estado.setText("PLASMA")
-                lbl_estado.setStyleSheet("color:#2563EB;font-weight:700;")
-            else:
-                lbl_estado.setText("LISTO")
-                lbl_estado.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+            self._pintar_lbl_estado(
+                lbl_estado,
+                ruta=str(ruta),
+                pieza=str(pieza or ""),
+                mat=str(mat_new or ""),
+            )
 
         self.seleccionar_fila(ruta, row, pieza, mat_new)
         self._actualizar_marca_edicion(str(ruta))
@@ -888,6 +889,7 @@ class TabParts(QWidget, TimerHost):
         }
         self.app.dxf_nesting_audit = dict(self._dxf_audit_actual)
         self.app.dxf_audit_pending = False
+        self._aplicar_estados_auditoria_filas()
         self._actualizar_widget_resumen_dxf()
 
     def actualizar_resumen_dxf(self, audit: dict | None = None):
@@ -900,7 +902,48 @@ class TabParts(QWidget, TimerHost):
             }
             self.app.dxf_nesting_audit = dict(self._dxf_audit_actual)
             self.app.dxf_audit_pending = False
+            self._aplicar_estados_auditoria_filas()
         self._actualizar_widget_resumen_dxf()
+
+    def _error_omitido_fila(self, ruta: str, pieza: str = "") -> str | None:
+        ruta_n = str(ruta or "").strip()
+        pieza_n = str(pieza or "").strip()
+        for item in self._dxf_audit_actual.get("omitidos") or []:
+            r = str(item.get("ruta") or "").strip()
+            p = str(item.get("pieza") or "").strip()
+            if (ruta_n and r == ruta_n) or (pieza_n and p == pieza_n and (not r or not ruta_n)):
+                err = str(item.get("error") or "").strip()
+                return err or "DXF omitido del nesteo."
+        return None
+
+    def _pintar_lbl_estado(self, lbl_estado, *, ruta: str, pieza: str = "", mat: str = "") -> None:
+        if lbl_estado is None:
+            return
+        err = self._error_omitido_fila(ruta, pieza)
+        if err:
+            lbl_estado.setText("FALLO")
+            lbl_estado.setStyleSheet("color:#DC2626;font-weight:700;")
+            lbl_estado.setToolTip(err)
+            return
+        es_cu = self._es_material_cobre(mat) if mat else False
+        es_plasma = bool(ruta) and (not es_cu) and self._plasma_guardada(ruta)
+        if es_plasma:
+            lbl_estado.setText("PLASMA")
+            lbl_estado.setStyleSheet("color:#2563EB;font-weight:700;")
+            lbl_estado.setToolTip("Plasma Compensated activo")
+        else:
+            lbl_estado.setText("LISTO")
+            lbl_estado.setStyleSheet(f"color:{COLOR_TEXTO_TITULO};")
+            lbl_estado.setToolTip("")
+
+    def _aplicar_estados_auditoria_filas(self) -> None:
+        for ruta, info in (self._row_widgets or {}).items():
+            lbl = info.get("lbl_estado")
+            if lbl is None:
+                continue
+            pieza = str(info.get("pieza") or "")
+            mat = self._material_actual_fila(ruta, "")
+            self._pintar_lbl_estado(lbl, ruta=str(ruta), pieza=pieza, mat=mat)
 
     def _estilo_lbl_dxf_conteo(self) -> str:
         return f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:13px;padding:0 8px;"
@@ -1530,7 +1573,56 @@ class TabParts(QWidget, TimerHost):
         except Exception:
             pass
 
+    def _forzar_rtz_activo(self, ruta_dxf) -> bool:
+        flags = getattr(self.app, "forzar_rtz_por_ruta", None) or {}
+        return bool(flags.get(self._clave_orientacion(ruta_dxf), False))
+
+    def _nombre_pieza_actual(self) -> str:
+        try:
+            ref = getattr(self.visor, "lbl_referencia", None)
+            if ref is not None and hasattr(ref, "text"):
+                t = str(ref.text() or "").strip()
+                if t:
+                    return t
+        except Exception:
+            pass
+        return str(getattr(self, "_nombre_fila_actual", "") or "").strip()
+
+    def _persistir_forzar_rtz(self, checked: bool, ruta_dxf=None):
+        ruta = ruta_dxf or getattr(self.visor, "_ruta_actual", None)
+        if not ruta:
+            return
+        if (
+            not hasattr(self.app, "forzar_rtz_por_ruta")
+            or self.app.forzar_rtz_por_ruta is None
+        ):
+            self.app.forzar_rtz_por_ruta = {}
+        if (
+            not hasattr(self.app, "forzar_rtz_por_nombre")
+            or self.app.forzar_rtz_por_nombre is None
+        ):
+            self.app.forzar_rtz_por_nombre = {}
+        clave = self._clave_orientacion(ruta)
+        from modules.nesting_engine.rtz_manual_promote import _norm_nombre_forzar
+
+        nom = _norm_nombre_forzar(self._nombre_pieza_actual())
+        if checked:
+            self.app.forzar_rtz_por_ruta[clave] = True
+            if nom:
+                self.app.forzar_rtz_por_nombre[nom] = True
+        else:
+            self.app.forzar_rtz_por_ruta.pop(clave, None)
+            if nom:
+                self.app.forzar_rtz_por_nombre.pop(nom, None)
+        try:
+            tab_n = getattr(self.app, "tab_nesting", None)
+            if tab_n is not None and hasattr(tab_n, "_sync_orientacion_cobre_al_motor"):
+                tab_n._sync_orientacion_cobre_al_motor()
+        except Exception:
+            pass
+
     def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
+        self._nombre_fila_actual = str(nombre_pieza or "")
         inner = self.lista_scroll.widget()
         if inner:
             for i in range(self._lista_layout.count()):
@@ -1547,6 +1639,7 @@ class TabParts(QWidget, TimerHost):
             self.visor.set_orientation_lock_checked(
                 self._orientacion_corte_bloqueada(ruta_dxf)
             )
+            self.visor.set_forzar_rtz_checked(self._forzar_rtz_activo(ruta_dxf))
             rot_vista = self._rotacion_vista_para_ruta(ruta_dxf, material)
             vista_dxf = ruta_dxf
             if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):

@@ -69,6 +69,54 @@ def _validar_poly_input(poly) -> str | None:
         return "No se pudo medir bounds de la pieza."
     if w < _MIN_EDGE_MM or h < _MIN_EDGE_MM:
         return f"Contorno degenerado ({w:.3f}×{h:.3f} mm)."
+    # Contorno abierto / DXF comprometido: bbox grande pero casi sin área.
+    bbox_area = max(w * h, 1.0)
+    if area < max(_MIN_AREA_MM2, bbox_area * 0.02):
+        return (
+            f"DXF corrupto o contorno abierto "
+            f"(área {area:.2f} mm² vs bbox {w:.1f}×{h:.1f} mm)."
+        )
+    return None
+
+
+def _validar_area_neta_pieza(ruta: str) -> str | None:
+    """Misma métrica del panel DETALLE: área neta de contornos realmente cerrados.
+
+    El parser de nesting a veces reconstruye un polígono usable a partir de
+    fragmentos; el visor (y el export láser) siguen viendo AREA NETA 0. Si el
+    detalle muestra área ≈ 0 con span grande, la pieza debe ir a omitidos/FALLO.
+    """
+    try:
+        from interface.qt.dxf_part_loader import load_dxf_part
+    except Exception:
+        return None
+    try:
+        model = load_dxf_part(ruta)
+    except Exception as exc:
+        return f"No se pudo medir área neta del DXF: {exc}"
+    if model is None:
+        return "No se pudo cargar el DXF para métricas de pieza."
+    try:
+        area = float(getattr(model, "area_neta", 0.0) or 0.0)
+        span_x = abs(float(model.max_x_raw) - float(model.min_x_raw))
+        span_y = abs(float(model.max_y_raw) - float(model.min_y_raw))
+    except Exception as exc:
+        return f"Métricas de pieza ilegibles: {exc}"
+    span_max = max(span_x, span_y)
+    # Unidades DXF raw (pulgadas típicas Inventor). Umbral holgado vs ruido.
+    if span_max < 0.25:
+        return None
+    bbox_area = max(span_x * span_y, 1e-9)
+    if area <= 1e-6:
+        return (
+            f"DXF corrupto o contorno abierto "
+            f"(área neta {area:.4f} vs span {span_x:.2f}×{span_y:.2f})."
+        )
+    if area < bbox_area * 0.02:
+        return (
+            f"DXF corrupto o contorno abierto "
+            f"(área neta {area:.4f} vs span {span_x:.2f}×{span_y:.2f})."
+        )
     return None
 
 
@@ -153,6 +201,18 @@ def auditar_lista_partes(lista_partes) -> dict:
                     "ruta": ruta,
                     "archivo": archivo,
                     "error": err_poly,
+                }
+            )
+            continue
+
+        err_neta = _validar_area_neta_pieza(ruta)
+        if err_neta:
+            omitidos.append(
+                {
+                    "pieza": pieza or archivo,
+                    "ruta": ruta,
+                    "archivo": archivo,
+                    "error": err_neta,
                 }
             )
             continue

@@ -187,7 +187,8 @@ def test_export_final_usa_plasma_compensated_y_preserva_arc_fuente() -> None:
             # se prueba en `plasma_offset2d`, no queremos que regenere este
             # fixture deliberadamente curvo desde el original rectilíneo.
             "plasma_offset_mm": 0.0,
-            "outer": [(0, 0), (10, 0), (10, 10), (0, 10)],
+            # DXF 10x10 in → nest en mm.
+            "outer": [(0, 0), (254, 0), (254, 254), (0, 254)],
             "rot_deg": 0.0,
             "shift_x": 0.0,
             "shift_y": 0.0,

@@ -644,6 +644,19 @@ class TabNesting(QWidget, TimerHost, ExportMixin, NestingCalcMixin, PlateManagem
         self.btn_rot_p1.setEnabled(estado_rot)
         if hasattr(self, "switch_edicion_libre"):
             self.switch_edicion_libre.setEnabled(estado_switch)
+        if hasattr(self, "btn_nestear_como_rtz"):
+            hoja = self.hoja_actual_data or {}
+            es_madre = isinstance(hoja, dict) and not bool(hoja.get("es_retazo"))
+            es_cu = self._es_grupo_cobre(self.clave_actual) or bool(
+                (hoja or {}).get("modo_largos_cu")
+            )
+            self.btn_nestear_como_rtz.setEnabled(
+                estado_transfer and es_madre and not es_cu
+            )
+            if n > 1:
+                self.btn_nestear_como_rtz.setText(f"Como RTZ ({n})")
+            else:
+                self.btn_nestear_como_rtz.setText("Como RTZ")
         if n > 1:
             self.btn_transferir.setText(f"Mudar ({n})")
             self.btn_transferir.setToolTip(f"Mudar {n} piezas a otra placa")

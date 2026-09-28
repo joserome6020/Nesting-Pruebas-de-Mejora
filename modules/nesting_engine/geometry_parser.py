@@ -5,7 +5,7 @@ from collections import defaultdict
 import ezdxf
 from ezdxf import path
 from shapely.geometry import LineString, MultiLineString, Polygon
-from shapely.ops import linemerge, polygonize
+from shapely.ops import linemerge, polygonize, unary_union
 
 # ezdxf NO es thread-safe (regresion 2026-08-13: audit + UI render pisando el
 # mismo pipeline C -> access violation en Python 3.14). Ver modules/dxf_thread_lock.py.
@@ -197,19 +197,30 @@ def _poligonos_cerrados_de_lineas(lineas) -> list[Polygon]:
         pass
     if candidatos:
         return candidatos
-    # Micro-gaps: cerrar con buffer mínimo sin engordar el contorno.
+    # Micro-gaps: cierre morfológico (buffer+/buffer-). NO bufferizar cada
+    # LINE suelta: eso inventaba "salchichas" con área≈bbox y hacía pasar
+    # DXF abiertos/corruptos como válidos (PARTS LISTO con AREA NETA 0).
     try:
-        for ln in lineas:
-            g = ln.buffer(0.002, join_style=1)
-            if g.is_empty:
-                continue
-            if g.geom_type == "Polygon":
-                if g.area >= DXF_MIN_HOLE_AREA_MM2:
-                    candidatos.append(g)
-            elif hasattr(g, "geoms"):
-                for sub in g.geoms:
-                    if sub.geom_type == "Polygon" and sub.area >= DXF_MIN_HOLE_AREA_MM2:
-                        candidatos.append(sub)
+        gap = max(float(DXF_CURVE_TOL_MM), 0.05)
+        closed = unary_union(lineas).buffer(gap).buffer(-gap)
+        if closed is None or closed.is_empty:
+            return candidatos
+        geoms = (
+            [closed]
+            if closed.geom_type == "Polygon"
+            else [g for g in getattr(closed, "geoms", []) if g.geom_type == "Polygon"]
+        )
+        for g in geoms:
+            poly = g
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if (
+                poly is not None
+                and not poly.is_empty
+                and poly.geom_type == "Polygon"
+                and float(poly.area or 0.0) >= DXF_MIN_HOLE_AREA_MM2
+            ):
+                candidatos.append(poly)
     except Exception:
         pass
     return candidatos

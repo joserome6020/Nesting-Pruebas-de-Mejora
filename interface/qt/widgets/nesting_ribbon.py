@@ -182,6 +182,15 @@ def _pix(kind: str, size: int = 28) -> QPixmap:
         p.setPen(QPen(_ACCENT, 1.6))
         p.drawLine(r.left() + 4, r.center().y(), r.right() - 4, r.center().y())
         p.drawLine(r.center().x(), r.top() + 6, r.center().x(), r.bottom() - 6)
+    elif kind == "rtz":
+        # Placa madre + recorte RTZ resaltado
+        p.drawRoundedRect(r.adjusted(1, 3, -1, -3), 2, 2)
+        p.setPen(QPen(_ACCENT, 1.8))
+        p.setBrush(QColor(147, 197, 253, 80))
+        p.drawRoundedRect(r.adjusted(8, 8, -3, -3), 2, 2)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(r.left() + 8, r.top() + 8, r.left() + 8, r.bottom() - 3)
+        p.drawLine(r.left() + 8, r.top() + 8, r.right() - 3, r.top() + 8)
     elif kind == "renest":
         p.drawEllipse(r.adjusted(3, 3, -3, -3))
         p.setPen(QPen(_ACCENT, 1.8))
@@ -600,6 +609,15 @@ QScrollArea#NestingRibbonScroll QScrollBar:vertical {
     )
     tab.btn_limpiar_sel.clicked.connect(tab.panel_limpiar_seleccion)
 
+    tab.btn_nestear_como_rtz = make_cmd(
+        "Como RTZ",
+        icon="rtz",
+        tip="Nestear la selección como RTZ natural (REF / guillotina en la madre)",
+        large=True,
+    )
+    tab.btn_nestear_como_rtz.setEnabled(False)
+    tab.btn_nestear_como_rtz.clicked.connect(tab.panel_nestear_como_rtz)
+
     tab.btn_rot_m1 = make_cmd(
         "-1°", icon="rotate", tip="Rotar −1°", large=False
     )
@@ -631,6 +649,7 @@ QScrollArea#NestingRibbonScroll QScrollBar:vertical {
             "Placa",
             tab.btn_panel_renest_placa,
             tab.btn_panel_cambiar_placa,
+            tab.btn_nestear_como_rtz,
             [tab.btn_panel_renest_calibre, tab.btn_ajustar_vista],
             [tab.btn_transferir, tab.btn_limpiar_sel],
             [tab.btn_rot_m1, tab.btn_rot_p1],

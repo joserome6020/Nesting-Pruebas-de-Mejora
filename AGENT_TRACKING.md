@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-28c — Release: RTZ manual/placas/láser + fixtures plasma en mm
+- Entra al repo el trabajo 2026-09-24b…j (RTZ manual, switch RTZ, DXF
+  abierto = FALLO, láser fail-closed) con `rtz_manual_promote.py` y candados.
+- `_export_source_dxf_at_placement` ahora rechaza DXF que no alinea con el
+  nest; dos fixtures plasma declaraban el nest en pulgadas (10 mm vs DXF
+  10 in = 254 mm). Se corrigieron a mm (convención planta: Processed en in).
+- Regresiones deben correrse con `py -3.14` (los `.pyd` son cp314); con
+  3.13 fallan 3 por DLL de `algorithm_cpp`, no por lógica.
+
 ### 2026-09-28b — Plasma Compensated: blindaje contra compensados facetados
 - Origen real de SWO-076-H2: `Plasma Compensated/BRACE A 90 New, QTY 20`
   (TANK261138) salió por **Clipper2** (601 vértices): OCCT rechazaba la
@@ -84,6 +93,76 @@ código viejo. Un bug sin candado vuelve.
 - DXF de planta corregido a mano (324 vértices, Hausdorff 0.003 mm).
 - Candado: `test_plasma_radio_facetado_arcos.py` (anillo real en JSON).
 - Build: sin módulos/assets nuevos para el .exe (solo lógica + test).
+
+### 2026-09-24j — PARTS: DXF abierto/corrupto → ESTADO FALLO (no LISTO)
+- Causa: el parser de nesting bufferizaba cada LINE suelta y inventaba un
+  “shell”; el panel DETALLE ya mostraba AREA NETA 0 pero la auditoría
+  marcaba OK y la columna ESTADO quedaba en LISTO (p. ej. `…3MT0210CA005`).
+- Fix parser: cierre morfológico (buffer+/−) en vez de salchichas por LINE.
+- Audit: segunda compuerta con `area_neta` del visor (mismo criterio DETALLE).
+- UI: omitidos pintan **FALLO** en rojo + tooltip del error; footer DXF NESTEO
+  refleja ok/omitidos.
+- Candado: `test_dxf_open_contour_fallo.py`.
+
+### 2026-09-24i — Export láser: DXF corrupto = fail-closed (no fallback silencioso)
+- El abort «fuera de la placa» era la señal correcta de `51-3MT0210CA005`
+  con DXF origen comprometido (AREA≈0 / contorno abierto).
+- Se revierte el fallback a polígono nest: si la fuente 1:1 no alinea o el CUT
+  se sale, **aborta nombrando la pieza** y pide regenerar AutoDXF.
+- Audit PARTS: omite DXF con área ≪ bbox (contorno abierto).
+
+### 2026-09-24h — Export láser: DXF fuente ≠ nest → fallback (no abortar hoja)
+- *Superseded by 24i*: el fallback ocultaba DXF corruptos.
+- Caso `51-3MT0210CA005` rot 180°: matriz 1:1 mal alineada → CUT bbox
+  (-600…1725) fuera de placa 120×48; abortaba todo H1.
+
+### 2026-09-24g — Switch RTZ: stamp por ruta norm + nombre (no solo 1 barreno)
+- Causa del “solo RTZ1 / 24 pzas”: el re-stamp usaba ruta cruda vs clave
+  `normcase` → casi todas las marcadas perdían `forzar_rtz` tras el pack.
+- Fix: `stamp_forzar_rtz_on_piezas` (ruta norm + basename + `forzar_rtz_por_nombre`);
+  membership de barreno por área; log `forzar/barrenos/sobran`.
+- Candado: `test_stamp_forzar_por_nombre_y_ruta_norm`.
+
+### 2026-09-24f — Switch PARTS RTZ = zona (barreno), no segregación ni 1:1
+- `forzar_rtz` nest normal (madre + orificios); post-pass
+  `promote_forzar_zones_on_madre`: 1 RTZ por barreno/remanente con N piezas;
+  contorno = orificio. **Como RTZ** sigue siendo 1:1 manual.
+- Candado: `test_promote_forzar_zona_barreno_un_rtz_varias_piezas`.
+
+### 2026-09-24e — Como RTZ: N seleccionadas → N RTZ (1:1)
+- Sin agrupar ni cherry-pick: cada pieza física seleccionada = 1 hoja RTZ.
+- Keepers (TOP COVER / PLACA BASE / PREFORMADOS) también se promueven si el
+  usuario los seleccionó (solo aviso). Fallo limpio si count mismatch.
+- Diálogo: `Seleccionadas` == `RTZ creados`. Candado
+  `test_promote_uno_a_uno_todas_las_seleccionadas`.
+
+### 2026-09-24d — Como RTZ: gap kerf + no abandonar selección
+- Choque vs madre usa **unión real + gap (kerf_usado)**, no bbox vacío.
+- Toda pieza seleccionada (no keeper) entra a RTZ; si el grupo falla, se
+  reintenta pieza a pieza. El diálogo reporta seleccionadas vs promovidas.
+- Candado: `test_promote_no_abandona_seleccion`.
+
+### 2026-09-24c — Como RTZ: guillotina no atraviesa keepers
+- Contorno = unión de piezas promovidas (no bbox rectangular vacío).
+- Cluster no crece si el bbox cruzaría piezas que quedan en la madre.
+- Sync overlays proyecta `poly_borde_retazo` si `guillotina_desde_borde`.
+- PREFORMADOS BASE / PLACA BASE / TOP COVER siguen excluidos (permanecen en madre).
+- Candado: `test_promote_guillotina_no_atraviesa_keepers`.
+
+### 2026-09-24b — Como RTZ: cinta grande + promote multi-cluster
+- Botón cinta **Como RTZ** (grande, icono propio) junto a Renestear/Cambiar.
+- Promote: si la selección no cabe en una cama, parte en varios RTZ vecinos;
+  unifica hoja del visor con resultados; redibuja madre con REF.
+- Candado ampliado: selección dispersa → ≥2 RTZ.
+
+### 2026-09-24 — Forzar RTZ dual (PARTS + Nestear como RTZ)
+- Checkbox **RTZ** en DETALLE DE PIEZA: reserva la pieza (`forzar_rtz`) para
+  mini-nest; no entra primero a la madre. Si no cabe, vuelve a accesorios.
+- Cinta Placa: **Nestear como RTZ** promueve la selección a hoja RTZ natural
+  (REF/GUILLOTINA/TATUAJE) sin re-nestear; omite TOP COVER / PLACA BASE.
+- No cambia `_debe_forzar_sin_mini_nest` ni el orden madre eficiente → RTZ.
+- Candado: `tests/native/test_forzar_rtz_dual.py`. Smoke/hidden:
+  `modules.nesting_engine.rtz_manual_promote`.
 
 ### 2026-09-22g — Release: margen 0.250\" + export plasma robusto
 - Empaqueta fixes 22e/22f (margen placa, fallback Placa Base).

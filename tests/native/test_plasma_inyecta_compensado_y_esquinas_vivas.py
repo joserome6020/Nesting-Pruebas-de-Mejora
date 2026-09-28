@@ -136,8 +136,9 @@ def test_export_del_nest_clona_el_compensado_con_arco_nativo() -> None:
         assert res["plasma_fuente_ya_compensada"], "no se resolvió Plasma Compensated"
 
         vertices = _vertices_outer(Path(res["ruta"]))
-        xs = [v[0] for v in vertices]
-        ys = [v[1] for v in vertices]
+        # DXF en pulgadas; el nest trabaja en mm.
+        xs = [v[0] * 25.4 for v in vertices]
+        ys = [v[1] * 25.4 for v in vertices]
         # El nest colocó exactamente la geometría compensada: el contorno del
         # placement es su bbox, así la validación no espera un segundo offset.
         outer = [

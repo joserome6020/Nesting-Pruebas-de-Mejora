@@ -323,17 +323,35 @@ def _reconstruir_overlays_rtz_en_madre(madre, rtz_hoja):
         # Workspaces viejos sin retazo_tipo: si hay guillotina previa era SOBRANTE.
         tipo = "SOBRANTE"
 
-    min_x, min_y = gx, gy
-    max_x, max_y = gx + rw, gy + rh
-    poly_g = [
-        [
-            (min_x, min_y),
-            (max_x, min_y),
-            (max_x, max_y),
-            (min_x, max_y),
-            (min_x, min_y),
+    # Promote manual / bordes irregulares: proyectar poly_borde_retazo.
+    # El rectángulo bbox atraviesa piezas que quedan en la madre.
+    poly_g = None
+    usar_borde = bool(rtz_hoja.get("guillotina_desde_borde"))
+    poly_local = _poly_borde_local(rtz_hoja)
+    if poly_local is not None:
+        area_rect = float(rw) * float(rh)
+        irregular = area_rect > 0 and float(poly_local.area) < area_rect * 0.98
+        if usar_borde or irregular:
+            try:
+                poly_g_global = affinity.translate(poly_local, xoff=gx, yoff=gy)
+                if poly_g_global.geom_type == "MultiPolygon":
+                    poly_g_global = max(poly_g_global.geoms, key=lambda g: g.area)
+                poly_g = [list(poly_g_global.exterior.coords)]
+            except Exception:
+                poly_g = None
+
+    if poly_g is None:
+        min_x, min_y = gx, gy
+        max_x, max_y = gx + rw, gy + rh
+        poly_g = [
+            [
+                (min_x, min_y),
+                (max_x, min_y),
+                (max_x, max_y),
+                (min_x, max_y),
+                (min_x, min_y),
+            ]
         ]
-    ]
 
     madre["piezas"].append(
         {

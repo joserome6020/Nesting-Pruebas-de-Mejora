@@ -96,6 +96,21 @@ class VisorDXF:
         self.chk_orientacion_corte.toggled.connect(self._on_orientation_lock_toggled)
         tb_lay.addWidget(self.chk_orientacion_corte)
 
+        self.chk_forzar_rtz = QCheckBox("RTZ")
+        self.chk_forzar_rtz.setStyleSheet(
+            "QCheckBox{color:#E2E8F0;font-size:11px;font-weight:700;background:transparent;}"
+            "QCheckBox::indicator{width:16px;height:16px;}"
+            + TOOLTIP_OSCURO_QSS
+        )
+        self.chk_forzar_rtz.setToolTip(
+            "Forzar lógica RTZ del nest: la pieza sigue nestando normal "
+            "(incluye orificios). Si cae en un barreno/remanente, ese contorno "
+            "se vuelve 1 RTZ con todas las piezas de la zona (no 1 por pieza; "
+            "eso es Como RTZ en Nesting)."
+        )
+        self.chk_forzar_rtz.toggled.connect(self._on_forzar_rtz_toggled)
+        tb_lay.addWidget(self.chk_forzar_rtz)
+
         lbl_hint = QLabel("CLIC: COTA  ·  RUEDA: ZOOM  ·  ESC: CANCELAR")
         lbl_hint.setStyleSheet("color:#64748B;font-size:10px;background:transparent;")
         lbl_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -116,6 +131,7 @@ class VisorDXF:
         self._rotacion_vista_deg = 0
         self._persist_rotation_hook = None
         self._orientation_lock_hook = None
+        self._forzar_rtz_hook = None
         self._material = ""
         self._plasma_offset_mm = 0.0
         self._plasma_base_metrics = None
@@ -145,6 +161,21 @@ class VisorDXF:
         if not hasattr(self, "chk_orientacion_corte"):
             return False
         return bool(self.chk_orientacion_corte.isChecked())
+
+    def set_forzar_rtz_hook(self, hook):
+        self._forzar_rtz_hook = hook
+
+    def set_forzar_rtz_checked(self, checked: bool):
+        if not hasattr(self, "chk_forzar_rtz"):
+            return
+        self.chk_forzar_rtz.blockSignals(True)
+        self.chk_forzar_rtz.setChecked(bool(checked))
+        self.chk_forzar_rtz.blockSignals(False)
+
+    def forzar_rtz_checked(self) -> bool:
+        if not hasattr(self, "chk_forzar_rtz"):
+            return False
+        return bool(self.chk_forzar_rtz.isChecked())
 
     def rotacion_vista_deg(self) -> int:
         return int(getattr(self, "_rotacion_vista_deg", 0) or 0) % 360
@@ -220,6 +251,13 @@ class VisorDXF:
         if callable(self._orientation_lock_hook):
             try:
                 self._orientation_lock_hook(bool(checked), self._ruta_actual)
+            except Exception:
+                pass
+
+    def _on_forzar_rtz_toggled(self, checked: bool):
+        if callable(self._forzar_rtz_hook):
+            try:
+                self._forzar_rtz_hook(bool(checked), self._ruta_actual)
             except Exception:
                 pass
 

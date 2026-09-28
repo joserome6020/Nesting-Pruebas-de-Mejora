@@ -539,6 +539,8 @@ class TransferMixin:
             self.visor.limpiar_seleccion_piezas()
             self.on_piece_selected()
             self.btn_transferir.setEnabled(False)
+            if hasattr(self, "btn_nestear_como_rtz"):
+                self.btn_nestear_como_rtz.setEnabled(False)
             self.btn_rot_90.setEnabled(False)
             self.btn_rot_m1.setEnabled(False)
             self.btn_rot_p1.setEnabled(False)

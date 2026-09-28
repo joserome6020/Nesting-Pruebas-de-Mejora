@@ -1752,12 +1752,16 @@ def export_plasma_placement(
         try:
             from modules.nest_exporter import _export_source_dxf_at_placement
 
-            _export_source_dxf_at_placement(
+            ok_src = _export_source_dxf_at_placement(
                 msp, doc, p, draw_marks=draw_marks, strict=False
             )
-            ok = True
-            log(f"    plasma[{nom}]: fuente 1:1 sin desfase -> OK", level="INFO")
-            return ok
+            if ok_src:
+                log(f"    plasma[{nom}]: fuente 1:1 sin desfase -> OK", level="INFO")
+                return True
+            log(
+                f"    plasma[{nom}]: fuente 1:1 no alinea nest; usando poligono nest",
+                level="WARN",
+            )
         except Exception as exc:
             log(
                 f"    plasma[{nom}]: fuente 1:1 fallo ({exc}); usando poligono nest",

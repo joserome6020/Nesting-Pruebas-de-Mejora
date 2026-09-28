@@ -625,7 +625,14 @@ def _size_ratio_sane(outer_bounds, src_bounds, *, max_ratio: float = 1.2) -> boo
     sh = float(src_bounds[3]) - float(src_bounds[1])
     if sw <= 0 or sh <= 0:
         return False
-    return (ow / max_ratio <= sw <= ow * max_ratio) and (oh / max_ratio <= sh <= oh * max_ratio)
+    same = (ow / max_ratio <= sw <= ow * max_ratio) and (
+        oh / max_ratio <= sh <= oh * max_ratio
+    )
+    # Pieza girada 90°: nest W×H vs DXF H×W.
+    swapped = (ow / max_ratio <= sh <= ow * max_ratio) and (
+        oh / max_ratio <= sw <= oh * max_ratio
+    )
+    return same or swapped
 
 
 def _matrix_maps_nest_bounds(
@@ -1621,22 +1628,55 @@ def _export_source_dxf_at_placement(
     draw_marks: bool = True,
     bounds_tol: float = 3.0,
     strict: bool = True,
-) -> None:
-    """Clona entidades nativas del DXF fuente en la posición validada del nest."""
+) -> bool:
+    """Clona entidades nativas del DXF fuente en la posición validada del nest.
+
+    Devuelve False si la matriz no alinea el DXF con el nest (el caller debe
+    caer a polígono nest). Antes se escribía igual y reventaba toda la hoja
+    con «Geometría de corte fuera de la placa».
+    """
+    del bounds_tol  # compat firma
     label = _piece_label(p)
     ruta = str(p.get("ruta") or "").strip()
     outer = p.get("outer") or p.get("outer_poly") or []
     if not ruta or not os.path.isfile(ruta):
-        _fail_export(label, f"sin DXF fuente válido ({ruta or 'sin ruta'})")
+        if strict:
+            _fail_export(label, f"sin DXF fuente válido ({ruta or 'sin ruta'})")
+        return False
     if len(outer) < 2:
-        _fail_export(label, "sin contorno colocado en el nest")
+        if strict:
+            _fail_export(label, "sin contorno colocado en el nest")
+        return False
 
     try:
         part_doc = ezdxf.readfile(ruta)
     except Exception as e:
-        _fail_export(label, f"DXF fuente ilegible: {e}")
+        if strict:
+            _fail_export(label, f"DXF fuente ilegible: {e}")
+        return False
 
-    m = _resolve_placement_matrix(part_doc, _resolve_placement(p))
+    resolved = _resolve_placement(p)
+    m = _resolve_placement_matrix(part_doc, resolved)
+    outer_bounds = _poly_bounds(outer)
+    if outer_bounds and not bool(p.get("cu_largos_piece")):
+        if not _matrix_maps_nest_bounds(
+            part_doc, m, outer_bounds, tol=max(ALIGN_TOL_MM, 5.0)
+        ):
+            src_b = _transformed_outer_bounds(part_doc, m)
+            try:
+                from modules.nesting_engine.dxf_export_log import log as _dxflog
+
+                _dxflog(
+                    f"  skip fuente 1:1 [{label}]: DXF no alinea con nest "
+                    f"(nest={tuple(round(v, 1) for v in outer_bounds)}, "
+                    f"dxf={tuple(round(v, 1) for v in src_b) if src_b else None}); "
+                    f"fallback polígono nest",
+                    level="WARN",
+                )
+            except Exception:
+                pass
+            return False
+
     added = 0
     layers_used: set[str] = set()
 
@@ -1669,7 +1709,11 @@ def _export_source_dxf_at_placement(
             continue
 
     if added <= 0 and not p.get("cu_largos_piece"):
-        _fail_export(label, "el DXF fuente no tiene geometría exportable en capas de corte")
+        if strict:
+            _fail_export(
+                label, "el DXF fuente no tiene geometría exportable en capas de corte"
+            )
+        return False
 
     if layers_used:
         _import_layers_from_source(part_doc, doc, layers_used)
@@ -1688,6 +1732,7 @@ def _export_source_dxf_at_placement(
                 n_total = max(1, int(p.get("cu_slice_count", 1) or 1))
                 if _segmentos_corte_laser_pieza(outer, idx=idx, n_total=n_total):
                     _fail_export(label, "sin cortes láser CUT_OUTER desde DXF fuente")
+    return True
 
 
 def _export_ring_exact(msp, points, layer: str, *, closed: bool = True) -> bool:

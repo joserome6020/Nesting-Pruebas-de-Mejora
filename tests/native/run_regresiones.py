@@ -244,6 +244,14 @@ REGRESIONES = [
         "2026-08-14e/i - BLOQUEAR ORIENTACIÓN fija vista PARTS y persiste con plasma",
     ),
     (
+        "test_forzar_rtz_dual.py",
+        "2026-09-24f - switch RTZ=zona barreno; Como RTZ=1:1",
+    ),
+    (
+        "test_dxf_open_contour_fallo.py",
+        "2026-09-24j - DXF contorno abierto (AREA NETA 0) → omitido/FALLO, no LISTO",
+    ),
+    (
         "test_tabla_gaps_todos_los_motores.py",
         "2026-08-14k - TABLA GAPS DE CORTE: todos los motores usan 0.250 placa→pieza y kerf por calibre",
     ),

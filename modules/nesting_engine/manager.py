@@ -2381,6 +2381,8 @@ class MotorNesting:
         self.plasma_dxf_por_ruta = {}
         self.orientacion_corte_por_ruta = {}
         self.orientacion_corte_bloqueada_por_ruta = {}
+        self.forzar_rtz_por_ruta = {}
+        self.forzar_rtz_por_nombre = {}
         self.active_engine_id = get_active_engine_id()
         self._ultima_comparacion_motores = None
         self._remnant_ids_consumidos: set[str] = set()
@@ -3395,6 +3397,25 @@ class MotorNesting:
                             clave_ruta_lock, 0
                         )
                     ) % 360
+                if bool(
+                    (getattr(self, "forzar_rtz_por_ruta", {}) or {}).get(
+                        clave_ruta_lock, False
+                    )
+                ) or bool(item_pz.get("forzar_rtz")):
+                    item_pz["forzar_rtz"] = True
+                else:
+                    try:
+                        from .rtz_manual_promote import _norm_nombre_forzar
+
+                        nom_k = _norm_nombre_forzar(pieza)
+                        if nom_k and bool(
+                            (getattr(self, "forzar_rtz_por_nombre", {}) or {}).get(
+                                nom_k, False
+                            )
+                        ):
+                            item_pz["forzar_rtz"] = True
+                    except Exception:
+                        pass
                 if plasma_flag:
                     item_pz["plasma_compensada_manual"] = True
                     item_pz["plasma_offset_mm_manual"] = float(plasma_off)
@@ -3800,6 +3821,8 @@ class MotorNesting:
             child.orientacion_corte_bloqueada_por_ruta = dict(
                 self.orientacion_corte_bloqueada_por_ruta or {}
             )
+            child.forzar_rtz_por_ruta = dict(self.forzar_rtz_por_ruta or {})
+            child.forzar_rtz_por_nombre = dict(self.forzar_rtz_por_nombre or {})
             return child
 
         bundle = ejecutar_comparacion_motores(
@@ -4239,8 +4262,16 @@ class MotorNesting:
         )
 
         AREA_LIMITE_MM2 = ARGA_AREA_ESTRUCTURAL_MM2
-        estructurales = [p for p in piezas if p['area'] > AREA_LIMITE_MM2]
-        accesorios_base = [p for p in piezas if p['area'] <= AREA_LIMITE_MM2]
+        # forzar_rtz NO segrega: nestan normal (madre + orificios). Post-pass
+        # promote_forzar_zones_on_madre reclasifica barrenos/remanentes a RTZ.
+        estructurales = [p for p in piezas if p["area"] > AREA_LIMITE_MM2]
+        accesorios_base = [p for p in piezas if p["area"] <= AREA_LIMITE_MM2]
+        n_forzar = sum(1 for p in piezas if bool(p.get("forzar_rtz")))
+        if n_forzar:
+            _dbg_nesting(
+                f"[FORZAR-RTZ] clave={clave} | marcadas={n_forzar} "
+                f"(nest normal; zona RTZ post-orificios)"
+            )
 
         nest_profile = get_engine_profile(get_active_engine_id())
         mc_iters = int(nest_profile.get("mc_iterations", 1))
@@ -5172,8 +5203,9 @@ class MotorNesting:
                 if pendientes_est or accesorios:
                     candidatos_seguro = []
                     area_retazo = retazo['w'] * retazo['h']
+                    pool_rtz_cand = list(pendientes_est) + list(accesorios)
                     
-                    for p in pendientes_est + accesorios:
+                    for p in pool_rtz_cand:
                         if p['area'] > (area_retazo * 0.85):
                             continue
                             
@@ -5614,6 +5646,64 @@ class MotorNesting:
                             apply_lite_hole_fill(hoja, engine_id=engine_id)
             except Exception as hole_ex:
                 _dbg_nesting(f"[LITE-HOLE-FILL-BATCH-ERR] {hole_ex}")
+            # Switch PARTS RTZ: reclasificar barrenos/remanentes con piezas forzar_rtz
+            # (1 RTZ por zona = contorno del barreno, N piezas). No es 1:1.
+            try:
+                from .rtz_manual_promote import (
+                    max_rtz_counter,
+                    promote_forzar_zones_on_madre,
+                    stamp_forzar_rtz_on_piezas,
+                )
+
+                flags_ruta = dict(getattr(self, "forzar_rtz_por_ruta", None) or {})
+                flags_nombre = dict(getattr(self, "forzar_rtz_por_nombre", None) or {})
+                if flags_ruta or flags_nombre:
+                    for hoja in hojas_finales:
+                        if not isinstance(hoja, dict):
+                            continue
+                        stamp_forzar_rtz_on_piezas(
+                            hoja.get("piezas") or [],
+                            flags_ruta=flags_ruta,
+                            flags_nombre=flags_nombre,
+                        )
+
+                contador_zona = max_rtz_counter(hojas_finales) + 1
+                for hoja in list(hojas_finales):
+                    if not isinstance(hoja, dict) or hoja.get("es_retazo"):
+                        continue
+                    if hoja.get("modo_largos_cu"):
+                        continue
+                    cal_h = str(hoja.get("placa_cal") or "").strip() or str(
+                        clave
+                    ).split("_", 1)[0].strip() or "NA"
+                    res_z = promote_forzar_zones_on_madre(
+                        hoja,
+                        hojas_grupo=hojas_finales,
+                        calibre=cal_h,
+                        wo_name=str(wo_name or "W.O."),
+                        contador_rtz=contador_zona,
+                        flags_ruta=flags_ruta,
+                        flags_nombre=flags_nombre,
+                    )
+                    if int(res_z.get("n_rtz") or 0) > 0:
+                        contador_zona = int(res_z.get("contador_rtz") or contador_zona)
+                        _dbg_nesting(
+                            f"[FORZAR-RTZ-ZONA] clave={clave} | "
+                            f"placa={hoja.get('placa_id')} | "
+                            f"forzar={res_z.get('n_forzar')} | "
+                            f"rtz={res_z.get('n_rtz')} | piezas={res_z.get('n_piezas')} | "
+                            f"barrenos={res_z.get('n_zonas_barreno')} | "
+                            f"sobran={res_z.get('n_zonas_sobran')} | "
+                            f"ids={res_z.get('rtz_ids')}"
+                        )
+                    elif int(res_z.get("n_forzar") or 0) > 0:
+                        _dbg_nesting(
+                            f"[FORZAR-RTZ-ZONA-SKIP] clave={clave} | "
+                            f"placa={hoja.get('placa_id')} | "
+                            f"forzar={res_z.get('n_forzar')} | sin zonas RTZ"
+                        )
+            except Exception as forzar_z_ex:
+                _dbg_nesting(f"[FORZAR-RTZ-ZONA-ERR] {forzar_z_ex}")
             try:
                 from . import venom_ai
 
