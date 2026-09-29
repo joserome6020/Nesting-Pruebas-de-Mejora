@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_swo_job_na_job_data.py",
+        "2026-09-29 - SWO: job_data CSV mal nombrado no registra job 'N/A' (SWO-099 VSM_JOB:N/A)",
+    ),
+    (
         "test_largos_mrl_barras_reales_swo097.py",
         "2026-09-28d - MRL largos: barras reales de 240\" (476\" en tira 480\" = 3 barras, SWO-097)",
     ),

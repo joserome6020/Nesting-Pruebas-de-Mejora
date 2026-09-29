@@ -71,6 +71,7 @@ from postgres_connector import (
     reiniciar_avisos_lista_largos,
 )
 from reporte_pdf_nesting import exportar_pdf_nesting
+from interface.swo_job_meta import es_job_placeholder
 from interface.export_checkpoint_service import (
     checkpoint_export_ok,
     guardar_checkpoint_export,
@@ -629,6 +630,14 @@ class ExportMixin:
             for j in jobs_involved
             if str(j or "").strip() and not _es_job_swo(str(j).strip())
         }
+        jobs_placeholder = sorted(j for j in jobs_involved if es_job_placeholder(j))
+        if jobs_placeholder:
+            raise RuntimeError(
+                f"reporte_cortes tiene piezas con job {jobs_placeholder} en {job_activo}: "
+                "el job_data_<job>.csv de alguna WO no se encontró al armar la SWO. "
+                "Corrija el CSV/job en diccionario_swo y reporte_cortes antes de "
+                "centralizar; no se llamó a VSM."
+            )
         if not jobs_involved:
             raise RuntimeError(
                 "No hay Jobs VSM trazables para centralizar esta exportación. "

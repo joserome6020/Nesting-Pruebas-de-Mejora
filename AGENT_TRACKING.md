@@ -55,6 +55,17 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-29 — SWO: job 'N/A' por job_data CSV mal nombrado (SWO-099)
+- SWO-099 falló en `VSM_JOB:N/A`: la carpeta `ATC_COMPARTMENT\VANTRAN\261092-HI`
+  traía `job_data_261092.csv`; la descarga SWO buscaba el nombre exacto y
+  registraba cliente/job 'N/A' en `diccionario_swo` → `reporte_cortes` →
+  `erp_jobs` → VSM "Job no encontrado".
+- Nuevo `interface/swo_job_meta.py` (`leer_job_data`, `es_job_placeholder`):
+  si el CSV no coincide toma cliente/producto y usa la carpeta como job; nunca
+  'N/A'. `postgres_connector` ignora 'N/A' de diccionario/ERP; `_mixin_export`
+  bloquea jobs placeholder antes de VSM. Candado `test_swo_job_na_job_data.py`.
+- Datos corregidos a mano (CSV renombrado por el usuario; BD SWO-099 → 261092-HI).
+
 ### 2026-09-28d — MRL largos: barras reales de 240" (SWO-097)
 - SWO-097 (job 261091, W.O. 121 X1): SLC046 = 5×64" + 6×26" = 476" cabe en
   una tira de 480", pero el pedido contaba `ceil(480/240)=2` barras. Una pieza

@@ -1137,6 +1137,8 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                                 (wo_original_pieza,)
                             )
                             reg_job = cursor.fetchone()
+                            if reg_job and str(reg_job[0] or "").strip().upper() in {"", "N/A", "NA", "NONE"}:
+                                reg_job = None
 
                             if not reg_job:
                                 cursor.execute("""
@@ -1144,6 +1146,7 @@ def guardar_nesting_en_postgresql(nombre_job, nombre_wo, resultados_motor, db_co
                                     FROM erp_work_orders w
                                     JOIN erp_jobs j ON w.id_job = j.id_job
                                     WHERE w.nombre_wo ILIKE %s
+                                      AND UPPER(BTRIM(COALESCE(j.job_number, ''))) NOT IN ('', 'N/A', 'NA', 'NONE')
                                     ORDER BY w.id_wo DESC LIMIT 1
                                 """, (wo_original_pieza,))
                                 reg_job = cursor.fetchone()

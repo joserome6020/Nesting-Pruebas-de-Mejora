@@ -35,6 +35,7 @@ from interface.autodxf_metadata import (
     normalizar_material_autodxf,
     parsear_nombre_archivo_dxf,
 )
+from interface.swo_job_meta import leer_job_data
 from modules.processed_layers import ProcesadorDXF
 from modules.scanner import EscanerServidor
 from interface.qt.layout_helpers import make_card, make_scroll
@@ -1514,25 +1515,7 @@ class TabFiles(QWidget):
                         prefer_ruta=prefer_ruta or None,
                         product_hint=product_hint or None,
                     )
-                    c_cli = c_job_com = c_prod = "N/A"
-                    if ruta_base_job:
-                        archivos_csv = glob.glob(os.path.join(ruta_base_job, f"job_data_{job}.csv"))
-                        if archivos_csv:
-                            try:
-                                with open(archivos_csv[0], encoding="utf-8-sig") as f:
-                                    reader = csv.reader(f)
-                                    enc = [str(e).strip().upper() for e in next(reader, [])]
-                                    datos = next(reader, [])
-                                    if "CLIENTE" in enc:
-                                        c_cli = datos[enc.index("CLIENTE")].strip()
-                                    if "PRODUCTO" in enc:
-                                        c_prod = datos[enc.index("PRODUCTO")].strip()
-                                    if "JOB NUMBER" in enc:
-                                        c_job_com = datos[enc.index("JOB NUMBER")].strip()
-                                    elif "JOB" in enc:
-                                        c_job_com = datos[enc.index("JOB")].strip()
-                            except Exception:
-                                pass
+                    c_cli, c_job_com, c_prod = leer_job_data(ruta_base_job, job)
                     if product_hint and (not c_prod or c_prod == "N/A"):
                         c_prod = product_hint
                     registrar_diccionario_swo(swo_id, prefijo_adn, c_cli, c_job_com, c_prod, cred)
