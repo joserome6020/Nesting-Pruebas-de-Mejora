@@ -676,6 +676,10 @@ def compensate_dxf_for_plasma(
     doc = ezdxf.readfile(str(input_dxf))
     msp = doc.modelspace()
 
+    from modules.dxf_mark.reglas_ans import quitar_marcaje_ans
+
+    quitar_marcaje_ans(doc)
+
     outer_set = _normalize_layers(outer_layers)
     inner_set = _normalize_layers(inner_layers)
 

@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_reglas_marcaje_ans.py",
+        "2026-09-29e - reglas marcaje ANS (compensadas / área >= 456.954 in²) + área neta visor sin doble conteo de CIRCLE",
+    ),
+    (
         "test_export_sin_json_ls_ready.py",
         "2026-09-29d - export acero sin JSON LS-READY ni carpetas NESTEO DXF/JSON/Cama A|B",
     ),

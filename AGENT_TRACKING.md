@@ -55,6 +55,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-29e — Reglas marcaje ANS (compensadas / área) + área neta visor
+- Solo aplica al stick ANS (LINE en MARK con XDATA `ARGA_STICK`); el marcaje
+  del DXF de origen se respeta siempre.
+- Regla 1: `plasma_compensator.compensate_dxf_for_plasma` quita el stick ANS
+  del DXF compensado (`dxf_mark/reglas_ans.quitar_marcaje_ans`);
+  `plasma_dxf_export` también lo filtra. `PLASMA_OFFSET_ALGO_VERSION` →
+  `offset2d-v10-sin-marcaje-ans` para regenerar compensados existentes.
+- Regla 2: `dxf_mark/pipeline.aplicar_marcaje_nesting` no inyecta stick si el
+  área neta ≥ 456.954 in² (SP-792_1); `InjectResult.omitido_por_area`. Jobs ya
+  procesados requieren "Reprocesar AutoDXF".
+- `interface/qt/dxf_part_loader.py`: el área neta contaba dos veces los CIRCLE
+  (SP-792_1 mostraba 913.909 en vez de 456.954).
+- Candado: `tests/native/test_reglas_marcaje_ans.py`. Build: `reglas_ans` en
+  `HIDDEN_IMPORTS`.
+
 ### 2026-09-29d — Export acero sin JSON LS-READY ni carpetas JSON/Cama A|B
 - `nesting_engine/exporter.py`: se quitaron `rutas["robot_laser_json_A|B"]`
   (creaba `NESTEO DXF/JSON/Cama A|B` en cada export, casi siempre vacías) y el

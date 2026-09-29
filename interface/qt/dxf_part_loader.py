@@ -174,10 +174,6 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
                 )
                 if es_cut_layer(layer) or model.render_all_layers:
                     perimetro_total += 2.0 * math.pi * r
-                    if es_outer_layer(layer):
-                        area_neta += math.pi * r * r
-                    elif es_inner_layer(layer):
-                        area_neta -= math.pi * r * r
             except Exception:
                 pass
             continue

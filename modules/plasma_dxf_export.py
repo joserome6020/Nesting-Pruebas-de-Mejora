@@ -2018,11 +2018,13 @@ def export_compensated_plasma_from_source(
                 ):
                     layers_used.add(layer)
 
-    # --- Paso 2: marcas 1:1 (sin desfase) ---
+    # --- Paso 2: marcas 1:1 (sin desfase); pieza compensada sin stick ANS ---
     if draw_marks:
+        from modules.dxf_mark.inject import _entity_has_stick_tag
+
         for entity in entities:
             typ = entity.dxftype()
-            if typ not in mark_types:
+            if typ not in mark_types or _entity_has_stick_tag(entity):
                 continue
             clase = _clasificar_capa(str(entity.dxf.layer))
             if clase != "mark":

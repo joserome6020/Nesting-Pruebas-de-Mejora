@@ -27,6 +27,7 @@ def aplicar_marcaje_nesting(
     Inyecta marcaje stick en un DXF ya procesado del Nesting Suite.
     Capa destino: MARK. Sobrescribe el mismo archivo.
     Si ya tiene marcaje stick (o origen_ya_marcado=True), no reinyecta.
+    Piezas con área neta >= AREA_SIN_MARCAJE_ANS_IN2 no llevan stick.
     """
     path = Path(dxf_path)
     if origen_ya_marcado or (skip_if_present and tiene_marcaje_stick(path)):
@@ -40,6 +41,21 @@ def aplicar_marcaje_nesting(
             components_marked=0,
             components_skipped=0,
             already_marked=True,
+        )
+    import ezdxf
+
+    from modules.dxf_mark.inject import mark_text_from_dxf_path
+    from modules.dxf_mark.reglas_ans import omitir_marcaje_ans_por_area
+
+    if omitir_marcaje_ans_por_area(ezdxf.readfile(str(path))):
+        return InjectResult(
+            input_path=path,
+            output_path=path,
+            mark_text=mark_text_from_dxf_path(path),
+            height_du=float(text_height_in),
+            components_marked=0,
+            components_skipped=0,
+            omitido_por_area=True,
         )
     return inject_mark_into_dxf(
         path,
