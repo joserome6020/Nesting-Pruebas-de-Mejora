@@ -199,6 +199,7 @@ HIDDEN_IMPORTS = (
     "modules.processed_layers",
     "modules.scanner",
     "modules.nest_exporter",
+    "modules.dxf_mark_join",
     "despachador_nocturno",
     "freecad_runner",
     "modules.plates_inventory",
@@ -312,6 +313,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.dxf_export.cyptube_vertical",
     "modules.dxf_export.cyptube_bridge",
     "modules.nest_exporter",
+    "modules.dxf_mark_join",
     "modules.processed_layers",
     "modules.ls_ready_paso1",
 )

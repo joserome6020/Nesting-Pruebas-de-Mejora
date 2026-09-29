@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_rtz_contorno_holgura_y_join_mark.py",
+        "2026-09-29b - RTZ: contorno con holgura sin pisar vecinos + JOIN MARK/RTZ_LABEL (SWO-068 H21)",
+    ),
+    (
         "test_swo_job_na_job_data.py",
         "2026-09-29 - SWO: job_data CSV mal nombrado no registra job 'N/A' (SWO-099 VSM_JOB:N/A)",
     ),

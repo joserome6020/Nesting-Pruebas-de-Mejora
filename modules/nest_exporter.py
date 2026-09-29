@@ -2734,6 +2734,9 @@ def export_nest_to_dxf(
                 doc, out_path, sheet if isinstance(sheet, dict) else None
             )
         else:
+            from modules.dxf_mark_join import join_mark_layers
+
+            join_mark_layers(msp)
             _save_dxf_atomic(doc, out_path)
         log_export_done(out_path, canal=canal_tag, exported_pieces=exported_pieces)
     except DxfExportValidationError as exc:

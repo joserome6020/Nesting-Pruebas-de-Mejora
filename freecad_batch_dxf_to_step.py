@@ -462,7 +462,7 @@ def convert_one_dxf(dxf_path: str, out_dir: str, thk_mm: float, scale: float, of
         # CUT_CU: contorno cerrado de piezas cobre → sólidos STEP.
         if "CUT_CU" in layer_str:
             outer_wires.extend(_collect_closed_wires_from_obj(obj))
-        elif "MARK" in layer_str or "ETCH" in layer_str or "TEXT" in layer_str:
+        elif "MARK" in layer_str or "ETCH" in layer_str or "TEXT" in layer_str or "LABEL" in layer_str:
             mark_edges.extend(_collect_edges_from_obj(obj))
         elif "INTER" in layer_str or "INNER" in layer_str or "HOLE" in layer_str:
             inner_wires.extend(_collect_closed_wires_from_obj(obj))

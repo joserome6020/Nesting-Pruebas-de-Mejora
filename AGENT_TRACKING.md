@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-29b — RTZ: contorno con holgura + JOIN MARK/RTZ_LABEL (SWO-068 H21)
+- `rtz_manual_promote._build_rtz_hoja` (SOBRANTE): el corte RTZ era el borde de
+  la pieza (margen 0) y con varias piezas solo la mayor (o su casco pisando
+  vecinos); RTZ contiguos compartían línea. Nuevo `contorno_rtz_con_holgura`:
+  casco + gap, a gap/2 de piezas de la madre, a 1.6 mm de otros RTZ, dentro de
+  la placa; mismo polígono para `RETAZO_GUILLOTINA__` y `poly_borde_retazo`
+  (capa Plate del RTZ). Sin holgura posible → contorno anterior.
+- `nest_exporter` (acero): `modules/dxf_mark_join.join_mark_layers` une LINE/ARC
+  de MARK y RTZ_LABEL en LWPOLYLINE antes de guardar (cortes y cobre intactos).
+  FreeCAD batch trata `*LABEL*` como marcaje. Build: HIDDEN/SMOKE `dxf_mark_join`.
+- Candado `test_rtz_contorno_holgura_y_join_mark.py`.
+
 ### 2026-09-29 — SWO: job 'N/A' por job_data CSV mal nombrado (SWO-099)
 - SWO-099 falló en `VSM_JOB:N/A`: la carpeta `ATC_COMPARTMENT\VANTRAN\261092-HI`
   traía `job_data_261092.csv`; la descarga SWO buscaba el nombre exacto y

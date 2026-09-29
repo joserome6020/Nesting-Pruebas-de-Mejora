@@ -185,6 +185,111 @@ def _clip_contorno_fuera_keepers(
     return union_g
 
 
+RTZ_SEP_MM = 1.6
+
+
+def _plate_poly(madre: dict | None) -> Polygon | None:
+    try:
+        w = float((madre or {}).get("placa_w") or 0.0)
+        h = float((madre or {}).get("placa_h") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return Polygon([(0, 0), (w, 0), (w, h), (0, h)])
+
+
+def rtz_existentes_en_madre(madre: dict | None) -> tuple[list[Polygon], list[Polygon]]:
+    """(piezas REF__ de RTZ ya creados, contornos RETAZO_GUILLOTINA__) en la madre."""
+    piezas: list[Polygon] = []
+    regiones: list[Polygon] = []
+    for p in (madre or {}).get("piezas") or []:
+        nom = str((p or {}).get("nombre") or "")
+        if not nom.startswith(("REF__", "RETAZO_GUILLOTINA__")):
+            continue
+        try:
+            poly = Polygon(((p.get("poligonos") or [[]])[0]))
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+        except Exception:
+            continue
+        if poly.is_empty:
+            continue
+        (piezas if nom.startswith("REF__") else regiones).append(poly)
+    return piezas, regiones
+
+
+def contorno_rtz_con_holgura(
+    items: list[dict],
+    keepers: list[dict],
+    gap_mm: float,
+    *,
+    plate_poly: Polygon | None = None,
+    otras_piezas_rtz: list[Polygon] | None = None,
+    otras_regiones_rtz: list[Polygon] | None = None,
+) -> Polygon | None:
+    """Contorno de corte de un RTZ sobrante que no pisa piezas vecinas.
+
+    Casco de las piezas + margen `gap`, recortado a `gap/2` de las piezas que
+    quedan en la madre (línea media del espacio del nesteo) y a RTZ_SEP_MM de
+    otros RTZ para no compartir línea de corte. None si no cabe con holgura.
+    """
+    try:
+        own = unary_union([Polygon(it["poly"].exterior) for it in items])
+    except Exception:
+        return None
+    if own is None or own.is_empty:
+        return None
+    gap = max(float(gap_mm or 0.0), 2.0)
+    c = gap / 2.0
+    mitre = {"join_style": 2, "mitre_limit": 2.0}
+    reg = own.convex_hull.buffer(gap, **mitre).simplify(0.02)
+    obst = []
+    for k in keepers or []:
+        poly = k.get("poly")
+        if poly is not None and not poly.is_empty:
+            obst.append(Polygon(poly.exterior).buffer(c, **mitre))
+    for poly in otras_piezas_rtz or []:
+        obst.append(poly.buffer(c + RTZ_SEP_MM / 2.0, **mitre))
+    for poly in otras_regiones_rtz or []:
+        obst.append(poly.buffer(RTZ_SEP_MM, **mitre))
+    try:
+        if obst:
+            reg = reg.difference(unary_union(obst))
+    except Exception:
+        return None
+    if plate_poly is not None:
+        for lim in (plate_poly.buffer(-c, **mitre), plate_poly):
+            cand = reg.intersection(lim)
+            if not cand.is_empty and cand.buffer(1e-6).contains(own):
+                reg = cand
+                break
+    if reg.is_empty:
+        return None
+    if reg.geom_type == "MultiPolygon":
+        reg = unary_union([g for g in reg.geoms if g.intersects(own)])
+    if reg.geom_type != "Polygon":
+        return None
+    reg = Polygon(reg.exterior)
+    if not reg.contains(own):
+        return None
+    margen_min = max(0.5, min(2.0, 0.9 * (gap - RTZ_SEP_MM) / 2.0))
+    if reg.exterior.distance(own) < margen_min:
+        return None
+    return reg
+
+
+def _regiones_guillotina(overlays: list[dict]) -> list[Polygon]:
+    out = []
+    for ov in overlays or []:
+        if str(ov.get("nombre") or "").startswith("RETAZO_GUILLOTINA__"):
+            try:
+                out.append(Polygon(ov["poligonos"][0]))
+            except Exception:
+                continue
+    return out
+
+
 def _selection_in_keeper_hole(items: list[dict], keepers: list[dict]) -> bool:
     """True si todas las piezas están dentro de un barreno de algún keeper."""
     if not items or not keepers:
@@ -421,6 +526,8 @@ def _build_rtz_hoja(
     gap_mm: float = 0.0,
     zone_poly_global: Polygon | None = None,
     force_hole: bool = False,
+    otras_piezas_rtz: list[Polygon] | None = None,
+    otras_regiones_rtz: list[Polygon] | None = None,
 ) -> tuple[dict | None, list[dict], str]:
     """Construye 1 RTZ para N piezas. Si zone_poly_global (barreno), ese es el borde."""
     keepers = list(keepers or [])
@@ -438,7 +545,18 @@ def _build_rtz_hoja(
             return None, [], "no_se_pudo_unir_contorno"
         es_hole = bool(force_hole) or _selection_in_keeper_hole(items, keepers)
         if not es_hole:
-            union_g = _clip_contorno_fuera_keepers(union_g, keepers, gap_mm) or union_g
+            region = contorno_rtz_con_holgura(
+                items,
+                keepers,
+                gap_mm,
+                plate_poly=_plate_poly(madre),
+                otras_piezas_rtz=otras_piezas_rtz,
+                otras_regiones_rtz=otras_regiones_rtz,
+            )
+            if region is not None:
+                union_g = region
+            else:
+                union_g = _clip_contorno_fuera_keepers(union_g, keepers, gap_mm) or union_g
             minx, miny, maxx, maxy = union_g.bounds
 
     gx, gy = float(minx), float(miny)
@@ -682,8 +800,12 @@ def promote_forzar_zones_on_madre(
     rtz_hojas: list[dict] = []
     rtz_ids: list[str] = []
     keepers_build = [it for it in físicos if int(it["idx"]) not in claimed]
+    refs_prev, regiones_rtz = rtz_existentes_en_madre(madre)
 
-    for items_z, zone_poly, is_hole in zones:
+    for zi, (items_z, zone_poly, is_hole) in enumerate(zones):
+        otras_piezas = refs_prev + [
+            it["poly"] for zj, z in enumerate(zones) if zj != zi for it in z[0]
+        ]
         minx, miny, maxx, maxy = (
             zone_poly.bounds if zone_poly is not None else _bbox_of_items(items_z)
         )
@@ -699,12 +821,15 @@ def promote_forzar_zones_on_madre(
             gap_mm=gap_mm,
             zone_poly_global=zone_poly,
             force_hole=is_hole,
+            otras_piezas_rtz=otras_piezas,
+            otras_regiones_rtz=regiones_rtz,
         )
         if hoja_rtz is None:
             continue
         rtz_hojas.append(hoja_rtz)
         rtz_ids.append(rtz_id)
         all_overlays.extend(overlays)
+        regiones_rtz.extend(_regiones_guillotina(overlays))
         for it in items_z:
             remove_idxs.add(int(it["idx"]))
         n_rtz += 1
@@ -868,8 +993,11 @@ def promote_selection_to_rtz(
     rtz_ids: list[str] = []
     rechazados: list[str] = []
 
+    refs_prev, regiones_rtz = rtz_existentes_en_madre(madre)
+
     # 1 pieza seleccionada = 1 RTZ. Sin clustering.
     for it in items:
+        otras_piezas = refs_prev + [o["poly"] for o in items if o is not it]
         minx, miny, maxx, maxy = it["poly"].bounds
         rw, rh = float(maxx - minx), float(maxy - miny)
         rtz_id = nombre_rtz_para_placa(n_rtz, cal, wo, largo_mm=rh, ancho_mm=rw)
@@ -881,6 +1009,8 @@ def promote_selection_to_rtz(
             mat=mat,
             keepers=keepers,
             gap_mm=gap_mm,
+            otras_piezas_rtz=otras_piezas,
+            otras_regiones_rtz=regiones_rtz,
         )
         if hoja_rtz is None:
             rechazados.append(f"{it.get('nombre') or '?'} ({motivo_r})")
@@ -888,6 +1018,7 @@ def promote_selection_to_rtz(
         rtz_hojas.append(hoja_rtz)
         rtz_ids.append(rtz_id)
         all_overlays.extend(overlays)
+        regiones_rtz.extend(_regiones_guillotina(overlays))
         remove_idxs.add(int(it["idx"]))
         n_rtz += 1
 
