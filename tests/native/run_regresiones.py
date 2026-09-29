@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_join_cortes_polilinea.py",
+        "2026-09-29c - JOIN CUT_OUTER/CUT_INNER en LWPOLYLINE; LS-READY y OCCT leen igual",
+    ),
+    (
         "test_rtz_contorno_holgura_y_join_mark.py",
         "2026-09-29b - RTZ: contorno con holgura sin pisar vecinos + JOIN MARK/RTZ_LABEL (SWO-068 H21)",
     ),

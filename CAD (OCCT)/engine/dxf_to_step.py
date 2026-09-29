@@ -83,7 +83,15 @@ def _is_closed_lw(e) -> bool:
 
 
 def _lw_points_xy(e) -> list[tuple[float, float]]:
-    return [(float(item[0]), float(item[1])) for item in e.get_points("xy")]
+    raw = list(e.get_points("xyb"))
+    if not any(abs(float(item[2] or 0.0)) > 1e-12 for item in raw):
+        return [(float(item[0]), float(item[1])) for item in raw]
+    from ezdxf import path as ezdxf_path
+
+    pts = [(float(v.x), float(v.y)) for v in ezdxf_path.make_path(e).flattening(0.01)]
+    if len(pts) > 2 and _is_closed_lw(e) and math.dist(pts[0], pts[-1]) < 1e-9:
+        pts.pop()
+    return pts
 
 
 def _wire_from_xy(pts: list[tuple[float, float]], *, z: float = 0.0, closed: bool = True):

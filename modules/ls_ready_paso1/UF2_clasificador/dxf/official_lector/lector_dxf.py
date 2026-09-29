@@ -546,6 +546,29 @@ def polyline_to_points_via_virtual_entities(entity):
     return clean_points(pts)
 
 
+def native_segments_from_polyline(entity):
+    """LINE/ARC nativos de una LWPOLYLINE, orientados en el sentido de la polilínea."""
+    try:
+        subs = list(entity.virtual_entities())
+        first = next(iter(entity.get_points("xy")))
+    except Exception:
+        return None
+    cur = [float(first[0]) * SCALE, float(first[1]) * SCALE]
+    out = []
+    for sub in subs:
+        nat = native_segment_from_entity(sub)
+        if nat is None or nat.get("type") not in ("line", "arc"):
+            return None
+        if nat["type"] == "arc":
+            nat["start_angle_deg"] = round(nat["start_angle_deg"] % 360.0, 6)
+            nat["end_angle_deg"] = round(nat["end_angle_deg"] % 360.0, 6)
+        if not same_pt(nat["start_dxf"], cur, 1e-3) and same_pt(nat["end_dxf"], cur, 1e-3):
+            nat = _reverse_native_segment(nat)
+        cur = nat["end_dxf"]
+        out.append(nat)
+    return out or None
+
+
 def entity_to_contour(entity):
     """
     Regresa:
@@ -623,6 +646,11 @@ def entity_to_contour(entity):
     if native is not None:
         result["native_segments"] = [native]
         result["native_geometry_preserved"] = True
+    elif t == "LWPOLYLINE":
+        natives = native_segments_from_polyline(entity)
+        if natives:
+            result["native_segments"] = natives
+            result["native_geometry_preserved"] = True
     return result
 
 

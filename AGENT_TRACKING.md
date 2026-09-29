@@ -55,6 +55,22 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-29c — JOIN de contornos de corte (CUT_OUTER / CUT_INNER)
+- `modules/dxf_mark_join.join_cut_layers`: al exportar acero (`nest_exporter`,
+  rama no-cobre) cada contorno cerrado de LINE/ARC pasa a una LWPOLYLINE con
+  bulge; cadenas abiertas y CIRCLE se quedan igual. H31 (W.O. 80 X3): 3890 ->
+  2017 entidades, 802 -> 646 KB, largo de corte idéntico.
+- El encadenado sigue el mismo orden que `stitch_open_contours` del lector
+  LS-READY: la polilínea arranca en el mismo punto y sentido que el robot
+  cortaba antes (movimientos/entradas UF1/UF2 idénticos en H31).
+- LS-READY `lector_dxf` (UF1/UF2): `native_segments_from_polyline` saca los
+  tramos LINE/ARC nativos de la polilínea (antes se perdían y quedaba solo la
+  discretización).
+- OCCT `dxf_to_step._lw_points_xy`: polilínea con bulge se discretiza por arcos
+  (antes cuerdas entre vértices). FreeCAD (`importDXF`) ya lee bulge.
+- Candado: `tests/native/test_join_cortes_polilinea.py`. Build: sin cambios
+  (`modules.dxf_mark_join` y `modules.ls_ready_paso1` ya empaquetados).
+
 ### 2026-09-29b — RTZ: contorno con holgura + JOIN MARK/RTZ_LABEL (SWO-068 H21)
 - `rtz_manual_promote._build_rtz_hoja` (SOBRANTE): el corte RTZ era el borde de
   la pieza (margen 0) y con varias piezas solo la mayor (o su casco pisando
