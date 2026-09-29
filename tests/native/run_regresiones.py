@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_export_sin_json_ls_ready.py",
+        "2026-09-29d - export acero sin JSON LS-READY ni carpetas NESTEO DXF/JSON/Cama A|B",
+    ),
+    (
         "test_join_cortes_polilinea.py",
         "2026-09-29c - JOIN CUT_OUTER/CUT_INNER en LWPOLYLINE; LS-READY y OCCT leen igual",
     ),

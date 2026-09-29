@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-29d — Export acero sin JSON LS-READY ni carpetas JSON/Cama A|B
+- `nesting_engine/exporter.py`: se quitaron `rutas["robot_laser_json_A|B"]`
+  (creaba `NESTEO DXF/JSON/Cama A|B` en cada export, casi siempre vacías) y el
+  hook `_generar_json_ls_ready_robot_laser` (JSON UF1/UF2 en hojas Robot
+  Láser; nadie los consume). `modules/ls_ready_paso1` queda como herramienta
+  manual (`generar_ls_ready_desde_dxf`); el build lo sigue empaquetando.
+- Candado: `tests/native/test_export_sin_json_ls_ready.py`.
+
 ### 2026-09-29c — JOIN de contornos de corte (CUT_OUTER / CUT_INNER)
 - `modules/dxf_mark_join.join_cut_layers`: al exportar acero (`nest_exporter`,
   rama no-cobre) cada contorno cerrado de LINE/ARC pasa a una LWPOLYLINE con

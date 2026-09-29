@@ -153,38 +153,6 @@ def _listar_dxfs_en_carpeta(ruta):
     return unicos
 
 
-def _generar_json_ls_ready_robot_laser(path_dxf, log, progress=None):
-    """Tras cada DXF de Robot Láser: JSON LS-READY Cama A (UF1) y Cama B (UF2)."""
-    ruta = os.path.normpath(str(path_dxf or "").strip())
-    if not ruta or not os.path.isfile(ruta):
-        return
-    try:
-        from modules.ls_ready_paso1 import generar_ls_ready_desde_dxf, ls_ready_habilitado
-    except Exception as exc:
-        log(f"WARN LS-READY: no se pudo importar el clasificador ({exc})")
-        return
-    if not ls_ready_habilitado():
-        log("LS-READY omitido (ARGA_LS_READY=0)")
-        return
-    if callable(progress):
-        progress(
-            mensaje=f"JSON LS-READY Cama A/B: {os.path.basename(ruta)}",
-            step_done=0,
-        )
-    try:
-        result = generar_ls_ready_desde_dxf(ruta)
-    except Exception as exc:
-        log(f"WARN LS-READY [{os.path.basename(ruta)}]: {exc}")
-        return
-    for tag in ("UF1", "UF2"):
-        info = result.get(tag) or {}
-        if info.get("ok"):
-            log(f"JSON LS-READY {tag}: {info.get('path')}")
-        else:
-            detalle = str(info.get("error") or info.get("log") or "falló clasificador")
-            log(f"WARN LS-READY {tag}: {detalle[:800]}")
-
-
 def _localizar_carpeta_dxf(carpeta_esperada: str, job_root_dir: str, etiqueta_familia: str) -> str:
     candidatos = []
     for raw in (
@@ -1481,12 +1449,6 @@ def exportar_resultados_a_dxf(
         "nesteos_cobre_step": os.path.join(job_root_dir, RUTA_NESTEOS_COBRE, "STEP"),
         # Acero globalizado: una sola carpeta física NESTEO DXF/{DXF,STEP}.
         "nestee_dxf": os.path.join(job_root_dir, RUTA_NESTEO_DXF, "DXF"),
-        "robot_laser_json_A": os.path.join(
-            job_root_dir, RUTA_NESTEO_DXF, "JSON", "Cama A"
-        ),
-        "robot_laser_json_B": os.path.join(
-            job_root_dir, RUTA_NESTEO_DXF, "JSON", "Cama B"
-        ),
     }
     # Alias legacy: mismos paths físicos (evita 4× conversión y callers viejos).
     for _k in (
@@ -2058,10 +2020,6 @@ def exportar_resultados_a_dxf(
                             ruta_dxf=path_principal,
                             tipo_corte=_normalizar_tipo_corte_pqart(carpeta_principal),
                         )
-                        if carpeta_principal == RUTA_ROBOT_LASER:
-                            _generar_json_ls_ready_robot_laser(
-                                path_principal, log, progress=_progress
-                            )
                 except DxfExportValidationError as exc:
                     raise DxfExportValidationError(
                         f"Exportación abortada ({nombre_archivo}): {exc}"
