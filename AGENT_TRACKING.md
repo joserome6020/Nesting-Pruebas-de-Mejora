@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30 — FALLO falso "contorno abierto" (job 62223: 1247-P12 / SP-742)
+- `interface/qt/dxf_part_loader.py`: LWPOLYLINE con bulge (Processed Files)
+  se leía solo por vértices; un anillo quedaba en su cuerda (P12: 1.563 in² en
+  vez de 288.05) y `dxf_nesting_audit._validar_area_neta_pieza` lo omitía.
+  Ahora se aplana con `ezdxf.path`.
+- `plasma_dxf_export._arc_points_head_tail`: ARC recorrido al revés trazaba el
+  arco complementario (ranuras de SP-742 = 21 in² → área neta 0).
+- `modules/dxf_lwpoly.puntos_lwpolyline` (nuevo) en `dxf_export/validate.py`
+  (bbox/holgura), `cu_amada_validacion` y bbox de `plasma_dxf_export`.
+- Candado: `tests/native/test_area_neta_bulge_arco_invertido.py`. Build:
+  `modules.dxf_lwpoly` en `HIDDEN_IMPORTS`.
+
 ### 2026-09-29e — Reglas marcaje ANS (compensadas / área) + área neta visor
 - Solo aplica al stick ANS (LINE en MARK con XDATA `ARGA_STICK`); el marcaje
   del DXF de origen se respeta siempre.

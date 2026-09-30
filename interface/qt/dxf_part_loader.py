@@ -224,8 +224,19 @@ def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartMo
         if typ in ("LWPOLYLINE", "POLYLINE"):
             try:
                 if typ == "LWPOLYLINE":
-                    raw_pts = [(float(x), float(y)) for x, y, *_ in entity.get_points("xyb")]
+                    xyb = list(entity.get_points("xyb"))
                     closed = bool(entity.closed)
+                    if any(abs(float(b or 0.0)) > 1e-12 for *_, b in xyb):
+                        # Processed Files guarda arcos como bulge: sin aplanarlos,
+                        # un anillo se reduce a su cuerda y el área neta sale ~0.
+                        raw_pts = [
+                            (float(v[0]), float(v[1]))
+                            for v in path.make_path(entity).flattening(
+                                distance=max(0.002 * model.factor_conversion, 1e-6)
+                            )
+                        ]
+                    else:
+                        raw_pts = [(float(x), float(y)) for x, y, *_ in xyb]
                 else:
                     raw_pts = [
                         (float(v.dxf.location.x), float(v.dxf.location.y))

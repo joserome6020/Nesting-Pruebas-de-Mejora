@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_area_neta_bulge_arco_invertido.py",
+        "2026-09-30 - FALLO falso 'contorno abierto': visor ignoraba bulge + ARC invertido trazaba complemento (62223 P12 / SP-742)",
+    ),
+    (
         "test_reglas_marcaje_ans.py",
         "2026-09-29e - reglas marcaje ANS (compensadas / área >= 456.954 in²) + área neta visor sin doble conteo de CIRCLE",
     ),

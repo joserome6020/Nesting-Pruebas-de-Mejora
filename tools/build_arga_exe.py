@@ -116,6 +116,7 @@ HIDDEN_IMPORTS = (
     "modules.dxf_mark",
     "modules.dxf_mark.pipeline",
     "modules.dxf_mark.reglas_ans",
+    "modules.dxf_lwpoly",
     "modules.cobre_step_fuentes",
     "modules.herinox_catalog_cache",
     "modules.app_auto_update",

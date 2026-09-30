@@ -134,7 +134,9 @@ def _chain_inner_shapes(doc) -> list[dict]:
                 }
             )
         elif typ == "LWPOLYLINE" and ent.closed:
-            pts = [(float(p[0]), float(p[1])) for p in ent.get_points("xy")]
+            from modules.dxf_lwpoly import puntos_lwpolyline
+
+            pts = puntos_lwpolyline(ent, 0.002)
             if len(pts) >= 3:
                 xs = [p[0] for p in pts]
                 ys = [p[1] for p in pts]

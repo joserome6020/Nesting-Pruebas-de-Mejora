@@ -406,11 +406,13 @@ def _outer_entities_span_mm(entities) -> float:
 
             elif ent.dxftype() == "LWPOLYLINE":
 
-                for x, y, *_ in ent.get_points("xy"):
+                from modules.dxf_lwpoly import puntos_lwpolyline
 
-                    xs.append(float(x))
+                for x, y in puntos_lwpolyline(ent, 0.002):
 
-                    ys.append(float(y))
+                    xs.append(x)
+
+                    ys.append(y)
 
         except Exception:
 
@@ -753,8 +755,8 @@ def _arc_points_head_tail(
     elif _points_near(head, ea_pt, tol=1e-3) and _points_near(tail, sa_pt, tol=1e-3):
         a0 = math.radians(float(entity.dxf.end_angle))
         a1 = math.radians(float(entity.dxf.start_angle))
-        while a1 <= a0:
-            a1 += 2 * math.pi
+        while a0 <= a1:
+            a0 += 2 * math.pi
         ccw = False
     else:
         ah = math.atan2(head[1] - cy, head[0] - cx)

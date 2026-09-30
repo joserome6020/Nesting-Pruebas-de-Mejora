@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from modules.dxf_lwpoly import puntos_lwpolyline
 from modules.nesting_engine.dxf_export_log import log, _poly_bounds_mm
 
 _OUTER_LAYERS = frozenset({"CUT_OUTER", "OUTER", "CORTE_EXTERNO", "IV_OUTER"})
@@ -58,9 +59,9 @@ def _entities_bbox_mm(entities) -> tuple[float, float, float, float] | None:
                 xs.extend([float(c.x) - r, float(c.x) + r])
                 ys.extend([float(c.y) - r, float(c.y) + r])
             elif typ == "LWPOLYLINE":
-                for x, y, *_ in ent.get_points("xy"):
-                    xs.append(float(x))
-                    ys.append(float(y))
+                for x, y in puntos_lwpolyline(ent, 0.1):
+                    xs.append(x)
+                    ys.append(y)
         except Exception:
             continue
     if not xs:
@@ -119,9 +120,7 @@ def _clearance_segments(entities) -> list[tuple[float, float, float, float]]:
                     _arc_segments_xy(ent.dxf.center, float(ent.dxf.radius), 0.0, 360.0)
                 )
             elif typ == "LWPOLYLINE":
-                pts = [(float(x), float(y)) for x, y, *_ in ent.get_points("xy")]
-                if getattr(ent, "closed", False) and len(pts) >= 3:
-                    pts.append(pts[0])
+                pts = puntos_lwpolyline(ent, 0.1)
                 for i in range(len(pts) - 1):
                     segs.append((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]))
         except Exception:
