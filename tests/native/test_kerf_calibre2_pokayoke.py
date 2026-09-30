@@ -18,7 +18,7 @@ def main() -> int:
     for cal in ("2", "2.0", "2.000", '2"'):
         kerf, margin, rule = gaps_for_calibre(cal)
         assert abs(kerf - 0.375) < 1e-9, (cal, kerf, rule)
-        assert abs(margin - 0.250) < 1e-9, (cal, margin)
+        assert abs(margin - 0.260) < 1e-9, (cal, margin)
         assert "2.000" in str(rule.get("label") or ""), rule
 
     # Caso real: APEX dejó ~0.15" → debe RECHAZARSE con kerf tabla 0.375.

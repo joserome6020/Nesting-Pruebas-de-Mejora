@@ -27,7 +27,7 @@ def aplicar_marcaje_nesting(
     Inyecta marcaje stick en un DXF ya procesado del Nesting Suite.
     Capa destino: MARK. Sobrescribe el mismo archivo.
     Si ya tiene marcaje stick (o origen_ya_marcado=True), no reinyecta.
-    Piezas con área neta >= AREA_SIN_MARCAJE_ANS_IN2 no llevan stick.
+    Piezas con área neta <= AREA_SIN_MARCAJE_ANS_IN2 no llevan stick.
     """
     path = Path(dxf_path)
     if origen_ya_marcado or (skip_if_present and tiene_marcaje_stick(path)):

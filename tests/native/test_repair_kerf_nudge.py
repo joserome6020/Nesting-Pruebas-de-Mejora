@@ -107,7 +107,9 @@ def main() -> int:
 
     # --- Cal 2 Ultra real: 2×2 PEGADO al 0.250" de placa (no hay 20 mm de holgura) ---
     # El split simétrico empujaba la P64 del rincón fuera de placa y expulsaba 3.
-    margin250 = 0.250 * 25.4
+    from modules.nesting_engine.cut_gaps_table import PLATE_TO_PIECE_DEFAULT_IN
+
+    margin250 = PLATE_TO_PIECE_DEFAULT_IN * 25.4
     p64_edge = []
     for ix in range(2):
         for iy in range(2):
@@ -306,15 +308,15 @@ def main() -> int:
     assert okg is True and "ok_separado" in str(detg), (okg, detg, expg)
     assert len(expg) == 0, f"no expulsar por margen placa: {detg}"
     minx_despues = float(hoja_galv["piezas"][0]["poly"].bounds[0])
-    assert minx_despues >= 0.250 * 25.4 - 1e-6, (
-        f"nudge debe llevar metal a ≥0.250\": {minx_antes} → {minx_despues}"
+    assert minx_despues >= PLATE_TO_PIECE_DEFAULT_IN * 25.4 - 1e-6, (
+        f"nudge debe llevar metal a ≥ margen tabla: {minx_antes} → {minx_despues}"
     )
     assert minx_despues > minx_antes + 1e-6, (
         f"nudge debe empujar: {minx_antes} → {minx_despues}"
     )
 
     # --- Nest desparramado (Ultra 18%): gravedad debe juntar al origen, kerf tabla ---
-    margin250 = 0.250 * 25.4
+    margin250 = PLATE_TO_PIECE_DEFAULT_IN * 25.4
     a = box(margin250, margin250, margin250 + 200, margin250 + 100)
     b = box(1800, margin250, 2000, margin250 + 100)
     c = box(margin250, 700, margin250 + 200, 800)

@@ -2,7 +2,8 @@
 
 1) Pieza compensada para plasma: su DXF compensado sale sin el stick del ANS;
    el marcaje que trae el DXF de origen se conserva.
-2) Pieza con área neta >= 456.954 in² (SP-792_1) no lleva stick del ANS.
+2) Pieza con área neta <= 456.954 in² (SP-792_1) no lleva stick del ANS
+   (2026-09-30: la regla es "igual o menor", no "igual o mayor").
 3) El detalle de pieza contaba 2 veces los CIRCLE: SP-792_1 (disco 24.25" con
    16 barrenos) mostraba 913.909 in² en vez de 456.954.
 """
@@ -44,12 +45,12 @@ def _disco(path: Path, r: float = R_DISCO) -> None:
     doc.saveas(path)
 
 
-def _placa_chica(path: Path) -> None:
+def _placa_grande(path: Path) -> None:
     doc = _doc()
     msp = doc.modelspace()
-    msp.add_lwpolyline([(0, 0), (12, 0), (12, 6), (0, 6)], close=True, dxfattribs={"layer": "CUT_OUTER"})
+    msp.add_lwpolyline([(0, 0), (30, 0), (30, 20), (0, 20)], close=True, dxfattribs={"layer": "CUT_OUTER"})
     msp.add_circle((2, 3), 0.5, dxfattribs={"layer": "CUT_INNER"})
-    msp.add_line((9, 1), (11, 1), dxfattribs={"layer": "MARK"})  # marcaje de origen
+    msp.add_line((25, 1), (27, 1), dxfattribs={"layer": "MARK"})  # marcaje de origen
     doc.saveas(path)
 
 
@@ -76,26 +77,31 @@ def _check_area_visor(fallos, tmp: Path) -> None:
 
 
 def _check_area(fallos, tmp: Path) -> None:
-    grande = tmp / "SP-792_1.dxf"
-    _disco(grande)
-    res = aplicar_marcaje_nesting(grande)
-    if not res.omitido_por_area or _n_stick(grande):
+    tope = tmp / "SP-792_1.dxf"
+    _disco(tope)
+    res = aplicar_marcaje_nesting(tope)
+    if not res.omitido_por_area or _n_stick(tope):
         fallos.append(f"SP-792_1 (área {AREA_SP792:.1f} in²) recibió stick ANS")
     menor = tmp / "SP-MENOR_1.dxf"
     _disco(menor, r=12.0)
     res = aplicar_marcaje_nesting(menor)
-    if res.omitido_por_area or not _n_stick(menor):
-        fallos.append("pieza bajo el tope se quedó sin stick ANS")
+    if not res.omitido_por_area or _n_stick(menor):
+        fallos.append("pieza bajo el tope recibió stick ANS")
+    mayor = tmp / "SP-MAYOR_1.dxf"
+    _disco(mayor, r=12.5)
+    res = aplicar_marcaje_nesting(mayor)
+    if res.omitido_por_area or not _n_stick(mayor):
+        fallos.append("pieza sobre el tope se quedó sin stick ANS")
 
 
 def _check_compensada(fallos, tmp: Path) -> None:
     from modules.plasma_compensator import asegurar_dxf_plasma_compensado
 
-    f = tmp / "PL-CHICA_1.dxf"
-    _placa_chica(f)
+    f = tmp / "PL-GRANDE_1.dxf"
+    _placa_grande(f)
     aplicar_marcaje_nesting(f)
     if not _n_stick(f):
-        fallos.append("pieza chica sin stick ANS (precondición)")
+        fallos.append("pieza de 600 in² sin stick ANS (precondición)")
         return
     out, err = asegurar_dxf_plasma_compensado(f, 0.0625 * 25.4, forzar=True)
     if not out:

@@ -4,7 +4,7 @@ Solo aplica al stick del ANS (entidades con XDATA ARGA_STICK). El marcaje que
 ya trae el DXF de origen no se toca.
 
 - Pieza compensada para plasma: su DXF compensado sale sin stick ANS.
-- Pieza con área neta >= AREA_SIN_MARCAJE_ANS_IN2: no se le inyecta stick.
+- Pieza con área neta <= AREA_SIN_MARCAJE_ANS_IN2: no se le inyecta stick.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def area_neta_in2(doc) -> float:
 
 
 def omitir_marcaje_ans_por_area(doc) -> bool:
-    return area_neta_in2(doc) >= AREA_SIN_MARCAJE_ANS_IN2 - 0.01
+    return area_neta_in2(doc) <= AREA_SIN_MARCAJE_ANS_IN2 + 0.01
 
 
 def quitar_marcaje_ans(doc) -> int:

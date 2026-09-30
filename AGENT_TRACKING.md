@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30b — Marcaje ANS: área <= SP-792_1 sin stick + gaps generales 0.375/0.260
+- Regla 2 corregida: piezas con área neta **<=** 456.954 in² no llevan stick
+  del ANS (antes `>=`). `inject._entity_points` aplana CIRCLE sobre el círculo
+  real (la Bézier de `make_path` sumaba 0.13 in² a SP-792_1 y la sacaba del tope).
+- `cut_gaps_table`: 0.375" entre piezas en todos los calibres y 0.260"
+  placa→pieza (`PLATE_TO_PIECE_DEFAULT_IN`). La tabla sigue editable. Settings
+  `version` 2: un `cut_gaps_table.json` v1 guardado en la PC se ignora.
+- Candados ajustados a los parámetros nuevos (`test_cut_gaps_table` añade el
+  caso JSON v1, `test_reglas_marcaje_ans` prueba menor/igual/mayor).
+
 ### 2026-09-30 — FALLO falso "contorno abierto" (job 62223: 1247-P12 / SP-742)
 - `interface/qt/dxf_part_loader.py`: LWPOLYLINE con bulge (Processed Files)
   se leía solo por vértices; un anillo quedaba en su cuerda (P12: 1.563 in² en

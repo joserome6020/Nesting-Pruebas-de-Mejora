@@ -19,9 +19,9 @@ def main() -> int:
     from modules.nesting_engine.sheet_integrity import kerf_efectivo_hoja
     from shapely.geometry import box
 
-    # Tabla: Cal 2 → 0.375" / 0.250"
+    # Tabla: Cal 2 → 0.375" / 0.260"
     k, m = gaps_efectivos_para_hoja({"placa_cal": "2"}, kerf_fallback=0.15)
-    assert abs(k - 0.375) < 1e-9 and abs(m - 0.250) < 1e-9, (k, m)
+    assert abs(k - 0.375) < 1e-9 and abs(m - 0.260) < 1e-9, (k, m)
 
     k2, m2 = gaps_efectivos_para_hoja(None, clave="2_SS", kerf_fallback=0.15)
     assert abs(k2 - 0.375) < 1e-9 and abs(m2 - PLATE_TO_PIECE_DEFAULT_IN) < 1e-9
@@ -78,7 +78,7 @@ def main() -> int:
     ) is True
 
     k375, m250, _ = gaps_for_calibre("2")
-    assert abs(k375 - 0.375) < 1e-9 and abs(m250 - 0.250) < 1e-9
+    assert abs(k375 - 0.375) < 1e-9 and abs(m250 - 0.260) < 1e-9
 
     print("MOVERS_TABLA_GAPS PASS")
     return 0

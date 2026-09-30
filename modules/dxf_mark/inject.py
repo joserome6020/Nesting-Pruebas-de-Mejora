@@ -273,8 +273,9 @@ def _entity_points(entity, flatten_dist: float) -> tuple[list[tuple[float, float
         return [_snap_xy(s.x, s.y), _snap_xy(e.x, e.y)], False
     if typ == "CIRCLE":
         try:
-            path = make_path(entity)
-            pts = [_snap_xy(v.x, v.y) for v in path.flattening(distance=max(flatten_dist, 1e-4))]
+            # Puntos sobre el círculo real: la Bézier de make_path queda ~2.7e-4·r
+            # por fuera y un disco de 24" sumaba 0.13 in² de área neta.
+            pts = [_snap_xy(v.x, v.y) for v in entity.flattening(max(flatten_dist, 1e-4))]
             if pts and pts[0] != pts[-1]:
                 pts.append(pts[0])
             return pts, True

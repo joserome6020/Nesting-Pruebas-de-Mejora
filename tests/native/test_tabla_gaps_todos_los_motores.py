@@ -33,10 +33,10 @@ from modules.nesting_engine.cut_gaps_table import (
 
 
 def test_tabla_declara_0_250_placa_a_pieza() -> None:
-    """La foto de planta manda: placa→pieza es 0.250\" fijo."""
+    """Parámetro general de planta (2026-09-30): placa→pieza 0.260\"."""
     defaults = default_cut_gap_settings()
-    assert abs(defaults["plate_to_piece_in"] - 0.250) < 1e-9, defaults
-    assert abs(PLATE_TO_PIECE_DEFAULT_IN - 0.250) < 1e-9
+    assert abs(defaults["plate_to_piece_in"] - 0.260) < 1e-9, defaults
+    assert abs(PLATE_TO_PIECE_DEFAULT_IN - 0.260) < 1e-9
 
 
 def test_manager_default_margin_iguala_la_tabla() -> None:
@@ -96,8 +96,8 @@ def test_gaps_for_calibre_devuelve_tabla_por_calibre() -> None:
     assert abs(margin250 - PLATE_TO_PIECE_DEFAULT_IN) < 1e-9
     assert abs(margin1000 - PLATE_TO_PIECE_DEFAULT_IN) < 1e-9
 
-    # Kerf per calibre: 0.150 (delgado) < 0.250 (medio) < 0.313 (1").
-    assert kerf14 < kerf250 < kerf1000
+    # Parámetro general 2026-09-30: 0.375" entre piezas en todos los calibres.
+    assert abs(kerf14 - 0.375) < 1e-9 and kerf14 == kerf250 == kerf1000
 
 
 def test_cambiar_settings_persiste_y_lo_leen_todos_los_motores(monkeypatch) -> None:

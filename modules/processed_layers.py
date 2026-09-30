@@ -391,7 +391,7 @@ class ProcesadorDXF:
                     elif result.omitido_por_area:
                         self._escribir_log(
                             ruta_reporte,
-                            "  > MARK stick: omitido (área neta >= tope sin marcaje ANS)",
+                            "  > MARK stick: omitido (área neta <= tope sin marcaje ANS)",
                         )
                     else:
                         self._escribir_log(

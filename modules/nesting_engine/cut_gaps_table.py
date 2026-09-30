@@ -19,30 +19,32 @@ class CutGapTableError(ValueError):
     """No fue posible resolver o validar la tabla oficial de gaps."""
 
 
-PLATE_TO_PIECE_DEFAULT_IN = 0.250
+PLATE_TO_PIECE_DEFAULT_IN = 0.260
+# v2 (2026-09-30): parámetros generales de planta 0.375" entre piezas y 0.260"
+# placa→pieza. Un JSON guardado con versión menor se descarta.
+_SETTINGS_VERSION = 2
 _EDIT_PASSWORD_SHA256 = "be3e6cd9bc366459b5b9316047c55585ec1c43da97096270acd85ea0ca271b2c"
 _CONFIG_RELATIVE_PATH = os.path.join("_config", "cut_gaps_table.json")
 
 # key identifica una regla persistente; label es la presentación aprobada en UI.
-# Tabla oficial (foto de planta). PLACA A PIEZA = 0.250" fija.
-# Cal 18 no aparece en la foto; se mantiene para Herinox con el mismo
-# gap entre piezas del grupo delgado (Cal 16..0.188).
+# Por defecto todos los calibres usan 0.375" entre piezas; la tabla sigue
+# editable por calibre.
 CUT_GAP_RULES: tuple[dict[str, Any], ...] = (
-    {"key": "cal_18", "label": "Cal 18", "kerf_in": 0.150, "gauges": ("18",)},
-    {"key": "cal_16", "label": "Cal 16", "kerf_in": 0.150, "gauges": ("16",)},
-    {"key": "cal_14", "label": "Cal 14", "kerf_in": 0.150, "gauges": ("14",)},
-    {"key": "cal_12", "label": "Cal 12", "kerf_in": 0.150, "gauges": ("12",)},
-    {"key": "cal_11", "label": "Cal 11", "kerf_in": 0.150, "gauges": ("11",)},
-    {"key": "cal_10", "label": "Cal 10", "kerf_in": 0.150, "gauges": ("10",)},
-    {"key": "thk_0188", "label": 'Cal 0.188"', "kerf_in": 0.150, "thicknesses": (0.188,)},
-    {"key": "thk_0250", "label": 'Cal 0.250"', "kerf_in": 0.250, "thicknesses": (0.250,)},
-    {"key": "thk_03125", "label": 'Cal 0.3125"', "kerf_in": 0.250, "thicknesses": (0.3125,)},
-    {"key": "thk_0375", "label": 'Cal 0.375"', "kerf_in": 0.250, "thicknesses": (0.375,)},
-    {"key": "thk_0500", "label": 'Cal 0.500"', "kerf_in": 0.250, "thicknesses": (0.500,)},
-    {"key": "thk_0625", "label": 'Cal 0.625"', "kerf_in": 0.250, "thicknesses": (0.625,)},
-    {"key": "thk_0750", "label": 'Cal 0.750"', "kerf_in": 0.250, "thicknesses": (0.750,)},
-    {"key": "thk_1000", "label": 'Cal 1.000"', "kerf_in": 0.313, "thicknesses": (1.000,)},
-    {"key": "thk_1250", "label": 'Cal 1.250"', "kerf_in": 0.313, "thicknesses": (1.250,)},
+    {"key": "cal_18", "label": "Cal 18", "kerf_in": 0.375, "gauges": ("18",)},
+    {"key": "cal_16", "label": "Cal 16", "kerf_in": 0.375, "gauges": ("16",)},
+    {"key": "cal_14", "label": "Cal 14", "kerf_in": 0.375, "gauges": ("14",)},
+    {"key": "cal_12", "label": "Cal 12", "kerf_in": 0.375, "gauges": ("12",)},
+    {"key": "cal_11", "label": "Cal 11", "kerf_in": 0.375, "gauges": ("11",)},
+    {"key": "cal_10", "label": "Cal 10", "kerf_in": 0.375, "gauges": ("10",)},
+    {"key": "thk_0188", "label": 'Cal 0.188"', "kerf_in": 0.375, "thicknesses": (0.188,)},
+    {"key": "thk_0250", "label": 'Cal 0.250"', "kerf_in": 0.375, "thicknesses": (0.250,)},
+    {"key": "thk_03125", "label": 'Cal 0.3125"', "kerf_in": 0.375, "thicknesses": (0.3125,)},
+    {"key": "thk_0375", "label": 'Cal 0.375"', "kerf_in": 0.375, "thicknesses": (0.375,)},
+    {"key": "thk_0500", "label": 'Cal 0.500"', "kerf_in": 0.375, "thicknesses": (0.500,)},
+    {"key": "thk_0625", "label": 'Cal 0.625"', "kerf_in": 0.375, "thicknesses": (0.625,)},
+    {"key": "thk_0750", "label": 'Cal 0.750"', "kerf_in": 0.375, "thicknesses": (0.750,)},
+    {"key": "thk_1000", "label": 'Cal 1.000"', "kerf_in": 0.375, "thicknesses": (1.000,)},
+    {"key": "thk_1250", "label": 'Cal 1.250"', "kerf_in": 0.375, "thicknesses": (1.250,)},
     {"key": "thk_1500", "label": 'Cal 1.500"', "kerf_in": 0.375, "thicknesses": (1.500,)},
     {"key": "thk_1750", "label": 'Cal 1.750"', "kerf_in": 0.375, "thicknesses": (1.750,)},
     {"key": "thk_2000", "label": 'Cal 2.000"', "kerf_in": 0.375, "thicknesses": (2.000,)},
@@ -87,7 +89,7 @@ def _config_path() -> Path:
 
 def default_cut_gap_settings() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": _SETTINGS_VERSION,
         "plate_to_piece_in": PLATE_TO_PIECE_DEFAULT_IN,
         "kerf_by_rule": {
             str(row["key"]): float(row["kerf_in"])
@@ -130,7 +132,7 @@ def normalize_cut_gap_settings(raw: Any) -> dict[str, Any]:
                 field=f'Entre piezas ({_RULE_BY_KEY[key]["label"]})',
             )
     return {
-        "version": 1,
+        "version": _SETTINGS_VERSION,
         "plate_to_piece_in": margin,
         "kerf_by_rule": kerfs,
     }
@@ -141,7 +143,10 @@ def load_cut_gap_settings() -> dict[str, Any]:
     if not path.is_file():
         return default_cut_gap_settings()
     try:
-        return normalize_cut_gap_settings(json.loads(path.read_text(encoding="utf-8")))
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if int((raw or {}).get("version") or 0) < _SETTINGS_VERSION:
+            return default_cut_gap_settings()
+        return normalize_cut_gap_settings(raw)
     except Exception:
         # Un archivo local inválido no puede degradar a un kerf global incorrecto.
         return default_cut_gap_settings()

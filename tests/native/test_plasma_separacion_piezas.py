@@ -217,8 +217,8 @@ def test_h1_legacy_base_mas_offset_se_rechaza_y_obliga_renestear():
     from modules.nesting_engine.cut_gaps_table import gaps_for_calibre
 
     kerf_in, margin_in, regla = gaps_for_calibre(0.0747)
-    assert abs(kerf_in - 0.150) < 1e-9, f"cal 0.0747 debe usar kerf 0.150; dio {kerf_in}"
-    assert abs(margin_in - 0.250) < 1e-9, margin_in
+    assert abs(kerf_in - 0.375) < 1e-9, f"cal 0.0747 debe usar kerf 0.375; dio {kerf_in}"
+    assert abs(margin_in - 0.260) < 1e-9, margin_in
 
     off = 0.318  # plasma_offset_mm del log
     minimo = kerf_in * ESCALA
