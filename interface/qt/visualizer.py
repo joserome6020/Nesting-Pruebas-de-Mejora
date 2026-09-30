@@ -106,9 +106,7 @@ class VisorDXF:
             "Forzar lógica RTZ del nest: la pieza sigue nestando normal "
             "(incluye orificios). Si cae en un barreno/remanente, ese contorno "
             "se vuelve 1 RTZ con todas las piezas de la zona (no 1 por pieza; "
-            "eso es Como RTZ en Nesting).\n"
-            "Piezas de área neta ≤ 456.954 in² vienen marcadas en automático; "
-            "desmarcar las excluye."
+            "eso es Como RTZ en Nesting)."
         )
         self.chk_forzar_rtz.toggled.connect(self._on_forzar_rtz_toggled)
         tb_lay.addWidget(self.chk_forzar_rtz)
@@ -528,6 +526,14 @@ class VisorDXF:
 
 
 def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
+    img = generar_thumbnail_imagen(ruta_dxf, size=size, material=material)
+    if img is None:
+        return None
+    return QPixmap.fromImage(img)
+
+
+def generar_thumbnail_imagen(ruta_dxf, size=(50, 50), material: str | None = None):
+    """QImage con buffer propio: segura en hilo worker (QPixmap solo en hilo GUI)."""
     try:
         from interface.material_colors import paleta_cad_hex
         from interface.qt.dxf_part_geometry import decimar_polyline_xy
@@ -597,9 +603,8 @@ def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
 
         img = Image.open(buf).convert("RGBA")
         data = img.tobytes("raw", "RGBA")
-        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-        pix = QPixmap.fromImage(qimg)
-        return pix.scaled(
+        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888).copy()
+        return qimg.scaled(
             size[0],
             size[1],
             Qt.AspectRatioMode.KeepAspectRatio,

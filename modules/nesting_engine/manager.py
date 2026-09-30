@@ -3425,20 +3425,25 @@ class MotorNesting:
                             clave_ruta_lock, 0
                         )
                     ) % 360
-                from .regla_area_rtz import flag_forzar_explicito, resolver_forzar_rtz
-                from .rtz_manual_promote import _norm_nombre_forzar
-
-                if resolver_forzar_rtz(
-                    item_pz["area"],
-                    flag_forzar_explicito(
-                        getattr(self, "forzar_rtz_por_ruta", None),
-                        clave_ruta_lock,
-                        getattr(self, "forzar_rtz_por_nombre", None),
-                        _norm_nombre_forzar(pieza),
-                    ),
-                    mat,
-                ):
+                if bool(
+                    (getattr(self, "forzar_rtz_por_ruta", {}) or {}).get(
+                        clave_ruta_lock, False
+                    )
+                ) or bool(item_pz.get("forzar_rtz")):
                     item_pz["forzar_rtz"] = True
+                else:
+                    try:
+                        from .rtz_manual_promote import _norm_nombre_forzar
+
+                        nom_k = _norm_nombre_forzar(pieza)
+                        if nom_k and bool(
+                            (getattr(self, "forzar_rtz_por_nombre", {}) or {}).get(
+                                nom_k, False
+                            )
+                        ):
+                            item_pz["forzar_rtz"] = True
+                    except Exception:
+                        pass
                 if plasma_flag:
                     item_pz["plasma_compensada_manual"] = True
                     item_pz["plasma_offset_mm_manual"] = float(plasma_off)
@@ -4287,8 +4292,27 @@ class MotorNesting:
         AREA_LIMITE_MM2 = ARGA_AREA_ESTRUCTURAL_MM2
         # forzar_rtz NO segrega: nestan normal (madre + orificios). Post-pass
         # promote_forzar_zones_on_madre reclasifica barrenos/remanentes a RTZ.
-        estructurales = [p for p in piezas if p["area"] > AREA_LIMITE_MM2]
-        accesorios_base = [p for p in piezas if p["area"] <= AREA_LIMITE_MM2]
+        from .regla_area_rtz import (
+            AREA_VENTANA_MIN_MM2,
+            RTZ_MIN_PIEZAS,
+            pieza_reservada_rtz,
+            placas_cama_laser,
+        )
+
+        reservadas_base = []
+        for p in piezas:
+            if pieza_reservada_rtz(p):
+                p_res = copy.deepcopy(p)
+                p_res["rtz_reserva"] = True
+                reservadas_base.append(p_res)
+        no_reservadas = [p for p in piezas if not pieza_reservada_rtz(p)]
+        estructurales = [p for p in no_reservadas if p["area"] > AREA_LIMITE_MM2]
+        accesorios_base = [p for p in no_reservadas if p["area"] <= AREA_LIMITE_MM2]
+        if reservadas_base:
+            _dbg_nesting(
+                f"[RTZ-RESERVA] clave={clave} | piezas<=tope={len(reservadas_base)} | "
+                f"madre={len(no_reservadas)}"
+            )
         n_forzar = sum(1 for p in piezas if bool(p.get("forzar_rtz")))
         if n_forzar:
             _dbg_nesting(
@@ -4315,15 +4339,41 @@ class MotorNesting:
         
         pendientes_est = copy.deepcopy(estructurales)
         accesorios = copy.deepcopy(accesorios_base)
+        reservadas = reservadas_base
+        fase_cama = False
         num_placa_actual = 1
 
-        while pendientes_est or accesorios:
+        def _reserva_va_directo(placa) -> bool:
+            if not reservadas or placa is None:
+                return False
+            return bool(sin_rtz) or _debe_forzar_sin_mini_nest(
+                req_cal, float(placa.get("w") or 0.0), float(placa.get("h") or 0.0)
+            )
+
+        while pendientes_est or accesorios or reservadas:
             if self._cancelado():
                 _dbg_nesting(f"[CANCEL] clave={clave} | abortando grupo (NestFab stop)")
                 break
+            if not fase_cama and accesorios:
+                devueltas = [p for p in accesorios if p.get("rtz_reserva")]
+                if devueltas:
+                    accesorios = [p for p in accesorios if not p.get("rtz_reserva")]
+                    reservadas = list(reservadas) + devueltas
+            if not pendientes_est and not accesorios and reservadas:
+                fase_cama = True
+                for p in reservadas:
+                    p.pop("rtz_reserva", None)
+                accesorios = reservadas
+                reservadas = []
+                _dbg_nesting(
+                    f"[RTZ-RESERVA-CAMA] clave={clave} | sobrantes={len(accesorios)} "
+                    "→ placa cama láser 120x60"
+                )
             pool_est_snapshot = copy.deepcopy(pendientes_est)
             pool_acc_snapshot = copy.deepcopy(accesorios)
-            usar_pack_combinado = _usar_pack_combinado_grupo(pendientes_est, accesorios)
+            usar_pack_combinado = _usar_pack_combinado_grupo(
+                pendientes_est, list(accesorios) + list(reservadas)
+            )
             if usar_pack_combinado:
                 _dbg_nesting(
                     f"[PACK-COMBINADO] clave={clave} | est={len(pendientes_est)} | "
@@ -4375,7 +4425,16 @@ class MotorNesting:
 
             candidatos_sim = placas_simulacion_validas
             solo_accesorios_fase = not pendientes_est and bool(accesorios)
-            if solo_accesorios_fase:
+            if fase_cama:
+                cama = placas_cama_laser(placas_simulacion_validas)
+                _dbg_nesting(
+                    f"[RTZ-RESERVA-CAMA] clave={clave} | formatos_cama={len(cama)}/"
+                    f"{len(placas_simulacion_validas)}"
+                    + ("" if cama else " | sin formato <=120x60, se usa catálogo")
+                )
+                if cama:
+                    candidatos_sim = cama
+            elif solo_accesorios_fase:
                 candidatos_sim = _filtrar_placas_para_accesorios(accesorios, placas_simulacion_validas)
                 _dbg_nesting(
                     f"[ACCESORIOS-FASE] clave={clave} | candidatos={len(candidatos_sim)}/{len(placas_simulacion_validas)} | "
@@ -4471,6 +4530,10 @@ class MotorNesting:
                 """Nest+score de una candidata. Thread-safe si C++ libera GIL."""
                 sim_est = copy.deepcopy(pendientes_est)
                 sim_acc = copy.deepcopy(accesorios)
+                reserva_directo = _reserva_va_directo(candidato_placa)
+                if reserva_directo:
+                    sim_acc.extend(copy.deepcopy(reservadas))
+                reserva_fuera_sim = [] if reserva_directo else list(reservadas)
                 record_probe(
                     "sim_start",
                     clave=str(clave),
@@ -4582,16 +4645,17 @@ class MotorNesting:
                         detail=str(msg_sim_s or ""),
                     )
                     return None
-                restos_count = len(restos_est_out) + len(restos_acc_out)
+                restos_acc_score = list(restos_acc_out) + reserva_fuera_sim
+                restos_count = len(restos_est_out) + len(restos_acc_score)
                 area_restos = _area_total_piezas(restos_est_out) + _area_total_piezas(
-                    restos_acc_out
+                    restos_acc_score
                 )
                 piezas_colocadas = len(hoja_sim.get("piezas") or [])
                 lookahead_cost = 0.0
                 if use_lookahead and restos_count > 0:
                     lookahead_cost = _estimar_costo_lookahead(
                         restos_est_out,
-                        restos_acc_out,
+                        restos_acc_score,
                         placas_simulacion_validas,
                         config_kerf,
                         config_margin,
@@ -4683,7 +4747,7 @@ class MotorNesting:
                 if q_msg:
                     q_msg.put(
                         f"[{req_cal}] Procesando Placa #{num_placa_actual} | "
-                        f"Quedan: {len(pendientes_est) + len(accesorios)} piezas..."
+                        f"Quedan: {len(pendientes_est) + len(accesorios) + len(reservadas)} piezas..."
                     )
                 resultados_ola = []
                 import contextlib as _ctxlib
@@ -4860,7 +4924,9 @@ class MotorNesting:
 
                         _m_in = gaps_efectivos_para_hoja(None, clave=clave)[1]
                         sin_placa = _piezas_sin_placa(
-                            list(pendientes_est or []) + list(accesorios or []),
+                            list(pendientes_est or [])
+                            + list(accesorios or [])
+                            + list(reservadas or []),
                             placas_ok,
                             _m_in,
                         )
@@ -4912,6 +4978,16 @@ class MotorNesting:
             forzar_sin_mini_nest = _debe_forzar_sin_mini_nest(
                 req_cal, candidato_ganador["w"], candidato_ganador["h"]
             )
+            if _reserva_va_directo(candidato_ganador):
+                _dbg_nesting(
+                    f"[RTZ-RESERVA-DIRECTO] clave={clave} | placa={candidato_ganador.get('id')} | "
+                    f"piezas={len(reservadas)} (placa sin mini nest)"
+                )
+                pool_acc_snapshot.extend(copy.deepcopy(reservadas))
+                if pool_combined_snapshot is not None:
+                    pool_combined_snapshot.extend(copy.deepcopy(reservadas))
+                accesorios = list(accesorios) + list(reservadas)
+                reservadas = []
 
             # Refinar compactación solo en modos con refine_hoja (standard/max)
             if refine_hoja and cu_refinar_intentos > 0:
@@ -5163,6 +5239,8 @@ class MotorNesting:
                     w_r, h_r = maxx - minx, maxy - miny
                     if not _retazo_cumple_tamano_minimo(w_r, h_r, tipo="HOLE"):
                         continue
+                    if float(hole_poly.area) < AREA_VENTANA_MIN_MM2:
+                        continue
                     # Barreno ya reutilizado en madre: no abrir RTZ encima (causa empalmes).
                     if _hole_ya_reutilizado_en_madre(hole_poly, hoja_ganadora):
                         _dbg_nesting(
@@ -5171,12 +5249,9 @@ class MotorNesting:
                             f"host={p.get('nombre')} | {w_r/25.4:.1f}x{h_r/25.4:.1f}\""
                         )
                         continue
-                    id_retazo = nombre_rtz_para_placa(
-                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_r, ancho_mm=w_r
-                    )
                     poly_local = affinity.translate(hole_poly, -minx, -miny)
                     retazos_virtuales.append({
-                        "id": id_retazo,
+                        "id": f"RTZ?-HOLE-{len(retazos_virtuales) + 1}",
                         "w": w_r,
                         "h": h_r,
                         "poly_borde": poly_local,
@@ -5184,7 +5259,6 @@ class MotorNesting:
                         "global_x": minx,
                         "global_y": miny,
                     })
-                    contador_rtz_grupo += 1
                             
             max_x, max_y = 0, 0
             for p in list(hoja_ganadora['piezas']):
@@ -5210,22 +5284,14 @@ class MotorNesting:
                 minx, miny, maxx, maxy = rem_der.bounds
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
-                    id_retazo = nombre_rtz_para_placa(
-                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
-                    )
-                    retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_der, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
-                    contador_rtz_grupo += 1
+                    retazos_virtuales.append({"id": "RTZ?-SOBRANTE-DER", "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_der, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
 
             if h_orig - max_y > 150:
                 rem_arr = box(0, max_y, max_x, h_orig)
                 minx, miny, maxx, maxy = rem_arr.bounds
                 w_rem, h_rem = maxx - minx, maxy - miny
                 if _retazo_cumple_tamano_minimo(w_rem, h_rem):
-                    id_retazo = nombre_rtz_para_placa(
-                        contador_rtz_grupo, req_cal, wo_name, largo_mm=h_rem, ancho_mm=w_rem
-                    )
-                    retazos_virtuales.append({"id": id_retazo, "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_arr, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
-                    contador_rtz_grupo += 1
+                    retazos_virtuales.append({"id": "RTZ?-SOBRANTE-ARR", "w": w_rem, "h": h_rem, "poly_borde": affinity.translate(rem_arr, -minx, -miny), "tipo": "SOBRANTE", "global_x": minx, "global_y": miny})
 
             retazos_virtuales = [
                 r
@@ -5239,10 +5305,10 @@ class MotorNesting:
             for retazo in retazos_virtuales:
                 rtz_usado = False
 
-                if pendientes_est or accesorios:
+                if pendientes_est or accesorios or reservadas:
                     candidatos_seguro = []
                     area_retazo = retazo['w'] * retazo['h']
-                    pool_rtz_cand = list(pendientes_est) + list(accesorios)
+                    pool_rtz_cand = list(pendientes_est) + list(accesorios) + list(reservadas)
                     
                     for p in pool_rtz_cand:
                         if p['area'] > (area_retazo * 0.85):
@@ -5302,8 +5368,30 @@ class MotorNesting:
                                     f"placa={candidato_ganador.get('id')}"
                                 )
                                 continue
+                            n_fisicas_rtz = sum(
+                                1
+                                for p_r in hoja_retazo.get('piezas') or []
+                                if _es_pieza_fisica_hoja(p_r.get('nombre'))
+                                and not str(p_r.get('nombre') or '').startswith(
+                                    ("REMANENTE__", "TATUAJE__")
+                                )
+                            )
+                            if not forzar_sin_mini_nest and n_fisicas_rtz < RTZ_MIN_PIEZAS:
+                                _dbg_nesting(
+                                    f"[RTZ-SKIP-POCAS-PIEZAS] clave={clave} | "
+                                    f"retazo={retazo.get('id')} | piezas={n_fisicas_rtz}"
+                                )
+                                continue
 
                             rtz_usado = True
+                            retazo['id'] = nombre_rtz_para_placa(
+                                contador_rtz_grupo,
+                                req_cal,
+                                wo_name,
+                                largo_mm=retazo['h'],
+                                ancho_mm=retazo['w'],
+                            )
+                            contador_rtz_grupo += 1
 
                             from .sheet_integrity import calcular_restos_desde_colocados
 
@@ -5312,6 +5400,9 @@ class MotorNesting:
                             )
                             accesorios = calcular_restos_desde_colocados(
                                 accesorios, hoja_retazo
+                            )
+                            reservadas = calcular_restos_desde_colocados(
+                                reservadas, hoja_retazo
                             )
 
                             hoja_retazo.update({
@@ -5698,14 +5789,15 @@ class MotorNesting:
 
                 flags_ruta = dict(getattr(self, "forzar_rtz_por_ruta", None) or {})
                 flags_nombre = dict(getattr(self, "forzar_rtz_por_nombre", None) or {})
-                for hoja in hojas_finales:
-                    if not isinstance(hoja, dict):
-                        continue
-                    stamp_forzar_rtz_on_piezas(
-                        hoja.get("piezas") or [],
-                        flags_ruta=flags_ruta,
-                        flags_nombre=flags_nombre,
-                    )
+                if flags_ruta or flags_nombre:
+                    for hoja in hojas_finales:
+                        if not isinstance(hoja, dict):
+                            continue
+                        stamp_forzar_rtz_on_piezas(
+                            hoja.get("piezas") or [],
+                            flags_ruta=flags_ruta,
+                            flags_nombre=flags_nombre,
+                        )
 
                 contador_zona = max_rtz_counter(hojas_finales) + 1
                 for hoja in list(hojas_finales):

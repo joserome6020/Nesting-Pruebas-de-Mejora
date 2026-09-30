@@ -433,15 +433,12 @@ class NestingCalcMixin:
             str(k): bool(v) for k, v in dict(bloqueo).items() if v
         }
         forzar_rtz = getattr(self.app, "forzar_rtz_por_ruta", None) or {}
-        # False = desmarcada a mano (anula el RTZ automático por área).
         self.app.motor_nesting.forzar_rtz_por_ruta = {
-            str(k): bool(v) for k, v in dict(forzar_rtz).items() if v is not None
+            str(k): bool(v) for k, v in dict(forzar_rtz).items() if v
         }
         forzar_nom = getattr(self.app, "forzar_rtz_por_nombre", None) or {}
         self.app.motor_nesting.forzar_rtz_por_nombre = {
-            str(k).strip().upper(): bool(v)
-            for k, v in dict(forzar_nom).items()
-            if v is not None
+            str(k).strip().upper(): bool(v) for k, v in dict(forzar_nom).items() if v
         }
 
     def ejecutar_nesting(self):
@@ -1728,23 +1725,21 @@ class NestingCalcMixin:
             item["allowed_rotations"] = [0]
             item["orientacion_corte_bloqueada"] = True
             item["orientacion_corte_deg"] = int(rot_lock_deg) % 360
-        from modules.nesting_engine.regla_area_rtz import (
-            flag_forzar_explicito,
-            resolver_forzar_rtz,
-        )
-        from modules.nesting_engine.rtz_manual_promote import _norm_nombre_forzar
-
-        if resolver_forzar_rtz(
-            item["area"],
-            flag_forzar_explicito(
-                getattr(self.app, "forzar_rtz_por_ruta", None),
-                clave_ruta,
-                getattr(self.app, "forzar_rtz_por_nombre", None),
-                _norm_nombre_forzar(src.get("nombre")),
-            ),
-            material,
+        if clave_ruta and bool(
+            (getattr(self.app, "forzar_rtz_por_ruta", None) or {}).get(clave_ruta, False)
         ):
             item["forzar_rtz"] = True
+        else:
+            try:
+                from modules.nesting_engine.rtz_manual_promote import _norm_nombre_forzar
+
+                nom_k = _norm_nombre_forzar(src.get("nombre"))
+                if nom_k and bool(
+                    (getattr(self.app, "forzar_rtz_por_nombre", None) or {}).get(nom_k, False)
+                ):
+                    item["forzar_rtz"] = True
+            except Exception:
+                pass
         if compensar:
             item["plasma_compensada_manual"] = True
             item["plasma_offset_mm_manual"] = float(offset_mm)

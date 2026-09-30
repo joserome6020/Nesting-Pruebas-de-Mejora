@@ -446,28 +446,29 @@ def stamp_forzar_rtz_on_piezas(
     flags_ruta: dict | None = None,
     flags_nombre: dict | None = None,
 ) -> int:
-    """Reaplica forzar_rtz: flag del usuario (ruta norm / nombre; True o False)
-    y, si nunca la tocó, el tope de área (regla_area_rtz). Devuelve cuántas quedan RTZ."""
-    from .regla_area_rtz import resolver_forzar_rtz
-
+    """Reaplica forzar_rtz por ruta (norm) y/o por nombre de pieza. Devuelve cuántas marcó."""
     if not isinstance(piezas, list):
         return 0
-    flags_ruta_n: dict[str, bool] = {}
-    flags_base: dict[str, bool] = {}
-    for k, v in dict(flags_ruta or {}).items():
-        if v is None:
+    flags_ruta = dict(flags_ruta or {})
+    flags_nombre = {
+        _norm_nombre_forzar(k): True
+        for k, v in dict(flags_nombre or {}).items()
+        if v
+    }
+    # Índice basename → True desde flags_ruta
+    flags_base = {}
+    extra_keys: list[tuple[str, bool]] = []
+    for k, v in list(flags_ruta.items()):
+        if not v:
             continue
-        for kk in _ruta_keys_forzar(str(k)):
-            flags_ruta_n[kk] = bool(v)
         try:
-            flags_base[os.path.basename(str(k)).lower()] = bool(v)
+            flags_base[os.path.basename(str(k)).lower()] = True
         except Exception:
             pass
-    flags_nombre_n = {
-        _norm_nombre_forzar(k): bool(v)
-        for k, v in dict(flags_nombre or {}).items()
-        if v is not None
-    }
+        for kk in _ruta_keys_forzar(str(k)):
+            extra_keys.append((kk, True))
+    for kk, vv in extra_keys:
+        flags_ruta[kk] = vv
     n = 0
     for p in piezas:
         if not isinstance(p, dict):
@@ -475,27 +476,22 @@ def stamp_forzar_rtz_on_piezas(
         nom = str(p.get("nombre") or "")
         if _is_virtual(nom):
             continue
-        explicito = None
+        if p.get("forzar_rtz"):
+            n += 1
+            continue
+        ok = False
         ruta = str(p.get("ruta") or "").strip()
-        for kk in _ruta_keys_forzar(ruta) if ruta else []:
-            if kk in flags_ruta_n:
-                explicito = flags_ruta_n[kk]
-                break
-            base = os.path.basename(kk).lower()
-            if base in flags_base:
-                explicito = flags_base[base]
-                break
-        if explicito is None:
-            explicito = flags_nombre_n.get(_norm_nombre_forzar(nom))
-        area = p.get("area")
-        if not area:
-            poly = _poly_of(p)
-            area = float(poly.area) if poly is not None else 0.0
-        if resolver_forzar_rtz(area, explicito, p.get("material") or ""):
+        if ruta:
+            for kk in _ruta_keys_forzar(ruta):
+                if flags_ruta.get(kk) or flags_base.get(os.path.basename(kk).lower()):
+                    ok = True
+                    break
+        if not ok and flags_nombre:
+            if flags_nombre.get(_norm_nombre_forzar(nom)):
+                ok = True
+        if ok:
             p["forzar_rtz"] = True
             n += 1
-        else:
-            p.pop("forzar_rtz", None)
     return n
 
 

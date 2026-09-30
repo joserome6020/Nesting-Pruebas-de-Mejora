@@ -20,8 +20,16 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_thumbnail_hilo_sin_qpixmap.py",
+        "2026-09-30g - crash access violation: miniaturas PARTS creaban QPixmap en hilo worker",
+    ),
+    (
+        "test_rtz_reserva_piezas_chicas.py",
+        "2026-09-30f - piezas <= 456.954 in2 solo en RTZ nativo (<=120x60, >=2 pzas) o placa cama 120x60",
+    ),
+    (
         "test_regla_area_rtz_ventanas.py",
-        "2026-09-30e - piezas <= 456.954 in2 = RTZ automatico (desmarcable); ventanas < tope no admiten piezas, barreno se conserva",
+        "2026-09-30e - ventanas < 456.954 in2 no admiten piezas; el barreno se conserva en la salida",
     ),
     (
         "test_notify_release.py",

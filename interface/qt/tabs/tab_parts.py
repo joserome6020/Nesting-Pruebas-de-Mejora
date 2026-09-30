@@ -41,7 +41,7 @@ from interface.parts_catalog import (
     mutar_pieza_en_listas,
 )
 from interface.qt.thread_bridge import call_on_main
-from interface.qt.visualizer import VisorDXF, generar_thumbnail
+from interface.qt.visualizer import VisorDXF, generar_thumbnail, generar_thumbnail_imagen
 from interface.qt.ui_mixins import TimerHost, scroll_clear, scroll_add_widget
 from interface.qt.layout_helpers import (
     finalize_splitter,
@@ -1086,7 +1086,7 @@ class TabParts(QWidget, TimerHost):
             pix = None
             if ruta and os.path.exists(ruta):
                 try:
-                    pix = generar_thumbnail(
+                    pix = generar_thumbnail_imagen(
                         ruta, size=(_PARTS_THUMB_PX, _PARTS_THUMB_PX), material=mat
                     )
                 except Exception:
@@ -1111,7 +1111,7 @@ class TabParts(QWidget, TimerHost):
                 if ph is None or not hasattr(ph, "setPixmap"):
                     continue
                 if pix is not None:
-                    ph.setPixmap(pix)
+                    ph.setPixmap(QPixmap.fromImage(pix))
                     ph.setText("")
                 else:
                     ph.setText("-")
@@ -1573,41 +1573,9 @@ class TabParts(QWidget, TimerHost):
         except Exception:
             pass
 
-    def _area_pieza_mm2(self, ruta_dxf) -> float:
-        cache = self.__dict__.setdefault("_area_rtz_cache", {})
-        clave = self._clave_orientacion(ruta_dxf)
-        if clave not in cache:
-            try:
-                import ezdxf
-
-                from modules.dxf_mark.reglas_ans import area_neta_in2
-                from modules.nesting_engine.regla_area_rtz import IN2_MM2
-
-                cache[clave] = area_neta_in2(ezdxf.readfile(str(ruta_dxf))) * IN2_MM2
-            except Exception:
-                cache[clave] = 0.0
-        return cache[clave]
-
     def _forzar_rtz_activo(self, ruta_dxf) -> bool:
-        from modules.nesting_engine.regla_area_rtz import (
-            flag_forzar_explicito,
-            resolver_forzar_rtz,
-        )
-        from modules.nesting_engine.rtz_manual_promote import _norm_nombre_forzar
-
-        explicito = flag_forzar_explicito(
-            getattr(self.app, "forzar_rtz_por_ruta", None),
-            self._clave_orientacion(ruta_dxf),
-            getattr(self.app, "forzar_rtz_por_nombre", None),
-            _norm_nombre_forzar(str(getattr(self, "_nombre_fila_actual", "") or "")),
-        )
-        if explicito is not None:
-            return explicito
-        return resolver_forzar_rtz(
-            self._area_pieza_mm2(ruta_dxf),
-            None,
-            getattr(self, "_material_fila_actual", None) or "",
-        )
+        flags = getattr(self.app, "forzar_rtz_por_ruta", None) or {}
+        return bool(flags.get(self._clave_orientacion(ruta_dxf), False))
 
     def _nombre_pieza_actual(self) -> str:
         try:
@@ -1638,10 +1606,14 @@ class TabParts(QWidget, TimerHost):
         from modules.nesting_engine.rtz_manual_promote import _norm_nombre_forzar
 
         nom = _norm_nombre_forzar(self._nombre_pieza_actual())
-        # False explícito: anula el RTZ automático por área de esa pieza.
-        self.app.forzar_rtz_por_ruta[clave] = bool(checked)
-        if nom:
-            self.app.forzar_rtz_por_nombre[nom] = bool(checked)
+        if checked:
+            self.app.forzar_rtz_por_ruta[clave] = True
+            if nom:
+                self.app.forzar_rtz_por_nombre[nom] = True
+        else:
+            self.app.forzar_rtz_por_ruta.pop(clave, None)
+            if nom:
+                self.app.forzar_rtz_por_nombre.pop(nom, None)
         try:
             tab_n = getattr(self.app, "tab_nesting", None)
             if tab_n is not None and hasattr(tab_n, "_sync_orientacion_cobre_al_motor"):

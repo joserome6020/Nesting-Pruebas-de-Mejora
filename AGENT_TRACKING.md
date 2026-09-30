@@ -55,6 +55,45 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30g — Crash (access violation) al terminar nest: QPixmap en hilo worker
+
+- `crash.log`: GC en hilo `_thread_generar_thumbnails` / `_thread_auditar_dxfs` mientras
+  el hilo GUI pintaba. `generar_thumbnail` creaba QPixmap (solo hilo GUI) en el worker
+  y QImage sobre buffer Python sin copiar.
+- Nuevo `visualizer.generar_thumbnail_imagen` (QImage `.copy()`, segura en worker); el hilo
+  de PARTS la usa y `_aplicar_thumbnails_async` convierte a QPixmap en el hilo GUI.
+- Candado `test_thumbnail_hilo_sin_qpixmap.py`.
+
+### 2026-09-30f — Piezas <= 456.954 in² reservadas a RTZ nativo (reemplaza 30e)
+
+- `manager._procesar_grupo_parallel_impl`: piezas con área <= tope (`pieza_reservada_rtz`)
+  van a la lista `reservadas` (marca `rtz_reserva`), fuera del cuerpo de la madre.
+  - Solo entran al mini-nest de retazos existente (HOLE >= 22" y ventana >= tope,
+    SOBRANTE >= 20", clamp cama 120x60"), mezcladas con el resto del pool.
+    RTZ con < `RTZ_MIN_PIEZAS` (2) piezas se descarta.
+  - Candidata "sin mini nest" (`_debe_forzar_sin_mini_nest` o `sin_rtz`): las
+    reservadas entran a la simulación y quedan directo en la placa (como antes).
+  - Sobrantes al final → fase cama: formatos `placas_cama_laser` (120x60 exacto;
+    si no, <= 120x60; si no, catálogo) con costo normal.
+- Candado `test_rtz_reserva_piezas_chicas.py` (falla con la lógica vieja: chicas
+  físicas en madre 96x240; grupo solo chicas en 96x240).
+- Nombre RTZ se asigna al aceptar el retazo con medidas ya recortadas a 120x60
+  (W.O. 89: hoja 100.5x60 salía como `RTZ1-0.375-96.0x100.5`); sin huecos de numeración
+  por retazos rechazados.
+
+### 2026-09-30f0 — Revertido el RTZ automático por área (mal integrado)
+
+- El auto-`forzar_rtz` de 2026-09-30e usaba `promote_forzar_zones_on_madre`, que no
+  respeta el flujo nativo de retazos (clamp cama láser 120x60", mínimo 20", mezcla
+  con otras piezas): generaba RTZ de 36.8x134.7, de 4.5x4.5 con 1 pieza y el
+  poka-yoke "Pieza fuera de placa RTZ". Se restauraron a `1c7e547^`: `manager`,
+  `rtz_manual_promote`, `tab_parts`, `_mixin_nesting_calc`, `visualizer`,
+  `nesting_workspace`, `test_forzar_rtz_dual`, `test_rtz_contorno_holgura_y_join_mark`.
+- `regla_area_rtz.py` queda solo con la regla de ventanas (se conservan: ventanas
+  < 456.954 in² no admiten piezas; todas las piezas llevan stick ANS).
+- Pendiente: regla "pieza <= 456.954 in² → RTZ" reimplementada sobre el flujo
+  nativo de retazos de `manager.py` (ver diseño a confirmar con el usuario).
+
 ### 2026-09-30e — Tope 456.954 in²: RTZ automático + ventanas; se revierte "sin marcaje"
 
 - **Revertido** 2026-09-29e/30 regla 2: toda pieza vuelve a llevar stick ANS sin

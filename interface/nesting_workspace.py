@@ -654,12 +654,12 @@ def construir_payload_workspace_lote_export(
         "forzar_rtz_por_ruta": {
             str(k): bool(v)
             for k, v in (getattr(tab.app, "forzar_rtz_por_ruta", {}) or {}).items()
-            if v is not None
+            if v
         },
         "forzar_rtz_por_nombre": {
             str(k).strip().upper(): bool(v)
             for k, v in (getattr(tab.app, "forzar_rtz_por_nombre", {}) or {}).items()
-            if v is not None
+            if v
         },
         "wo_reales_por_lote": {0: str(n_wo)},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
@@ -767,12 +767,12 @@ def construir_payload_workspace(tab):
         "forzar_rtz_por_ruta": {
             str(k): bool(v)
             for k, v in (getattr(tab.app, "forzar_rtz_por_ruta", {}) or {}).items()
-            if v is not None
+            if v
         },
         "forzar_rtz_por_nombre": {
             str(k).strip().upper(): bool(v)
             for k, v in (getattr(tab.app, "forzar_rtz_por_nombre", {}) or {}).items()
-            if v is not None
+            if v
         },
         "wo_reales_por_lote": getattr(tab.app, "wo_reales_por_lote", {}) or {},
         "ultimos_escenarios": getattr(tab.app, "ultimos_escenarios", []),
@@ -1250,7 +1250,7 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         tab.app.forzar_rtz_por_ruta = {
             str(k): bool(v)
             for k, v in (payload.get("forzar_rtz_por_ruta") or {}).items()
-            if v is not None
+            if v
         }
     except Exception:
         tab.app.forzar_rtz_por_ruta = {}
@@ -1258,7 +1258,7 @@ def aplicar_workspace(tab, payload, *, carga_rapida: bool = False):
         tab.app.forzar_rtz_por_nombre = {
             str(k).strip().upper(): bool(v)
             for k, v in (payload.get("forzar_rtz_por_nombre") or {}).items()
-            if v is not None
+            if v
         }
     except Exception:
         tab.app.forzar_rtz_por_nombre = {}

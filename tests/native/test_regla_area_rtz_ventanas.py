@@ -1,10 +1,8 @@
-"""Candado 2026-09-30e: tope 456.954 in² (SP-792_1) decide RTZ y ventanas.
+"""Candado 2026-09-30e: ventanas y tope 456.954 in² (SP-792_1).
 
-1) Pieza con área neta <= tope se nestea como RTZ (forzar_rtz) salvo que el
-   usuario la desmarque en PARTS (flag False). Cobre queda fuera.
-2) Orificio interior ("ventana") solo admite piezas si su área >= tope. Los
-   menores son metal para el motor, pero el barreno sigue en la geometría de
-   salida (visor/export).
+Orificio interior ("ventana") solo admite piezas si su área >= tope. Los
+menores son metal para el motor, pero el barreno sigue en la geometría de
+salida (visor/export).
 """
 from __future__ import annotations
 
@@ -25,39 +23,10 @@ TOPE = 456.954
 
 
 def _check_umbral(fallos: list[str]) -> None:
-    if not r.pieza_es_rtz_por_area(TOPE * IN2):
-        fallos.append("SP-792_1 (456.954 in²) no quedó RTZ")
-    if not r.pieza_es_rtz_por_area(100 * IN2):
-        fallos.append("pieza de 100 in² no quedó RTZ")
-    if r.pieza_es_rtz_por_area(457.1 * IN2):
-        fallos.append("pieza de 457.1 in² quedó RTZ")
-    if r.pieza_es_rtz_por_area(100 * IN2, "COBRE"):
-        fallos.append("cobre no debe ser RTZ automático")
-    if r.resolver_forzar_rtz(100 * IN2, False):
-        fallos.append("desmarcar a mano no anuló el RTZ automático")
-    if not r.resolver_forzar_rtz(900 * IN2, True):
-        fallos.append("marcar a mano una pieza grande no la hizo RTZ")
     if not r.ventana_admite_piezas(TOPE * IN2):
         fallos.append("ventana igual al tope debe admitir piezas")
     if r.ventana_admite_piezas(456.8 * IN2):
         fallos.append("ventana menor al tope admitió piezas")
-
-
-def _check_stamp(fallos: list[str]) -> None:
-    from modules.nesting_engine.rtz_manual_promote import stamp_forzar_rtz_on_piezas
-
-    chica = {"nombre": "W.O. 1__BKT", "ruta": r"C:\DXF\BKT.dxf", "area": 50 * IN2, "material": "A 36"}
-    grande = {"nombre": "W.O. 1__PLACA", "ruta": r"C:\DXF\PLACA.dxf", "area": 900 * IN2, "material": "A 36"}
-    optout = {"nombre": "W.O. 1__LUG", "ruta": r"C:\DXF\LUG.dxf", "area": 30 * IN2, "material": "A 36"}
-    stamp_forzar_rtz_on_piezas(
-        [chica, grande, optout], flags_ruta={r"c:\dxf\lug.dxf": False}, flags_nombre={}
-    )
-    if not chica.get("forzar_rtz"):
-        fallos.append("stamp: pieza chica sin RTZ automático")
-    if grande.get("forzar_rtz"):
-        fallos.append("stamp: pieza grande quedó RTZ")
-    if optout.get("forzar_rtz"):
-        fallos.append("stamp: pieza desmarcada en PARTS quedó RTZ")
 
 
 def _host():
@@ -123,7 +92,6 @@ def _check_motor_cpp(fallos: list[str]) -> None:
 def main() -> int:
     fallos: list[str] = []
     _check_umbral(fallos)
-    _check_stamp(fallos)
     _check_cavidades(fallos)
     _check_motor_cpp(fallos)
     if fallos:
