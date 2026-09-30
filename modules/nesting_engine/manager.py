@@ -269,6 +269,34 @@ def _dbg_nesting(msg: str):
         pass
 
 
+def _piezas_sin_placa(piezas, placas, margin_in: float) -> list[str]:
+    """Piezas cuyo bbox + margen placa→pieza no entra en ninguna placa (mm)."""
+    m2 = 2.0 * float(margin_in) * 25.4
+    dims = [
+        (float(p.get("w") or 0.0), float(p.get("h") or 0.0))
+        for p in (placas or [])
+        if isinstance(p, dict)
+    ]
+    out: list[str] = []
+    vistos: set[str] = set()
+    for pz in piezas or []:
+        poly = pz.get("poly") if isinstance(pz, dict) else None
+        nom = str((pz or {}).get("nombre") or "").strip()
+        if poly is None or not nom or nom in vistos:
+            continue
+        minx, miny, maxx, maxy = poly.bounds
+        w, h = maxx - minx, maxy - miny
+        cabe = any(
+            (w + m2 <= W + 1e-6 and h + m2 <= H + 1e-6)
+            or (h + m2 <= W + 1e-6 and w + m2 <= H + 1e-6)
+            for W, H in dims
+        )
+        if not cabe:
+            vistos.add(nom)
+            out.append(f'{nom} ({min(w, h) / 25.4:.3f}" × {max(w, h) / 25.4:.3f}")')
+    return out
+
+
 def _plate_format_key_mm(w_mm: float, h_mm: float) -> str:
     w_in = round(float(w_mm) / 25.4, 3)
     h_in = round(float(h_mm) / 25.4, 3)
@@ -4832,6 +4860,22 @@ class MotorNesting:
                 if hojas_finales:
                     # Ya hay placas buenas: no tumbar el grupo entero.
                     # El candado de inventario al final marca incompleto.
+                    try:
+                        from .cut_gaps_table import gaps_efectivos_para_hoja
+
+                        _m_in = gaps_efectivos_para_hoja(None, clave=clave)[1]
+                        sin_placa = _piezas_sin_placa(
+                            list(pendientes_est or []) + list(accesorios or []),
+                            placas_ok,
+                            _m_in,
+                        )
+                        if sin_placa:
+                            inventario_aviso = (
+                                f"No caben en ninguna placa disponible con margen placa→pieza "
+                                f'{_m_in:.3f}": ' + ", ".join(sin_placa) + "."
+                            )
+                    except Exception as _sp_exc:
+                        _dbg_nesting(f"[SIN-PLACA-CHECK-ERR] {_sp_exc}")
                     _dbg_nesting(
                         f"[EMPAQUE-STOP-PARCIAL] clave={clave} | "
                         f"hojas_ok={len(hojas_finales)} | target={tgt} | "
@@ -5503,6 +5547,8 @@ class MotorNesting:
             )
             ok_inv, msg_inv = validar_colocacion_completa(piezas, hojas_finales)
             if not ok_inv:
+                if inventario_aviso:
+                    msg_inv = f"{msg_inv} {inventario_aviso}"
                 _dbg_nesting(f"[INVENTARIO-INCOMPLETO] clave={clave} | {msg_inv}")
                 inventario_aviso = msg_inv
                 from .nest_poka_yoke import allow_incomplete_nest, aplicar_resultado_inventario

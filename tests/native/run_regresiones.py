@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_nest_incompleto_nombra_piezas.py",
+        "2026-09-30c - nest incompleto nombra piezas faltantes y avisa si no caben en ninguna placa (62223 P07/P09 95.558\" en 96\")",
+    ),
+    (
         "test_area_neta_bulge_arco_invertido.py",
         "2026-09-30 - FALLO falso 'contorno abierto': visor ignoraba bulge + ARC invertido trazaba complemento (62223 P12 / SP-742)",
     ),

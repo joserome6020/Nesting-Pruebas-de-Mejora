@@ -434,6 +434,14 @@ def validar_colocacion_completa(
     faltan = sum(max(0, esperado[n] - colocado.get(n, 0)) for n in esperado)
     sobran = sum(max(0, colocado[n] - esperado.get(n, 0)) for n in colocado)
     pend = list(piezas_pendientes or [])
+    if not pend:
+        pend = [
+            f"{n} ×{esperado[n] - colocado.get(n, 0)}"
+            if esperado[n] - colocado.get(n, 0) > 1
+            else n
+            for n in sorted(esperado)
+            if esperado[n] > colocado.get(n, 0)
+        ]
     det = ""
     if pend:
         det = " Piezas sin colocar: " + ", ".join(str(x) for x in pend[:10])

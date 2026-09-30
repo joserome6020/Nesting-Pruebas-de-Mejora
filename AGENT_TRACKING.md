@@ -55,6 +55,14 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30c — Nest incompleto nombra piezas y avisa "no caben en ninguna placa"
+- Job 62223 Cal 0.375: P07/P09 miden 95.558" y la única placa es 240×96";
+  con margen 0.260" (ni con 0.250") no caben. El aviso decía solo "faltan 2".
+- `sheet_integrity.validar_colocacion_completa` lista las piezas faltantes
+  aunque el caller no pase pendientes; `manager._piezas_sin_placa` agrega el
+  motivo con medidas al cortar el empaque parcial.
+- Candado: `tests/native/test_nest_incompleto_nombra_piezas.py`.
+
 ### 2026-09-30b — Marcaje ANS: área <= SP-792_1 sin stick + gaps generales 0.375/0.260
 - Regla 2 corregida: piezas con área neta **<=** 456.954 in² no llevan stick
   del ANS (antes `>=`). `inject._entity_points` aplana CIRCLE sobre el círculo
