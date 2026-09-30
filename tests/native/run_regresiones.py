@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_notify_release.py",
+        "2026-09-30d - aviso de release por correo: link del zip, instrucciones de instalacion, notas manuales, no envia sin url",
+    ),
+    (
         "test_nest_incompleto_nombra_piezas.py",
         "2026-09-30c - nest incompleto nombra piezas faltantes y avisa si no caben en ninguna placa (62223 P07/P09 95.558\" en 96\")",
     ),

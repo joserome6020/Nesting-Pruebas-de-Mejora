@@ -247,6 +247,17 @@ def main() -> int:
         action="store_true",
         help="No marcar como 'latest' en GitHub (útil para canal beta paralelo).",
     )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Al terminar, envía el aviso por correo (tools/notify_release.py).",
+    )
+    parser.add_argument(
+        "--notify-to",
+        action="append",
+        default=[],
+        help="Destinatario del aviso (repetible). Por defecto los de notify_release.",
+    )
     args = parser.parse_args()
 
     latest_path = Path(args.latest).resolve()
@@ -292,6 +303,12 @@ def main() -> int:
         ]
         print(f"[RUN] {' '.join(cmd)}")
         subprocess.check_call(cmd)
+
+    if args.notify:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from notify_release import notificar_release
+
+        notificar_release(latest, to=args.notify_to or None)
     return 0
 
 

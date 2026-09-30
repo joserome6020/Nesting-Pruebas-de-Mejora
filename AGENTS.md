@@ -25,8 +25,8 @@
     lo que entra, (2) **actualizar `main` en remoto** (merge/FF desde la
     rama de trabajo), (3) publicar el artefacto con tag apuntando al
     **commit del build** (`publish_release.py` usa `--target`),
-    (`python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora`
-    o el UNC indicado) y devolver la URL del tag nuevo. No dejar el zip solo
+ (`python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora --notify`
+ o el UNC indicado; `--notify` avisa por correo a los supervisores) y devolver la URL del tag nuevo. No dejar el zip solo
     en `dist/releases/` ni dejar `main` congelada. Ver
     `.cursor/rules/release-publish.mdc`.
 9c. **Release = ANS cerrado + empaquetado 100%:** cerrar el Suite antes del

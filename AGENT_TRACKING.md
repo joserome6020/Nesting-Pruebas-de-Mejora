@@ -55,6 +55,22 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30d — Aviso por correo de cada release
+
+- Nuevo `tools/notify_release.py`: correo formal HTML (español) con link del zip,
+  página del release, pasos de instalación (descomprimir, acceso directo a
+  `ARGA NESTING SUITE.exe` sin separarlo de la carpeta, datos conservados en
+  `%LOCALAPPDATA%`, SmartScreen), novedades (notas de `latest.json`/`--nota`, o
+  commits desde el release anterior) y SHA-256. Envía por Outlook de escritorio
+  (COM; fallback PowerShell STA); sin credenciales SMTP en el repo.
+- Destinatarios por defecto: jose_rosales@grupoarga.com, aaron_orrantia@grupoarga.com.
+  `--to` para pruebas, `--preview` para HTML sin enviar, `--display` para borrador.
+- `publish_release.py --notify [--notify-to ...]` lo dispara tras publicar; regla
+  `release-publish.mdc` actualizada.
+- Candado `test_notify_release.py`. Solo tooling de release: no entra al `.exe`,
+  sin cambios en `build_arga_exe.py`.
+- Prueba real enviada solo a jose_rosales@grupoarga.com (release v2026.09.30-524e3258).
+
 ### 2026-09-30c — Nest incompleto nombra piezas y avisa "no caben en ninguna placa"
 - Job 62223 Cal 0.375: P07/P09 miden 95.558" y la única placa es 240×96";
   con margen 0.260" (ni con 0.250") no caben. El aviso decía solo "faltan 2".
