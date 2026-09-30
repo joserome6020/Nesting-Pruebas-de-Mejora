@@ -2,8 +2,8 @@
 
 1) Pieza compensada para plasma: su DXF compensado sale sin el stick del ANS;
    el marcaje que trae el DXF de origen se conserva.
-2) Pieza con área neta <= 456.954 in² (SP-792_1) no lleva stick del ANS
-   (2026-09-30: la regla es "igual o menor", no "igual o mayor").
+2) 2026-09-30e: se revierte "área <= 456.954 in² sin stick". Toda pieza lleva
+   stick sin importar el área; ese tope ahora decide RTZ en nesting.
 3) El detalle de pieza contaba 2 veces los CIRCLE: SP-792_1 (disco 24.25" con
    16 barrenos) mostraba 913.909 in² en vez de 456.954.
 """
@@ -77,21 +77,12 @@ def _check_area_visor(fallos, tmp: Path) -> None:
 
 
 def _check_area(fallos, tmp: Path) -> None:
-    tope = tmp / "SP-792_1.dxf"
-    _disco(tope)
-    res = aplicar_marcaje_nesting(tope)
-    if not res.omitido_por_area or _n_stick(tope):
-        fallos.append(f"SP-792_1 (área {AREA_SP792:.1f} in²) recibió stick ANS")
-    menor = tmp / "SP-MENOR_1.dxf"
-    _disco(menor, r=12.0)
-    res = aplicar_marcaje_nesting(menor)
-    if not res.omitido_por_area or _n_stick(menor):
-        fallos.append("pieza bajo el tope recibió stick ANS")
-    mayor = tmp / "SP-MAYOR_1.dxf"
-    _disco(mayor, r=12.5)
-    res = aplicar_marcaje_nesting(mayor)
-    if res.omitido_por_area or not _n_stick(mayor):
-        fallos.append("pieza sobre el tope se quedó sin stick ANS")
+    for nombre, r in (("SP-MENOR_1", 12.0), ("SP-792_1", R_DISCO), ("SP-MAYOR_1", 12.5)):
+        f = tmp / f"{nombre}.dxf"
+        _disco(f, r=r)
+        aplicar_marcaje_nesting(f)
+        if not _n_stick(f):
+            fallos.append(f"{nombre} (disco r={r}) se quedó sin stick ANS")
 
 
 def _check_compensada(fallos, tmp: Path) -> None:

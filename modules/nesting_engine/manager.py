@@ -3425,25 +3425,20 @@ class MotorNesting:
                             clave_ruta_lock, 0
                         )
                     ) % 360
-                if bool(
-                    (getattr(self, "forzar_rtz_por_ruta", {}) or {}).get(
-                        clave_ruta_lock, False
-                    )
-                ) or bool(item_pz.get("forzar_rtz")):
-                    item_pz["forzar_rtz"] = True
-                else:
-                    try:
-                        from .rtz_manual_promote import _norm_nombre_forzar
+                from .regla_area_rtz import flag_forzar_explicito, resolver_forzar_rtz
+                from .rtz_manual_promote import _norm_nombre_forzar
 
-                        nom_k = _norm_nombre_forzar(pieza)
-                        if nom_k and bool(
-                            (getattr(self, "forzar_rtz_por_nombre", {}) or {}).get(
-                                nom_k, False
-                            )
-                        ):
-                            item_pz["forzar_rtz"] = True
-                    except Exception:
-                        pass
+                if resolver_forzar_rtz(
+                    item_pz["area"],
+                    flag_forzar_explicito(
+                        getattr(self, "forzar_rtz_por_ruta", None),
+                        clave_ruta_lock,
+                        getattr(self, "forzar_rtz_por_nombre", None),
+                        _norm_nombre_forzar(pieza),
+                    ),
+                    mat,
+                ):
+                    item_pz["forzar_rtz"] = True
                 if plasma_flag:
                     item_pz["plasma_compensada_manual"] = True
                     item_pz["plasma_offset_mm_manual"] = float(plasma_off)
@@ -5703,15 +5698,14 @@ class MotorNesting:
 
                 flags_ruta = dict(getattr(self, "forzar_rtz_por_ruta", None) or {})
                 flags_nombre = dict(getattr(self, "forzar_rtz_por_nombre", None) or {})
-                if flags_ruta or flags_nombre:
-                    for hoja in hojas_finales:
-                        if not isinstance(hoja, dict):
-                            continue
-                        stamp_forzar_rtz_on_piezas(
-                            hoja.get("piezas") or [],
-                            flags_ruta=flags_ruta,
-                            flags_nombre=flags_nombre,
-                        )
+                for hoja in hojas_finales:
+                    if not isinstance(hoja, dict):
+                        continue
+                    stamp_forzar_rtz_on_piezas(
+                        hoja.get("piezas") or [],
+                        flags_ruta=flags_ruta,
+                        flags_nombre=flags_nombre,
+                    )
 
                 contador_zona = max_rtz_counter(hojas_finales) + 1
                 for hoja in list(hojas_finales):

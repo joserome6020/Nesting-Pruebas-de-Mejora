@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_regla_area_rtz_ventanas.py",
+        "2026-09-30e - piezas <= 456.954 in2 = RTZ automatico (desmarcable); ventanas < tope no admiten piezas, barreno se conserva",
+    ),
+    (
         "test_notify_release.py",
         "2026-09-30d - aviso de release por correo: link del zip, instrucciones de instalacion, notas manuales, no envia sin url",
     ),
@@ -33,7 +37,7 @@ REGRESIONES = [
     ),
     (
         "test_reglas_marcaje_ans.py",
-        "2026-09-29e - reglas marcaje ANS (compensadas / área >= 456.954 in²) + área neta visor sin doble conteo de CIRCLE",
+        "2026-09-29e - reglas marcaje ANS (compensadas sin stick; toda otra pieza con stick, sin tope de área desde 2026-09-30e) + área neta visor sin doble conteo de CIRCLE",
     ),
     (
         "test_export_sin_json_ls_ready.py",

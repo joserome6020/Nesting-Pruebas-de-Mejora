@@ -340,7 +340,6 @@ class InjectResult:
     components_marked: int
     components_skipped: int
     already_marked: bool = False
-    omitido_por_area: bool = False
 
 
 def _polydata_from_ring(coords) -> PolyData | None:

@@ -184,8 +184,10 @@ def test_promote_forzar_zona_barreno_un_rtz_varias_piezas():
     hojas = [madre]
     from modules.nesting_engine.rtz_manual_promote import promote_forzar_zones_on_madre
 
+    # HOST-PLATE (279 in²) desmarcada a mano: sin eso el tope de área la haría RTZ.
     res = promote_forzar_zones_on_madre(
-        madre, hojas_grupo=hojas, calibre="0.25", wo_name="SWO-068", contador_rtz=1
+        madre, hojas_grupo=hojas, calibre="0.25", wo_name="SWO-068", contador_rtz=1,
+        flags_nombre={"HOST-PLATE": False},
     )
     assert res["ok"] is True
     assert res["n_rtz"] == 1, res

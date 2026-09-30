@@ -17,6 +17,8 @@ from typing import Any
 from shapely import affinity
 from shapely.geometry import Polygon, box
 
+from .regla_area_rtz import AREA_VENTANA_MIN_MM2, solidificar_ventanas_chicas
+
 IN2_MM2 = 25.4 * 25.4
 MIN_CAVITY_MM2 = 5.0 * IN2_MM2
 # Lite dense: solo orificios grandes (centros de brida), no barrenos.
@@ -802,7 +804,7 @@ def list_closed_interior_cavities(poly: Polygon) -> list[Polygon]:
     out: list[Polygon] = []
     if poly is None or poly.is_empty:
         return out
-    min_a = MIN_CAVITY_DENSE_MM2
+    min_a = max(MIN_CAVITY_DENSE_MM2, AREA_VENTANA_MIN_MM2)
     try:
         for hole in poly.interiors:
             h = Polygon(hole)
@@ -1031,11 +1033,12 @@ def list_host_cavities(poly: Polygon, *, open_profile: bool) -> list[Polygon]:
     try:
         for hole in poly.interiors:
             h = Polygon(hole)
-            if not h.is_empty and float(h.area) >= MIN_CAVITY_MM2:
+            if not h.is_empty and float(h.area) >= max(MIN_CAVITY_MM2, AREA_VENTANA_MIN_MM2):
                 out.append(h)
     except Exception:
         pass
 
+    poly = solidificar_ventanas_chicas(poly)
     minx, miny, maxx, maxy = poly.bounds
     aabb = box(minx, miny, maxx, maxy)
     bbox_area = float(aabb.area)
@@ -1890,17 +1893,18 @@ def _fill_sheet_free_pockets(
         if time.perf_counter() - t0 > MAX_FILL_SECONDS:
             break
 
-        raw_polys = [e["poly"] for e in entries if e["poly"] is not None]
+        raw_polys = [solidificar_ventanas_chicas(e["poly"]) for e in entries if e["poly"] is not None]
         if not raw_polys:
             break
         try:
             occ_raw = unary_union(raw_polys)
             buffered = []
             for e in entries:
+                solido = solidificar_ventanas_chicas(e["poly"])
                 try:
-                    buffered.append(e["poly"].buffer(kerf_half, resolution=2, join_style=2))
+                    buffered.append(solido.buffer(kerf_half, resolution=2, join_style=2))
                 except Exception:
-                    buffered.append(e["poly"])
+                    buffered.append(solido)
             occ = unary_union(buffered)
             free = box(inset, inset, placa_w - inset, placa_h - inset).difference(occ)
         except Exception:
@@ -2167,10 +2171,11 @@ def _fill_corridor_gaps(
         try:
             buffered = []
             for e in entries:
+                solido = solidificar_ventanas_chicas(e["poly"])
                 try:
-                    buffered.append(e["poly"].buffer(kerf_half, resolution=2, join_style=2))
+                    buffered.append(solido.buffer(kerf_half, resolution=2, join_style=2))
                 except Exception:
-                    buffered.append(e["poly"])
+                    buffered.append(solido)
             occ = unary_union(buffered)
             free = box(inset, inset, placa_w - inset, placa_h - inset).difference(occ)
         except Exception:

@@ -112,7 +112,11 @@ def _check_forzar_cluster(fallos: list[str]) -> None:
         _pieza("W.O. 1__KEEP NOTCH", notch),
     ]
     hojas = [madre]
-    res = promote_forzar_zones_on_madre(madre, hojas_grupo=hojas, calibre="1/4", wo_name="W.O. 1")
+    # KEEP NOTCH (22 in²) desmarcada a mano: sin eso el tope de área la haría RTZ.
+    res = promote_forzar_zones_on_madre(
+        madre, hojas_grupo=hojas, calibre="1/4", wo_name="W.O. 1",
+        flags_nombre={"KEEP NOTCH": False},
+    )
     guill = [
         Polygon(p["poligonos"][0])
         for p in madre["piezas"]

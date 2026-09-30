@@ -106,7 +106,9 @@ class VisorDXF:
             "Forzar lógica RTZ del nest: la pieza sigue nestando normal "
             "(incluye orificios). Si cae en un barreno/remanente, ese contorno "
             "se vuelve 1 RTZ con todas las piezas de la zona (no 1 por pieza; "
-            "eso es Como RTZ en Nesting)."
+            "eso es Como RTZ en Nesting).\n"
+            "Piezas de área neta ≤ 456.954 in² vienen marcadas en automático; "
+            "desmarcar las excluye."
         )
         self.chk_forzar_rtz.toggled.connect(self._on_forzar_rtz_toggled)
         tb_lay.addWidget(self.chk_forzar_rtz)

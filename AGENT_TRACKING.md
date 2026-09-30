@@ -55,6 +55,31 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-09-30e — Tope 456.954 in²: RTZ automático + ventanas; se revierte "sin marcaje"
+
+- **Revertido** 2026-09-29e/30 regla 2: toda pieza vuelve a llevar stick ANS sin
+  importar el área (`reglas_ans.omitir_marcaje_ans_por_area`, `InjectResult.omitido_por_area`
+  y el log de `processed_layers` eliminados). Compensadas plasma siguen sin stick.
+  DXF procesados durante la regla vieja: reprocesar el job en FILES.
+- Nuevo `modules/nesting_engine/regla_area_rtz.py` (tope único):
+  - Pieza con área neta <= 456.954 in² → `forzar_rtz` automático (misma lógica del
+    checkbox RTZ: nest normal, post-pass `promote_forzar_zones_on_madre`). Cobre fuera.
+  - Flag explícito del usuario manda: desmarcar en PARTS guarda `False` en
+    `forzar_rtz_por_ruta/por_nombre` (antes hacía pop) y anula el automático.
+    `tab_parts`, `_mixin_nesting_calc`, `manager` (creación de pieza y re-stamp
+    siempre, no solo con flags), `stamp_forzar_rtz_on_piezas` tri-estado,
+    `nesting_workspace` persiste los `False`.
+  - Ventana (orificio interior) solo admite piezas si área >= tope. Motores C++:
+    `_piece_to_native` manda orificios chicos como metal y `_assemble_pack_result`
+    los restaura en `poligonos` (transformación rígida Kabsch sobre el exterior),
+    sin recompilar. Python: `list_closed_interior_cavities` / `list_host_cavities`
+    filtran por tope y los pockets de hoja solidifican orificios chicos.
+- Candado `test_regla_area_rtz_ventanas.py` (falla con código viejo: stamp, cavidades
+  venom y motor metiendo pieza en ventana de 100 in²). Ajustados: `test_reglas_marcaje_ans`
+  (stick en todas), `test_forzar_rtz_dual` / `test_rtz_contorno_holgura_y_join_mark`
+  (host chico desmarcado a mano), `test_lite_hole_fill_brida` (geometría ×2).
+- Build: `HIDDEN_IMPORTS` += `modules.nesting_engine.regla_area_rtz`.
+
 ### 2026-09-30d — Aviso por correo de cada release
 
 - Nuevo `tools/notify_release.py`: correo formal HTML (español) con link del zip,

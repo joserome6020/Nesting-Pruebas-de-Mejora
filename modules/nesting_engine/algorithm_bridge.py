@@ -73,8 +73,77 @@ def _marks_from_shapely(marks):
     return out
 
 
+def _transform_rigido(src, dst):
+    """(cos, sin, tx, ty) que lleva src→dst vértice a vértice; None si no calza."""
+    import math
+
+    def _abierto(pts):
+        return pts[:-1] if len(pts) > 1 and pts[0] == pts[-1] else pts
+
+    src, dst = _abierto(list(src)), _abierto(list(dst))
+    n = len(src)
+    if n < 3 or n != len(dst):
+        return None
+    sx = sum(p[0] for p in src) / n
+    sy = sum(p[1] for p in src) / n
+    dx = sum(p[0] for p in dst) / n
+    dy = sum(p[1] for p in dst) / n
+    a = b = 0.0
+    for (x0, y0), (x1, y1) in zip(src, dst):
+        ux, uy, vx, vy = x0 - sx, y0 - sy, x1 - dx, y1 - dy
+        a += ux * vx + uy * vy
+        b += ux * vy - uy * vx
+    ang = math.atan2(b, a)
+    c, s = math.cos(ang), math.sin(ang)
+    tx = dx - (c * sx - s * sy)
+    ty = dy - (s * sx + c * sy)
+    for (x0, y0), (x1, y1) in zip(src, dst):
+        if abs(c * x0 - s * y0 + tx - x1) > 0.5 or abs(s * x0 + c * y0 + ty - y1) > 0.5:
+            return None
+    return c, s, tx, ty
+
+
+def _restaurar_ventanas_chicas(hoja, piezas):
+    """El motor vio los orificios < tope como metal; devuelve los barrenos a poligonos."""
+    from shapely.geometry import Polygon
+
+    from .regla_area_rtz import ventana_admite_piezas
+
+    lookup = _build_piece_lookup_lists(piezas)
+    for pout in (hoja or {}).get("piezas") or []:
+        bucket = lookup.get(str(pout.get("nombre") or ""))
+        if not bucket:
+            continue
+        pin = bucket.pop(0)
+        poly = pin.get("poly")
+        if poly is None or getattr(poly, "geom_type", "") != "Polygon":
+            continue
+        chicos = [
+            list(r.coords) for r in poly.interiors if not ventana_admite_piezas(Polygon(r).area)
+        ]
+        rings_out = pout.get("poligonos") or []
+        if not chicos or not rings_out:
+            continue
+        tr = _transform_rigido(
+            [(float(x), float(y)) for x, y in list(poly.exterior.coords)],
+            [(float(p[0]), float(p[1])) for p in rings_out[0]],
+        )
+        if tr is None:
+            print(
+                f"[VENTANAS] {pout.get('nombre')}: no se pudo restaurar {len(chicos)} barreno(s)",
+                flush=True,
+            )
+            continue
+        c, s, tx, ty = tr
+        pout["poligonos"] = list(rings_out) + [
+            [[c * x - s * y + tx, s * x + c * y + ty] for x, y in ring] for ring in chicos
+        ]
+
+
 def _piece_to_native(piece):
-    poly = piece["poly"]
+    from .regla_area_rtz import solidificar_ventanas_chicas
+
+    poly = solidificar_ventanas_chicas(piece["poly"])
     marks = piece.get("marks")
     try:
         area = float(piece.get("area") or poly.area or 0.0)
@@ -402,6 +471,7 @@ def _assemble_pack_result(hoja_native, restos_native, piezas):
                 restos.append(copy.deepcopy(p))
 
     hoja, restos = reject_locked_orientation_violations(hoja, restos, piezas)
+    _restaurar_ventanas_chicas(hoja, piezas)
     return hoja, restos
 
 

@@ -36,11 +36,12 @@ def main() -> int:
 
     assert lite_hole_fill_enabled() is True
 
-    # Brida ~24"×24" con orificio ~16"×16" (mm).
-    outer = [(0, 0), (600, 0), (600, 600), (0, 600), (0, 0)]
-    hole = [(100, 100), (500, 100), (500, 500), (100, 500), (100, 100)]
+    # Brida ~47"×47" con orificio ~31"×31" (mm). 2026-09-30e: geometría ×2 para
+    # que todos los orificios del test superen el tope de ventana 456.954 in².
+    outer = [(0, 0), (1200, 0), (1200, 1200), (0, 1200), (0, 0)]
+    hole = [(200, 200), (1000, 200), (1000, 1000), (200, 1000), (200, 200)]
     host_poly = _ring_poly(outer, hole)
-    guest_poly = box(620, 50, 700, 120)  # fuera del anillo, misma hoja
+    guest_poly = box(1240, 100, 1400, 240)  # fuera del anillo, misma hoja
 
     cavs = list_host_cavities(host_poly, open_profile=False)
     assert cavs, "la brida debe exponer cavidad interior"
@@ -60,19 +61,19 @@ def main() -> int:
         "area": float(guest_poly.area),
         "poligonos": [
             [
-                [620.0, 50.0],
-                [700.0, 50.0],
-                [700.0, 120.0],
-                [620.0, 120.0],
-                [620.0, 50.0],
+                [1240, 100],
+                [1400, 100],
+                [1400, 240],
+                [1240, 240],
+                [1240, 100],
             ]
         ],
     }
     hoja = {
         "piezas": [host, guest],
         "kerf_usado": 0.15,
-        "placa_w": 2000.0,
-        "placa_h": 1200.0,
+        "placa_w": 4000,
+        "placa_h": 2400,
     }
 
     stats = apply_lite_hole_fill(hoja, engine_id="arga_lite")
@@ -93,7 +94,7 @@ def main() -> int:
 
     reload(vhf)
     assert vhf.lite_hole_fill_enabled() is False
-    guest_out = box(620, 50, 700, 120)
+    guest_out = box(1240, 100, 1400, 240)
     hoja2 = {
         "piezas": [
             {"nombre": "H", "poly": host_poly, "area": float(host_poly.area)},
@@ -108,7 +109,7 @@ def main() -> int:
     # Shot único (renest placa): post-pack también debe fill.
     os.environ["ARGA_LITE_HOLE_FILL"] = "1"
     reload(vhf)
-    guest3 = box(620, 50, 700, 120)
+    guest3 = box(1240, 100, 1400, 240)
     hoja3 = {
         "piezas": [
             {
@@ -126,8 +127,8 @@ def main() -> int:
             },
         ],
         "kerf_usado": 0.15,
-        "placa_w": 2000.0,
-        "placa_h": 1200.0,
+        "placa_w": 4000,
+        "placa_h": 2400,
     }
     from modules.nesting_engine.algorithm_bridge import _lite_apply_post_pack
 
@@ -138,8 +139,8 @@ def main() -> int:
     # Dos guests: kerf completo entre sí y contra el metal del anillo.
     kerf_in = 0.15
     kerf_full_mm = kerf_in * 25.4
-    g_a = box(620, 50, 700, 120)
-    g_b = box(720, 50, 800, 120)
+    g_a = box(1240, 100, 1400, 240)
+    g_b = box(1440, 100, 1600, 240)
     hoja4 = {
         "piezas": [
             {
@@ -153,8 +154,8 @@ def main() -> int:
             {"nombre": "GB", "poly": g_b, "poly_exact": g_b, "area": float(g_b.area)},
         ],
         "kerf_usado": kerf_in,
-        "placa_w": 2000.0,
-        "placa_h": 1200.0,
+        "placa_w": 4000,
+        "placa_h": 2400,
     }
     stats4 = vhf.apply_lite_hole_fill(hoja4, engine_id="arga_lite")
     assert int(stats4.get("filled") or 0) >= 2, f"esperaba 2 fills: {stats4}"
@@ -174,7 +175,7 @@ def main() -> int:
     )
 
     # Placa sólida ≥80 in² debe poder ser GUEST en Lite dense (antes era host).
-    solid_12 = box(650, 200, 650 + 12 * 25.4, 200 + 12 * 25.4)
+    solid_12 = box(1300, 400, 1300 + 12 * 25.4, 400 + 12 * 25.4)
     assert not vhf._is_cavity_host(
         solid_12, {"nombre": "62176-1254-P01", "area": float(solid_12.area)}
     ), "placa sólida no debe ser cavity-host"
@@ -193,7 +194,7 @@ def main() -> int:
     }
     poly_fixed = vhf._piece_poly(p_bad)
     assert len(getattr(poly_fixed, "interiors", []) or []) >= 1, "debe recuperar hueco de poligonos"
-    g_small = box(800, 50, 850, 100)
+    g_small = box(1600, 100, 1700, 200)
     hoja_poly = {
         "piezas": [
             p_bad,
@@ -205,8 +206,8 @@ def main() -> int:
             },
         ],
         "kerf_usado": 0.25,
-        "placa_w": 2000.0,
-        "placa_h": 1200.0,
+        "placa_w": 4000,
+        "placa_h": 2400,
     }
     stats_poly = vhf.apply_lite_hole_fill(hoja_poly, engine_id="arga_lite")
     assert int(stats_poly.get("filled") or 0) >= 1, (
@@ -230,8 +231,8 @@ def main() -> int:
             },
         ],
         "kerf_usado": 0.15,
-        "placa_w": 2000.0,
-        "placa_h": 1200.0,
+        "placa_w": 4000,
+        "placa_h": 2400,
     }
     stats5 = vhf.apply_lite_hole_fill(hoja5, engine_id="arga_lite")
     assert int(stats5.get("filled") or 0) >= 1, (
@@ -239,12 +240,12 @@ def main() -> int:
     )
 
     # Varios guests chicos en un anillo grande (meta acomodo manual denso).
-    outer2 = [(0, 0), (700, 0), (700, 700), (0, 700), (0, 0)]
-    hole2 = [(80, 80), (620, 80), (620, 620), (80, 620), (80, 80)]
+    outer2 = [(0, 0), (1400, 0), (1400, 1400), (0, 1400), (0, 0)]
+    hole2 = [(160, 160), (1240, 160), (1240, 1240), (160, 1240), (160, 160)]
     host2 = _ring_poly(outer2, hole2)
     smalls = []
     for i in range(8):
-        s = box(800 + (i % 4) * 90, 40 + (i // 4) * 90, 800 + (i % 4) * 90 + 70, 110 + (i // 4) * 90)
+        s = box(1600 + (i % 4) * 180, 80 + (i // 4) * 180, 1600 + (i % 4) * 180 + 140, 220 + (i // 4) * 180)
         smalls.append(
             {
                 "nombre": f"S{i}",
@@ -265,8 +266,8 @@ def main() -> int:
             *smalls,
         ],
         "kerf_usado": 0.15,
-        "placa_w": 3000.0,
-        "placa_h": 1200.0,
+        "placa_w": 6000,
+        "placa_h": 2400,
     }
     # Reset idempotencia entre casos del mismo proceso.
     hoja_m.pop("_lite_hole_fill_done", None)
@@ -285,13 +286,13 @@ def main() -> int:
     # Recompact: tras fill, una pieza exterior con hueco a la izquierda debe acercarse.
     from modules.nesting_engine.compact_lite import recompact_exterior_after_hole_fill
 
-    outer_r = [(0, 0), (500, 0), (500, 500), (0, 500), (0, 0)]
-    hole_r = [(100, 100), (400, 100), (400, 400), (100, 400), (100, 100)]
+    outer_r = [(0, 0), (1000, 0), (1000, 1000), (0, 1000), (0, 0)]
+    hole_r = [(200, 200), (800, 200), (800, 800), (200, 800), (200, 200)]
     host_r = _ring_poly(outer_r, hole_r)
     # Guest ya "dentro" (centroide en orificio).
-    g_in = box(180, 180, 260, 240)
+    g_in = box(360, 360, 520, 480)
     # Exterior lejos en X (hueco artificial a la izquierda del exterior).
-    g_out = box(900, 50, 980, 120)
+    g_out = box(1800, 100, 1960, 240)
     hoja_rc = {
         "piezas": [
             {
@@ -315,8 +316,8 @@ def main() -> int:
             },
         ],
         "kerf_usado": 0.15,
-        "placa_w": 2000.0,
-        "placa_h": 800.0,
+        "placa_w": 4000,
+        "placa_h": 1600,
         "lite_hole_fill": {"filled": 1},
     }
     x_before = float(hoja_rc["piezas"][2]["poly"].bounds[0])
@@ -346,12 +347,12 @@ def main() -> int:
     )
     from shapely import affinity as _aff
 
-    outer_vf = [(0, 0), (600, 0), (600, 600), (0, 600), (0, 0)]
-    hole_vf = [(100, 100), (500, 100), (500, 500), (100, 500), (100, 100)]
+    outer_vf = [(0, 0), (1200, 0), (1200, 1200), (0, 1200), (0, 0)]
+    hole_vf = [(200, 200), (1000, 200), (1000, 1000), (200, 1000), (200, 200)]
     host_vf = _ring_poly(outer_vf, hole_vf)
     guests_vf = []
     for i in range(4):
-        s = box(700 + i * 90, 40, 770 + i * 90, 110)
+        s = box(1400 + i * 180, 80, 1540 + i * 180, 220)
         guests_vf.append(
             {
                 "nombre": f"VF{i}",
@@ -360,7 +361,7 @@ def main() -> int:
                 "area": float(s.area),
             }
         )
-    solid_vf = box(800, 200, 800 + 50, 200 + 50)
+    solid_vf = box(1600, 400, 1600 + 100, 400 + 100)
     pool_vf = [
         {
             "nombre": "HOST-VF",
