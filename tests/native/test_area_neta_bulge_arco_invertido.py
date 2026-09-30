@@ -113,6 +113,16 @@ def main() -> int:
         bb = _entities_bbox_mm(polys)
         if not bb or bb[3] - bb[1] < 20.0:
             fallos.append(f"validate bbox ignora bulge: {bb}")
+
+        from modules.dxf_lwpoly import puntos_lwpolyline
+
+        d = ezdxf.readfile(tmp / "sp742_proc.dxf")
+        outer = [e for e in d.modelspace().query("LWPOLYLINE") if e.dxf.layer == "CUT_OUTER"]
+        if not outer or len(puntos_lwpolyline(outer[0], 0.02)) <= 3:
+            fallos.append("SP-742 Processed: contorno exterior sin arcos aplanados")
+        vis = (RAIZ / "interface/qt/visualizer.py").read_text(encoding="utf-8")
+        if "puntos_lwpolyline(e, 0.02)" not in vis:
+            fallos.append("miniatura PARTS lee LWPOLYLINE sin bulge (SP-742 sale vacía)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

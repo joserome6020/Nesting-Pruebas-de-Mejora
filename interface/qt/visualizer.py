@@ -529,6 +529,7 @@ def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
     try:
         from interface.material_colors import paleta_cad_hex
         from interface.qt.dxf_part_geometry import decimar_polyline_xy
+        from modules.dxf_lwpoly import puntos_lwpolyline
         from modules.dxf_thread_lock import EZDXF_LOCK
 
         piece_fill, hole_fill, piece_edge = paleta_cad_hex(material)
@@ -566,7 +567,7 @@ def generar_thumbnail(ruta_dxf, size=(50, 50), material: str | None = None):
                     )
                     continue
                 if typ == "LWPOLYLINE":
-                    pts = [(float(x), float(y)) for x, y, *_ in e.get_points("xyb")]
+                    pts = puntos_lwpolyline(e, 0.02)
                     if len(pts) > 120:
                         pts = decimar_polyline_xy(pts, max_pts=120)
                 else:

@@ -63,7 +63,8 @@ código viejo. Un bug sin candado vuelve.
 - `plasma_dxf_export._arc_points_head_tail`: ARC recorrido al revés trazaba el
   arco complementario (ranuras de SP-742 = 21 in² → área neta 0).
 - `modules/dxf_lwpoly.puntos_lwpolyline` (nuevo) en `dxf_export/validate.py`
-  (bbox/holgura), `cu_amada_validacion` y bbox de `plasma_dxf_export`.
+  (bbox/holgura), `cu_amada_validacion`, bbox de `plasma_dxf_export` y la
+  miniatura PARTS (`visualizer.generar_thumbnail`: SP-742 salía vacía).
 - Candado: `tests/native/test_area_neta_bulge_arco_invertido.py`. Build:
   `modules.dxf_lwpoly` en `HIDDEN_IMPORTS`.
 
