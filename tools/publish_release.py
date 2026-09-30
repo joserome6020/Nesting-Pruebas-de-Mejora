@@ -258,6 +258,12 @@ def main() -> int:
         default=[],
         help="Destinatario del aviso (repetible). Por defecto los de notify_release.",
     )
+    parser.add_argument(
+        "--notify-nota",
+        action="append",
+        default=[],
+        help="Novedad a listar en el aviso (repetible). Sin esto se usan los commits.",
+    )
     args = parser.parse_args()
 
     latest_path = Path(args.latest).resolve()
@@ -308,7 +314,8 @@ def main() -> int:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from notify_release import notificar_release
 
-        notificar_release(latest, to=args.notify_to or None)
+        aviso = {**latest, "notes": "\n".join(args.notify_nota)} if args.notify_nota else latest
+        notificar_release(aviso, to=args.notify_to or None)
     return 0
 
 

@@ -19,7 +19,8 @@ obligatorio es:
 3. **Publicar**: `python tools/publish_release.py --github --repo joserome6020/Nesting-Pruebas-de-Mejora --notify`
  (o el `--unc` que indique el usuario). `--notify` envía por Outlook el aviso
  formal (link + instrucciones de instalación) a los supervisores de
- `tools/notify_release.py` (jose_rosales / aaron_orrantia). Eso crea/actualiza el tag de GitHub
+ `tools/notify_release.py` (jose_rosales / aaron_orrantia / quotes). Pasar
+ las novedades con `--notify-nota "..."` (texto claro, no mensajes de commit). Eso crea/actualiza el tag de GitHub
  Releases **apuntando al commit del build** (`gh release create --target
  <commit>`, nunca dejar que caiga al default `main` viejo), sube el `.zip` y
  reescribe `latest.json` con `url` + `published_at_utc`.

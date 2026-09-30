@@ -63,7 +63,8 @@ código viejo. Un bug sin candado vuelve.
   `%LOCALAPPDATA%`, SmartScreen), novedades (notas de `latest.json`/`--nota`, o
   commits desde el release anterior) y SHA-256. Envía por Outlook de escritorio
   (COM; fallback PowerShell STA); sin credenciales SMTP en el repo.
-- Destinatarios por defecto: jose_rosales@grupoarga.com, aaron_orrantia@grupoarga.com.
+- Destinatarios por defecto: jose_rosales@grupoarga.com, aaron_orrantia@grupoarga.com,
+  quotes@grupoarga.com (agregado a pedido del usuario; primer envío completo v2026.09.30-524e3258).
   `--to` para pruebas, `--preview` para HTML sin enviar, `--display` para borrador.
 - `publish_release.py --notify [--notify-to ...]` lo dispara tras publicar; regla
   `release-publish.mdc` actualizada.

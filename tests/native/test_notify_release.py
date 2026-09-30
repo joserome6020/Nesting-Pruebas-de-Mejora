@@ -48,7 +48,11 @@ def main() -> int:
     if "2026.09.30" not in nr.construir_asunto(LATEST):
         fallos.append("asunto sin versión")
 
-    if set(nr.DEFAULT_RECIPIENTS) != {"jose_rosales@grupoarga.com", "aaron_orrantia@grupoarga.com"}:
+    if set(nr.DEFAULT_RECIPIENTS) != {
+        "jose_rosales@grupoarga.com",
+        "aaron_orrantia@grupoarga.com",
+        "quotes@grupoarga.com",
+    }:
         fallos.append(f"destinatarios por defecto: {nr.DEFAULT_RECIPIENTS}")
 
     enviados: list[dict] = []

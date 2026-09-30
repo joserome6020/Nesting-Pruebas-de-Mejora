@@ -36,6 +36,7 @@ DEFAULT_LATEST_JSON = ROOT / "dist" / "releases" / "latest.json"
 DEFAULT_RECIPIENTS: tuple[str, ...] = (
     "jose_rosales@grupoarga.com",
     "aaron_orrantia@grupoarga.com",
+    "quotes@grupoarga.com",
 )
 
 EXE_NAME = "ARGA NESTING SUITE.exe"
