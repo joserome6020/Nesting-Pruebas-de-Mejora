@@ -3241,17 +3241,6 @@ class MotorNesting:
 
             poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta_parse)
 
-            if should_omit_copper_marks(
-                mat,
-                poly=poly,
-                especial=bool(
-                    (getattr(self, "cu_especial_por_ruta", {}) or {}).get(
-                        clave_orientacion_cobre_ruta(ruta), False
-                    )
-                ),
-            ):
-                marks = MultiLineString()
-
             if es_material_cobre(mat):
                 rot_deg = int(
                     (getattr(self, "orientacion_cobre_por_ruta", {}) or {}).get(
@@ -3304,6 +3293,18 @@ class MotorNesting:
                                 f"[ORIENT-LOCK-ROT-FAIL] clave={clave} | pieza={pieza} | "
                                 f"ruta={ruta} | err={exc}"
                             )
+
+            # Después de la rotación PARTS: Z/relieve se evalúa en la orientación del nest.
+            if should_omit_copper_marks(
+                mat,
+                poly=poly,
+                especial=bool(
+                    (getattr(self, "cu_especial_por_ruta", {}) or {}).get(
+                        clave_orientacion_cobre_ruta(ruta), False
+                    )
+                ),
+            ):
+                marks = MultiLineString()
 
             if poly is None:
                 motivo = err_geom or "recuperar_geometria_robusta devolvió None"
