@@ -839,6 +839,37 @@ def _familia_corte_cu(item: dict) -> str:
     return "guillotina"
 
 
+def _firma_herramental_poly(poly) -> tuple:
+    """Herramientas (códigos orientados) que piden los barrenos de la pieza ya orientada."""
+    if poly is None:
+        return ()
+    try:
+        from modules.dxf_export.cu_punch_csv import barrenos_poligono
+        from .cu_punch_tooling import firma_herramental
+
+        barrenos = barrenos_poligono(poly)
+        return firma_herramental(barrenos) if barrenos else ()
+    except Exception:
+        return ()
+
+
+def _herramental_barra(colocados: List[tuple] | None) -> set:
+    out: set = set()
+    for c in colocados or []:
+        out.update(c[0].get("cu_firma_herr") or ())
+    return out
+
+
+def _barra_cabe_herramental(barra: dict, item: dict) -> bool:
+    """La punzonadora tiene 8 estaciones: una barra no puede pedir más herramientas."""
+    firma = item.get("cu_firma_herr") or ()
+    if not firma or _familia_corte_cu(item) != "guillotina":
+        return True
+    from .cu_punch_tooling import N_ESTACIONES
+
+    return len(_herramental_barra(barra.get("colocados")) | set(firma)) <= N_ESTACIONES
+
+
 def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
     """Amada sola; Z sola; rectángulares pueden rellenar cola RTZ de Amada o de Z.
 
@@ -848,6 +879,8 @@ def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
     if not colocados:
         return True
     if not _barra_acepta_clase_ancho(barra, item):
+        return False
+    if not _barra_cabe_herramental(barra, item):
         return False
     fam_item = _familia_corte_cu(item)
     fams = {_familia_corte_cu(c[0]) for c in colocados}
@@ -1235,6 +1268,11 @@ def _score_barra_para_item(
     ):
         score += 3000.0
 
+    # Mismo herramental que la barra (sin herramienta nueva) → menos cambios en la punzonadora.
+    firma = set(item_eff.get("cu_firma_herr") or ())
+    if firma and barra.get("colocados") and firma <= _herramental_barra(barra["colocados"]):
+        score += 300.0
+
     restante = float(barra["largo_mm"]) - (x_pos + float(item_eff["len_mm"]))
     score -= restante * 0.002
     score -= gap_before * 0.001
@@ -1541,6 +1579,7 @@ def empaquetar_largos_cu(
                 "corte_superior_mm": corte_sup,
                 "calibre_superior": cal_sup,
                 "rot_deg": float(rot_deg),
+                "cu_firma_herr": _firma_herramental_poly(poly_o),
             }
             marks = p.get("marks")
             if marks is not None and not getattr(marks, "is_empty", True) and rot_deg:
@@ -1570,11 +1609,29 @@ def empaquetar_largos_cu(
             return 0
         return 0 if _pieza_cu_ancho_exacto(x) else 1
 
+    try:
+        from .cu_punch_tooling import codigos_molds
+
+        herr_base = set(codigos_molds())
+    except Exception:
+        herr_base = set()
+
+    def _prio_herramental(x: dict) -> tuple:
+        # Punzonadora: piezas con el mismo juego de herramientas juntas. Las que piden
+        # herramienta fuera del montaje base abren barra primero (todas juntas → el
+        # cambio se hace en el menor número de barras); las del montaje base rellenan
+        # después sin pedir cambio.
+        if _familia_corte_cu(x) != "guillotina":
+            return (0, ())
+        firma = tuple(x.get("cu_firma_herr") or ())
+        return (-len(set(firma) - herr_base), firma)
+
     items.sort(
         key=lambda x: (
             float(x["barra_objetivo_in"]),
             _prio_familia(x),
             _prio_clase_ancho(x),
+            _prio_herramental(x),
             -x["len_mm"],
         )
     )
@@ -1833,10 +1890,24 @@ def ordenar_hojas_largos_cu_por_ancho(hojas: List[dict] | None) -> List[dict]:
             continue
         otros.append(h)
 
+    def _montaje_hoja(h: dict) -> tuple:
+        # Barras con el mismo cambio de herramental seguidas (un solo cambio en máquina);
+        # primero las que corren con el montaje base.
+        try:
+            from modules.dxf_export.cu_punch_csv import hoja_requiere_csv_punzonado, montaje_barra
+
+            if not hoja_requiere_csv_punzonado(h):
+                return (0, ())
+            cambios = tuple(montaje_barra(h)[1])
+            return (len(cambios), cambios)
+        except Exception:
+            return (0, ())
+
     madres.sort(
         key=lambda h: (
             float(h.get("placa_h") or 0.0),
             str(h.get("placa_id") or ""),
+            _montaje_hoja(h),
             -float(h.get("area_usada") or 0.0),
         )
     )

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -266,6 +267,53 @@ def montaje_barra(
     piezas, _err = _analizar_barra(hoja)
     barrenos = [(b[0], b[3], b[4]) for _n, _x0, _l, bs in piezas for b in bs]
     return montaje_para_barra(barrenos, estaciones, inventario)
+
+
+def barrenos_poligono(poly) -> list[tuple[str, float, float]]:
+    """``(tipo, dx, dy)`` de los barrenos punzonables de un polígono shapely (ejes de la barra)."""
+    out: list[tuple[str, float, float]] = []
+    for geom in getattr(poly, "geoms", None) or [poly]:
+        for ring in getattr(geom, "interiors", None) or []:
+            info = _clasificar_barreno(list(ring.coords))
+            if info is not None:
+                out.append((info[0], info[3], info[4]))
+    return out
+
+
+def resumen_herramental_barra(
+    hoja: dict,
+    *,
+    estaciones: list | None = None,
+    inventario: list | None = None,
+) -> dict:
+    """Herramental de la barra para el reporte.
+
+    ``por_pieza``: nombre → estaciones que usa (``"M1 M5"``); ``cambios``: cambios
+    respecto al montaje base con las piezas que los piden; ``mixta``: la barra
+    junta piezas con juegos de herramental distintos.
+    """
+    from modules.nesting_engine.cu_punch_tooling import estacion_para_barreno
+
+    ests, cambios, _falt = montaje_barra(hoja, estaciones=estaciones, inventario=inventario)
+    piezas, _err = _analizar_barra(hoja)
+    por_pieza: dict[str, str] = {}
+    usos: dict[int, dict[str, int]] = {}
+    for nombre, _x0, _l, bs in piezas:
+        idxs = sorted({estacion_para_barreno(b[0], b[3], b[4], ests) for b in bs} - {None})
+        por_pieza[nombre] = " ".join(f"M{i}" for i in idxs) or "-"
+        for i in idxs:
+            cnt = usos.setdefault(i, {})
+            cnt[nombre] = cnt.get(nombre, 0) + 1
+    cambios_det = []
+    for cambio in cambios:
+        m = re.match(r"M(\d+):", cambio)
+        quien = usos.get(int(m.group(1))) if m else None
+        if quien:
+            lista = ", ".join(f"{n} x{q}" if q > 1 else n for n, q in quien.items())
+            cambio = f"{cambio} (para {lista})"
+        cambios_det.append(cambio)
+    juegos = {v for v in por_pieza.values() if v != "-"}
+    return {"por_pieza": por_pieza, "cambios": cambios_det, "mixta": len(juegos) > 1}
 
 
 def construir_filas_barra(

@@ -1,8 +1,9 @@
 """Candado: CSV CNC Busbar Punching (Lijian MX602K / LJcad) por barra de cobre.
 
 - Una fila por pieza en orden del nest; sin fila de despunte (6 mm solo visual en el nest).
-- Primer golpe = grabado M100 en Y = 0, antes del primer barreno.
-- Width = solera, Thickness = 6.35 (1/4"), golpes relativos a la pieza, C en X = Length.
+- Formato de planta (pruebas jose.csv): Name/Num/Width/High/Length/X-Y-M/TOOL1..8.
+- Primer golpe = grabado M100 en Y = 30, antes del primer barreno; sin golpe C.
+- Width = solera, High = 6.35 (1/4"), golpes relativos a la pieza.
 - Redondo → C{d}; ovalado E{x}X{y} con x a lo largo de la solera (orientación).
 - Barreno sin herramienta / contorno no rectangular → PunchCsvError (bloquea export).
 - Barras Z (sin_gap) no llevan CSV; RTZCU sí; modo forzado DXF+STEP no.
@@ -192,8 +193,13 @@ def main() -> None:
         h_ov, _ = empaquetar_largos_cu([_pieza("OVAL-X", ov)], _placas(), separacion_in=0.0)
         fil_ov = pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
         assert fil_ov[0]["M2"] == "M8" and fil_ov[0]["TOOL8"] == "E15.9X11.1", fil_ov[0]
-        assert h_ov[0]["cu_punch_cambios_herramental"] == ["Mold8: E20.6X11.1 → E15.9X11.1"]
-        assert pc.montaje_barra(h_ov[0])[1] == ["Mold8: E20.6X11.1 → E15.9X11.1"]
+        cambio_ov = "M8: quitar E20.6X11.1, poner E15.9X11.1"
+        assert h_ov[0]["cu_punch_cambios_herramental"] == [cambio_ov]
+        assert pc.montaje_barra(h_ov[0])[1] == [cambio_ov]
+        assert all("→" not in c for c in pc.montaje_barra(h_ov[0])[1]), "Helvetica sin glifo →"
+        res_ov = pc.resumen_herramental_barra(h_ov[0])
+        assert res_ov["cambios"] == [f"{cambio_ov} (para OVAL-X)"], res_ov
+        assert res_ov["por_pieza"] == {"OVAL-X": "M8"} and not res_ov["mixta"]
         # Sin esa herramienta en el inventario → bloquea.
         try:
             pc.construir_filas_barra(
@@ -240,12 +246,12 @@ def main() -> None:
         e11, c11, f11 = montaje_para_barra(
             [("C", 11.11, 11.11), ("C", 11.0, 11.0)], estaciones=base
         )
-        assert not f11 and c11 == ["Mold8: E20.6X11.1 → C11.0"], c11
+        assert not f11 and c11 == ["M8: quitar E20.6X11.1, poner C11.0"], c11
         assert estacion_para_barreno("C", 11.0, 11.0, e11) == 8
         assert estacion_para_barreno("C", 11.11, 11.11, e11) == 1
         # Sin estación libre: respaldo con C11.1, avisado.
         e11, c11, f11 = montaje_para_barra(ocho + [("C", 11.0, 11.0)], estaciones=base)
-        assert not f11 and c11 == ["C11.0 sin estación libre: se punzona con Mold1 (C11.1)"], c11
+        assert not f11 and c11 == ["C11.0 sin estación libre: se punzona con M1 (C11.1)"], c11
 
         # Contorno con muesca → bloquea.
         muesca = Polygon([(0, 0), (400, 0), (400, W6), (20, W6), (20, W6 - 10), (0, W6 - 10)])

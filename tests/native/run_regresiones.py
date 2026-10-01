@@ -380,6 +380,10 @@ REGRESIONES = [
         "2026-10-01 - CSV CNC Busbar Punching por barra cobre normal/RTZCU + herramental",
     ),
     (
+        "test_cu_nest_herramental.py",
+        "2026-10-01h - nest cobre agrupa por herramental de punzonado; tope 8 herramientas/barra",
+    ),
+    (
         "test_lite_hole_fill_brida.py",
         "2026-08-17g - Lite hole-fill denso en brida + kerf completo guest↔guest/host",
     ),

@@ -176,7 +176,8 @@ def _piece_dimensions_mm(piece):
     return max(span_x, span_y), min(span_x, span_y)
 
 
-def _build_group_summary(pieces, meta_por_ruta=None, job_fallback="-"):
+def _build_group_summary(pieces, meta_por_ruta=None, job_fallback="-", herr_por_pieza=None):
+    """``herr_por_pieza``: punzonado CU, nombre → estaciones (columna Herramental)."""
     piezas_reales = [p for p in pieces if _is_real_piece(p)]
 
     ordenadas = sorted(
@@ -206,6 +207,7 @@ def _build_group_summary(pieces, meta_por_ruta=None, job_fallback="-"):
                 "largos": [],
                 "anchos": [],
                 "cantidad": 0,
+                "herr": [],
             }
             consecutivo += 1
 
@@ -213,6 +215,10 @@ def _build_group_summary(pieces, meta_por_ruta=None, job_fallback="-"):
         grupos[clave]["anchos"].append(ancho_mm)
         grupos[clave]["cantidad"] += 1
         ids_por_pieza[id(pieza)] = grupos[clave]["displayId"]
+        if herr_por_pieza:
+            herr = herr_por_pieza.get(str(pieza.get("nombre") or ""))
+            if herr and herr not in grupos[clave]["herr"]:
+                grupos[clave]["herr"].append(herr)
 
     rows = []
     for data in grupos.values():
@@ -224,6 +230,7 @@ def _build_group_summary(pieces, meta_por_ruta=None, job_fallback="-"):
                 "largoIn": _fmt_in(mean(data["largos"]) if data["largos"] else 0),
                 "anchoIn": _fmt_in(mean(data["anchos"]) if data["anchos"] else 0),
                 "cantidad": data["cantidad"],
+                "herramental": " / ".join(data["herr"]),
             }
         )
 
@@ -401,19 +408,24 @@ def _enumerate_plates(resultados_nesting):
             cu_proceso = ""
             cu_recorte_laser: list = []
             cu_cambios_herramental: list = []
+            cu_herr_por_pieza: dict = {}
+            cu_herr_mixta = False
             if hoja.get("modo_largos_cu"):
                 try:
                     from modules.dxf_export.cu_punch_csv import (
                         hoja_requiere_csv_punzonado,
-                        montaje_barra,
                         piezas_recorte_laser,
                         proceso_hoja_cobre,
+                        resumen_herramental_barra,
                     )
 
                     cu_proceso = proceso_hoja_cobre(hoja)
                     if hoja_requiere_csv_punzonado(hoja):
                         cu_recorte_laser = piezas_recorte_laser(hoja)
-                        cu_cambios_herramental = montaje_barra(hoja)[1]
+                        resumen = resumen_herramental_barra(hoja)
+                        cu_cambios_herramental = resumen["cambios"]
+                        cu_herr_por_pieza = resumen["por_pieza"]
+                        cu_herr_mixta = resumen["mixta"]
                 except Exception:
                     pass
 
@@ -422,6 +434,8 @@ def _enumerate_plates(resultados_nesting):
                     "cu_proceso": cu_proceso,
                     "cu_recorte_laser": cu_recorte_laser,
                     "cu_cambios_herramental": cu_cambios_herramental,
+                    "cu_herr_por_pieza": cu_herr_por_pieza,
+                    "cu_herr_mixta": cu_herr_mixta,
                     "id": placa_id_final,
                     "base_id": _plate_base_id(placa_id_final),
                     "calibre": str(grupo_calibre),
@@ -740,16 +754,60 @@ def _draw_cu_proceso_header(c, plate, width, title_color):
         )
     cambios = plate.get("cu_cambios_herramental") or []
     if cambios:
+        # Ancho 270: no pisar "Eficiencia placa…" / "Placa excluida…" de la izquierda.
+        lineas = ["Cambio de herramental antes de esta barra:", cambios[0]]
+        if len(cambios) > 1:
+            lineas.append(" | ".join(cambios[1:]))
         c.setFont("Helvetica-Bold", 7.6)
         c.setFillColor(colors.HexColor("#B91C1C"))
+        for i, linea in enumerate(lineas):
+            c.drawRightString(
+                width - 18, 671 - 11 * i, _fit_text(linea, 270, "Helvetica-Bold", 7.6)
+            )
+    elif plate.get("cu_herr_mixta"):
+        c.setFont("Helvetica", 7.6)
+        c.setFillColor(colors.HexColor("#1D4ED8"))
         c.drawRightString(
             width - 18,
             671,
             _fit_text(
-                "Cambio de herramental: " + ", ".join(cambios), 300, "Helvetica-Bold", 7.6
+                "Piezas con distinto herramental (montaje base): ver columna Herramental",
+                270,
+                "Helvetica",
+                7.6,
             ),
         )
     c.setFillColor(title_color)
+
+
+_TABLA_HOJA_HEADERS = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
+_TABLA_HOJA_COLS = [48, 120, 220, 55, 55, 50]
+_TABLA_HOJA_ALIGNS = ["center", "left", "left", "center", "center", "center"]
+
+
+def _tabla_hoja_layout(plate):
+    """Encabezados/anchos/alineación de la tabla de la hoja (+ Herramental en punzonado CU)."""
+    if (plate or {}).get("cu_herr_por_pieza"):
+        return (
+            _TABLA_HOJA_HEADERS + ["Herramental"],
+            [40, 105, 175, 48, 48, 40, 92],
+            _TABLA_HOJA_ALIGNS + ["center"],
+        )
+    return list(_TABLA_HOJA_HEADERS), list(_TABLA_HOJA_COLS), list(_TABLA_HOJA_ALIGNS)
+
+
+def _valores_fila_hoja(row, headers):
+    vals = [
+        row["displayId"],
+        row["job"],
+        row["item"],
+        str(row["largoIn"]),
+        str(row["anchoIn"]),
+        str(row["cantidad"]),
+    ]
+    if len(headers) > len(vals):
+        vals.append(str(row.get("herramental") or ""))
+    return vals
 
 
 def _draw_cell_text(c, text, x, y, w, align="left", font_name="Helvetica", font_size=7.4):
@@ -1312,8 +1370,7 @@ def _draw_sheet_table_continuation_pages(
     if not rows_overflow:
         return
 
-    headers = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
-    col_widths = [48, 120, 220, 55, 55, 50]
+    headers, col_widths, _aligns = _tabla_hoja_layout(plate)
 
     chunks = _split_rows(rows_overflow, 28)
 
@@ -1350,17 +1407,7 @@ def _draw_sheet_table_continuation_pages(
             f"Detalle de componentes agrupados de la hoja {sheet_code}",
         )
 
-        table_rows = [
-            [
-                row["displayId"],
-                row["job"],
-                row["item"],
-                str(row["largoIn"]),
-                str(row["anchoIn"]),
-                str(row["cantidad"]),
-            ]
-            for row in chunk
-        ]
+        table_rows = [_valores_fila_hoja(row, headers) for row in chunk]
 
         _draw_table(
             c=c,
@@ -1476,7 +1523,12 @@ def exportar_pdf_nesting(
         if plate.get("cu_rtz_virtual"):
             continue
         piezas_reales = [p for p in plate["piezas"] if _is_real_piece(p)]
-        rows, ids_map = _build_group_summary(piezas_reales, meta_por_ruta, job_fallback)
+        rows, ids_map = _build_group_summary(
+            piezas_reales,
+            meta_por_ruta,
+            job_fallback,
+            herr_por_pieza=plate.get("cu_herr_por_pieza"),
+        )
         sheet_code = plate.get("sheet_code") or f"{wo_label}-H{page_idx}"
         # Marca de agua
         _draw_watermark_logo(c, width, height, LOGO_ICON1_PATH)
@@ -1554,7 +1606,7 @@ def exportar_pdf_nesting(
                 "cantidad": "",
             }
         ]
-        col_widths = [48, 120, 220, 55, 55, 50]
+        headers, col_widths, aligns = _tabla_hoja_layout(plate)
         table_w = sum(col_widths)
         table_x = (width - table_w) / 2.0
         header_h = 18
@@ -1634,8 +1686,6 @@ def exportar_pdf_nesting(
             stroke=0
         )
 
-        headers = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
-
         x = table_x
         c.setFont("Helvetica-Bold", 7.2)
         c.setFillColor(title_color)
@@ -1660,15 +1710,7 @@ def exportar_pdf_nesting(
             y = table_y + row_h * (len(first_page_rows) - 1 - ridx)
             x = table_x
 
-            values = [
-                row["displayId"],
-                row["job"],
-                row["item"],
-                str(row["largoIn"]),
-                str(row["anchoIn"]),
-                str(row["cantidad"]),
-            ]
-            aligns = ["center", "left", "left", "center", "center", "center"]
+            values = _valores_fila_hoja(row, headers)
 
             for w_col, value, align in zip(col_widths, values, aligns):
                 c.rect(x, y, w_col, row_h, fill=0, stroke=1)

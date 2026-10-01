@@ -372,7 +372,7 @@ def _editar_tabla_gaps_corte(parent) -> bool:
 
 
 def _editar_herramental_punzonadora(parent) -> bool:
-    """Montaje Mold1..Mold8 de la punzonadora de cobre (CSV CNC Busbar Punching)."""
+    """Montaje M1..M8 de la punzonadora de cobre (CSV CNC Busbar Punching)."""
     from modules.nesting_engine.cu_punch_tooling import (
         CODIGO_GRABADO,
         N_ESTACIONES,
@@ -401,14 +401,16 @@ def _editar_herramental_punzonadora(parent) -> bool:
     dlg.setStyleSheet(surface_dialog_stylesheet())
     lay = QVBoxLayout(dlg)
 
-    titulo = QLabel("HERRAMENTAL PUNZONADORA — Mold1..Mold8", alignment=Qt.AlignmentFlag.AlignCenter)
+    titulo = QLabel("HERRAMENTAL PUNZONADORA — M1..M8", alignment=Qt.AlignmentFlag.AlignCenter)
     titulo.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(titulo)
     aviso = QLabel(
         "Montaje base de la máquina. Ovalado: X = medida a lo largo de la solera, Y = a lo "
-        "ancho (E11.1X15.9 ≠ E15.9X11.1). Si una barra necesita una herramienta del "
-        "inventario que no está montada, el CSV de esa barra la coloca en una estación que "
-        "no usa y el PDF avisa el cambio. Solo un barreno fuera del inventario bloquea."
+        "ancho (E11.1X15.9 ≠ E15.9X11.1). El nesteo agrupa en la misma barra las piezas "
+        "con el mismo herramental. Si una barra necesita una herramienta del inventario "
+        "que no está montada, el CSV de esa barra la coloca en una estación que no usa y "
+        "el PDF avisa el cambio y qué piezas lo piden. Solo un barreno fuera del "
+        "inventario bloquea."
     )
     aviso.setWordWrap(True)
     aviso.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
@@ -474,7 +476,7 @@ def _editar_herramental_punzonadora(parent) -> bool:
         sy.valueChanged.connect(lambda _v, f=fila: _refrescar(f))
 
     for i in range(N_ESTACIONES):
-        _crear_fila(grid, filas, f"Mold{i + 1}", i + 1)
+        _crear_fila(grid, filas, f"M{i + 1}", i + 1)
     lay.addLayout(grid)
     _cargar(cargar_estaciones())
 

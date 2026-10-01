@@ -55,6 +55,25 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01h — Cobre: nest agrupado por herramental de punzonado + reporte por pieza
+
+- Planta confirmó que el punzón ovalado queda fijo (se reposiciona a mano): la
+  orientación sigue contando (`E11.1X15.9` ≠ `E15.9X11.1`).
+- `cu_largos_nesting.py`: cada pieza lleva `cu_firma_herr` (herramientas orientadas
+  de sus barrenos, `cu_punch_tooling.firma_herramental` + `cu_punch_csv.barrenos_poligono`).
+  Orden dentro del ancho: primero las que piden herramienta fuera del montaje base
+  (todas juntas → el cambio en el menor número de barras), luego las del base que
+  rellenan sin pedir cambio; +300 al score si la pieza no agrega herramienta a la
+  barra; **tope duro de 8 herramientas por barra** (antes el CSV bloqueaba "más de 8").
+  `ordenar_hojas_largos_cu_por_ancho`: barras con el mismo cambio seguidas, base primero.
+- Cambio de herramental sin flecha (Helvetica no tiene "→", salía "fi"):
+  `"M8: quitar E20.6X11.1, poner C11.0"`; estaciones `M1..M8` como en planta.
+- PDF: "Cambio de herramental antes de esta barra" + piezas que lo piden; columna
+  **Herramental** (estaciones por pieza) en barras de punzonado; aviso si la barra
+  mezcla piezas con distinto herramental. `cu_punch_csv.resumen_herramental_barra`.
+- Candado nuevo `tests/native/test_cu_nest_herramental.py` (falla con el orden viejo:
+  barras `A0 B0 A1 B1` mezcladas); `test_cu_punch_csv.py` con los textos nuevos.
+
 ### 2026-10-01g — Cobre: CSV punzonado con el formato de planta (`pruebas jose.csv`)
 
 - `modules/dxf_export/cu_punch_csv.py`: encabezado de planta `Name, Num, Width, High,

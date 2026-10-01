@@ -1,20 +1,21 @@
 """Herramental de la punzonadora de solera (CNC Busbar Punching, Lijian MX602K).
 
-Montaje base de las 8 estaciones (``Mold1..Mold8`` del CSV) + inventario de
+Montaje base de las 8 estaciones (``M1..M8`` / ``TOOL1..TOOL8`` del CSV) + inventario de
 herramientas físicas, persistidos en ``_config/cu_punch_tooling.json`` y
 editables desde Configuración Global.
 
 Cada estación es un barreno redondo (``C{d}``) o un ovalado (``E{x}X{y}``):
 ``x`` es la medida a lo largo de la solera e ``y`` a lo ancho, así que
-``E11.1X15.9`` y ``E15.9X11.1`` son montajes distintos (orientación). El
+``E11.1X15.9`` y ``E15.9X11.1`` son montajes distintos: el punzón ovalado queda
+fijo en la posición en que se monta (planta lo reposiciona a mano). El
 inventario no lleva orientación: un ovalado 11.11×17.47 puede montarse a lo
 largo o a lo ancho.
 
 Si una barra necesita una herramienta del inventario que no está en el montaje
 base, ``montaje_para_barra`` la coloca en una estación que esa barra no usa
-(el CSV lleva su propio ``Mold1..Mold8``) y reporta el cambio.
+(el CSV lleva su propio ``TOOL1..TOOL8``) y reporta el cambio.
 
-``M100`` no es estación de punzón: es el grabado del nombre (``Model``).
+``M100`` no es estación de punzón: es el grabado del nombre (``Name``).
 """
 from __future__ import annotations
 
@@ -314,6 +315,24 @@ def herramienta_inventario(
     return mejor[1] if mejor else None
 
 
+def firma_herramental(
+    barrenos: list[tuple[str, float, float]],
+    inventario: list[dict[str, Any]] | None = None,
+) -> tuple[str, ...]:
+    """Códigos orientados (``C11.1``, ``E17.5X11.1``) que piden los barrenos, sin repetir."""
+    inv = inventario if inventario is not None else cargar_inventario()
+    codes: set[str] = set()
+    for tipo, dx, dy in barrenos:
+        h = herramienta_inventario(tipo, dx, dy, inv)
+        if h is not None:
+            codes.add(codigo_estacion(h))
+        elif str(tipo).upper() == "C":
+            codes.add(f"C{float(dx):.1f}")
+        else:
+            codes.add(f"E{float(dx):.1f}X{float(dy):.1f}")
+    return tuple(sorted(codes))
+
+
 def _error_herramienta(h: dict[str, Any], dx: float, dy: float) -> float:
     if h["tipo"] == "C":
         return abs(float(h["x"]) - float(dx))
@@ -330,8 +349,8 @@ def montaje_para_barra(
     """Montaje para una barra: ``(estaciones, cambios, faltantes)``.
 
     Conserva el montaje base; cada barreno sin estación toma la herramienta del
-    inventario (en su orientación) y ocupa, de Mold8 hacia Mold1, una estación
-    que la barra no usa. ``faltantes`` = descripciones de barrenos que no tienen
+    inventario (en su orientación) y ocupa, de M8 hacia M1, una estación
+    que la barra no usa (cambio ``"M{i}: quitar X, poner Y"``). ``faltantes`` = descripciones de barrenos que no tienen
     herramienta en el inventario o que no caben en las 8 estaciones.
     """
     ests = list(normalizar_estaciones(estaciones if estaciones is not None else cargar_estaciones()))
@@ -372,7 +391,7 @@ def montaje_para_barra(
         if not disponibles:
             if respaldo is not None:
                 cambios.append(
-                    f"{code} sin estación libre: se punzona con Mold{respaldo} "
+                    f"{code} sin estación libre: se punzona con M{respaldo} "
                     f"({codigo_estacion(ests[respaldo - 1])})"
                 )
                 continue
@@ -385,12 +404,13 @@ def montaje_para_barra(
             disponibles = [j for j in disponibles if j != respaldo]
             if not disponibles:
                 cambios.append(
-                    f"{code} sin estación libre: se punzona con Mold{respaldo} "
+                    f"{code} sin estación libre: se punzona con M{respaldo} "
                     f"({codigo_estacion(ests[respaldo - 1])})"
                 )
                 continue
             i = disponibles[0]
         libres.remove(i)
-        cambios.append(f"Mold{i}: {codigo_estacion(ests[i - 1])} → {code}")
+        # Texto sin flecha: Helvetica del PDF no tiene el glifo "→".
+        cambios.append(f"M{i}: quitar {codigo_estacion(ests[i - 1])}, poner {code}")
         ests[i - 1] = h
     return ests, cambios, faltantes
