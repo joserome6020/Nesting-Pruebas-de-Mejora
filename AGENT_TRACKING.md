@@ -65,6 +65,16 @@ código viejo. Un bug sin candado vuelve.
   genera `marcas` (respeta omitir marcas de cobre); manager usa `.get`.
 - Candado: `tests/native/test_void_cargo_marcas.py`. Sin cambios al build (módulos existentes).
 
+### 2026-10-01f — Cobre: MARK vertical al inicio (cuadra con el M100 del CSV)
+
+- Nuevo `modules/dxf_mark/cu_mark_vertical.py`: piezas normales de cobre (rectangulares,
+  no especiales, sin modo forzado) llevan el MARK con el nombre de PARTS en vertical,
+  centrado en `cu_punch_tooling.x_grabado_mm` (misma X que el golpe `M100` del CSV).
+- `manager.py` lo genera al cargar (nest/vista de barras); el visor de PARTS reemplaza la
+  capa MARK en memoria (`load_dxf_part(..., mark_cu_vertical_texto)`); el DXF de barras
+  normales/RTZCU exporta ese MARK (`cu_mark_vertical`), no el horizontal del DXF fuente.
+- Candado en `test_cu_punch_csv.py` (centro MARK = X del M100; visor en pulgadas).
+
 ### 2026-10-01e — Cobre: despunte 6 mm solo visual + montaje de planta + grabado M100
 
 - `DESPUNTE_CU_MM = 6.0`: zona solo visual en el nest; el CSV ya no lleva fila de
