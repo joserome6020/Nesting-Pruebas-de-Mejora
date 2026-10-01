@@ -55,6 +55,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01e — Cobre: despunte 6 mm solo visual + montaje de planta + grabado M100
+
+- `DESPUNTE_CU_MM = 6.0`: zona solo visual en el nest; el CSV ya no lleva fila de
+  despunte (el software de la máquina hace el suyo, ~5.8 mm).
+- Montaje base = pizarrón de planta: M1 C11.1, M2 C10.3, M3 E10.3X15.1, M4 E14.3X11.1,
+  M5 E11.1X15.9, M6 E17.5X11.1, M7 E11.1X20.3, M8 E20.6X11.1 (orientación de los planos
+  GIGA, pendiente de confirmar en máquina).
+- `M100` = grabado del `Model` (vertical): primer golpe de cada pieza, `Y = 0`, X = centro
+  de la franja libre antes del primer barreno (sin barrenos: 12.7 mm, configurable).
+  Editor: switch de grabado + X sin barrenos.
+- `montaje_para_barra`: si el inventario tiene una herramienta más exacta que la montada
+  (p. ej. Ø11.00 vs C11.1) la monta y avisa; sin estación libre usa la montada y lo avisa.
+
 ### 2026-10-01d — Fix: CSV punzonado bloqueaba W.O. 90 X2 (ovalado 17.46 a lo largo)
 
 - Bug: el montaje default tenía los ovalados girados (`E11.1X17.5` = slot a lo ancho);

@@ -1,8 +1,8 @@
-"""Candado: cobre sin gap + despunte 50 mm + modos de ancho (Conf1/Conf2) + MARK por pieza.
+"""Candado: cobre sin gap + despunte 6 mm + modos de ancho (Conf1/Conf2) + MARK por pieza.
 
 Reglas (2026-10-01):
 - Piezas normales (rectangulares) van pegadas (gap 0) y la barra entera lleva
-  un despunte de 50 mm antes de la primera pieza (zona + guillotina).
+  un despunte de 6 mm antes de la primera pieza (zona + guillotina).
 - Barras Zapato/Botella/Z (laser) no llevan despunte.
 - Configuración 1 (exacto, default): piezas con decimal no entran a barras de
   exactas; las exactas sobrantes sí pueden rellenar barras residuales.
@@ -99,7 +99,7 @@ def main() -> None:
         assert normalize_cu_ancho_modo("basura") == "exacto"
         assert cln.DEFAULT_SEPARACION_CU_IN == 0.0
 
-        # 1) Gap 0 + despunte 50 mm; Conf1 separa exactas de decimales.
+        # 1) Gap 0 + despunte 6 mm; Conf1 separa exactas de decimales.
         piezas = [_pieza(f"EX{i}", 1000.0) for i in range(3)]
         piezas += [_pieza(f"DEC{i}", 1000.0, DEC_575_MM) for i in range(2)]
         hojas, sin = cln.empaquetar_largos_cu(piezas, _placas(), separacion_in=0.0)
@@ -115,7 +115,7 @@ def main() -> None:
             nombres = {p.get("nombre") for p in h["piezas"]}
             assert cln.NOMBRE_DESPUNTE_ZONA_CU in nombres
             assert cln.NOMBRE_DESPUNTE_CORTE_CU in nombres
-            assert abs(float(h.get("cu_despunte_mm") or 0.0) - 50.0) < 0.01
+            assert abs(float(h.get("cu_despunte_mm") or 0.0) - 6.0) < 0.01
             assert float(h.get("separacion_cu_in")) == 0.0
 
         # 2) Conf1: exactas que sobran (barra incompleta) rellenan la residual.

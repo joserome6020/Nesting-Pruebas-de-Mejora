@@ -13,6 +13,8 @@ largo o a lo ancho.
 Si una barra necesita una herramienta del inventario que no está en el montaje
 base, ``montaje_para_barra`` la coloca en una estación que esa barra no usa
 (el CSV lleva su propio ``Mold1..Mold8``) y reporta el cambio.
+
+``M100`` no es estación de punzón: es el grabado del nombre (``Model``).
 """
 from __future__ import annotations
 
@@ -27,17 +29,22 @@ _CONFIG_RELATIVE_PATH = os.path.join("_config", "cu_punch_tooling.json")
 # Holgura DXF ↔ herramienta (mm) al emparejar un barreno con su estación.
 TOL_HERRAMIENTA_MM = 0.15
 
-# Montaje base con la orientación de los planos GIGA (pendiente del orden real de planta).
+# Montaje de planta (pizarrón 2026-10-01). La orientación de cada ovalado es la que
+# usan los planos GIGA (pendiente de confirmar en máquina).
 _DEFAULT_ESTACIONES: list[dict[str, Any]] = [
     {"tipo": "C", "x": 11.11},
     {"tipo": "C", "x": 10.31},
-    {"tipo": "C", "x": 11.0},
-    {"tipo": "E", "x": 20.65, "y": 11.11},
-    {"tipo": "E", "x": 17.47, "y": 11.11},
-    {"tipo": "E", "x": 11.11, "y": 15.88},
-    {"tipo": "E", "x": 14.30, "y": 11.11},
     {"tipo": "E", "x": 10.31, "y": 15.08},
+    {"tipo": "E", "x": 14.30, "y": 11.11},
+    {"tipo": "E", "x": 11.11, "y": 15.88},
+    {"tipo": "E", "x": 17.47, "y": 11.11},
+    {"tipo": "E", "x": 11.11, "y": 20.33},
+    {"tipo": "E", "x": 20.65, "y": 11.11},
 ]
+
+# Estación de grabado: marca el texto de ``Model`` (vertical, al inicio de la pieza).
+CODIGO_GRABADO = "M100"
+_DEFAULT_GRABADO: dict[str, Any] = {"habilitado": True, "x_sin_barrenos_mm": 12.7}
 
 # Herramientas físicas disponibles (herramental_cobre_barrenos.csv); ovalado = ancho × largo.
 _DEFAULT_INVENTARIO: list[dict[str, Any]] = [
@@ -168,9 +175,28 @@ def cargar_inventario() -> list[dict[str, Any]]:
     return normalizar_inventario(data.get("inventario"))
 
 
+def normalizar_grabado(raw: Any) -> dict[str, Any]:
+    out = dict(_DEFAULT_GRABADO)
+    if isinstance(raw, dict):
+        if "habilitado" in raw:
+            out["habilitado"] = bool(raw.get("habilitado"))
+        try:
+            x = float(raw.get("x_sin_barrenos_mm", out["x_sin_barrenos_mm"]))
+            if x > 0:
+                out["x_sin_barrenos_mm"] = round(x, 3)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def cargar_grabado() -> dict[str, Any]:
+    return normalizar_grabado(_leer_config().get("grabado"))
+
+
 def guardar_herramental(
     estaciones: list[dict[str, Any] | None] | None = None,
     inventario: list[dict[str, Any]] | None = None,
+    grabado: dict[str, Any] | None = None,
 ) -> Path:
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +207,7 @@ def guardar_herramental(
         "inventario": normalizar_inventario(
             inventario if inventario is not None else cargar_inventario()
         ),
+        "grabado": normalizar_grabado(grabado if grabado is not None else cargar_grabado()),
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -258,6 +285,12 @@ def herramienta_inventario(
     return mejor[1] if mejor else None
 
 
+def _error_herramienta(h: dict[str, Any], dx: float, dy: float) -> float:
+    if h["tipo"] == "C":
+        return abs(float(h["x"]) - float(dx))
+    return max(abs(float(h["x"]) - float(dx)), abs(float(h["y"]) - float(dy)))
+
+
 def montaje_para_barra(
     barrenos: list[tuple[str, float, float]],
     estaciones: list[dict[str, Any] | None] | None = None,
@@ -275,15 +308,21 @@ def montaje_para_barra(
     ests = list(normalizar_estaciones(estaciones if estaciones is not None else cargar_estaciones()))
     inv = inventario if inventario is not None else cargar_inventario()
     usadas: set[int] = set()
-    pendientes: list[tuple[dict[str, Any], str]] = []
+    pendientes: list[tuple[dict[str, Any], str, int | None]] = []
     faltantes: list[str] = []
     vistos: set[str] = set()
     for tipo, dx, dy in barrenos:
         idx = estacion_para_barreno(tipo, dx, dy, ests, tol_mm=tol_mm)
-        if idx is not None:
-            usadas.add(idx)
-            continue
         h = herramienta_inventario(tipo, dx, dy, inv, tol_mm=tol_mm)
+        if idx is not None:
+            est = ests[idx - 1]
+            if (
+                h is None
+                or codigo_estacion(h) == codigo_estacion(est)
+                or _error_herramienta(h, dx, dy) >= _error_herramienta(est, dx, dy) - 0.02
+            ):
+                usadas.add(idx)
+                continue
         if h is None:
             desc = f"Ø{dx:.2f}" if tipo == "C" else f"ovalado {dx:.2f}×{dy:.2f} (largo×ancho)"
             if desc not in vistos:
@@ -291,17 +330,38 @@ def montaje_para_barra(
                 faltantes.append(f"barreno {desc} mm no existe en el inventario de herramientas")
             continue
         code = codigo_estacion(h)
-        if code not in {codigo_estacion(p[0]) for p in pendientes}:
-            pendientes.append((h, code))
+        if code not in {p[1] for p in pendientes}:
+            pendientes.append((h, code, idx))
+    # Primero las que no tienen alternativa montada; la estación de respaldo de las
+    # demás queda reservada por si no alcanza lugar para la herramienta exacta.
+    pendientes.sort(key=lambda p: p[2] is not None)
+    reservadas = {p[2] for p in pendientes if p[2] is not None}
     cambios: list[str] = []
     libres = [i for i in range(N_ESTACIONES, 0, -1) if i not in usadas]
-    for h, code in pendientes:
-        if not libres:
+    for h, code, respaldo in pendientes:
+        disponibles = [i for i in libres if i not in reservadas or respaldo is not None]
+        if not disponibles:
+            if respaldo is not None:
+                cambios.append(
+                    f"{code} sin estación libre: se punzona con Mold{respaldo} "
+                    f"({codigo_estacion(ests[respaldo - 1])})"
+                )
+                continue
             faltantes.append(
                 f"la barra necesita más de {N_ESTACIONES} herramientas distintas ({code} no cabe)"
             )
             continue
-        i = libres.pop(0)
+        i = disponibles[0]
+        if respaldo is not None and i == respaldo:
+            disponibles = [j for j in disponibles if j != respaldo]
+            if not disponibles:
+                cambios.append(
+                    f"{code} sin estación libre: se punzona con Mold{respaldo} "
+                    f"({codigo_estacion(ests[respaldo - 1])})"
+                )
+                continue
+            i = disponibles[0]
+        libres.remove(i)
         cambios.append(f"Mold{i}: {codigo_estacion(ests[i - 1])} → {code}")
         ests[i - 1] = h
     return ests, cambios, faltantes

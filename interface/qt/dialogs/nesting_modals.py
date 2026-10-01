@@ -62,7 +62,7 @@ def preguntar_separacion_cobre_renest(
 ) -> tuple[float, float] | None:
     """
     Separación CU antes de renestear. Regla actual: cobre sin gap (0) y
-    despunte de 50 mm en barras de piezas normales. Retorna (separacion_in, 0.0) o None.
+    despunte de 6 mm en barras de piezas normales. Retorna (separacion_in, 0.0) o None.
     """
     _ = valor_largo_sin
     dlg = QDialog(parent)
@@ -77,7 +77,7 @@ def preguntar_separacion_cobre_renest(
     lay.addWidget(tit)
 
     hint = QLabel(
-        "Cobre sin gap (0) + despunte 50 mm en barras normales. "
+        "Cobre sin gap (0) + despunte 6 mm en barras normales. "
         "Solo cambia el gap si la máquina lo requiere."
     )
     hint.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
@@ -374,8 +374,10 @@ def _editar_tabla_gaps_corte(parent) -> bool:
 def _editar_herramental_punzonadora(parent) -> bool:
     """Montaje Mold1..Mold8 de la punzonadora de cobre (CSV CNC Busbar Punching)."""
     from modules.nesting_engine.cu_punch_tooling import (
+        CODIGO_GRABADO,
         N_ESTACIONES,
         cargar_estaciones,
+        cargar_grabado,
         cargar_inventario,
         codigo_estacion,
         estaciones_default,
@@ -487,6 +489,20 @@ def _editar_herramental_punzonadora(parent) -> bool:
     lay.addLayout(grid_inv)
     _cargar_en(filas_inv, cargar_inventario())
 
+    grab = cargar_grabado()
+    fila_grab = QHBoxLayout()
+    chk_grab = QCheckBox(f"Grabar nombre de la pieza ({CODIGO_GRABADO}, vertical, Y = 0)")
+    chk_grab.setChecked(bool(grab["habilitado"]))
+    spin_grab = QDoubleSpinBox()
+    spin_grab.setRange(1.0, 200.0)
+    spin_grab.setDecimals(2)
+    spin_grab.setValue(float(grab["x_sin_barrenos_mm"]))
+    fila_grab.addWidget(chk_grab)
+    fila_grab.addStretch(1)
+    fila_grab.addWidget(QLabel("X sin barrenos (mm):"))
+    fila_grab.addWidget(spin_grab)
+    lay.addLayout(fila_grab)
+
     botones = QHBoxLayout()
     btn_default = QPushButton("RESTAURAR MONTAJE INICIAL")
     btn_cancelar = QPushButton("CANCELAR")
@@ -514,7 +530,11 @@ def _editar_herramental_punzonadora(parent) -> bool:
             QMessageBox.critical(dlg, "Herramental inválido", "Hay herramientas del inventario en 0.")
             return
         try:
-            guardar_herramental(estaciones, inventario)
+            guardar_herramental(
+                estaciones,
+                inventario,
+                {"habilitado": chk_grab.isChecked(), "x_sin_barrenos_mm": spin_grab.value()},
+            )
         except OSError as exc:
             QMessageBox.critical(dlg, "Error", f"No se pudo guardar el herramental:\n{exc}")
             return
@@ -523,6 +543,8 @@ def _editar_herramental_punzonadora(parent) -> bool:
     def _restaurar() -> None:
         _cargar(estaciones_default())
         _cargar_en(filas_inv, inventario_default())
+        chk_grab.setChecked(True)
+        spin_grab.setValue(12.7)
 
     btn_default.clicked.connect(_restaurar)
     btn_cancelar.clicked.connect(dlg.reject)

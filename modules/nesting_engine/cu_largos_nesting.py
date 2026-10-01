@@ -7,7 +7,7 @@ Nesting 1D para largos de cobre (CU).
 - Gap: 0 entre todas las piezas (punzonadora de solera). Solo el switch
   "Forzar cobre DXF+STEP" vuelve al gap láser de 3/8".
 - Barras enteras de piezas normales (rectangulares) empiezan con un despunte
-  de 50 mm; las barras Zapato/Botella/Z (relieve) y sus RTZCU no.
+  de 6 mm (solo visual; el CSV de punzonado no lo lleva); las barras Zapato/Botella/Z (relieve) y sus RTZCU no.
 - Anchos (Configuración Global ``cu_ancho_modo``):
   exacto (default) = piezas del ancho exacto de la solera primero; las de ancho
   con decimal van en barras propias y las exactas sobrantes pueden rellenarlas.
@@ -93,8 +93,9 @@ DEFAULT_SEPARACION_CU_IN = 0.0
 # Switch "Forzar cobre DXF+STEP": conserva el gap láser histórico de 3/8".
 SEPARACION_CU_FORZADA_IN = 0.375
 # Despunte al inicio de barras enteras de piezas normales: la máquina limpia la
-# cabeza de la solera y el nesteo real empieza después.
-DESPUNTE_CU_MM = 50.0
+# cabeza de la solera (default de su software ~5.8 mm) y el nesteo real empieza
+# después. Solo visual en el nest: el CSV de punzonado no lo lleva.
+DESPUNTE_CU_MM = 6.0
 PREFIJO_DESPUNTE_CU = f"{PREFIJO_CORTE_CU}DESPUNTE__"
 NOMBRE_DESPUNTE_ZONA_CU = f"{PREFIJO_DESPUNTE_CU}ZONA"
 NOMBRE_DESPUNTE_CORTE_CU = f"{PREFIJO_DESPUNTE_CU}V"

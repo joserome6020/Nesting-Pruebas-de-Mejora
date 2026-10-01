@@ -7,8 +7,10 @@ Formato LJcad: 283 columnas separadas por tabulador, CRLF, sin BOM,
 encabezado + 100 filas. Una fila por pieza en el orden del nest
 (``Quantity`` = 1) para que la máquina reproduzca la barra tal cual:
 
-- Primera fila (barras normales enteras): despunte de 50 mm, solo cizalla,
-  ``Model`` vacío para que no se marque.
+- Sin fila de despunte: el despunte (6 mm) es solo visual en el nest; el
+  software de la máquina hace el suyo por defecto (~5.8 mm).
+- Primer golpe de cada pieza = grabado ``M100`` del ``Model`` (vertical) en
+  ``Y = 0``, centrado en la franja libre antes del primer barreno.
 - ``Width`` = ancho de la solera (piezas con decimal se cortan al ancho de la
   solera y se recortan después en láser).
 - Golpes ``X``/``Y`` relativos a la pieza (X desde su inicio, Y desde la orilla
@@ -238,6 +240,15 @@ def _analizar_barra(hoja: dict) -> tuple[list[tuple], list[str]]:
     return piezas, errores
 
 
+def _x_grabado(x0: float, largo: float, barrenos: list[tuple], grabado: dict) -> float:
+    """X del grabado (relativo a la pieza): centro de la franja libre antes del primer barreno."""
+    if barrenos:
+        borde = min(float(cx) - float(dx) / 2.0 for _t, cx, _cy, dx, _dy in barrenos) - x0
+        if borde > 0.0:
+            return borde / 2.0
+    return min(float(grabado.get("x_sin_barrenos_mm") or 12.7), largo / 2.0)
+
+
 def montaje_barra(
     hoja: dict,
     *,
@@ -258,6 +269,7 @@ def construir_filas_barra(
     thickness_mm: float,
     estaciones: list | None = None,
     inventario: list | None = None,
+    grabado: dict | None = None,
     etiqueta: str = "",
 ) -> list[dict[str, str]]:
     """Filas CSV de una barra. Lanza ``PunchCsvError`` con todos los problemas juntos.
@@ -266,6 +278,8 @@ def construir_filas_barra(
     montaje base (herramientas del inventario que la barra necesita).
     """
     from modules.nesting_engine.cu_punch_tooling import (
+        CODIGO_GRABADO,
+        cargar_grabado,
         codigos_molds,
         estacion_para_barreno,
         herramienta_inventario,
@@ -281,12 +295,12 @@ def construir_filas_barra(
     molds = codigos_molds(ests)
     filas: list[dict[str, str]] = []
 
-    despunte = float(hoja.get("cu_despunte_mm") or 0.0)
-    if despunte > 0.5 and not hoja.get("cu_rtz_virtual"):
-        filas.append(_fila("", ancho_bar, thickness_mm, despunte, [(despunte, 0.0, "C")], molds))
+    grab = grabado if grabado is not None else cargar_grabado()
 
     for nombre, x0, largo, barrenos_p in piezas:
         golpes: list[tuple[float, float, str]] = []
+        if grab.get("habilitado"):
+            golpes.append((_x_grabado(x0, largo, barrenos_p, grab), 0.0, CODIGO_GRABADO))
         for tipo, cx, cy, dx, dy in barrenos_p:
             idx = estacion_para_barreno(tipo, dx, dy, ests)
             if idx is None:
@@ -295,7 +309,13 @@ def construir_filas_barra(
                     errores.append(f"{nombre}: barreno {desc} mm sin herramienta en el inventario")
                 continue
             golpes.append((cx - x0, cy, f"M{idx}"))
-        golpes.sort(key=lambda g: (round(g[0], 3), round(g[1], 3)))
+        golpes.sort(key=lambda g: (g[2] != CODIGO_GRABADO, round(g[0], 3), round(g[1], 3)))
+        if len(golpes) + 1 > N_GOLPES:
+            errores.append(
+                f"{nombre}: {len(golpes)} golpes (barrenos + grabado); la máquina admite "
+                f"{N_GOLPES - 1} por pieza"
+            )
+            continue
         golpes.append((largo, 0.0, "C"))
         filas.append(_fila(_model_texto(nombre), ancho_bar, thickness_mm, largo, golpes, molds))
 
