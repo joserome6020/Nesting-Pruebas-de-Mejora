@@ -55,6 +55,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01d — Fix: CSV punzonado bloqueaba W.O. 90 X2 (ovalado 17.46 a lo largo)
+
+- Bug: el montaje default tenía los ovalados girados (`E11.1X17.5` = slot a lo ancho);
+  GENE-FCU-4-109/4-112/4-301 y ABB-22-U-BCK-72x llevan 17.46 a lo largo → todo el
+  export de cobre quedaba bloqueado.
+- Montaje base con la orientación de los planos (`E20.6X11.1`, `E17.5X11.1`,
+  `E11.1X15.9`, `E14.3X11.1`, `E10.3X15.1`) + inventario de herramientas físicas
+  (`herramental_cobre_barrenos.csv`, sin orientación).
+- `montaje_para_barra`: si la barra necesita una herramienta del inventario que no está
+  montada, el CSV de esa barra la pone en una estación que no usa (Mold8 → Mold1) y el
+  PDF muestra "Cambio de herramental". Solo bloquea un barreno fuera del inventario o
+  más de 8 herramientas en una barra. Errores agrupados por pieza (`(xN)`).
+- Editor de herramental: sección de inventario (12 renglones).
+- Candado: `test_cu_punch_csv.py` (caso 17.46 a lo largo → Mold5).
+
 ### 2026-10-01c — CSV CNC Busbar Punching (Lijian MX602K / LJcad) por barra de cobre
 
 - Nuevo `modules/dxf_export/cu_punch_csv.py`: un CSV por barra normal (`con_gap`) y por

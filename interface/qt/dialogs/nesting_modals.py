@@ -376,10 +376,14 @@ def _editar_herramental_punzonadora(parent) -> bool:
     from modules.nesting_engine.cu_punch_tooling import (
         N_ESTACIONES,
         cargar_estaciones,
+        cargar_inventario,
         codigo_estacion,
         estaciones_default,
-        guardar_estaciones,
+        guardar_herramental,
+        inventario_default,
     )
+
+    n_inventario = 12
 
     if not _autorizar_edicion_dyt(
         parent,
@@ -399,9 +403,10 @@ def _editar_herramental_punzonadora(parent) -> bool:
     titulo.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
     lay.addWidget(titulo)
     aviso = QLabel(
-        "Debe coincidir con las herramientas montadas en la máquina. Ovalado: X = medida a lo "
-        "largo de la solera, Y = a lo ancho (E11.1X15.9 ≠ E15.9X11.1). Un barreno sin "
-        "herramienta bloquea el export del CSV."
+        "Montaje base de la máquina. Ovalado: X = medida a lo largo de la solera, Y = a lo "
+        "ancho (E11.1X15.9 ≠ E15.9X11.1). Si una barra necesita una herramienta del "
+        "inventario que no está montada, el CSV de esa barra la coloca en una estación que "
+        "no usa y el PDF avisa el cambio. Solo un barreno fuera del inventario bloquea."
     )
     aviso.setWordWrap(True)
     aviso.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
@@ -412,6 +417,7 @@ def _editar_herramental_punzonadora(parent) -> bool:
         grid.addWidget(_celda_tabla_gaps(txt, encabezado=True), 0, col)
 
     filas: list[tuple[QComboBox, QDoubleSpinBox, QDoubleSpinBox, QLabel]] = []
+    filas_inv: list[tuple[QComboBox, QDoubleSpinBox, QDoubleSpinBox, QLabel]] = []
 
     def _leer_fila(combo, sx, sy) -> dict | None:
         tipo = combo.currentData()
@@ -422,22 +428,26 @@ def _editar_herramental_punzonadora(parent) -> bool:
             est["y"] = float(sy.value())
         return est
 
-    def _refrescar(i: int) -> None:
-        combo, sx, sy, lbl = filas[i]
+    def _refrescar(fila) -> None:
+        combo, sx, sy, lbl = fila
         tipo = combo.currentData()
         sx.setEnabled(bool(tipo))
         sy.setEnabled(tipo == "E")
         lbl.setText(codigo_estacion(_leer_fila(combo, sx, sy)))
 
-    def _cargar(estaciones) -> None:
-        for i, est in enumerate(estaciones):
-            combo, sx, sy, _lbl = filas[i]
+    def _cargar_en(lista, items) -> None:
+        items = list(items) + [None] * (len(lista) - len(items))
+        for fila, est in zip(lista, items):
+            combo, sx, sy, _lbl = fila
             combo.setCurrentIndex({None: 0, "C": 1, "E": 2}.get((est or {}).get("tipo"), 0))
             sx.setValue(float((est or {}).get("x") or 0.0))
             sy.setValue(float((est or {}).get("y") or 0.0))
-            _refrescar(i)
+            _refrescar(fila)
 
-    for i in range(N_ESTACIONES):
+    def _cargar(estaciones) -> None:
+        _cargar_en(filas, estaciones)
+
+    def _crear_fila(grid_dst, lista, etiqueta: str, row: int) -> None:
         combo = QComboBox()
         combo.addItem("Vacía", None)
         combo.addItem("Redondo (C)", "C")
@@ -450,17 +460,32 @@ def _editar_herramental_punzonadora(parent) -> bool:
             sp.setSingleStep(0.01)
         lbl = QLabel("0")
         lbl.setStyleSheet("font-weight:700;")
-        filas.append((combo, sx, sy, lbl))
-        grid.addWidget(QLabel(f"Mold{i + 1}"), i + 1, 0)
-        grid.addWidget(combo, i + 1, 1)
-        grid.addWidget(sx, i + 1, 2)
-        grid.addWidget(sy, i + 1, 3)
-        grid.addWidget(lbl, i + 1, 4)
-        combo.currentIndexChanged.connect(lambda _v, k=i: _refrescar(k))
-        sx.valueChanged.connect(lambda _v, k=i: _refrescar(k))
-        sy.valueChanged.connect(lambda _v, k=i: _refrescar(k))
+        fila = (combo, sx, sy, lbl)
+        lista.append(fila)
+        grid_dst.addWidget(QLabel(etiqueta), row, 0)
+        grid_dst.addWidget(combo, row, 1)
+        grid_dst.addWidget(sx, row, 2)
+        grid_dst.addWidget(sy, row, 3)
+        grid_dst.addWidget(lbl, row, 4)
+        combo.currentIndexChanged.connect(lambda _v, f=fila: _refrescar(f))
+        sx.valueChanged.connect(lambda _v, f=fila: _refrescar(f))
+        sy.valueChanged.connect(lambda _v, f=fila: _refrescar(f))
+
+    for i in range(N_ESTACIONES):
+        _crear_fila(grid, filas, f"Mold{i + 1}", i + 1)
     lay.addLayout(grid)
     _cargar(cargar_estaciones())
+
+    tit_inv = QLabel("INVENTARIO DE HERRAMIENTAS (ovalado: ancho × largo, cualquier orientación)")
+    tit_inv.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(tit_inv)
+    grid_inv = QGridLayout()
+    for col, txt in enumerate(("#", "TIPO", "Ø / ANCHO (mm)", "LARGO (mm)", "HERRAMIENTA")):
+        grid_inv.addWidget(_celda_tabla_gaps(txt, encabezado=True), 0, col)
+    for i in range(n_inventario):
+        _crear_fila(grid_inv, filas_inv, str(i + 1), i + 1)
+    lay.addLayout(grid_inv)
+    _cargar_en(filas_inv, cargar_inventario())
 
     botones = QHBoxLayout()
     btn_default = QPushButton("RESTAURAR MONTAJE INICIAL")
@@ -484,14 +509,22 @@ def _editar_herramental_punzonadora(parent) -> bool:
         if len(set(codigos)) != len(codigos):
             QMessageBox.critical(dlg, "Herramental inválido", "Hay herramientas repetidas.")
             return
+        inventario = [e for e in (_leer_fila(c, sx, sy) for c, sx, sy, _l in filas_inv) if e]
+        if any(codigo_estacion(e) == "0" for e in inventario):
+            QMessageBox.critical(dlg, "Herramental inválido", "Hay herramientas del inventario en 0.")
+            return
         try:
-            guardar_estaciones(estaciones)
+            guardar_herramental(estaciones, inventario)
         except OSError as exc:
             QMessageBox.critical(dlg, "Error", f"No se pudo guardar el herramental:\n{exc}")
             return
         dlg.accept()
 
-    btn_default.clicked.connect(lambda: _cargar(estaciones_default()))
+    def _restaurar() -> None:
+        _cargar(estaciones_default())
+        _cargar_en(filas_inv, inventario_default())
+
+    btn_default.clicked.connect(_restaurar)
     btn_cancelar.clicked.connect(dlg.reject)
     btn_guardar.clicked.connect(guardar)
     _centrar_dialogo(dlg, parent)

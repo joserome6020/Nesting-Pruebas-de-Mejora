@@ -1530,12 +1530,13 @@ def exportar_resultados_a_dxf(
         escribir_csv,
         hoja_requiere_csv_punzonado,
     )
-    from modules.nesting_engine.cu_punch_tooling import cargar_estaciones
+    from modules.nesting_engine.cu_punch_tooling import cargar_estaciones, cargar_inventario
 
     # Antes de escribir nada: una barra no punzonable bloquea todo el export.
     punch_filas_por_hoja: dict[int, list] = {}
     punch_errores: list[str] = []
     punch_estaciones = cargar_estaciones()
+    punch_inventario = cargar_inventario()
     for _clave_p, _data_p in (resultados or {}).items():
         if not isinstance(_data_p, dict):
             continue
@@ -1549,6 +1550,7 @@ def exportar_resultados_a_dxf(
                     _hoja_p,
                     thickness_mm=_thk_mm,
                     estaciones=punch_estaciones,
+                    inventario=punch_inventario,
                     etiqueta=str(
                         _hoja_p.get("sheet_code")
                         or _hoja_p.get("placa_id")
@@ -1562,7 +1564,8 @@ def exportar_resultados_a_dxf(
             log(f"[CU-PUNCH][ERROR] {_err}")
         raise DxfExportValidationError(
             "Cobre CNC Busbar Punching: hay barras que la punzonadora no puede hacer "
-            "con el herramental montado (Configuración Global → Herramental punzonadora).\n\n"
+            "con el inventario de herramientas (Configuración Global → Herramental "
+            "punzonadora).\n\n"
             + "\n".join(punch_errores[:12])
             + (f"\n(+{len(punch_errores) - 12} más)" if len(punch_errores) > 12 else "")
         )
@@ -2108,6 +2111,8 @@ def exportar_resultados_a_dxf(
                 )
                 hoja["cu_punch_csv"] = path_csv
                 log(f"-> EXPORT CSV CNC BUSBAR PUNCHING: {path_csv} ({len(filas_punch)} filas)")
+                for _cambio in hoja.get("cu_punch_cambios_herramental") or []:
+                    log(f"   [CU-PUNCH] cambio de herramental: {_cambio}")
 
             # Exportación plasma solo cuando aplique
             lista_plasma = placements_plasma

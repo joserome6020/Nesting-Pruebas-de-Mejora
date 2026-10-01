@@ -186,31 +186,17 @@ def _model_texto(nombre: str) -> str:
     return " ".join(str(nombre or "").replace("\t", " ").split())
 
 
-def construir_filas_barra(
-    hoja: dict,
-    *,
-    thickness_mm: float,
-    estaciones: list | None = None,
-    etiqueta: str = "",
-) -> list[dict[str, str]]:
-    """Filas CSV de una barra. Lanza ``PunchCsvError`` con todos los problemas juntos."""
-    from modules.nesting_engine.cu_punch_tooling import (
-        cargar_estaciones,
-        codigos_molds,
-        estacion_para_barreno,
-    )
+def _agrupar_errores(errores: list[str]) -> list[str]:
+    conteo: dict[str, int] = {}
+    for e in errores:
+        conteo[e] = conteo.get(e, 0) + 1
+    return [f"{e} (x{n})" if n > 1 else e for e, n in conteo.items()]
 
-    ests = estaciones if estaciones is not None else cargar_estaciones()
-    molds = codigos_molds(ests)
-    ancho_bar = float(hoja.get("placa_h") or 0.0)
-    tag = etiqueta or str(hoja.get("sheet_code") or hoja.get("placa_id") or "barra")
+
+def _analizar_barra(hoja: dict) -> tuple[list[tuple], list[str]]:
+    """Piezas punzonables ``(nombre, x0, largo, barrenos)`` + errores de geometría."""
+    piezas: list[tuple] = []
     errores: list[str] = []
-    filas: list[dict[str, str]] = []
-
-    despunte = float(hoja.get("cu_despunte_mm") or 0.0)
-    if despunte > 0.5 and not hoja.get("cu_rtz_virtual"):
-        filas.append(_fila("", ancho_bar, thickness_mm, despunte, [(despunte, 0.0, "C")], molds))
-
     for p in _piezas_reales(hoja):
         nombre = str(p.get("nombre") or "PIEZA")
         pols = p["poligonos"]
@@ -230,7 +216,7 @@ def construir_filas_barra(
                 f"({LARGO_MIN_MAQUINA_MM:.0f} mm)"
             )
             continue
-        golpes: list[tuple[float, float, str]] = []
+        barrenos = []
         for anillo in pols[1:]:
             info = _clasificar_barreno(anillo)
             if info is None:
@@ -242,26 +228,82 @@ def construir_filas_barra(
                     "solo redondos u ovalados"
                 )
                 continue
-            tipo, cx, cy, dx, dy = info
+            barrenos.append(info)
+        if len(barrenos) + 1 > N_GOLPES:
+            errores.append(
+                f"{nombre}: {len(barrenos)} barrenos; la máquina admite {N_GOLPES - 1} por pieza"
+            )
+            continue
+        piezas.append((nombre, x0, largo, barrenos))
+    return piezas, errores
+
+
+def montaje_barra(
+    hoja: dict,
+    *,
+    estaciones: list | None = None,
+    inventario: list | None = None,
+) -> tuple[list, list[str], list[str]]:
+    """``(estaciones, cambios, faltantes)`` del herramental que necesita la barra."""
+    from modules.nesting_engine.cu_punch_tooling import montaje_para_barra
+
+    piezas, _err = _analizar_barra(hoja)
+    barrenos = [(b[0], b[3], b[4]) for _n, _x0, _l, bs in piezas for b in bs]
+    return montaje_para_barra(barrenos, estaciones, inventario)
+
+
+def construir_filas_barra(
+    hoja: dict,
+    *,
+    thickness_mm: float,
+    estaciones: list | None = None,
+    inventario: list | None = None,
+    etiqueta: str = "",
+) -> list[dict[str, str]]:
+    """Filas CSV de una barra. Lanza ``PunchCsvError`` con todos los problemas juntos.
+
+    Deja en ``hoja["cu_punch_cambios_herramental"]`` los cambios respecto al
+    montaje base (herramientas del inventario que la barra necesita).
+    """
+    from modules.nesting_engine.cu_punch_tooling import (
+        codigos_molds,
+        estacion_para_barreno,
+        herramienta_inventario,
+        montaje_para_barra,
+    )
+
+    ancho_bar = float(hoja.get("placa_h") or 0.0)
+    tag = etiqueta or str(hoja.get("sheet_code") or hoja.get("placa_id") or "barra")
+    piezas, errores = _analizar_barra(hoja)
+    barrenos = [(b[0], b[3], b[4]) for _n, _x0, _l, bs in piezas for b in bs]
+    ests, cambios, faltantes = montaje_para_barra(barrenos, estaciones, inventario)
+    errores.extend(f for f in faltantes if f.startswith("la barra"))
+    molds = codigos_molds(ests)
+    filas: list[dict[str, str]] = []
+
+    despunte = float(hoja.get("cu_despunte_mm") or 0.0)
+    if despunte > 0.5 and not hoja.get("cu_rtz_virtual"):
+        filas.append(_fila("", ancho_bar, thickness_mm, despunte, [(despunte, 0.0, "C")], molds))
+
+    for nombre, x0, largo, barrenos_p in piezas:
+        golpes: list[tuple[float, float, str]] = []
+        for tipo, cx, cy, dx, dy in barrenos_p:
             idx = estacion_para_barreno(tipo, dx, dy, ests)
             if idx is None:
                 desc = f"Ø{dx:.2f}" if tipo == "C" else f"ovalado {dx:.2f}×{dy:.2f} (largo×ancho)"
-                errores.append(f"{nombre}: barreno {desc} mm sin herramienta montada")
+                if herramienta_inventario(tipo, dx, dy, inventario) is None:
+                    errores.append(f"{nombre}: barreno {desc} mm sin herramienta en el inventario")
                 continue
             golpes.append((cx - x0, cy, f"M{idx}"))
         golpes.sort(key=lambda g: (round(g[0], 3), round(g[1], 3)))
-        if len(golpes) + 1 > N_GOLPES:
-            errores.append(
-                f"{nombre}: {len(golpes)} barrenos; la máquina admite {N_GOLPES - 1} por pieza"
-            )
-            continue
         golpes.append((largo, 0.0, "C"))
         filas.append(_fila(_model_texto(nombre), ancho_bar, thickness_mm, largo, golpes, molds))
 
     if len(filas) > N_FILAS:
         errores.append(f"{len(filas)} filas; LJcad admite {N_FILAS} por archivo")
     if errores:
-        raise PunchCsvError(f"[{tag}] " + " | ".join(errores))
+        raise PunchCsvError(f"[{tag}] " + " | ".join(_agrupar_errores(errores)))
+    hoja["cu_punch_cambios_herramental"] = cambios
     return filas
 
 

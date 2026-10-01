@@ -82,12 +82,14 @@ def main() -> None:
         from modules.nesting_engine.nest_runtime_prefs import save_nest_runtime_prefs
 
         assert codigos_molds() == [
-            "C11.1", "C10.3", "C11.0", "E11.1X20.6",
-            "E11.1X17.5", "E11.1X15.9", "E11.1X14.3", "E10.3X15.1",
+            "C11.1", "C10.3", "C11.0", "E20.6X11.1",
+            "E17.5X11.1", "E11.1X15.9", "E14.3X11.1", "E10.3X15.1",
         ], codigos_molds()
         assert estacion_para_barreno("C", 11.11, 11.11) == 1
         assert estacion_para_barreno("E", 11.11, 15.88) == 6
         assert estacion_para_barreno("E", 15.88, 11.11) is None, "orientación del ovalado"
+        # Caso W.O. 90 X2 (GENE-FCU-4-109, ABB-22-U-BCK-72x): 17.46 a lo largo.
+        assert estacion_para_barreno("E", 17.46, 11.11) == 5
 
         normal = _con_barrenos(
             600.0,
@@ -148,30 +150,60 @@ def main() -> None:
         vacia = lineas[5].split("\t")
         assert vacia[0] == "" and vacia[1] == "0" and vacia[-1] == "0"
 
-        # Barreno sin herramienta → bloquea.
-        raro = _con_barrenos(400.0, W6, [Point(60.0, 60.0).buffer(4.5, resolution=32)])
+        # Ovalado 17.46 a lo largo (caso real que bloqueaba) → Mold5 sin cambios.
+        ab = _con_barrenos(
+            300.0, W6,
+            [_slot(40.0, 30.0, 11.11, 17.46, eje_y=False), _slot(40.0, 120.0, 11.11, 17.46, eje_y=False)],
+        )
+        h_ab, _ = empaquetar_largos_cu([_pieza("ABB-22-U-BCK-721", ab)], _placas(), separacion_in=0.0)
+        fil_ab = pc.construir_filas_barra(h_ab[0], thickness_mm=6.35)
+        assert [fil_ab[1][f"M{n}"] for n in (1, 2, 3)] == ["M5", "M5", "C"], fil_ab[1]
+        assert h_ab[0]["cu_punch_cambios_herramental"] == []
+
+        # Barreno fuera del inventario → bloquea, mensaje agrupado por pieza.
+        raro = _con_barrenos(
+            400.0, W6,
+            [Point(60.0, 60.0).buffer(4.5, resolution=32), Point(160.0, 60.0).buffer(4.5, resolution=32)],
+        )
         h_raro, _ = empaquetar_largos_cu([_pieza("RARO", raro)], _placas(), separacion_in=0.0)
         try:
             pc.construir_filas_barra(h_raro[0], thickness_mm=6.35)
         except pc.PunchCsvError as exc:
-            assert "RARO" in str(exc) and "sin herramienta" in str(exc), exc
+            assert "RARO" in str(exc) and "inventario" in str(exc) and "(x2)" in str(exc), exc
         else:
-            raise AssertionError("barreno Ø9 sin herramienta debió bloquear")
+            raise AssertionError("barreno Ø9 fuera del inventario debió bloquear")
 
-        # Ovalado a lo largo (E15.9X11.1) no montado → bloquea.
+        # Ovalado 15.88 a lo largo: no montado pero sí en inventario → cambio automático.
         ov = _con_barrenos(400.0, W6, [_slot(200.0, 76.2, 11.11, 15.88, eje_y=False)])
         h_ov, _ = empaquetar_largos_cu([_pieza("OVAL-X", ov)], _placas(), separacion_in=0.0)
+        fil_ov = pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
+        assert fil_ov[1]["M1"] == "M8" and fil_ov[1]["Mold8"] == "E15.9X11.1", fil_ov[1]
+        assert h_ov[0]["cu_punch_cambios_herramental"] == ["Mold8: E10.3X15.1 → E15.9X11.1"]
+        assert pc.montaje_barra(h_ov[0])[1] == ["Mold8: E10.3X15.1 → E15.9X11.1"]
+        # Sin esa herramienta en el inventario → bloquea.
         try:
-            pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
+            pc.construir_filas_barra(
+                h_ov[0], thickness_mm=6.35, inventario=[{"tipo": "C", "x": 11.11}]
+            )
         except pc.PunchCsvError as exc:
             assert "OVAL-X" in str(exc), exc
         else:
-            raise AssertionError("ovalado a lo largo sin herramienta debió bloquear")
+            raise AssertionError("ovalado fuera del inventario debió bloquear")
+        # Montado por el usuario en el base → sin cambio.
         ests = cargar_estaciones()
         ests[7] = {"tipo": "E", "x": 15.88, "y": 11.11}
         guardar_estaciones(ests)
         fil_ov = pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
-        assert fil_ov[1]["M1"] == "M8" and fil_ov[1]["Mold8"] == "E15.9X11.1"
+        assert fil_ov[1]["M1"] == "M8" and h_ov[0]["cu_punch_cambios_herramental"] == []
+
+        # Más de 8 herramientas distintas en una barra → bloquea.
+        from modules.nesting_engine.cu_punch_tooling import montaje_para_barra
+
+        muchos = [("C", 11.11, 11.11), ("C", 10.31, 10.31), ("C", 11.0, 11.0),
+                  ("E", 20.65, 11.11), ("E", 17.47, 11.11), ("E", 11.11, 15.88),
+                  ("E", 14.30, 11.11), ("E", 10.31, 15.08), ("E", 11.11, 20.33)]
+        _e, _c, falt = montaje_para_barra(muchos, estaciones=None)
+        assert any("más de 8" in f for f in falt), falt
 
         # Contorno con muesca → bloquea.
         muesca = Polygon([(0, 0), (400, 0), (400, W6), (20, W6), (20, W6 - 10), (0, W6 - 10)])

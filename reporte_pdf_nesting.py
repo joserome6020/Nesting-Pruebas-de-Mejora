@@ -400,10 +400,12 @@ def _enumerate_plates(resultados_nesting):
 
             cu_proceso = ""
             cu_recorte_laser: list = []
+            cu_cambios_herramental: list = []
             if hoja.get("modo_largos_cu"):
                 try:
                     from modules.dxf_export.cu_punch_csv import (
                         hoja_requiere_csv_punzonado,
+                        montaje_barra,
                         piezas_recorte_laser,
                         proceso_hoja_cobre,
                     )
@@ -411,6 +413,7 @@ def _enumerate_plates(resultados_nesting):
                     cu_proceso = proceso_hoja_cobre(hoja)
                     if hoja_requiere_csv_punzonado(hoja):
                         cu_recorte_laser = piezas_recorte_laser(hoja)
+                        cu_cambios_herramental = montaje_barra(hoja)[1]
                 except Exception:
                     pass
 
@@ -418,6 +421,7 @@ def _enumerate_plates(resultados_nesting):
                 {
                     "cu_proceso": cu_proceso,
                     "cu_recorte_laser": cu_recorte_laser,
+                    "cu_cambios_herramental": cu_cambios_herramental,
                     "id": placa_id_final,
                     "base_id": _plate_base_id(placa_id_final),
                     "calibre": str(grupo_calibre),
@@ -733,6 +737,17 @@ def _draw_cu_proceso_header(c, plate, width, title_color):
             width - 18,
             684,
             _fit_text(f"Recorte láser posterior: {nombres}", 250, "Helvetica", 7.6),
+        )
+    cambios = plate.get("cu_cambios_herramental") or []
+    if cambios:
+        c.setFont("Helvetica-Bold", 7.6)
+        c.setFillColor(colors.HexColor("#B91C1C"))
+        c.drawRightString(
+            width - 18,
+            671,
+            _fit_text(
+                "Cambio de herramental: " + ", ".join(cambios), 300, "Helvetica-Bold", 7.6
+            ),
         )
     c.setFillColor(title_color)
 
