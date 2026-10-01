@@ -395,13 +395,16 @@ def _patch_dxf_limits_on_disk(
 
 def _save_dxf_atomic(doc, out_path: str) -> None:
     """Escribe DXF vía temporal + reemplazo atómico (tolerante a locks breves)."""
-    out_path = os.path.abspath(str(out_path))
-    out_dir = os.path.dirname(out_path) or "."
-    os.makedirs(out_dir, exist_ok=True)
+    from modules.win_long_path import asegurar_ruta_escritura, win_long_path
+
+    nombre = os.path.basename(str(out_path))
+    out_path = asegurar_ruta_escritura(os.path.abspath(str(out_path)), threshold=200)
     tmp_path = os.path.join(
-        out_dir,
+        os.path.dirname(out_path) or ".",
         f".__arga_export_{os.getpid()}_{uuid.uuid4().hex[:8]}.dxf",
     )
+    if out_path.startswith("\\\\?\\"):
+        tmp_path = win_long_path(tmp_path)
     try:
         limits = _sync_dxf_header_view(doc)
         doc.saveas(tmp_path)
@@ -419,7 +422,11 @@ def _save_dxf_atomic(doc, out_path: str) -> None:
                     time.sleep(0.4 * (attempt + 1))
                     continue
                 break
-        nombre = os.path.basename(out_path)
+        if getattr(last_err, "winerror", None) in (3, 206):
+            raise DxfExportValidationError(
+                f"No se pudo guardar {nombre}: {last_err}. "
+                "La ruta de la carpeta del job no existe o es demasiado larga para Windows."
+            ) from last_err
         raise DxfExportValidationError(
             f"No se pudo guardar {nombre}: {last_err}. "
             "El archivo está en uso — cierra Inventor, AutoCAD o FreeCAD si lo tienen abierto "
@@ -2425,7 +2432,9 @@ def _assert_dxf_autocad_safe_on_disk(path: str) -> None:
     """Falla el export si el archivo en disco aún no es aceptable para AutoCAD."""
     from pathlib import Path
 
-    p = Path(path)
+    from modules.win_long_path import needs_win_long_path, win_long_path
+
+    p = Path(win_long_path(path) if needs_win_long_path(path, threshold=200) else path)
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:

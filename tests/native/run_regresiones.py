@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_export_dxf_ruta_larga.py",
+        "2026-10-01 - export DXF abortado (WinError 3) en ruta UNC > 260 chars (W.O. 154 X1 VANTRAN)",
+    ),
+    (
         "test_thumbnail_hilo_sin_qpixmap.py",
         "2026-09-30g - crash access violation: miniaturas PARTS creaban QPixmap en hilo worker",
     ),

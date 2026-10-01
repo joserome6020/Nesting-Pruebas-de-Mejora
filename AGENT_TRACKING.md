@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01 — Export DXF abortado en ruta UNC > 260 caracteres
+
+- W.O. 154 X1 (VANTRAN, `\\192.168.2.80\...\NESTEO DXF\DXF\` = 224 chars) + nombre RTZ = 272:
+  `_save_dxf_atomic` hacía `os.replace` sin prefijo `\\?\` → WinError 3 en PCs con
+  `LongPathsEnabled=0` (el .exe ya es longPathAware; PDF/.arganest ya usaban `win_long_path`).
+- `_save_dxf_atomic` y `_assert_dxf_autocad_safe_on_disk` usan `asegurar_ruta_escritura` /
+  `win_long_path`; mensaje de error distingue ruta larga (WinError 3/206) de archivo en uso.
+- Candado `test_export_dxf_ruta_larga.py` (simula MAX_PATH; reproduce el error con el código viejo).
+
 ### 2026-09-30g — Crash (access violation) al terminar nest: QPixmap en hilo worker
 
 - `crash.log`: GC en hilo `_thread_generar_thumbnails` / `_thread_auditar_dxfs` mientras
