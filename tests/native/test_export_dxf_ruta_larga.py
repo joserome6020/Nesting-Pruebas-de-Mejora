@@ -55,6 +55,46 @@ def test_save_dxf_atomic_ruta_mayor_260():
     assert not sobrantes, sobrantes
 
 
+def test_ruta_larga_win_y_makedirs():
+    sys.path.insert(0, str(RAIZ / "CAD (OCCT)"))
+    from engine.local_staging import ruta_larga_win
+    from modules.nesting_engine.exporter import _makedirs_largo
+
+    unc = "\\\\192.168.2.80\\Users\\x\\NESTEO DXF\\DXF\\a.dxf"
+    assert ruta_larga_win(unc) == "\\\\?\\UNC\\192.168.2.80\\Users\\x\\NESTEO DXF\\DXF\\a.dxf"
+    assert ruta_larga_win("\\\\?\\C:\\x") == "\\\\?\\C:\\x"
+    assert ruta_larga_win("C:\\corto\\a.dxf") == "C:\\corto\\a.dxf"
+
+    base = tempfile.mkdtemp(prefix="arga_lp_dir_")
+    carpeta = Path(base)
+    while len(str(carpeta)) < 270:
+        carpeta = carpeta / "ARGA MODEL CORE NESTING"
+    _makedirs_largo(str(carpeta))
+    assert os.path.isdir("\\\\?\\" + str(carpeta))
+
+
+def test_step_occt_ruta_mayor_260():
+    sys.path.insert(0, str(RAIZ / "CAD (OCCT)"))
+    try:
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+    except Exception:
+        print("SKIP OCP no disponible")
+        return
+    from engine.occt_runtime import write_step_shape
+
+    base = tempfile.mkdtemp(prefix="arga_lp_step_")
+    carpeta = Path(base)
+    while len(str(carpeta)) < 230:
+        carpeta = carpeta / "NESTEO DXF STEP Cama A"
+    out = carpeta / "NESTING_0.1875_RTZ1-0.1875-60.0x120.0-W.O. 154 X1.step"
+    assert len(str(out)) > 260
+    write_step_shape(BRepPrimAPI_MakeBox(10.0, 10.0, 10.0).Shape(), out)
+    largo = "\\\\?\\" + str(out)
+    assert os.path.isfile(largo) and os.path.getsize(largo) > 64
+
+
 if __name__ == "__main__":
     test_save_dxf_atomic_ruta_mayor_260()
+    test_ruta_larga_win_y_makedirs()
+    test_step_occt_ruta_mayor_260()
     print("OK test_export_dxf_ruta_larga")

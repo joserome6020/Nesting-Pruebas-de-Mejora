@@ -18,6 +18,16 @@ RUTA_ROBOT_LASER = "ROBOT LASER + MINI NEST"
 RUTA_ROBOT_PLASMA = "ROBOT PLASMA"
 
 
+def _makedirs_largo(path: str) -> None:
+    """makedirs con prefijo \\\\?\\ en UNC/rutas profundas (PCs sin LongPathsEnabled)."""
+    from modules.win_long_path import needs_win_long_path, win_long_path
+
+    p = str(path or "").strip()
+    if not p:
+        return
+    os.makedirs(win_long_path(p) if needs_win_long_path(p, threshold=200) else p, exist_ok=True)
+
+
 def _es_familia_acero_nest(nombre_carpeta: str) -> bool:
     u = str(nombre_carpeta or "").strip().upper()
     if not u or RUTA_NESTEOS_COBRE.upper() in u:
@@ -172,7 +182,7 @@ def _localizar_carpeta_dxf(carpeta_esperada: str, job_root_dir: str, etiqueta_fa
 
     carpeta_esperada = os.path.normpath(str(carpeta_esperada or "").strip())
     if carpeta_esperada:
-        os.makedirs(carpeta_esperada, exist_ok=True)
+        _makedirs_largo(carpeta_esperada)
     return carpeta_esperada
 
 
@@ -1220,7 +1230,7 @@ def lanzar_freecad_robotica(
             _notify(f"FreeCAD [{etiqueta}]: sin DXF", step_done=step_acc[0])
             return
 
-        os.makedirs(out_dir, exist_ok=True)
+        _makedirs_largo(out_dir)
         print(f"[{cad_label}] {etiqueta}: {len(candidatos)} DXF -> {out_dir}")
         base = int(step_acc[0])
         _notify(
@@ -1480,9 +1490,9 @@ def exportar_resultados_a_dxf(
         rutas["robot_plasma_step_B"] = rutas["nestee_step_B"]
 
     for r in rutas.values():
-        os.makedirs(r, exist_ok=True)
-    os.makedirs(os.path.join(job_root_dir, REPORTE_PDF_NESTING), exist_ok=True)
-    os.makedirs(os.path.join(job_root_dir, ARCHIVO_ARGANEST_NESTING), exist_ok=True)
+        _makedirs_largo(r)
+    _makedirs_largo(os.path.join(job_root_dir, REPORTE_PDF_NESTING))
+    _makedirs_largo(os.path.join(job_root_dir, ARCHIVO_ARGANEST_NESTING))
 
     exportados_principales = []
     cyptube_vertical_records = []

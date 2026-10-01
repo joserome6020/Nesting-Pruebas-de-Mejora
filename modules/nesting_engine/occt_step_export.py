@@ -34,6 +34,17 @@ def _ensure_cad_engine():
     )
 
 
+def _io(path: str) -> str:
+    from modules.win_long_path import needs_win_long_path, win_long_path
+
+    return win_long_path(path) if needs_win_long_path(path, threshold=200) else path
+
+
+def _step_ok(path: str) -> bool:
+    p = _io(path)
+    return os.path.isfile(p) and os.path.getsize(p) >= 64
+
+
 def _step_path_for_dxf(dxf_path: str, out_dir: str) -> str:
     base = os.path.splitext(os.path.basename(dxf_path))[0]
     return os.path.join(out_dir, f"{base}.step")
@@ -60,7 +71,7 @@ def _convertir_carpeta_occt(
         return True
 
     export_fn, _robot_fn, thk_from_name = _ensure_cad_engine()
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(_io(out_dir), exist_ok=True)
     print(f"[STEP][OCCT] {etiqueta}: {len(dxf_paths)} DXF -> {out_dir}")
     ok_all = True
     for dxf_path in dxf_paths:
@@ -91,7 +102,7 @@ def _convertir_carpeta_occt(
                 piece_workers=step_piece_workers(),
                 include_plate=False,
             )
-            if not os.path.isfile(out_step) or os.path.getsize(out_step) < 64:
+            if not _step_ok(out_step):
                 raise RuntimeError(f"STEP vacío o ausente: {out_step}")
             print(f"[STEP][OCCT] OK {nombre} -> {os.path.basename(out_step)}")
         except Exception as exc:
@@ -133,8 +144,8 @@ def _convertir_robot_ab_occt(
     _export_fn, robot_fn, thk_from_name = _ensure_cad_engine()
     out_a = os.path.normpath(str(out_dir_a or "").strip())
     out_b = os.path.normpath(str(out_dir_b or "").strip())
-    os.makedirs(out_a, exist_ok=True)
-    os.makedirs(out_b, exist_ok=True)
+    os.makedirs(_io(out_a), exist_ok=True)
+    os.makedirs(_io(out_b), exist_ok=True)
     print(
         f"[STEP][OCCT] {etiqueta_base} A+B: {len(dxf_paths)} DXF "
         f"(1 build → 2 camas) -> A={out_a} | B={out_b}"
@@ -165,9 +176,9 @@ def _convertir_robot_ab_occt(
                 mark_chunk=step_mark_chunk(),
                 piece_workers=step_piece_workers(),
             )
-            if not os.path.isfile(step_a) or os.path.getsize(step_a) < 64:
+            if not _step_ok(step_a):
                 raise RuntimeError(f"STEP A vacío: {step_a}")
-            if not os.path.isfile(step_b) or os.path.getsize(step_b) < 64:
+            if not _step_ok(step_b):
                 raise RuntimeError(f"STEP B vacío: {step_b}")
             print(
                 f"[STEP][OCCT] OK {nombre} A+B | "
@@ -418,7 +429,7 @@ def generar_steps_cobre_fuentes_occt(
         if not isinstance(item, dict):
             continue
         ruta = os.path.normpath(str(item.get("ruta_dxf") or "").strip())
-        if not ruta or not os.path.isfile(ruta):
+        if not ruta or not os.path.isfile(_io(ruta)):
             _log(f"[COBRE-FUENTE][OCCT][SKIP] DXF no accesible: {ruta or item.get('nombre', '?')}")
             continue
         out_step = _step_path_for_dxf(ruta, os.path.dirname(ruta))
@@ -444,7 +455,7 @@ def generar_steps_cobre_fuentes_occt(
                 piece_workers=step_piece_workers(),
                 include_plate=False,
             )
-            if os.path.isfile(out_step) and os.path.getsize(out_step) >= 64:
+            if _step_ok(out_step):
                 rutas_ok += 1
                 _log(f"[COBRE-FUENTE][OCCT] OK {nombre}")
             else:

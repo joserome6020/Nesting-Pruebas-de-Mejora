@@ -62,6 +62,10 @@ código viejo. Un bug sin candado vuelve.
   `LongPathsEnabled=0` (el .exe ya es longPathAware; PDF/.arganest ya usaban `win_long_path`).
 - `_save_dxf_atomic` y `_assert_dxf_autocad_safe_on_disk` usan `asegurar_ruta_escritura` /
   `win_long_path`; mensaje de error distingue ruta larga (WinError 3/206) de archivo en uso.
+- Blindaje extendido (nombres de job largos son recurrentes): STEP OCCT (`occt_runtime`
+  escribe a temp corto y copia con `ruta_larga_win`; `local_staging` lee fuente con prefijo;
+  `occt_step_export._io/_step_ok`) y `exporter._makedirs_largo` en todas las carpetas del job.
+  Candado: `test_export_dxf_ruta_larga.py` (DXF + makedirs + STEP > 260).
 - Candado `test_export_dxf_ruta_larga.py` (simula MAX_PATH; reproduce el error con el código viejo).
 
 ### 2026-09-30g — Crash (access violation) al terminar nest: QPixmap en hilo worker

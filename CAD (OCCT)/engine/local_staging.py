@@ -46,6 +46,18 @@ def is_network_drive(path: str | Path) -> bool:
         return False
 
 
+def ruta_larga_win(path: str | Path) -> str:
+    """Prefijo \\\\?\\ (o \\\\?\\UNC\\) en Windows para rutas UNC/profundas > MAX_PATH."""
+    s = str(path)
+    if sys.platform != "win32" or s.startswith("\\\\?\\"):
+        return s
+    if s.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + s[2:]
+    if len(s) >= 200:
+        return "\\\\?\\" + os.path.abspath(s)
+    return s
+
+
 def needs_local_staging(path: str | Path) -> bool:
     mode = _env_stage_mode()
     if mode in ("0", "off", "no", "false", "never"):
@@ -72,7 +84,8 @@ def stage_file_to_temp(
         yield source
         return
 
-    if not source.is_file():
+    source_io = ruta_larga_win(source)
+    if not os.path.isfile(source_io):
         raise FileNotFoundError(f"No se puede stagear (no existe): {source}")
 
     ext = suffix if suffix is not None else source.suffix or ".bin"
@@ -80,7 +93,7 @@ def stage_file_to_temp(
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
-        shutil.copy2(str(source), str(tmp_path))
+        shutil.copy2(source_io, str(tmp_path))
         print(
             f"[STAGE] {source.name} -> %TEMP% "
             f"({tmp_path.stat().st_size} bytes) desde red/UNC",

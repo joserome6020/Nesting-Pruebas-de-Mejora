@@ -22,15 +22,31 @@ def write_step_shape(shape: Any, out_path: str | Path) -> Path:
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPControl import STEPControl_AsIs, STEPControl_Writer
 
+    import os
+    import shutil
+    import tempfile
+
+    from .local_staging import ruta_larga_win
+
     path = Path(out_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(ruta_larga_win(path.parent), exist_ok=True)
 
     writer = STEPControl_Writer()
     writer.Transfer(shape, STEPControl_AsIs)
-    status = writer.Write(str(path))
-    if status != IFSelect_RetDone:
-        raise RuntimeError(f"OCCT STEP write falló (status={int(status)}): {path}")
-    if not path.is_file() or path.stat().st_size <= 0:
+    fd, tmp_name = tempfile.mkstemp(prefix="arga_occt_", suffix=".step")
+    os.close(fd)
+    try:
+        status = writer.Write(tmp_name)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(f"OCCT STEP write falló (status={int(status)}): {path}")
+        shutil.copy2(tmp_name, ruta_larga_win(path))
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+    destino = ruta_larga_win(path)
+    if not os.path.isfile(destino) or os.path.getsize(destino) <= 0:
         raise RuntimeError(f"STEP vacío o no creado: {path}")
     return path
 
@@ -188,8 +204,10 @@ def write_step_xcaf(
             pass
         _STEP_WRITER_PRIMED = True
 
+    from .local_staging import ruta_larga_win
+
     path = Path(out_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(ruta_larga_win(path.parent), exist_ok=True)
 
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
@@ -274,15 +292,15 @@ def write_step_xcaf(
         # Evita dumps XCAF lentísimos directo al share.
         import shutil
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(tmp_path), str(path))
+        shutil.copy2(str(tmp_path), ruta_larga_win(path))
     finally:
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except Exception:
                 pass
-    if not path.is_file() or path.stat().st_size <= 0:
+    destino = ruta_larga_win(path)
+    if not os.path.isfile(destino) or os.path.getsize(destino) <= 0:
         raise RuntimeError(f"STEP vacío o no creado: {path}")
     return path
 
