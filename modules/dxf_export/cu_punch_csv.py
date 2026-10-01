@@ -242,11 +242,12 @@ def _analizar_barra(hoja: dict) -> tuple[list[tuple], list[str]]:
 
 def _x_grabado(x0: float, largo: float, barrenos: list[tuple], grabado: dict) -> float:
     """X del grabado (relativo a la pieza): centro de la franja libre antes del primer barreno."""
+    from modules.nesting_engine.cu_punch_tooling import x_grabado_mm
+
+    borde = None
     if barrenos:
         borde = min(float(cx) - float(dx) / 2.0 for _t, cx, _cy, dx, _dy in barrenos) - x0
-        if borde > 0.0:
-            return borde / 2.0
-    return min(float(grabado.get("x_sin_barrenos_mm") or 12.7), largo / 2.0)
+    return x_grabado_mm(largo, borde, grabado)
 
 
 def montaje_barra(

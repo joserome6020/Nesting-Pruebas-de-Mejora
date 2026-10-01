@@ -1442,6 +1442,10 @@ def _export_cu_inner_and_marks_from_source(
     """Inner/marks cobre largos clonando entidades nativas del DXF fuente (arcos/círculos 1:1)."""
     added = 0
     layers_used: set[str] = set()
+    if draw_marks and p.get("cu_mark_vertical"):
+        draw_marks = False
+        if _export_cu_inner_and_marks(msp, p, draw_holes=False, draw_marks=True):
+            added += 1
     for entity in part_doc.modelspace():
         if entity.dxftype() not in (
             "LINE",

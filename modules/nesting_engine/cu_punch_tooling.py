@@ -193,6 +193,22 @@ def cargar_grabado() -> dict[str, Any]:
     return normalizar_grabado(_leer_config().get("grabado"))
 
 
+def x_grabado_mm(
+    largo_mm: float,
+    borde_primer_barreno_mm: float | None,
+    grabado: dict[str, Any] | None = None,
+) -> float:
+    """X del grabado ``M100`` desde el inicio de la pieza (= centro del MARK vertical).
+
+    Centro de la franja libre antes del primer barreno; sin barrenos (o barreno
+    pegado a la orilla) usa ``x_sin_barrenos_mm`` sin pasar de media pieza.
+    """
+    if borde_primer_barreno_mm is not None and borde_primer_barreno_mm > 0.0:
+        return float(borde_primer_barreno_mm) / 2.0
+    grab = grabado if grabado is not None else cargar_grabado()
+    return min(float(grab.get("x_sin_barrenos_mm") or 12.7), float(largo_mm) / 2.0)
+
+
 def guardar_herramental(
     estaciones: list[dict[str, Any] | None] | None = None,
     inventario: list[dict[str, Any]] | None = None,

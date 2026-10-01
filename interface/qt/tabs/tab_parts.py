@@ -1644,6 +1644,17 @@ class TabParts(QWidget, TimerHost):
             vista_dxf = ruta_dxf
             if (not self._es_material_cobre(material)) and self._plasma_guardada(ruta_dxf):
                 vista_dxf = self._asegurar_vista_plasma(ruta_dxf)
+            mark_v = None
+            try:
+                from modules.dxf_mark.cu_mark_vertical import aplica_mark_cu_vertical
+
+                if aplica_mark_cu_vertical(
+                    material, especial=self._cu_especial_guardada(ruta_dxf)
+                ):
+                    mark_v = nombre_pieza
+            except Exception:
+                mark_v = None
+            self.visor.set_mark_cu_vertical(mark_v)
             self.visor.renderizar_dxf(
                 vista_dxf,
                 rotacion_vista_deg=rot_vista,

@@ -116,10 +116,58 @@ def _agregar_shapes_desde_line_arc(
         )
 
 
-def load_dxf_part(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | None:
-    """Carga y parsea el DXF bajo `EZDXF_LOCK` (evita race con audit thread)."""
+def load_dxf_part(
+    ruta_dxf: str,
+    rotacion_vista_deg: int = 0,
+    mark_cu_vertical_texto: str | None = None,
+) -> DxfPartModel | None:
+    """Carga y parsea el DXF bajo `EZDXF_LOCK` (evita race con audit thread).
+
+    ``mark_cu_vertical_texto``: cobre normal → la capa MARK se reemplaza (solo en
+    memoria) por el texto vertical al inicio de la pieza, igual que en el nest/CSV.
+    """
     with EZDXF_LOCK:
-        return _load_dxf_part_impl(ruta_dxf, rotacion_vista_deg)
+        model = _load_dxf_part_impl(ruta_dxf, rotacion_vista_deg)
+        if model is not None and mark_cu_vertical_texto:
+            try:
+                _reemplazar_mark_cu_vertical(model, mark_cu_vertical_texto)
+            except Exception:
+                pass
+        return model
+
+
+def _reemplazar_mark_cu_vertical(model: DxfPartModel, texto: str) -> None:
+    from shapely.geometry import Polygon
+
+    from modules.dxf_mark.cu_mark_vertical import es_rectangulo_eje, strokes_mark_cu_vertical
+
+    outers, inners = clasificar_contornos_cerrados(list(model.shapes_cerrados or []))
+    if len(outers) != 1:
+        return
+    pts = outers[0].get("pts") or []
+    if len(pts) < 3:
+        return
+    # factor_conversion = unidades DXF por pulgada → mm por unidad = 25.4 / factor.
+    f = 25.4 / float(model.factor_conversion or 25.4)
+    outer_mm = Polygon([(float(x) * f, float(y) * f) for x, y in pts])
+    if not es_rectangulo_eje(outer_mm):
+        return
+    holes_minx = []
+    for sh in inners:
+        hp = sh.get("pts") or []
+        if hp:
+            holes_minx.append(min(float(x) for x, _y in hp) * f)
+    strokes = strokes_mark_cu_vertical(outer_mm.bounds, holes_minx, texto)
+    if not strokes:
+        return
+    msp = model.msp
+    if "MARK" not in model.doc.layers:
+        model.doc.layers.add("MARK")
+    for e in [e for e in msp if es_mark_layer(str(e.dxf.layer).upper())]:
+        msp.delete_entity(e)
+    for s in strokes:
+        for (x1, y1), (x2, y2) in zip(s, s[1:]):
+            msp.add_line((x1 / f, y1 / f), (x2 / f, y2 / f), dxfattribs={"layer": "MARK"})
 
 
 def _load_dxf_part_impl(ruta_dxf: str, rotacion_vista_deg: int = 0) -> DxfPartModel | None:

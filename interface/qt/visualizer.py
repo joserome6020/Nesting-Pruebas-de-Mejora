@@ -411,6 +411,10 @@ class VisorDXF:
         self.lbl_perim.setText(snap[3])
         self.lbl_ref.setText(snap[4])
 
+    def set_mark_cu_vertical(self, texto: str | None) -> None:
+        """Cobre normal: MARK vertical al inicio (mismo lugar que el grabado M100 del CSV)."""
+        self._mark_cu_vertical_texto = str(texto) if texto else None
+
     def ajustar_vista(self):
         self._cad.fit_view()
 
@@ -447,11 +451,16 @@ class VisorDXF:
         if ruta and os.path.isfile(ruta):
             self._cad.show_placeholder("Cargando vista…")
 
+        mark_v = getattr(self, "_mark_cu_vertical_texto", None)
+
         def _worker():
             model = None
             try:
                 if ruta and os.path.isfile(ruta):
-                    model = load_dxf_part(ruta, self._rotacion_vista_deg)
+                    if mark_v:
+                        model = load_dxf_part(ruta, self._rotacion_vista_deg, mark_v)
+                    else:
+                        model = load_dxf_part(ruta, self._rotacion_vista_deg)
             except Exception:
                 model = None
             call_on_main(
@@ -505,7 +514,11 @@ class VisorDXF:
             if plasma_offset_mm is not None:
                 self._plasma_offset_mm = float(plasma_offset_mm or 0.0)
             self._cad.set_material(self._material)
-            model = load_dxf_part(ruta_dxf, self._rotacion_vista_deg)
+            mark_v = getattr(self, "_mark_cu_vertical_texto", None)
+            if mark_v:
+                model = load_dxf_part(ruta_dxf, self._rotacion_vista_deg, mark_v)
+            else:
+                model = load_dxf_part(ruta_dxf, self._rotacion_vista_deg)
             if model is None:
                 return False
             self.factor_conversion = model.factor_conversion

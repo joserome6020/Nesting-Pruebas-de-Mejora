@@ -248,6 +248,49 @@ def main() -> None:
         else:
             raise AssertionError("contorno con muesca debió bloquear")
 
+        # MARK vertical (nest/visor) en la misma X que el M100 del CSV.
+        from modules.dxf_mark.cu_mark_vertical import mark_cu_vertical_para_poly
+
+        abb = _con_barrenos(
+            489.79, 101.6,
+            [_slot(25.4, 25.4, 11.11, 17.46, eje_y=False), _slot(25.4, 76.2, 11.11, 17.46, eje_y=False),
+             Point(419.1, 25.4).buffer(5.155, resolution=32), Point(469.9, 25.4).buffer(5.155, resolution=32)],
+        )
+        mk = mark_cu_vertical_para_poly(abb, "ABB-22-U-BCK-721")
+        assert not mk.is_empty
+        mb = mk.bounds
+        assert mb[3] - mb[1] > mb[2] - mb[0], "MARK debe ir vertical"
+        assert mb[2] < 25.4 - 17.46 / 2, "MARK antes del primer barreno"
+        placas4 = [dict(_placas()[0], h=101.6)]
+        p_abb = dict(_pieza("ABB-22-U-BCK-721", abb), marks=mk)
+        h_abb, _ = empaquetar_largos_cu([p_abb], placas4, separacion_in=0.0)
+        f_abb = pc.construir_filas_barra(h_abb[0], thickness_mm=6.35)[0]
+        pz = [p for p in h_abb[0]["piezas"] if p["nombre"] == "ABB-22-U-BCK-721"][0]
+        x0 = min(t[0] for t in pz["poligonos"][0])
+        mxs = [pt[0] - x0 for s in pz["marcas"] for pt in s]
+        assert f_abb["M1"] == "M100"
+        assert abs((min(mxs) + max(mxs)) / 2 - float(f_abb["X1"])) < 0.02, (mxs, f_abb["X1"])
+
+        import ezdxf
+
+        from interface.qt.dxf_part_loader import load_dxf_part
+
+        doc = ezdxf.new("R2000")
+        doc.header["$INSUNITS"] = 1
+        msp = doc.modelspace()
+        msp.add_lwpolyline([(0, 0), (10, 0), (10, 4), (0, 4)], close=True, dxfattribs={"layer": "CUT_OUTER"})
+        msp.add_circle((2.0, 2.0), 0.219, dxfattribs={"layer": "CUT_INNER"})
+        msp.add_line((4, 2), (7, 2), dxfattribs={"layer": "MARK"})
+        ruta_v = os.path.join(temp_dir, "VISOR-CU.dxf")
+        doc.saveas(ruta_v)
+        model = load_dxf_part(ruta_v, 0, "VISOR-CU")
+        segs = [e for e in model.msp if e.dxf.layer.upper() == "MARK"]
+        vx = [v for e in segs for v in (e.dxf.start.x, e.dxf.end.x)]
+        vy = [v for e in segs for v in (e.dxf.start.y, e.dxf.end.y)]
+        borde_mm = (2.0 - 0.219) * 25.4
+        assert abs((min(vx) + max(vx)) / 2 * 25.4 - borde_mm / 2) < 0.05, vx
+        assert max(vy) - min(vy) > 1.0 and max(vx) < 2.0 - 0.219, "visor: MARK vertical antes del barreno"
+
         # Qué barras llevan CSV.
         assert pc.hoja_requiere_csv_punzonado(
             {"modo_largos_cu": True, "cu_modo_separacion_barra": "sin_gap"}

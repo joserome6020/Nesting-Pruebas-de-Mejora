@@ -3305,6 +3305,26 @@ class MotorNesting:
                 ),
             ):
                 marks = MultiLineString()
+            elif poly is not None:
+                try:
+                    from modules.dxf_mark.cu_mark_vertical import (
+                        aplica_mark_cu_vertical,
+                        mark_cu_vertical_para_poly,
+                    )
+
+                    if aplica_mark_cu_vertical(
+                        mat,
+                        especial=bool(
+                            (getattr(self, "cu_especial_por_ruta", {}) or {}).get(
+                                clave_orientacion_cobre_ruta(ruta), False
+                            )
+                        ),
+                    ):
+                        mk_v = mark_cu_vertical_para_poly(poly, pieza)
+                        if not mk_v.is_empty:
+                            marks = mk_v
+                except Exception as exc:
+                    _dbg_nesting(f"[CU-MARK-V-FAIL] pieza={pieza} | {exc}")
 
             if poly is None:
                 motivo = err_geom or "recuperar_geometria_robusta devolvió None"

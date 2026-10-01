@@ -1837,6 +1837,9 @@ def exportar_resultados_a_dxf(
                 if cu_largos_piece and should_omit_copper_marks("CU", pieza=pz):
                     placement["omit_marks_cu"] = True
                     placement["marks"] = []
+                elif cu_largos_piece and id(hoja) in punch_filas_por_hoja:
+                    # MARK vertical del nest (misma X que el M100 del CSV), no el del DXF fuente.
+                    placement["cu_mark_vertical"] = True
                 if layer_override:
                     placement["layer_override"] = str(layer_override)
                 if closed_flag is not None:
