@@ -1372,11 +1372,15 @@ def exportar_resultados_a_dxf(
         from nest_exporter import export_nest_to_dxf, DxfExportValidationError
         from modules.dxf_export.cobre_nest import export_cobre_hoja_to_dxf
 
-    from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+    from modules.nesting_engine.cu_largos_nesting import NOMBRE_DESPUNTE_ZONA_CU
+    from modules.nesting_engine.nest_runtime_prefs import (
+        is_cu_sin_marcaje_enabled,
+        should_omit_copper_marks,
+    )
 
     cu_sin_marcaje = bool(is_cu_sin_marcaje_enabled())
     if cu_sin_marcaje:
-        log("[CyPTube] Preferencia activa: cobre SIN marcaje (solo Corte)")
+        log("[CyPTube] Preferencia activa: cobre Z/Zapato/Botella SIN marcaje (normales con MARK)")
 
     import config
 
@@ -1716,6 +1720,8 @@ def exportar_resultados_a_dxf(
                 pols = pz.get("poligonos", []) or []
                 if not pols:
                     continue
+                if es_cu_hoja and nom == NOMBRE_DESPUNTE_ZONA_CU:
+                    continue
 
                 es_linea_corte = (
                     nom.startswith("RETAZO_GUILLOTINA")
@@ -1780,6 +1786,9 @@ def exportar_resultados_a_dxf(
                     "rot_origin_cx": pz.get("rot_origin_cx", 0.0),
                     "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                 }
+                if cu_largos_piece and should_omit_copper_marks("CU", pieza=pz):
+                    placement["omit_marks_cu"] = True
+                    placement["marks"] = []
                 if layer_override:
                     placement["layer_override"] = str(layer_override)
                 if closed_flag is not None:
@@ -2006,7 +2015,7 @@ def exportar_resultados_a_dxf(
                                 sheet_info,
                                 placements_principales,
                                 title=f"{carpeta_principal} | {clave}",
-                                draw_marks=not cu_sin_marcaje,
+                                draw_marks=True,
                                 strict=True,
                             )
                         else:

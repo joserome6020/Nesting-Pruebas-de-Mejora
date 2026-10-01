@@ -222,9 +222,9 @@ def _marcas_para_display(
         return []
     if _is_copper_context(pieza, hoja, clave):
         try:
-            from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+            from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
 
-            if is_cu_sin_marcaje_enabled():
+            if should_omit_copper_marks("CU", pieza=pieza):
                 return []
         except Exception:
             pass
@@ -634,6 +634,12 @@ def _piece_style(
         return None, QPen(COLOR_REM_EDGE, 1.0, Qt.PenStyle.DashLine), Qt.BrushStyle.NoBrush
     if es_ref:
         return QBrush(COLOR_REF_FILL), QPen(QColor("#1E293B"), 1.0), Qt.BrushStyle.SolidPattern
+    if nom.startswith("CU_CORTE__DESPUNTE__ZONA"):
+        return (
+            QBrush(QColor("#94A3B8"), Qt.BrushStyle.BDiagPattern),
+            QPen(QColor("#64748B"), 1.0, Qt.PenStyle.DashLine),
+            Qt.BrushStyle.BDiagPattern,
+        )
     if es_guill:
         return None, QPen(COLOR_GUILL, 4.5, Qt.PenStyle.DashDotLine), Qt.BrushStyle.NoBrush
     if es_tat:

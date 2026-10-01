@@ -545,7 +545,7 @@ def renovar_pieza_desde_dxf_en_pose(pieza: dict) -> bool:
     try:
         from modules.nesting_engine.nest_runtime_prefs import should_omit_copper_marks
 
-        omit_mark = should_omit_copper_marks(pieza.get("material"))
+        omit_mark = should_omit_copper_marks(pieza.get("material"), pieza=pieza)
     except Exception:
         pass
 

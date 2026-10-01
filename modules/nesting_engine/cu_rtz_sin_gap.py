@@ -13,10 +13,12 @@ RTZCU con gap — también para rellenar la cola libre de una barra relieve/Z
 (mismo ancho) aunque el tramo empiece antes de 114\".
 
 El inicio del RTZCU NO es una línea fija en 114\": empieza al terminar la
-última pieza de la madre + gap por defecto (puede quedar antes o después
-de 114\" según cómo llenó la madre).
+última pieza de la madre + ``separacion_cu_in`` de la hoja (puede quedar antes
+o después de 114\" según cómo llenó la madre). Con la regla actual el cobre va
+sin gap (separación 0): el RTZCU arranca pegado a la madre y sus piezas van
+pegadas entre sí. Solo hojas antiguas o modo forzado DXF/STEP traen 0.375".
 
-Si con gap no caben todas las piezas del tramo RTZ hasta el final de la
+Si no caben todas las piezas del tramo RTZ hasta el final de la
 solera (144\"), las que sobran se derraman a barra(s) nueva(s) — que a su
 vez pueden llenarse y generar otro RTZCU.
 """
@@ -660,7 +662,7 @@ def _calcular_inicio_rtz_mm(
     largo_barra_mm: float,
 ) -> float:
     """
-    Inicio del bloque RTZCU: justo después de la madre + gap.
+    Inicio del bloque RTZCU: justo después de la madre + gap de la hoja (0 por defecto).
 
     - Si la madre no llenó hasta 114\", el RTZ puede empezar antes de 114\".
     - Si con gap el bloque no cabe hasta el final de la solera, se corre hacia

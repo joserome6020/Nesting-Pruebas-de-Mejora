@@ -790,7 +790,10 @@ def _colocar_geometria_exacta_en_pieza(p_orig: dict, p_final: dict, transform: d
     if marcas_motor:
         return
 
-    if should_omit_copper_marks(p_orig.get("material") or p_final.get("material")):
+    if should_omit_copper_marks(
+        p_orig.get("material") or p_final.get("material"),
+        pieza={**p_orig, **p_final},
+    ):
         return
 
     pe = p_orig.get("poly_exact") or p_orig.get("poly")
@@ -3238,7 +3241,15 @@ class MotorNesting:
 
             poly, marks, err_geom = recuperar_geometria_robusta_detalle(ruta_parse)
 
-            if should_omit_copper_marks(mat):
+            if should_omit_copper_marks(
+                mat,
+                poly=poly,
+                especial=bool(
+                    (getattr(self, "cu_especial_por_ruta", {}) or {}).get(
+                        clave_orientacion_cobre_ruta(ruta), False
+                    )
+                ),
+            ):
                 marks = MultiLineString()
 
             if es_material_cobre(mat):

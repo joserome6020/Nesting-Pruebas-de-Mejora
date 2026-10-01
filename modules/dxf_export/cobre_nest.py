@@ -241,7 +241,7 @@ def export_cobre_hoja_to_dxf(
 
             # VERTICAL CyPTube ESP: cortes + MARK; sin barrenos en la barra vertical.
             piece_holes = draw_holes
-            piece_marks = draw_marks
+            piece_marks = draw_marks and not bool(p.get("omit_marks_cu"))
             if bool(p.get("cu_especial_vertical")) and not sheet_work.get("cu_export_amada"):
                 piece_holes = False
 

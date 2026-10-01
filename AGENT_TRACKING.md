@@ -55,6 +55,26 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01b — Cobre sin gap + despunte 50 mm + anchos Conf1/Conf2 + MARK solo normales
+
+- Preparación para la punzonadora Lijian (MX602K): Amada queda en desuso (código intacto).
+- `cu_largos_nesting`: `DEFAULT_SEPARACION_CU_IN = 0.0`; 0.375" solo en modo forzado
+  DXF+STEP (`SEPARACION_CU_FORZADA_IN`). Barras de piezas normales arrancan en x=50 mm
+  (`DESPUNTE_CU_MM`) con zona `CU_CORTE__DESPUNTE__ZONA` (visual, no se exporta) y
+  guillotina `CU_CORTE__DESPUNTE__V`; `hoja["cu_despunte_mm"]`. Barras Z/Zapato/Botella
+  (sin_gap laser) y RTZCU sin despunte.
+- RTZCU: con separación 0 arranca pegado a la madre y sus piezas van pegadas (sin cambio de
+  código, solo docstrings).
+- Switch nuevo `cu_ancho_modo` (Configuración Global, env `ARGA_CU_ANCHO_MODO`):
+  `exacto` (Conf1, default) = piezas con decimal (p. ej. 5.75" en barra 6") no entran a barras
+  de exactas; exactas sobrantes sí rellenan residuales (`_reubicar_exactas_en_residuales`).
+  `mixto` (Conf2) = mezcla como antes.
+- `cu_sin_marcaje` ahora = "Z/Zapato/Botella sin marcaje": normales siempre con MARK
+  (`should_omit_copper_marks(..., pieza=/poly=/especial=)`; material solo → conserva MARK).
+  FILES ya no quita MARK al Processed; hay que reprocesar los Processed de cobre viejos.
+- Renesteo cobre propone gap 0 (antes heredaba 0.375 del nest viejo).
+- Candado `test_cu_despunte_ancho_modo.py`. Build: sin módulos/assets nuevos.
+
 ### 2026-10-01 — Export DXF abortado en ruta UNC > 260 caracteres
 
 - W.O. 154 X1 (VANTRAN, `\\192.168.2.80\...\NESTEO DXF\DXF\` = 224 chars) + nombre RTZ = 272:

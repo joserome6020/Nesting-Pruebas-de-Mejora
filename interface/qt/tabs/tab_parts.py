@@ -2024,7 +2024,10 @@ class TabParts(QWidget, TimerHost):
             pass
         try:
             from interface.utils_nesting import _es_clave_cobre
-            from modules.nesting_engine.nest_runtime_prefs import is_cu_sin_marcaje_enabled
+            from modules.nesting_engine.nest_runtime_prefs import (
+                is_cu_sin_marcaje_enabled,
+                should_omit_copper_marks,
+            )
 
             if is_cu_sin_marcaje_enabled():
                 for clave, info in (getattr(self.app, "resultados_nesting", None) or {}).items():
@@ -2032,7 +2035,7 @@ class TabParts(QWidget, TimerHost):
                         continue
                     for hoja in (info or {}).get("hojas") or []:
                         for pz in (hoja or {}).get("piezas") or []:
-                            if isinstance(pz, dict):
+                            if isinstance(pz, dict) and should_omit_copper_marks("CU", pieza=pz):
                                 pz["marcas"] = []
                 vista_nest = getattr(self.app, "vista_nesting", None)
                 if vista_nest and hasattr(vista_nest, "_redibujar_hoja_actual_tras_geom"):

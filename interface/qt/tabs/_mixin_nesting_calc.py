@@ -3190,15 +3190,17 @@ class NestingCalcMixin:
         from modules.nesting_engine.cu_largos_nesting import (
             DEFAULT_SEPARACION_CU_IN,
             LARGO_SIN_SEPARACION_CU_IN,
+            SEPARACION_CU_FORZADA_IN,
         )
+        from modules.nesting_engine.nest_runtime_prefs import is_cu_force_dxf_step_enabled
 
         grp_act = (self.app.resultados_nesting or {}).get(clave) or {}
         src = hoja if isinstance(hoja, dict) else {}
-        valor_sep = float(
-            src.get(
-                "separacion_cu_in",
-                grp_act.get("separacion_cu_in", DEFAULT_SEPARACION_CU_IN),
-            )
+        # Nests viejos guardan 0.375; el renesteo propone la regla vigente.
+        valor_sep = (
+            SEPARACION_CU_FORZADA_IN
+            if is_cu_force_dxf_step_enabled()
+            else DEFAULT_SEPARACION_CU_IN
         )
         valor_largo = float(
             src.get(

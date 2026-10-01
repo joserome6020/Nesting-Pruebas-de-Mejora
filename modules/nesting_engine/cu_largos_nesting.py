@@ -4,15 +4,22 @@ Nesting 1D para largos de cobre (CU).
 - Orientación exacta elegida en PARTS: el empaquetador no vuelve a girar la pieza.
 - Eje X = avance a lo largo del bar; eje Y = ancho (empalme con inventario).
 - Sin tolerancia: si el ancho excede la tira exacta, sube a la tira más ancha siguiente.
-- Gap: 3/8" siempre entre piezas normales. Sin umbral por largo.
-  Excepciones sin_gap (independiente del largo):
+- Gap: 0 entre todas las piezas (punzonadora de solera). Solo el switch
+  "Forzar cobre DXF+STEP" vuelve al gap láser de 3/8".
+- Barras enteras de piezas normales (rectangulares) empiezan con un despunte
+  de 50 mm; las barras Zapato/Botella/Z (relieve) y sus RTZCU no.
+- Anchos (Configuración Global ``cu_ancho_modo``):
+  exacto (default) = piezas del ancho exacto de la solera primero; las de ancho
+  con decimal van en barras propias y las exactas sobrantes pueden rellenarlas.
+  mixto = exactas y con decimal comparten barra.
+  Familias de corte (independiente del largo):
   1) Perfil relieve/Z (escalón/diagonal) — auto por geometría.
   2) Pieza marcada especial en PARTS (`cu_especial_vertical`) — barra vertical CyPTube
      con cortes + MARK (sin barrenos); export AMADA/FIXTURA con colchón +10\" + barrenos.
   Relieve/Z y especiales se priorizan al inicio y NUNCA van a RTZCU (si no caben
   en ≤114\", abren barra nueva). Amada (PARTS) y Z NUNCA comparten la misma barra:
   Amada ESP. solo admite barras de 5\" de ancho. Otras piezas rectangulares en
-  la misma barra Amada/Z van a RTZCU con gap.
+  la misma barra Amada/Z van a RTZCU (pegadas, sin gap).
   Rectángulos con orilla o laminas verticales exactas SÍ pueden ir a RTZCU.
   Cada pieza usa su tira objetivo (exacta o la mínima del catálogo).
 - Export DXF cobre: CUT_OUTER = láser; CUT_INNER + MARK (con_gap / Amada).
@@ -81,7 +88,16 @@ def _tol_ancho_mm() -> float:
 
 
 # Separación por defecto entre piezas en el eje del largo (solo cobre largos).
-DEFAULT_SEPARACION_CU_IN = 0.375  # 3/8"
+# Punzonadora de solera (MX602K): piezas pegadas, corte de cizalla sin merma.
+DEFAULT_SEPARACION_CU_IN = 0.0
+# Switch "Forzar cobre DXF+STEP": conserva el gap láser histórico de 3/8".
+SEPARACION_CU_FORZADA_IN = 0.375
+# Despunte al inicio de barras enteras de piezas normales: la máquina limpia la
+# cabeza de la solera y el nesteo real empieza después.
+DESPUNTE_CU_MM = 50.0
+PREFIJO_DESPUNTE_CU = f"{PREFIJO_CORTE_CU}DESPUNTE__"
+NOMBRE_DESPUNTE_ZONA_CU = f"{PREFIJO_DESPUNTE_CU}ZONA"
+NOMBRE_DESPUNTE_CORTE_CU = f"{PREFIJO_DESPUNTE_CU}V"
 # Legacy: el umbral por largo ya no decide gap (siempre 3/8" salvo Z/especial).
 # Se conserva la constante/API por compatibilidad de renesteo y tests.
 LARGO_SIN_SEPARACION_CU_IN = 0.0
@@ -662,6 +678,29 @@ def _linea_corte_vertical(x_mm: float, alto_mm: float, indice: int) -> dict:
     }
 
 
+def _piezas_despunte_cu(despunte_mm: float, ancho_mm: float) -> List[dict]:
+    """Zona de despunte (solo visual, no se exporta) + guillotina al terminar el despunte."""
+    x1 = float(despunte_mm)
+    alto = float(ancho_mm)
+    zona = {
+        "nombre": NOMBRE_DESPUNTE_ZONA_CU,
+        "poligonos": [[(0.0, 0.0), (x1, 0.0), (x1, alto), (0.0, alto), (0.0, 0.0)]],
+        "marcas": [],
+        "area": 0.0,
+        "calibre": "",
+        "material": "CU",
+        "rot_deg": 0.0,
+        "shift_x": 0.0,
+        "shift_y": 0.0,
+        "es_corte_cu": True,
+        "es_despunte_cu": True,
+    }
+    corte = _linea_corte_vertical(x1, alto, 0)
+    corte["nombre"] = NOMBRE_DESPUNTE_CORTE_CU
+    corte["es_despunte_cu"] = True
+    return [zona, corte]
+
+
 def _largo_pieza_cu_in(item: dict) -> float:
     """Largo nativo del DXF en el eje X (avance de barra), en pulgadas."""
     if item is None:
@@ -807,6 +846,8 @@ def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
     colocados = barra.get("colocados") or []
     if not colocados:
         return True
+    if not _barra_acepta_clase_ancho(barra, item):
+        return False
     fam_item = _familia_corte_cu(item)
     fams = {_familia_corte_cu(c[0]) for c in colocados}
 
@@ -832,6 +873,102 @@ def _barra_acepta_familia_corte(barra: dict, item: dict) -> bool:
 def _barra_tiene_relieve_cu(colocados: List[tuple] | None) -> bool:
     """True si la barra tiene piezas sin_gap forzado (Z o Amada) → cola a RTZCU."""
     return any(_pieza_cu_forzar_sin_gap(c[0]) for c in (colocados or []))
+
+
+def pieza_cu_es_z_o_especial(
+    *,
+    pieza: dict | None = None,
+    poly=None,
+    especial: bool = False,
+) -> bool:
+    """True para Zapato/Botella/Z (relieve) o especial Amada; False = pieza normal.
+
+    Usa los flags del nest si la pieza ya los trae; si no, el contorno
+    (``poly`` shapely o ``poligonos[0]``). Sin geometría → normal.
+    """
+    if especial:
+        return True
+    if isinstance(pieza, dict):
+        if bool(pieza.get("cu_especial_vertical")):
+            return True
+        if "cu_perfil_relieve" in pieza:
+            return bool(pieza.get("cu_perfil_relieve"))
+        if bool(pieza.get("cu_forzar_sin_gap")):
+            return True
+        exterior = _exterior_item_cu(pieza)
+        if exterior:
+            return not _solo_cortes_guillotina_vertical(exterior)
+    if poly is not None and not getattr(poly, "is_empty", True):
+        try:
+            geom = poly
+            if getattr(geom, "geom_type", "") == "MultiPolygon":
+                geom = max(geom.geoms, key=lambda g: g.area)
+            exterior = list(geom.exterior.coords)
+        except Exception:
+            return False
+        return not _solo_cortes_guillotina_vertical(exterior)
+    return False
+
+
+def _cu_ancho_modo_exacto() -> bool:
+    try:
+        from .nest_runtime_prefs import cu_ancho_modo
+
+        return cu_ancho_modo() == "exacto"
+    except Exception:
+        return True
+
+
+def _pieza_cu_ancho_exacto(item: dict) -> bool:
+    """True si la pieza mide exactamente el ancho de su solera (sin recorte a lo largo)."""
+    try:
+        wid_in = float(item.get("wid_mm") or 0.0) / 25.4
+    except (TypeError, ValueError):
+        return True
+    objetivo = _ancho_objetivo_item_in(item)
+    if objetivo <= 0.0 or wid_in <= 0.0:
+        return True
+    return abs(objetivo - wid_in) <= TOL_ANCHO_IN_MIN
+
+
+def _barra_acepta_clase_ancho(barra: dict, item: dict) -> bool:
+    """Configuración 1 (exacto): las piezas con decimal no entran a barras con exactas.
+
+    Las exactas sí pueden entrar a barras de piezas con decimal (residuales).
+    Solo aplica a piezas normales; barras Z/Amada y modo mixto no se restringen.
+    """
+    if not _cu_ancho_modo_exacto():
+        return True
+    if _familia_corte_cu(item) != "guillotina":
+        return True
+    colocados = barra.get("colocados") or []
+    if not colocados:
+        return True
+    if any(_familia_corte_cu(c[0]) != "guillotina" for c in colocados):
+        return True
+    if _pieza_cu_ancho_exacto(item):
+        return True
+    return not any(_pieza_cu_ancho_exacto(c[0]) for c in colocados)
+
+
+def _despunte_inicio_mm(items: List[dict] | None) -> float:
+    """X donde empieza la primera pieza: despunte en barras enteras de piezas normales.
+
+    Barras Zapato/Botella/Z o Amada (laser, sin_gap) y el modo forzado DXF+STEP
+    empiezan en 0.
+    """
+    if not items:
+        return 0.0
+    try:
+        from .nest_runtime_prefs import is_cu_force_dxf_step_enabled
+
+        if is_cu_force_dxf_step_enabled():
+            return 0.0
+    except Exception:
+        pass
+    if any(_pieza_cu_forzar_sin_gap(it) for it in items):
+        return 0.0
+    return float(DESPUNTE_CU_MM)
 
 
 def _gap_mm_entre_piezas_cu(
@@ -945,9 +1082,9 @@ def _simular_encaje_en_barra(
     if modo_trial == modo_prev:
         tiene_relieve = any(_pieza_cu_forzar_sin_gap(it) for it in trial_items)
         if not colocados:
-            x_pos = 0.0
+            x_pos = _despunte_inicio_mm(trial_items)
             gap_before = 0.0
-            cursor = float(item.get("len_mm") or 0.0)
+            cursor = x_pos + float(item.get("len_mm") or 0.0)
         else:
             prev_item, prev_x, _ = colocados[-1]
             gap = _gap_mm_entre_piezas_cu(
@@ -1169,10 +1306,11 @@ def _recalcular_colocados_barra(
     largo_mm: float,
     largo_sin_separacion_in: float = LARGO_SIN_SEPARACION_CU_IN,
 ) -> Tuple[List[tuple], float, str]:
-    """Recalcula posiciones X: gap fijo 3/8" salvo Z/especial (sin_gap madre).
+    """Recalcula posiciones X con el gap de la barra (0 salvo modo forzado).
 
     La barra madre conserva su modo (sin_gap / con_gap). Si es sin_gap y rebasa
-    114\", el tramo sobrante se separa como RTZCU con gap por defecto.
+    114\", el tramo sobrante se separa como RTZCU. Barras enteras de piezas
+    normales arrancan después del despunte.
     """
     if not colocados:
         return colocados, 0.0, "con_gap"
@@ -1180,13 +1318,14 @@ def _recalcular_colocados_barra(
     items = [c[0] for c in colocados]
     modo = _modo_separacion_barra(items, largo_sin_separacion_in)
     tiene_relieve = any(_pieza_cu_forzar_sin_gap(it) for it in items)
+    x0 = _despunte_inicio_mm(items)
     nuevos: List[tuple] = []
     cursor = 0.0
     for i, item in enumerate(items):
         if i == 0:
             item_mod = {**item, "cu_modo_separacion_barra": modo}
-            nuevos.append((item_mod, 0.0, 0.0))
-            cursor = float(item["len_mm"])
+            nuevos.append((item_mod, x0, 0.0))
+            cursor = x0 + float(item["len_mm"])
             continue
         gap = _gap_mm_entre_piezas_cu(
             modo,
@@ -1286,6 +1425,88 @@ def _consolidar_barras_con_pieza_sola(
         barras_abiertas[:] = [b for b in barras_abiertas if b.get("colocados")]
 
 
+def _es_barra_solo_exactas(barra: dict) -> bool:
+    colocados = barra.get("colocados") or []
+    return bool(colocados) and all(
+        _familia_corte_cu(c[0]) == "guillotina" and _pieza_cu_ancho_exacto(c[0])
+        for c in colocados
+    )
+
+
+def _es_barra_residual(barra: dict) -> bool:
+    """Barra de piezas normales que contiene al menos una pieza con decimal."""
+    colocados = barra.get("colocados") or []
+    if not colocados:
+        return False
+    if any(_familia_corte_cu(c[0]) != "guillotina" for c in colocados):
+        return False
+    return any(not _pieza_cu_ancho_exacto(c[0]) for c in colocados)
+
+
+def _reubicar_exactas_en_residuales(
+    barras_abiertas: List[dict],
+    *,
+    separacion_in: float,
+    largo_sin_separacion_in: float,
+) -> None:
+    """Configuración 1: barras de exactas que caben completas en el sobrante de
+    barras residuales (piezas con decimal) del mismo ancho se vacían ahí.
+
+    Solo se mueve una barra si TODAS sus piezas caben; así baja el número de
+    barras y nunca se parte una barra de exactas a medias.
+    """
+    cambiado = True
+    while cambiado:
+        cambiado = False
+        exactas = sorted(
+            (b for b in barras_abiertas if _es_barra_solo_exactas(b)),
+            key=lambda b: float(b.get("cursor_x") or 0.0),
+        )
+        for barra in exactas:
+            residuales = [
+                b
+                for b in barras_abiertas
+                if b is not barra
+                and _es_barra_residual(b)
+                and abs(float(b.get("ancho_in") or 0.0) - float(barra.get("ancho_in") or 0.0))
+                <= TOL_ANCHO_IN_MIN
+            ]
+            if not residuales:
+                continue
+            prueba = {id(b): {**b, "colocados": list(b.get("colocados") or [])} for b in residuales}
+            piezas = sorted(
+                (c[0] for c in barra.get("colocados") or []),
+                key=lambda it: -float(it.get("len_mm") or 0.0),
+            )
+            todas = True
+            for item in piezas:
+                destino = None
+                for b in residuales:
+                    copia = prueba[id(b)]
+                    if _aplicar_pieza_en_barra(
+                        copia, item, separacion_in, largo_sin_separacion_in
+                    ):
+                        destino = copia
+                        break
+                if destino is None:
+                    todas = False
+                    break
+            if not todas:
+                continue
+            for b in residuales:
+                copia = prueba[id(b)]
+                b["colocados"] = copia["colocados"]
+                b["cursor_x"] = copia.get("cursor_x", b.get("cursor_x"))
+                b["cu_modo_separacion"] = copia.get(
+                    "cu_modo_separacion", b.get("cu_modo_separacion")
+                )
+            barra["colocados"] = []
+            barra["cursor_x"] = 0.0
+            barras_abiertas[:] = [b for b in barras_abiertas if b.get("colocados")]
+            cambiado = True
+            break
+
+
 def empaquetar_largos_cu(
     piezas: List[dict],
     placas_ok: List[dict],
@@ -1340,10 +1561,19 @@ def empaquetar_largos_cu(
             return 1
         return 2
 
+    modo_exacto = _cu_ancho_modo_exacto()
+
+    def _prio_clase_ancho(x: dict) -> int:
+        # Configuración 1: exactas abren y llenan barras antes que las de decimal.
+        if not modo_exacto or _familia_corte_cu(x) != "guillotina":
+            return 0
+        return 0 if _pieza_cu_ancho_exacto(x) else 1
+
     items.sort(
         key=lambda x: (
             float(x["barra_objetivo_in"]),
             _prio_familia(x),
+            _prio_clase_ancho(x),
             -x["len_mm"],
         )
     )
@@ -1410,13 +1640,14 @@ def empaquetar_largos_cu(
 
         if stock is not None:
             item0 = _adaptar_item_a_barra(item, stock)
+            x0 = _despunte_inicio_mm([item0])
             nueva = {
                 "stock": stock,
                 "largo_mm": stock["largo_mm"],
                 "ancho_mm": stock["ancho_mm"],
                 "ancho_in": stock["ancho_in"],
-                "cursor_x": item0["len_mm"],
-                "colocados": [(item0, 0.0, 0.0)],
+                "cursor_x": x0 + float(item0["len_mm"]),
+                "colocados": [(item0, x0, 0.0)],
                 "cu_modo_separacion": _modo_separacion_barra([item0], largo_umbral),
             }
             barras_abiertas.append(nueva)
@@ -1432,6 +1663,12 @@ def empaquetar_largos_cu(
         separacion_in=separacion_in,
         largo_sin_separacion_in=largo_umbral,
     )
+    if modo_exacto:
+        _reubicar_exactas_en_residuales(
+            barras_abiertas,
+            separacion_in=separacion_in,
+            largo_sin_separacion_in=largo_umbral,
+        )
 
     hojas: List[dict] = []
     for barra in barras_abiertas:
@@ -1506,6 +1743,12 @@ def empaquetar_largos_cu(
                     )
                 )
 
+        despunte_mm = _despunte_inicio_mm([c[0] for c in barra["colocados"]])
+        if despunte_mm > 0.5:
+            piezas_hoja.extend(
+                _piezas_despunte_cu(despunte_mm, float(barra["ancho_mm"]))
+            )
+
         if len(barra["colocados"]) > 1:
             for idx_corte, (_p_data, x_mm, _y_mm) in enumerate(barra["colocados"]):
                 if idx_corte <= 0:
@@ -1548,6 +1791,7 @@ def empaquetar_largos_cu(
                 "mayoria_barra_cu_frac": MAYORIA_BARRA_CU_FRACCION,
                 "cu_modo_separacion_barra": barra.get("cu_modo_separacion", "con_gap"),
                 "cu_barra_especial": bool(tiene_especial_barra),
+                "cu_despunte_mm": float(despunte_mm),
                 "requiere_corte_superior": requiere_corte_sup,
                 "ignorar_deduccion": True,
             }
@@ -1856,7 +2100,9 @@ def procesar_grupo_largos_cu(
         _cu_force = bool(is_cu_force_dxf_step_enabled())
     except Exception:
         _cu_force = False
-    sep_in = max(0.0, float(separacion_in if separacion_in is not None else DEFAULT_SEPARACION_CU_IN))
+    if separacion_in is None:
+        separacion_in = SEPARACION_CU_FORZADA_IN if _cu_force else DEFAULT_SEPARACION_CU_IN
+    sep_in = max(0.0, float(separacion_in))
     largo_umbral = max(
         0.0,
         float(
