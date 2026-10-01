@@ -5469,12 +5469,12 @@ class MotorNesting:
                                     p_clon['nombre'] = f"REF__{p_clon['nombre']}"
                                     p_clon["rtz_overlay_id"] = retazo["id"]
 
-                                if p_clon['poligonos']:
+                                if p_clon.get('poligonos'):
                                     p_clon['poligonos'] = _translate_poligonos_for_overlay(
                                         p_clon['poligonos'], gx, gy
                                     )
                                     
-                                if p_clon['marcas']:
+                                if p_clon.get('marcas'):
                                     nuevas_marcas = []
                                     for line_coords in p_clon['marcas']:
                                         try:

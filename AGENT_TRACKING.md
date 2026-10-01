@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01f — Fix: KeyError 'marcas' en nest Lite (Southwest 0.375_A 36)
+
+- Bug: Lite void-first mete piezas en orificios y `expand_void_cargo_onto_hoja`
+  las agregaba a la hoja en formato pool (sin `marcas`); al promover la hoja RTZ
+  `manager.py` leía `p_clon['marcas']` → lote "Error en calcular: 'marcas'",
+  nest incompleto. Además el marcaje del cargo no seguía a la pieza.
+- Fix: `_apply_rigid_pose` también mueve `marks_exact`/`marks`; el cargo expandido
+  genera `marcas` (respeta omitir marcas de cobre); manager usa `.get`.
+- Candado: `tests/native/test_void_cargo_marcas.py`. Sin cambios al build (módulos existentes).
+
 ### 2026-10-01e — Cobre: despunte 6 mm solo visual + montaje de planta + grabado M100
 
 - `DESPUNTE_CU_MM = 6.0`: zona solo visual en el nest; el CSV ya no lleva fila de

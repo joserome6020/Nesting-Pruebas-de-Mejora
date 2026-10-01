@@ -20,6 +20,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_void_cargo_marcas.py",
+        "2026-10-01b - Lite void-first: cargo en orificios sin 'marcas' → KeyError 'marcas' (Southwest 0.375_A 36)",
+    ),
+    (
         "test_export_dxf_ruta_larga.py",
         "2026-10-01 - export DXF abortado (WinError 3) en ruta UNC > 260 chars (W.O. 154 X1 VANTRAN)",
     ),

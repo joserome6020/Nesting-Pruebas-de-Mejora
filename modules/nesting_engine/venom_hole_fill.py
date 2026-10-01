@@ -251,6 +251,22 @@ def prefill_voids_in_pool(
     return mc_pool, stats
 
 
+def _ensure_hoja_marcas(p: dict) -> None:
+    """Piezas de hoja requieren ``marcas`` (lista de rings); el pool trae ``marks_exact``."""
+    if p.get("marcas"):
+        return
+    p["marcas"] = []
+    try:
+        from .manager import _marks_geom_to_lista
+        from .nest_runtime_prefs import should_omit_copper_marks
+
+        if should_omit_copper_marks(p.get("material"), pieza=p):
+            return
+        p["marcas"] = _marks_geom_to_lista(p.get("marks_exact") or p.get("marks"))
+    except Exception:
+        p["marcas"] = []
+
+
 def expand_void_cargo_onto_hoja(
     hoja: dict,
     mc_pool: list,
@@ -328,6 +344,7 @@ def expand_void_cargo_onto_hoja(
                 leftover.append(g)
                 continue
             _apply_rigid_pose(g2, old, new, rot)
+            _ensure_hoja_marcas(g2)
             g2["_void_prefilled"] = True
             expanded.append(g2)
         src["_void_cargo"] = leftover
@@ -916,6 +933,16 @@ def _apply_rigid_pose(p: dict, old_poly: Polygon, new_poly: Polygon, angle_deg: 
 
     dx = nx - ox
     dy = ny - oy
+    for key in ("marks_exact", "marks"):
+        mk = p.get(key)
+        if mk is None or not hasattr(mk, "bounds") or getattr(mk, "is_empty", True):
+            continue
+        try:
+            p[key] = affinity.translate(
+                affinity.rotate(mk, float(angle_deg or 0.0), origin=(ox, oy)), dx, dy
+            )
+        except Exception:
+            pass
     p["shift_x"] = float(p.get("shift_x", 0.0) or 0.0) + dx
     p["shift_y"] = float(p.get("shift_y", 0.0) or 0.0) + dy
     _sync_outline(p, new_poly)
