@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01i — Fix: CSV W.O. 91 X1-H1 llamaba M8 y era M3 (ovalado 10.31×15.08)
+
+- Caso: GENE-FCU-5-108 (solera 1.75") con ovalado 15.08 a lo largo. M3 estaba como
+  `E10.3X15.1` (a lo ancho) → el ANS "montaba" un segundo punzón `E15.1X10.3` en M8.
+  En la misma W.O., GENE-FCU-5-118 (5") usa el mismo ovalado a lo ancho.
+- `cu_punch_tooling.py`: M3 base = `E15.1X10.3` (como lo tiene planta). Un ovalado
+  ya montado a 90° se **gira en su estación** (`"M3: girar E15.1X10.3 a E10.3X15.1"`),
+  no se manda a otra estación (un punzón físico por renglón del inventario). Si la
+  barra pide las dos orientaciones, el cambio avisa "pide un segundo punzón".
+- Candado en `test_cu_punch_csv.py` con las medidas reales de H1 (falla con el código
+  viejo). Los CSV ya exportados de W.O. 91 hay que re-exportarlos.
+
 ### 2026-10-01h — Cobre: nest agrupado por herramental de punzonado + reporte por pieza
 
 - Planta confirmó que el punzón ovalado queda fijo (se reposiciona a mano): la

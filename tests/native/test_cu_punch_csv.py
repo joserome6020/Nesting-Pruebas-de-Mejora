@@ -85,7 +85,7 @@ def main() -> None:
 
         # Montaje de planta (pizarrón 2026-10-01).
         assert codigos_molds() == [
-            "C11.1", "C10.3", "E10.3X15.1", "E14.3X11.1",
+            "C11.1", "C10.3", "E15.1X10.3", "E14.3X11.1",
             "E11.1X15.9", "E17.5X11.1", "E11.1X20.3", "E20.6X11.1",
         ], codigos_molds()
         assert estacion_para_barreno("C", 11.11, 11.11) == 1
@@ -188,18 +188,45 @@ def main() -> None:
         else:
             raise AssertionError("barreno Ø9 fuera del inventario debió bloquear")
 
-        # Ovalado 15.88 a lo largo: no montado pero sí en inventario → cambio automático.
+        # Ovalado 15.88 a lo largo: el punzón 11.11×15.88 está en M5 a lo ancho → se gira
+        # en M5 (un solo punzón físico; antes se "inventaba" otro en M8).
         ov = _con_barrenos(400.0, W6, [_slot(200.0, 76.2, 11.11, 15.88, eje_y=False)])
         h_ov, _ = empaquetar_largos_cu([_pieza("OVAL-X", ov)], _placas(), separacion_in=0.0)
         fil_ov = pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
-        assert fil_ov[0]["M2"] == "M8" and fil_ov[0]["TOOL8"] == "E15.9X11.1", fil_ov[0]
-        cambio_ov = "M8: quitar E20.6X11.1, poner E15.9X11.1"
+        assert fil_ov[0]["M2"] == "M5" and fil_ov[0]["TOOL5"] == "E15.9X11.1", fil_ov[0]
+        assert fil_ov[0]["TOOL8"] == "E20.6X11.1"
+        cambio_ov = "M5: girar E11.1X15.9 a E15.9X11.1"
         assert h_ov[0]["cu_punch_cambios_herramental"] == [cambio_ov]
         assert pc.montaje_barra(h_ov[0])[1] == [cambio_ov]
         assert all("→" not in c for c in pc.montaje_barra(h_ov[0])[1]), "Helvetica sin glifo →"
         res_ov = pc.resumen_herramental_barra(h_ov[0])
         assert res_ov["cambios"] == [f"{cambio_ov} (para OVAL-X)"], res_ov
-        assert res_ov["por_pieza"] == {"OVAL-X": "M8"} and not res_ov["mixta"]
+        assert res_ov["por_pieza"] == {"OVAL-X": "M5"} and not res_ov["mixta"]
+
+        # Caso real W.O. 91 X1-H1 (GENE-FCU-5-108, solera 1.75"): ovalado 10.31×15.08 con
+        # 15.08 a lo largo → M3 tal cual está montado (el CSV mandaba M8; planta: "era la 3").
+        fcu108 = _con_barrenos(
+            127.1, 44.45,
+            [_slot(44.73 + 4.766 / 2, 22.23, 10.31, 15.08, eje_y=False),
+             _slot(84.44 + 4.766 / 2, 22.23, 10.31, 15.08, eje_y=False)],
+        )
+        placas175 = [dict(_placas()[0], h=44.45)]
+        h108, _ = empaquetar_largos_cu([_pieza("GENE-FCU-5-108", fcu108)], placas175, separacion_in=0.0)
+        f108 = pc.construir_filas_barra(h108[0], thickness_mm=6.35)[0]
+        assert (f108["M2"], f108["M3"], f108["TOOL3"]) == ("M3", "M3", "E15.1X10.3"), f108
+        assert h108[0]["cu_punch_cambios_herramental"] == []
+        # GENE-FCU-5-118 (solera 5"): el mismo ovalado a lo ancho → girar M3, no otra estación.
+        fcu118 = _con_barrenos(400.0, 127.0, [_slot(200.0, 63.5, 10.31, 15.08, eje_y=True)])
+        placas5 = [dict(_placas()[0], h=127.0)]
+        h118, _ = empaquetar_largos_cu([_pieza("GENE-FCU-5-118", fcu118)], placas5, separacion_in=0.0)
+        f118 = pc.construir_filas_barra(h118[0], thickness_mm=6.35)[0]
+        assert f118["M2"] == "M3" and f118["TOOL3"] == "E10.3X15.1", f118
+        assert h118[0]["cu_punch_cambios_herramental"] == ["M3: girar E15.1X10.3 a E10.3X15.1"]
+        # Las dos orientaciones en la misma barra → pide un segundo punzón (aviso explícito).
+        from modules.nesting_engine.cu_punch_tooling import montaje_para_barra as _mpb
+
+        _e2, c2, f2 = _mpb([("E", 15.08, 10.31), ("E", 10.31, 15.08)])
+        assert not f2 and len(c2) == 1 and "segundo punzón 10.31×15.08" in c2[0], c2
         # Sin esa herramienta en el inventario → bloquea.
         try:
             pc.construir_filas_barra(
@@ -236,7 +263,7 @@ def main() -> None:
         from modules.nesting_engine.cu_punch_tooling import estaciones_default, montaje_para_barra
 
         base = estaciones_default()
-        ocho = [("C", 11.11, 11.11), ("C", 10.31, 10.31), ("E", 10.31, 15.08),
+        ocho = [("C", 11.11, 11.11), ("C", 10.31, 10.31), ("E", 15.08, 10.31),
                 ("E", 14.30, 11.11), ("E", 11.11, 15.88), ("E", 17.47, 11.11),
                 ("E", 11.11, 20.33), ("E", 20.65, 11.11)]
         _e, _c, falt = montaje_para_barra(ocho + [("E", 11.11, 12.26)], estaciones=base)

@@ -35,7 +35,8 @@ TOL_HERRAMIENTA_MM = 0.15
 _DEFAULT_ESTACIONES: list[dict[str, Any]] = [
     {"tipo": "C", "x": 11.11},
     {"tipo": "C", "x": 10.31},
-    {"tipo": "E", "x": 10.31, "y": 15.08},
+    # M3: planta lo tiene con 15.08 a lo largo (W.O. 91 X1-H1, GENE-FCU-5-108).
+    {"tipo": "E", "x": 15.08, "y": 10.31},
     {"tipo": "E", "x": 14.30, "y": 11.11},
     {"tipo": "E", "x": 11.11, "y": 15.88},
     {"tipo": "E", "x": 17.47, "y": 11.11},
@@ -350,7 +351,9 @@ def montaje_para_barra(
 
     Conserva el montaje base; cada barreno sin estación toma la herramienta del
     inventario (en su orientación) y ocupa, de M8 hacia M1, una estación
-    que la barra no usa (cambio ``"M{i}: quitar X, poner Y"``). ``faltantes`` = descripciones de barrenos que no tienen
+    que la barra no usa (cambio ``"M{i}: quitar X, poner Y"``). Un ovalado que ya
+    está montado a 90° se gira en su estación (``"M{i}: girar X a Y"``): hay un solo
+    punzón físico por renglón del inventario. ``faltantes`` = descripciones de barrenos que no tienen
     herramienta en el inventario o que no caben en las 8 estaciones.
     """
     ests = list(normalizar_estaciones(estaciones if estaciones is not None else cargar_estaciones()))
@@ -380,11 +383,32 @@ def montaje_para_barra(
         code = codigo_estacion(h)
         if code not in {p[1] for p in pendientes}:
             pendientes.append((h, code, idx))
+    cambios: list[str] = []
+    # Ovalado montado en la otra orientación: es el mismo punzón físico → se gira en
+    # su estación (no se inventa un segundo punzón en otra estación).
+    sin_girar: list[tuple[dict[str, Any], str, int | None]] = []
+    nota_segundo: dict[str, str] = {}
+    for h, code, respaldo in pendientes:
+        j = _estacion_girada(h, ests, tol_mm)
+        if j is None:
+            sin_girar.append((h, code, respaldo))
+            continue
+        if j not in usadas:
+            cambios.append(f"M{j}: girar {codigo_estacion(ests[j - 1])} a {code}")
+            ests[j - 1] = h
+            usadas.add(j)
+            continue
+        if _copias_inventario(h, inv, tol_mm) < 2:
+            nota_segundo[code] = (
+                f" (pide un segundo punzón {min(h['x'], h['y']):.2f}×{max(h['x'], h['y']):.2f}: "
+                f"M{j} se usa en la otra orientación)"
+            )
+        sin_girar.append((h, code, respaldo))
+    pendientes = sin_girar
     # Primero las que no tienen alternativa montada; la estación de respaldo de las
     # demás queda reservada por si no alcanza lugar para la herramienta exacta.
     pendientes.sort(key=lambda p: p[2] is not None)
     reservadas = {p[2] for p in pendientes if p[2] is not None}
-    cambios: list[str] = []
     libres = [i for i in range(N_ESTACIONES, 0, -1) if i not in usadas]
     for h, code, respaldo in pendientes:
         disponibles = [i for i in libres if i not in reservadas or respaldo is not None]
@@ -411,6 +435,38 @@ def montaje_para_barra(
             i = disponibles[0]
         libres.remove(i)
         # Texto sin flecha: Helvetica del PDF no tiene el glifo "→".
-        cambios.append(f"M{i}: quitar {codigo_estacion(ests[i - 1])}, poner {code}")
+        cambios.append(
+            f"M{i}: quitar {codigo_estacion(ests[i - 1])}, poner {code}{nota_segundo.get(code, '')}"
+        )
         ests[i - 1] = h
     return ests, cambios, faltantes
+
+
+def _estacion_girada(
+    h: dict[str, Any], ests: list[dict[str, Any] | None], tol_mm: float
+) -> int | None:
+    """Estación con el mismo ovalado montado a 90° (``E{y}X{x}``)."""
+    if h.get("tipo") != "E":
+        return None
+    for i, est in enumerate(ests, start=1):
+        if (
+            est
+            and est["tipo"] == "E"
+            and abs(float(est["x"]) - float(h["y"])) <= tol_mm
+            and abs(float(est["y"]) - float(h["x"])) <= tol_mm
+        ):
+            return i
+    return None
+
+
+def _copias_inventario(h: dict[str, Any], inventario: list[dict[str, Any]], tol_mm: float) -> int:
+    """Cuántos punzones físicos de esa medida hay en el inventario (sin orientación)."""
+    a, b = sorted((float(h["x"]), float(h.get("y") or h["x"])))
+    n = 0
+    for it in normalizar_inventario(inventario):
+        if it["tipo"] != h["tipo"]:
+            continue
+        p, q = sorted((float(it["x"]), float(it.get("y") or it["x"])))
+        if abs(p - a) <= tol_mm and abs(q - b) <= tol_mm:
+            n += 1
+    return n
