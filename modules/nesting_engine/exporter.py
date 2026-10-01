@@ -1524,6 +1524,51 @@ def exportar_resultados_a_dxf(
 
     asignar_rtz_cu_sin_gap_ids(resultados)
 
+    from modules.dxf_export.cu_punch_csv import (
+        PunchCsvError,
+        construir_filas_barra,
+        escribir_csv,
+        hoja_requiere_csv_punzonado,
+    )
+    from modules.nesting_engine.cu_punch_tooling import cargar_estaciones
+
+    # Antes de escribir nada: una barra no punzonable bloquea todo el export.
+    punch_filas_por_hoja: dict[int, list] = {}
+    punch_errores: list[str] = []
+    punch_estaciones = cargar_estaciones()
+    for _clave_p, _data_p in (resultados or {}).items():
+        if not isinstance(_data_p, dict):
+            continue
+        _thk_raw, _thk_in = _parse_thickness_from_clave(_clave_p)
+        _thk_mm = float(_thk_in) * 25.4 if _thk_in and _thk_in <= 1.0 else 6.35
+        for _idx_p, _hoja_p in enumerate(_data_p.get("hojas") or [], start=1):
+            if not hoja_requiere_csv_punzonado(_hoja_p):
+                continue
+            try:
+                punch_filas_por_hoja[id(_hoja_p)] = construir_filas_barra(
+                    _hoja_p,
+                    thickness_mm=_thk_mm,
+                    estaciones=punch_estaciones,
+                    etiqueta=str(
+                        _hoja_p.get("sheet_code")
+                        or _hoja_p.get("placa_id")
+                        or f"{_clave_p} H{_idx_p}"
+                    ),
+                )
+            except PunchCsvError as exc:
+                punch_errores.append(str(exc))
+    if punch_errores:
+        for _err in punch_errores:
+            log(f"[CU-PUNCH][ERROR] {_err}")
+        raise DxfExportValidationError(
+            "Cobre CNC Busbar Punching: hay barras que la punzonadora no puede hacer "
+            "con el herramental montado (Configuración Global → Herramental punzonadora).\n\n"
+            + "\n".join(punch_errores[:12])
+            + (f"\n(+{len(punch_errores) - 12} más)" if len(punch_errores) > 12 else "")
+        )
+    if punch_filas_por_hoja:
+        log(f"[CU-PUNCH] barras con CSV de punzonado: {len(punch_filas_por_hoja)}")
+
     from .efficiency_metrics import (
         inicializar_contador_rtz_sobrante,
         inicializar_contador_rtzc_sobrante,
@@ -2043,6 +2088,26 @@ def exportar_resultados_a_dxf(
                     raise DxfExportValidationError(
                         f"Exportación abortada ({nombre_archivo}): {exc}"
                     ) from exc
+
+            filas_punch = punch_filas_por_hoja.get(id(hoja))
+            if filas_punch:
+                path_csv = os.path.join(
+                    job_root_dir,
+                    RUTA_NESTEOS_COBRE,
+                    "CSV",
+                    os.path.splitext(nombre_archivo)[0] + ".csv",
+                )
+                _makedirs_largo(os.path.dirname(path_csv))
+                from modules.win_long_path import needs_win_long_path, win_long_path
+
+                escribir_csv(
+                    win_long_path(path_csv)
+                    if needs_win_long_path(path_csv, threshold=200)
+                    else path_csv,
+                    filas_punch,
+                )
+                hoja["cu_punch_csv"] = path_csv
+                log(f"-> EXPORT CSV CNC BUSBAR PUNCHING: {path_csv} ({len(filas_punch)} filas)")
 
             # Exportación plasma solo cuando aplique
             lista_plasma = placements_plasma

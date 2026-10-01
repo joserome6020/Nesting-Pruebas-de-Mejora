@@ -398,8 +398,26 @@ def _enumerate_plates(resultados_nesting):
             else:
                 real_piece_count = len([p for p in pieces if _is_real_piece(p)])
 
+            cu_proceso = ""
+            cu_recorte_laser: list = []
+            if hoja.get("modo_largos_cu"):
+                try:
+                    from modules.dxf_export.cu_punch_csv import (
+                        hoja_requiere_csv_punzonado,
+                        piezas_recorte_laser,
+                        proceso_hoja_cobre,
+                    )
+
+                    cu_proceso = proceso_hoja_cobre(hoja)
+                    if hoja_requiere_csv_punzonado(hoja):
+                        cu_recorte_laser = piezas_recorte_laser(hoja)
+                except Exception:
+                    pass
+
             plates.append(
                 {
+                    "cu_proceso": cu_proceso,
+                    "cu_recorte_laser": cu_recorte_laser,
                     "id": placa_id_final,
                     "base_id": _plate_base_id(placa_id_final),
                     "calibre": str(grupo_calibre),
@@ -687,6 +705,36 @@ def _fit_text(text, max_width, font_name, font_size):
         base = base[:-1]
 
     return (base + "...") if base else "..."
+
+
+def _draw_cu_proceso_header(c, plate, width, title_color):
+    """Cobre largos: proceso de la barra (Láser vs CNC Busbar Punching) y recortes láser."""
+    proceso = str((plate or {}).get("cu_proceso") or "")
+    if not proceso:
+        return
+    texto = f"Proceso: {proceso}"
+    if plate.get("cu_rtz_activo") and "LÁSER" in proceso:
+        texto += " | RTZCU: CNC BUSBAR PUNCHING"
+    c.setFont("Helvetica-Bold", 9.0)
+    c.setFillColor(colors.HexColor("#1D4ED8"))
+    c.drawRightString(width - 18, 698, _fit_text(texto, 330, "Helvetica-Bold", 9.0))
+    recorte = plate.get("cu_recorte_laser") or []
+    if recorte:
+        conteo: dict[tuple[str, str], int] = {}
+        for r in recorte:
+            k = (str(r["nombre"]), f"{r['ancho_mm'] / 25.4:.3f}")
+            conteo[k] = conteo.get(k, 0) + 1
+        nombres = ", ".join(
+            f"{n}{f' x{q}' if q > 1 else ''} ({a}\")" for (n, a), q in conteo.items()
+        )
+        c.setFont("Helvetica", 7.6)
+        c.setFillColor(colors.HexColor("#B45309"))
+        c.drawRightString(
+            width - 18,
+            684,
+            _fit_text(f"Recorte láser posterior: {nombres}", 250, "Helvetica", 7.6),
+        )
+    c.setFillColor(title_color)
 
 
 def _draw_cell_text(c, text, x, y, w, align="left", font_name="Helvetica", font_size=7.4):
@@ -1437,6 +1485,7 @@ def exportar_pdf_nesting(
         c.setFillColor(title_color)
         c.setFont("Helvetica-Bold", 10.5)
         c.drawString(18, 698, f"Material: {plate['material']} | Calibre: {plate['calibre']}")
+        _draw_cu_proceso_header(c, plate, width, title_color)
 
         c.setFont("Helvetica", 8.3)
         c.setFillColor(subtitle_color)

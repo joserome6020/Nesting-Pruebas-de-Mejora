@@ -372,6 +372,10 @@ REGRESIONES = [
         "2026-10-01 - cobre sin gap + despunte 50mm + Conf1/Conf2 anchos + MARK solo normales",
     ),
     (
+        "test_cu_punch_csv.py",
+        "2026-10-01 - CSV CNC Busbar Punching por barra cobre normal/RTZCU + herramental",
+    ),
+    (
         "test_lite_hole_fill_brida.py",
         "2026-08-17g - Lite hole-fill denso en brida + kerf completo guest↔guest/host",
     ),

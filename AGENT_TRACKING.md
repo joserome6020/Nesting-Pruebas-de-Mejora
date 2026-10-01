@@ -55,6 +55,26 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01c — CSV CNC Busbar Punching (Lijian MX602K / LJcad) por barra de cobre
+
+- Nuevo `modules/dxf_export/cu_punch_csv.py`: un CSV por barra normal (`con_gap`) y por
+  RTZCU virtual → `NESTEOS DE COBRE/CSV/<hoja>.csv`. Formato LJcad: 283 columnas TAB,
+  100 filas fijas, CRLF, sin BOM. Fila 1 = despunte 50 mm (Model vacío, solo `C`);
+  RTZCU sin despunte. Width = solera (decimales se punzonan a 6" y se marcan para recorte
+  láser en el PDF), Thickness 6.35, Model = nombre PARTS, golpes relativos a la pieza,
+  `C` en X = Length. Barras Z/Zapato/Botella (`sin_gap`) y modo forzado DXF+STEP: sin CSV.
+- Nuevo `modules/nesting_engine/cu_punch_tooling.py`: herramental Mold1..Mold8 en
+  `_config/cu_punch_tooling.json` (default = montaje de la prueba H28). Ovalado
+  `E{x}X{y}` con x a lo largo de la solera. Editable en Configuración Global →
+  "EDITAR HERRAMENTAL PUNZONADORA" (contraseña DyT).
+- `exporter.py`: prevalida todas las barras antes de escribir; barreno sin herramienta,
+  contorno no rectangular, pieza < 50 mm o > 89 golpes / 100 filas → bloquea el export.
+- PDF: "Proceso: CNC BUSBAR PUNCHING (Normales)" / "LÁSER (Zapato / Botella / Z)" (+ RTZCU)
+  y "Recorte láser posterior" para piezas más angostas que la solera.
+- Build: módulos nuevos en `HIDDEN_IMPORTS` / `CRITICAL_SUITE_FILES` / `SMOKE_IMPORT_MODULES`.
+- Candado: `tests/native/test_cu_punch_csv.py`.
+- Pendiente de la prueba en máquina: borde de origen Y y límite de texto de Model.
+
 ### 2026-10-01b — Cobre sin gap + despunte 50 mm + anchos Conf1/Conf2 + MARK solo normales
 
 - Preparación para la punzonadora Lijian (MX602K): Amada queda en desuso (código intacto).

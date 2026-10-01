@@ -371,6 +371,133 @@ def _editar_tabla_gaps_corte(parent) -> bool:
     return dlg.exec() == QDialog.DialogCode.Accepted
 
 
+def _editar_herramental_punzonadora(parent) -> bool:
+    """Montaje Mold1..Mold8 de la punzonadora de cobre (CSV CNC Busbar Punching)."""
+    from modules.nesting_engine.cu_punch_tooling import (
+        N_ESTACIONES,
+        cargar_estaciones,
+        codigo_estacion,
+        estaciones_default,
+        guardar_estaciones,
+    )
+
+    if not _autorizar_edicion_dyt(
+        parent,
+        titulo="Herramental punzonadora",
+        mensaje="Ingrese la contraseña para modificar el herramental de la punzonadora.",
+    ):
+        return False
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("Herramental punzonadora (CNC Busbar Punching)")
+    dlg.setModal(True)
+    dlg.setMinimumWidth(520)
+    dlg.setStyleSheet(surface_dialog_stylesheet())
+    lay = QVBoxLayout(dlg)
+
+    titulo = QLabel("HERRAMENTAL PUNZONADORA — Mold1..Mold8", alignment=Qt.AlignmentFlag.AlignCenter)
+    titulo.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(titulo)
+    aviso = QLabel(
+        "Debe coincidir con las herramientas montadas en la máquina. Ovalado: X = medida a lo "
+        "largo de la solera, Y = a lo ancho (E11.1X15.9 ≠ E15.9X11.1). Un barreno sin "
+        "herramienta bloquea el export del CSV."
+    )
+    aviso.setWordWrap(True)
+    aviso.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+    lay.addWidget(aviso)
+
+    grid = QGridLayout()
+    for col, txt in enumerate(("ESTACIÓN", "TIPO", "X / Ø (mm)", "Y (mm)", "CÓDIGO")):
+        grid.addWidget(_celda_tabla_gaps(txt, encabezado=True), 0, col)
+
+    filas: list[tuple[QComboBox, QDoubleSpinBox, QDoubleSpinBox, QLabel]] = []
+
+    def _leer_fila(combo, sx, sy) -> dict | None:
+        tipo = combo.currentData()
+        if not tipo:
+            return None
+        est = {"tipo": tipo, "x": float(sx.value())}
+        if tipo == "E":
+            est["y"] = float(sy.value())
+        return est
+
+    def _refrescar(i: int) -> None:
+        combo, sx, sy, lbl = filas[i]
+        tipo = combo.currentData()
+        sx.setEnabled(bool(tipo))
+        sy.setEnabled(tipo == "E")
+        lbl.setText(codigo_estacion(_leer_fila(combo, sx, sy)))
+
+    def _cargar(estaciones) -> None:
+        for i, est in enumerate(estaciones):
+            combo, sx, sy, _lbl = filas[i]
+            combo.setCurrentIndex({None: 0, "C": 1, "E": 2}.get((est or {}).get("tipo"), 0))
+            sx.setValue(float((est or {}).get("x") or 0.0))
+            sy.setValue(float((est or {}).get("y") or 0.0))
+            _refrescar(i)
+
+    for i in range(N_ESTACIONES):
+        combo = QComboBox()
+        combo.addItem("Vacía", None)
+        combo.addItem("Redondo (C)", "C")
+        combo.addItem("Ovalado (E)", "E")
+        sx = QDoubleSpinBox()
+        sy = QDoubleSpinBox()
+        for sp in (sx, sy):
+            sp.setRange(0.0, 200.0)
+            sp.setDecimals(2)
+            sp.setSingleStep(0.01)
+        lbl = QLabel("0")
+        lbl.setStyleSheet("font-weight:700;")
+        filas.append((combo, sx, sy, lbl))
+        grid.addWidget(QLabel(f"Mold{i + 1}"), i + 1, 0)
+        grid.addWidget(combo, i + 1, 1)
+        grid.addWidget(sx, i + 1, 2)
+        grid.addWidget(sy, i + 1, 3)
+        grid.addWidget(lbl, i + 1, 4)
+        combo.currentIndexChanged.connect(lambda _v, k=i: _refrescar(k))
+        sx.valueChanged.connect(lambda _v, k=i: _refrescar(k))
+        sy.valueChanged.connect(lambda _v, k=i: _refrescar(k))
+    lay.addLayout(grid)
+    _cargar(cargar_estaciones())
+
+    botones = QHBoxLayout()
+    btn_default = QPushButton("RESTAURAR MONTAJE INICIAL")
+    btn_cancelar = QPushButton("CANCELAR")
+    btn_guardar = QPushButton("GUARDAR HERRAMENTAL")
+    apply_push_button(btn_default, "#FFFFFF", font_size=10)
+    apply_push_button(btn_cancelar, "#FFFFFF", font_size=10)
+    apply_push_button(btn_guardar, COLOR_GRIS_DARK, font_size=11)
+    botones.addWidget(btn_default)
+    botones.addStretch(1)
+    botones.addWidget(btn_cancelar)
+    botones.addWidget(btn_guardar)
+    lay.addLayout(botones)
+
+    def guardar():
+        estaciones = [_leer_fila(c, sx, sy) for c, sx, sy, _l in filas]
+        codigos = [codigo_estacion(e) for e in estaciones if e]
+        if any(c == "0" for c in codigos):
+            QMessageBox.critical(dlg, "Herramental inválido", "Hay estaciones con medidas en 0.")
+            return
+        if len(set(codigos)) != len(codigos):
+            QMessageBox.critical(dlg, "Herramental inválido", "Hay herramientas repetidas.")
+            return
+        try:
+            guardar_estaciones(estaciones)
+        except OSError as exc:
+            QMessageBox.critical(dlg, "Error", f"No se pudo guardar el herramental:\n{exc}")
+            return
+        dlg.accept()
+
+    btn_default.clicked.connect(lambda: _cargar(estaciones_default()))
+    btn_cancelar.clicked.connect(dlg.reject)
+    btn_guardar.clicked.connect(guardar)
+    _centrar_dialogo(dlg, parent)
+    return dlg.exec() == QDialog.DialogCode.Accepted
+
+
 def abrir_modal_configuracion(parent):
     from modules.nesting_engine.step_export_prefs import (
         STEP_FOLDER_SPECS,
@@ -632,6 +759,33 @@ def abrir_modal_configuracion(parent):
         cu_ancho_exacto[0] = bool(activo)
 
     switch_cu_ancho.toggled.connect(_toggle_cu_ancho)
+
+    from modules.nesting_engine.cu_punch_tooling import codigos_molds
+
+    cu_punch_tit = QLabel("COBRE — herramental punzonadora (CNC Busbar Punching)")
+    cu_punch_tit.setStyleSheet(f"font-weight:700;color:{COLOR_TEXTO_TITULO};")
+    lay.addWidget(cu_punch_tit)
+    lbl_cu_punch = QLabel()
+    lbl_cu_punch.setWordWrap(True)
+    lbl_cu_punch.setStyleSheet(f"color:{COLOR_TEXTO_SECUNDARIO};font-size:11px;")
+
+    def _refrescar_lbl_punch() -> None:
+        lbl_cu_punch.setText(
+            "Montaje actual: "
+            + " | ".join(f"M{i}={c}" for i, c in enumerate(codigos_molds(), start=1))
+        )
+
+    _refrescar_lbl_punch()
+    lay.addWidget(lbl_cu_punch)
+    btn_cu_punch = QPushButton("EDITAR HERRAMENTAL PUNZONADORA")
+    apply_push_button(btn_cu_punch, "#FFFFFF", font_size=10)
+
+    def _editar_punch() -> None:
+        if _editar_herramental_punzonadora(dlg):
+            _refrescar_lbl_punch()
+
+    btn_cu_punch.clicked.connect(_editar_punch)
+    lay.addWidget(btn_cu_punch)
 
     sep_giga = QFrame()
     sep_giga.setFrameShape(QFrame.Shape.HLine)
