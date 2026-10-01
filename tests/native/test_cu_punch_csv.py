@@ -113,7 +113,10 @@ def main() -> None:
         assert not sin and len(hojas) == 1, (len(hojas), sin)
         hoja = hojas[0]
         assert pc.hoja_requiere_csv_punzonado(hoja)
-        assert pc.proceso_hoja_cobre(hoja).startswith("CNC BUSBAR PUNCHING")
+        assert pc.proceso_hoja_cobre(hoja) == "CNC BUSBAR PUNCHING"
+        assert pc.proceso_hoja_cobre({"modo_largos_cu": True, "cu_modo_separacion_barra": "sin_gap"}) == (
+            "LÁSER"
+        ), "el reporte no lleva comentarios internos (Normales / Zapato / Botella / Z)"
         recorte = pc.piezas_recorte_laser(hoja)
         assert [r["nombre"] for r in recorte] == ["GENE-DEC"], recorte
 

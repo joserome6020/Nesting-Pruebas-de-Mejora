@@ -82,8 +82,8 @@ def hoja_requiere_csv_punzonado(hoja: dict | None) -> bool:
 def proceso_hoja_cobre(hoja: dict | None) -> str:
     """Etiqueta de proceso para PDF/UI de una barra de cobre largos."""
     if hoja_requiere_csv_punzonado(hoja):
-        return "CNC BUSBAR PUNCHING (Normales)"
-    return "LÁSER (Zapato / Botella / Z)"
+        return "CNC BUSBAR PUNCHING"
+    return "LÁSER"
 
 
 def _piezas_reales(hoja: dict) -> list[dict]:
