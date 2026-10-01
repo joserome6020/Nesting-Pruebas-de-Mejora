@@ -122,37 +122,42 @@ def main() -> None:
         assert len(filas) == 2, "el CSV no lleva fila de despunte"
         f1, f2 = filas
 
-        piezas_orden = [f["Model"] for f in (f1, f2)]
-        fila_n = f1 if f1["Model"] == "GENE-FCU-6-106" else f2
+        # Formato del archivo de planta (pruebas jose.csv).
+        assert pc.ENCABEZADO[:5] == ["Name", "Num", "Width", "High", "Length"]
+        assert pc.ENCABEZADO[-8:] == [f"TOOL{n}" for n in range(1, 9)]
+        assert len(pc.ENCABEZADO) == 283
+        piezas_orden = [f["Name"] for f in (f1, f2)]
+        fila_n = f1 if f1["Name"] == "GENE-FCU-6-106" else f2
         fila_d = f2 if fila_n is f1 else f1
         assert set(piezas_orden) == {"GENE-FCU-6-106", "GENE-DEC"}
-        assert fila_n["Width"] == "152.40" and fila_n["Thickness"] == "6.35"
-        assert fila_n["Length"] == "600.00"
+        assert fila_n["Num"] == "1"
+        assert fila_n["Width"] == "152.4" and fila_n["High"] == "6.35"
+        assert fila_n["Length"] == "600"
         golpes = [(fila_n[f"X{n}"], fila_n[f"Y{n}"], fila_n[f"M{n}"]) for n in range(1, 6)]
-        # Grabado M100 primero: centro de la franja libre antes del barreno (50 - 5.555) / 2.
+        # Grabado M100 primero (Y fija 30): X = centro de la franja libre (50 - 5.555) / 2.
+        # Sin golpe C: la máquina corta sola en Length.
         assert golpes == [
-            ("22.22", "0.00", "M100"),
-            ("50.00", "30.00", "M1"),
-            ("50.00", "120.00", "M1"),
-            ("300.00", "76.20", "M5"),
-            ("600.00", "0.00", "C"),
+            ("22.22", "30", "M100"),
+            ("50", "30", "M1"),
+            ("50", "120", "M1"),
+            ("300", "76.2", "M5"),
+            ("0", "0", ""),
         ], golpes
-        assert fila_d["Width"] == "152.40", "decimal se punzona al ancho de la solera"
-        assert (fila_d["X1"], fila_d["M1"]) == ("47.42", "M100")
-        assert (fila_d["X2"], fila_d["Y2"], fila_d["M2"]) == ("100.00", "40.00", "M2")
-        assert (fila_d["X3"], fila_d["M3"]) == ("500.00", "C")
-        assert fila_n["Mold5"] == "E11.1X15.9"
-        assert all(fila_n[f"Mold{n}"] != "M100" for n in range(1, 9))
+        assert fila_d["Width"] == "152.4", "decimal se punzona al ancho de la solera"
+        assert (fila_d["X1"], fila_d["Y1"], fila_d["M1"]) == ("47.42", "30", "M100")
+        assert (fila_d["X2"], fila_d["Y2"], fila_d["M2"]) == ("100", "40", "M2")
+        assert (fila_d["X3"], fila_d["M3"]) == ("0", "")
+        assert fila_n["TOOL5"] == "E11.1X15.9"
+        assert all("C" != fila_n[f"M{n}"] for n in range(1, 91))
 
         out = os.path.join(temp_dir, "CSV", "barra.csv")
         pc.escribir_csv(out, filas)
         raw = Path(out).read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf")
         lineas = raw.decode("utf-8").split("\r\n")
-        assert lineas[-1] == "" and len(lineas) == 102, len(lineas)
+        assert lineas[-1] == "" and len(lineas) == 4, "solo encabezado + filas con piezas"
         assert all(len(ln.split("\t")) == 283 for ln in lineas[:-1])
-        vacia = lineas[5].split("\t")
-        assert vacia[0] == "" and vacia[1] == "0" and vacia[-1] == "0"
+        assert lineas[0].split("\t")[:5] == ["Name", "Num", "Width", "High", "Length"]
 
         # Ovalado 17.46 a lo largo (caso real que bloqueaba) → Mold6 sin cambios.
         ab = _con_barrenos(
@@ -161,9 +166,9 @@ def main() -> None:
         )
         h_ab, _ = empaquetar_largos_cu([_pieza("ABB-22-U-BCK-721", ab)], _placas(), separacion_in=0.0)
         fil_ab = pc.construir_filas_barra(h_ab[0], thickness_mm=6.35)
-        assert [fil_ab[0][f"M{n}"] for n in (1, 2, 3, 4)] == ["M100", "M6", "M6", "C"], fil_ab[0]
-        # Franja libre antes del slot: 40 - 17.46/2 = 31.27 → grabado en X = 15.64.
-        assert fil_ab[0]["X1"] == "15.64" and fil_ab[0]["Y1"] == "0.00", fil_ab[0]["X1"]
+        assert [fil_ab[0][f"M{n}"] for n in (1, 2, 3, 4)] == ["M100", "M6", "M6", ""], fil_ab[0]
+        # Franja libre antes del slot: 40 - 17.46/2 = 31.27 → grabado en X = 15.64, Y = 30.
+        assert fil_ab[0]["X1"] == "15.64" and fil_ab[0]["Y1"] == "30", fil_ab[0]["X1"]
         assert h_ab[0]["cu_punch_cambios_herramental"] == []
 
         # Barreno fuera del inventario → bloquea, mensaje agrupado por pieza.
@@ -183,7 +188,7 @@ def main() -> None:
         ov = _con_barrenos(400.0, W6, [_slot(200.0, 76.2, 11.11, 15.88, eje_y=False)])
         h_ov, _ = empaquetar_largos_cu([_pieza("OVAL-X", ov)], _placas(), separacion_in=0.0)
         fil_ov = pc.construir_filas_barra(h_ov[0], thickness_mm=6.35)
-        assert fil_ov[0]["M2"] == "M8" and fil_ov[0]["Mold8"] == "E15.9X11.1", fil_ov[0]
+        assert fil_ov[0]["M2"] == "M8" and fil_ov[0]["TOOL8"] == "E15.9X11.1", fil_ov[0]
         assert h_ov[0]["cu_punch_cambios_herramental"] == ["Mold8: E20.6X11.1 → E15.9X11.1"]
         assert pc.montaje_barra(h_ov[0])[1] == ["Mold8: E20.6X11.1 → E15.9X11.1"]
         # Sin esa herramienta en el inventario → bloquea.
@@ -206,11 +211,17 @@ def main() -> None:
         liso = box(0, 0, 300.0, W6)
         h_liso, _ = empaquetar_largos_cu([_pieza("LISO", liso)], _placas(), separacion_in=0.0)
         fil_l = pc.construir_filas_barra(h_liso[0], thickness_mm=6.35)
-        assert (fil_l[0]["X1"], fil_l[0]["M1"], fil_l[0]["M2"]) == ("12.70", "M100", "C")
+        assert (fil_l[0]["X1"], fil_l[0]["Y1"], fil_l[0]["M1"], fil_l[0]["M2"]) == (
+            "12.7", "30", "M100", ""
+        )
         fil_l = pc.construir_filas_barra(
             h_liso[0], thickness_mm=6.35, grabado={"habilitado": False}
         )
-        assert (fil_l[0]["X1"], fil_l[0]["M1"]) == ("300.00", "C")
+        assert (fil_l[0]["X1"], fil_l[0]["M1"]) == ("0", ""), "sin grabado ni C: fila sin golpes"
+        # Solera angosta (1"): Y del grabado limitada a media solera.
+        from modules.nesting_engine.cu_punch_tooling import y_grabado_mm
+
+        assert y_grabado_mm(25.4, {"y_mm": 30.0}) == 12.7
 
         # Más de 8 herramientas distintas en una barra → bloquea.
         from modules.nesting_engine.cu_punch_tooling import estaciones_default, montaje_para_barra
@@ -268,8 +279,10 @@ def main() -> None:
         pz = [p for p in h_abb[0]["piezas"] if p["nombre"] == "ABB-22-U-BCK-721"][0]
         x0 = min(t[0] for t in pz["poligonos"][0])
         mxs = [pt[0] - x0 for s in pz["marcas"] for pt in s]
+        mys = [pt[1] for s in pz["marcas"] for pt in s]
         assert f_abb["M1"] == "M100"
         assert abs((min(mxs) + max(mxs)) / 2 - float(f_abb["X1"])) < 0.02, (mxs, f_abb["X1"])
+        assert abs(min(mys) - float(f_abb["Y1"])) < 0.02, "MARK empieza en la Y del M100"
 
         import ezdxf
 
@@ -298,7 +311,7 @@ def main() -> None:
         rtz = {"modo_largos_cu": True, "cu_rtz_virtual": True, "cu_despunte_mm": 50.0,
                "placa_h": W6, "piezas": hoja["piezas"]}
         assert pc.hoja_requiere_csv_punzonado(rtz) is True
-        assert pc.construir_filas_barra(rtz, thickness_mm=6.35)[0]["Model"] != "", (
+        assert pc.construir_filas_barra(rtz, thickness_mm=6.35)[0]["Name"] != "", (
             "RTZCU sin despunte"
         )
         save_nest_runtime_prefs({"cu_force_dxf_step": True})

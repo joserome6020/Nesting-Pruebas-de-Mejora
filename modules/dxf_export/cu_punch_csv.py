@@ -3,18 +3,20 @@
 Un CSV por barra de piezas normales (con_gap) y por RTZCU. Las barras
 Zapato/Botella/Z (sin_gap) siguen a láser y no llevan CSV.
 
-Formato LJcad: 283 columnas separadas por tabulador, CRLF, sin BOM,
-encabezado + 100 filas. Una fila por pieza en el orden del nest
-(``Quantity`` = 1) para que la máquina reproduzca la barra tal cual:
+Formato LJcad igual al archivo de planta (``pruebas jose.csv``): 283 columnas
+separadas por tabulador (``Name, Num, Width, High, Length, X1, Y1, M1 … M90,
+TOOL1..TOOL8``), CRLF, sin BOM, solo las filas con piezas. Una fila por pieza
+en el orden del nest (``Num`` = 1) para que la máquina reproduzca la barra:
 
 - Sin fila de despunte: el despunte (6 mm) es solo visual en el nest; el
   software de la máquina hace el suyo por defecto (~5.8 mm).
-- Primer golpe de cada pieza = grabado ``M100`` del ``Model`` (vertical) en
-  ``Y = 0``, centrado en la franja libre antes del primer barreno.
+- Primer golpe de cada pieza = grabado ``M100`` del ``Name`` (vertical) en
+  ``Y`` fija (30 mm); X = centro de la franja libre antes del primer barreno.
 - ``Width`` = ancho de la solera (piezas con decimal se cortan al ancho de la
   solera y se recortan después en láser).
 - Golpes ``X``/``Y`` relativos a la pieza (X desde su inicio, Y desde la orilla
-  de la solera), ``M{n}`` = estación ``Mold{n}``; último golpe ``C`` en ``X = Length``.
+  de la solera), ``M{n}`` = estación ``TOOL{n}``. Sin golpe ``C``: la máquina
+  corta sola en ``Length``.
 """
 from __future__ import annotations
 
@@ -33,9 +35,9 @@ TOL_RECT_MM = 0.05
 TOL_ANCHO_MM = 0.5
 
 ENCABEZADO: list[str] = (
-    ["Model", "Quantity", "Width", "Thickness", "Length"]
+    ["Name", "Num", "Width", "High", "Length"]
     + [c for n in range(1, N_GOLPES + 1) for c in (f"X{n}", f"Y{n}", f"M{n}")]
-    + [f"Mold{n}" for n in range(1, N_MOLDS + 1)]
+    + [f"TOOL{n}" for n in range(1, N_MOLDS + 1)]
 )
 
 
@@ -44,10 +46,12 @@ class PunchCsvError(ValueError):
 
 
 def _r2(v: float) -> str:
+    """2 decimales (ROUND_HALF_UP) sin ceros sobrantes: ``152.4``, ``900``, ``95.25``."""
     q = Decimal(str(round(float(v), 4))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if q == 0:
-        q = Decimal("0.00")
-    return f"{q:.2f}"
+        return "0"
+    txt = f"{q:.2f}".rstrip("0").rstrip(".")
+    return txt or "0"
 
 
 def _es_virtual(nombre: str) -> bool:
@@ -148,14 +152,14 @@ def _clasificar_barreno(anillo: list) -> tuple[str, float, float, float, float] 
 
 def _fila_vacia() -> dict[str, str]:
     fila = {c: "" for c in ENCABEZADO}
-    fila["Quantity"] = "0"
-    for c in ("Width", "Thickness", "Length"):
-        fila[c] = "0.00"
+    fila["Num"] = "0"
+    for c in ("Width", "High", "Length"):
+        fila[c] = "0"
     for n in range(1, N_GOLPES + 1):
-        fila[f"X{n}"] = "0.00"
-        fila[f"Y{n}"] = "0.00"
+        fila[f"X{n}"] = "0"
+        fila[f"Y{n}"] = "0"
     for n in range(1, N_MOLDS + 1):
-        fila[f"Mold{n}"] = "0"
+        fila[f"TOOL{n}"] = "0"
     return fila
 
 
@@ -169,10 +173,10 @@ def _fila(
 ) -> dict[str, str]:
     fila = _fila_vacia()
     fila.update(
-        Model=model,
-        Quantity="1",
+        Name=model,
+        Num="1",
         Width=_r2(width_mm),
-        Thickness=_r2(thickness_mm),
+        High=_r2(thickness_mm),
         Length=_r2(length_mm),
     )
     for n, (x, y, m) in enumerate(golpes, start=1):
@@ -180,7 +184,7 @@ def _fila(
         fila[f"Y{n}"] = _r2(y)
         fila[f"M{n}"] = m
     for n, code in enumerate(molds[:N_MOLDS], start=1):
-        fila[f"Mold{n}"] = code
+        fila[f"TOOL{n}"] = code
     return fila
 
 
@@ -231,9 +235,9 @@ def _analizar_barra(hoja: dict) -> tuple[list[tuple], list[str]]:
                 )
                 continue
             barrenos.append(info)
-        if len(barrenos) + 1 > N_GOLPES:
+        if len(barrenos) > N_GOLPES:
             errores.append(
-                f"{nombre}: {len(barrenos)} barrenos; la máquina admite {N_GOLPES - 1} por pieza"
+                f"{nombre}: {len(barrenos)} barrenos; la máquina admite {N_GOLPES} por pieza"
             )
             continue
         piezas.append((nombre, x0, largo, barrenos))
@@ -285,6 +289,7 @@ def construir_filas_barra(
         estacion_para_barreno,
         herramienta_inventario,
         montaje_para_barra,
+        y_grabado_mm,
     )
 
     ancho_bar = float(hoja.get("placa_h") or 0.0)
@@ -301,7 +306,9 @@ def construir_filas_barra(
     for nombre, x0, largo, barrenos_p in piezas:
         golpes: list[tuple[float, float, str]] = []
         if grab.get("habilitado"):
-            golpes.append((_x_grabado(x0, largo, barrenos_p, grab), 0.0, CODIGO_GRABADO))
+            golpes.append(
+                (_x_grabado(x0, largo, barrenos_p, grab), y_grabado_mm(ancho_bar, grab), CODIGO_GRABADO)
+            )
         for tipo, cx, cy, dx, dy in barrenos_p:
             idx = estacion_para_barreno(tipo, dx, dy, ests)
             if idx is None:
@@ -311,13 +318,12 @@ def construir_filas_barra(
                 continue
             golpes.append((cx - x0, cy, f"M{idx}"))
         golpes.sort(key=lambda g: (g[2] != CODIGO_GRABADO, round(g[0], 3), round(g[1], 3)))
-        if len(golpes) + 1 > N_GOLPES:
+        if len(golpes) > N_GOLPES:
             errores.append(
                 f"{nombre}: {len(golpes)} golpes (barrenos + grabado); la máquina admite "
-                f"{N_GOLPES - 1} por pieza"
+                f"{N_GOLPES} por pieza"
             )
             continue
-        golpes.append((largo, 0.0, "C"))
         filas.append(_fila(_model_texto(nombre), ancho_bar, thickness_mm, largo, golpes, molds))
 
     if len(filas) > N_FILAS:
@@ -329,9 +335,8 @@ def construir_filas_barra(
 
 
 def escribir_csv(path: str, filas: list[dict[str, str]]) -> str:
-    vacias = [_fila_vacia() for _ in range(max(0, N_FILAS - len(filas)))]
     lineas = ["\t".join(ENCABEZADO)]
-    for f in list(filas) + vacias:
+    for f in filas:
         lineas.append("\t".join(f.get(c, "") for c in ENCABEZADO))
     parent = os.path.dirname(path)
     if parent:

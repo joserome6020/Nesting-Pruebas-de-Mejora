@@ -491,14 +491,20 @@ def _editar_herramental_punzonadora(parent) -> bool:
 
     grab = cargar_grabado()
     fila_grab = QHBoxLayout()
-    chk_grab = QCheckBox(f"Grabar nombre de la pieza ({CODIGO_GRABADO}, vertical, Y = 0)")
+    chk_grab = QCheckBox(f"Grabar nombre de la pieza ({CODIGO_GRABADO}, vertical)")
     chk_grab.setChecked(bool(grab["habilitado"]))
     spin_grab = QDoubleSpinBox()
     spin_grab.setRange(1.0, 200.0)
     spin_grab.setDecimals(2)
     spin_grab.setValue(float(grab["x_sin_barrenos_mm"]))
+    spin_grab_y = QDoubleSpinBox()
+    spin_grab_y.setRange(0.0, 200.0)
+    spin_grab_y.setDecimals(2)
+    spin_grab_y.setValue(float(grab["y_mm"]))
     fila_grab.addWidget(chk_grab)
     fila_grab.addStretch(1)
+    fila_grab.addWidget(QLabel("Y (mm):"))
+    fila_grab.addWidget(spin_grab_y)
     fila_grab.addWidget(QLabel("X sin barrenos (mm):"))
     fila_grab.addWidget(spin_grab)
     lay.addLayout(fila_grab)
@@ -533,7 +539,11 @@ def _editar_herramental_punzonadora(parent) -> bool:
             guardar_herramental(
                 estaciones,
                 inventario,
-                {"habilitado": chk_grab.isChecked(), "x_sin_barrenos_mm": spin_grab.value()},
+                {
+                    "habilitado": chk_grab.isChecked(),
+                    "x_sin_barrenos_mm": spin_grab.value(),
+                    "y_mm": spin_grab_y.value(),
+                },
             )
         except OSError as exc:
             QMessageBox.critical(dlg, "Error", f"No se pudo guardar el herramental:\n{exc}")
@@ -545,6 +555,7 @@ def _editar_herramental_punzonadora(parent) -> bool:
         _cargar_en(filas_inv, inventario_default())
         chk_grab.setChecked(True)
         spin_grab.setValue(12.7)
+        spin_grab_y.setValue(30.0)
 
     btn_default.clicked.connect(_restaurar)
     btn_cancelar.clicked.connect(dlg.reject)

@@ -49,8 +49,9 @@ def strokes_mark_cu_vertical(
     *,
     grabado: dict[str, Any] | None = None,
 ) -> list[list[tuple[float, float]]]:
-    """Trazos (mm) del texto vertical centrado en ``x_grabado_mm`` y a media solera."""
-    from modules.nesting_engine.cu_punch_tooling import x_grabado_mm
+    """Trazos (mm) del texto vertical: centrado en ``x_grabado_mm`` y empezando en
+    ``y_grabado_mm`` (mismo punto que el golpe ``M100`` del CSV), leyendo hacia arriba."""
+    from modules.nesting_engine.cu_punch_tooling import x_grabado_mm, y_grabado_mm
 
     text = normalize_mark_text(texto)
     if not text:
@@ -70,14 +71,15 @@ def strokes_mark_cu_vertical(
     bb = text_bbox(strokes)
     if not bb:
         return []
-    usable = max(ancho - 2.0 * clear, 1e-6)
+    y_rel = y_grabado_mm(ancho, grabado)
+    usable = max(ancho - y_rel - clear, 1e-6)
     tw = bb[2] - bb[0]
     if tw > usable:
         strokes = build_stick_strokes(text, (0.0, 0.0), height * usable / tw)
     strokes = rotate_strokes(strokes, 90.0)
     bb = text_bbox(strokes)
-    cx_t, cy_t = (bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0
-    return translate_strokes(strokes, minx + x_rel - cx_t, miny + ancho / 2.0 - cy_t)
+    cx_t = (bb[0] + bb[2]) / 2.0
+    return translate_strokes(strokes, minx + x_rel - cx_t, miny + y_rel - bb[1])
 
 
 def mark_cu_vertical_para_poly(

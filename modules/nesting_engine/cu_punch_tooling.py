@@ -44,7 +44,8 @@ _DEFAULT_ESTACIONES: list[dict[str, Any]] = [
 
 # Estación de grabado: marca el texto de ``Model`` (vertical, al inicio de la pieza).
 CODIGO_GRABADO = "M100"
-_DEFAULT_GRABADO: dict[str, Any] = {"habilitado": True, "x_sin_barrenos_mm": 12.7}
+# Y fija del grabado (archivo de planta ``pruebas jose.csv``: M100 en Y = 30).
+_DEFAULT_GRABADO: dict[str, Any] = {"habilitado": True, "x_sin_barrenos_mm": 12.7, "y_mm": 30.0}
 
 # Herramientas físicas disponibles (herramental_cobre_barrenos.csv); ovalado = ancho × largo.
 _DEFAULT_INVENTARIO: list[dict[str, Any]] = [
@@ -186,7 +187,19 @@ def normalizar_grabado(raw: Any) -> dict[str, Any]:
                 out["x_sin_barrenos_mm"] = round(x, 3)
         except (TypeError, ValueError):
             pass
+        try:
+            y = float(raw.get("y_mm", out["y_mm"]))
+            if y >= 0:
+                out["y_mm"] = round(y, 3)
+        except (TypeError, ValueError):
+            pass
     return out
+
+
+def y_grabado_mm(ancho_mm: float, grabado: dict[str, Any] | None = None) -> float:
+    """Y del grabado ``M100`` (inicio del texto vertical); en soleras angostas, media solera."""
+    grab = normalizar_grabado(grabado if grabado is not None else cargar_grabado())
+    return min(float(grab["y_mm"]), float(ancho_mm) / 2.0)
 
 
 def cargar_grabado() -> dict[str, Any]:

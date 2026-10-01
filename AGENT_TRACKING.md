@@ -55,6 +55,18 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-01g — Cobre: CSV punzonado con el formato de planta (`pruebas jose.csv`)
+
+- `modules/dxf_export/cu_punch_csv.py`: encabezado de planta `Name, Num, Width, High,
+  Length, X1,Y1,M1..X90,Y90,M90, TOOL1..TOOL8` (283 col, TAB, CRLF, sin BOM); números
+  sin ceros sobrantes (`152.4`, `600`); vacíos X/Y = `0`, M = ``; **sin golpe `C`** (la
+  máquina corta en `Length`) y **sin relleno** a 100 filas (solo filas con pieza).
+- `cu_punch_tooling.py`: grabado `M100` con `y_mm` (default 30, editable en
+  EDITAR HERRAMENTAL PUNZONADORA); `y_grabado_mm` lo limita a media solera en angostas.
+- `cu_mark_vertical.py`: el MARK vertical empieza en esa Y (misma X/Y que el `M100`).
+- Candado: `tests/native/test_cu_punch_csv.py` actualizado (encabezado, Y = 30, sin C,
+  sin relleno, MARK en la Y del M100). Header E2E idéntico byte a byte a `pruebas jose.csv`.
+
 ### 2026-10-01f — Fix: KeyError 'marcas' en nest Lite (Southwest 0.375_A 36)
 
 - Bug: Lite void-first mete piezas en orificios y `expand_void_cargo_onto_hoja`
