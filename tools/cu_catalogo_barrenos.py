@@ -376,20 +376,82 @@ def mezclar_manual(catalogo: dict, ruta_manual: Path = DEFAULT_MANUAL) -> dict:
             "no_punzonables": [],
         }
         ent = catalogo.setdefault(nombre.upper(), {"variantes": [], "fuentes": []})
-        if not any(u["barrenos"] == v["barrenos"] for u in ent["variantes"]):
+        if m.get("conflicto"):
+            ent["conflicto"] = m["conflicto"]
+        if m.get("reemplaza"):
+            # El plano manda: el modelo 3D que lo contradice no puede validar una pieza.
+            ent["variantes"] = [v]
+            ent["fuentes"] = [v["fuente"]]
+        elif not any(u["barrenos"] == v["barrenos"] for u in ent["variantes"]):
             ent["variantes"].append(v)
             ent["fuentes"].append(v["fuente"])
     return dict(sorted(catalogo.items()))
+
+
+_COTA = re.compile(r"(?<![\d.])(\d{1,3}\.\d{1,3})(?![\d.])")
+
+
+def _cotas_plano(base: str, planos: list[str]) -> set[float]:
+    import fitz
+
+    nums: set[float] = set()
+    for rel in planos:
+        try:
+            for pg in fitz.open(os.path.join(base, rel)):
+                nums |= {float(x) for x in _COTA.findall(pg.get_text())}
+        except Exception:  # noqa: BLE001
+            continue
+    return nums
+
+
+def verificar_contra_plano(base: str, catalogo: dict) -> dict:
+    """Marca cada pieza según si las medidas de sus barrenos están acotadas en su plano PDF."""
+
+    def esta(v, nums, tol=0.03):
+        return any(abs(v - n) <= tol for n in nums)
+
+    for nombre, ent in catalogo.items():
+        var = ent["variantes"]
+        if not var:
+            ent["plano"] = "sin datos"
+            continue
+        if var[0]["fuente"].startswith("PDF:"):
+            ent["plano"] = "conflicto con STEP (manda el plano)" if ent.get("conflicto") else "capturado del plano"
+            continue
+        nums = _cotas_plano(base, ent.get("planos") or [])
+        if not nums:
+            ent["plano"] = "sin plano PDF"
+            continue
+        faltan = []
+        for b in var[0]["barrenos"]:
+            if b["tipo"] == "C":
+                if not esta(b["ancho"], nums, 0.12):
+                    faltan.append(f"Ø{b['ancho']}")
+            elif not esta(b["ancho"], nums) or not (
+                esta(b["largo"], nums) or esta(b["largo"] - b["ancho"], nums) or esta(b["ancho"] / 2, nums, 0.04)
+            ):
+                faltan.append(f"ov {b['ancho']}x{b['largo']}")
+        ent["plano"] = "confirmado" if not faltan else "plano parcial (sin cota: " + ", ".join(faltan) + ")"
+    return catalogo
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("base", help="carpeta de planos (se recorre completa)")
     ap.add_argument("--out", default=str(DEFAULT_OUT))
+    ap.add_argument(
+        "--solo-manual",
+        action="store_true",
+        help="no relee los STEP: reaplica capturas del plano y la verificación sobre el JSON actual",
+    )
     args = ap.parse_args(argv)
-    cobre = inventario_cobre(args.base)
-    print(f"piezas de cobre en los planos: {len(cobre)}")
-    cat = mezclar_manual(construir_catalogo(args.base, cobre=cobre))
+    if args.solo_manual:
+        cat = json.loads(Path(args.out).read_text(encoding="utf-8"))["piezas"]
+    else:
+        cobre = inventario_cobre(args.base)
+        print(f"piezas de cobre en los planos: {len(cobre)}")
+        cat = construir_catalogo(args.base, cobre=cobre)
+    cat = verificar_contra_plano(args.base, mezclar_manual(cat))
     data = {
         "generado": _dt.datetime.now().isoformat(timespec="seconds"),
         "origen": args.base,

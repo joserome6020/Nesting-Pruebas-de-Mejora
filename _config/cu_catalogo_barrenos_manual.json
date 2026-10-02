@@ -112,6 +112,72 @@
      "cantidad": 6
     }
    ]
+  },
+  "ABB-22-U-BCK-735": {
+   "fuente": "PDF ABB-22-U-BCK-735 (Board 16): 6X Ø11.11 + 2X Ø10.31",
+   "ancho_solera_mm": 127.0,
+   "reemplaza": true,
+   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 2
+    }
+   ]
+  },
+  "ABB-22-U-BCK-736": {
+   "fuente": "PDF ABB-22-U-BCK-736 (Board 16): 6X Ø11.11 + 2X Ø10.31",
+   "ancho_solera_mm": 127.0,
+   "reemplaza": true,
+   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 2
+    }
+   ]
+  },
+  "ABB-22-U-BCK-737": {
+   "fuente": "PDF ABB-22-U-BCK-737 (Board 16): 6X Ø11.11 + 2X Ø10.31",
+   "ancho_solera_mm": 127.0,
+   "reemplaza": true,
+   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 2
+    }
+   ]
   }
  }
 }
