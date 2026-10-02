@@ -26,7 +26,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 N_GOLPES = 90
 N_FILAS = 100
@@ -324,12 +324,15 @@ def construir_filas_barra(
     inventario: list | None = None,
     grabado: dict | None = None,
     etiqueta: str = "",
+    catalogo: dict | None = None,
 ) -> list[dict[str, str]]:
     """Filas CSV de una barra. Lanza ``PunchCsvError`` con todos los problemas juntos.
 
     Deja en ``hoja["cu_punch_cambios_herramental"]`` los cambios respecto al
-    montaje base (herramientas del inventario que la barra necesita).
+    montaje base (herramientas del inventario que la barra necesita) y en
+    ``hoja["cu_punch_avisos"]`` las piezas que no están en el catálogo de barrenos.
     """
+    from modules.nesting_engine.cu_catalogo_barrenos import verificar_pieza
     from modules.nesting_engine.cu_punch_tooling import (
         CODIGO_GRABADO,
         cargar_grabado,
@@ -350,8 +353,17 @@ def construir_filas_barra(
     filas: list[dict[str, str]] = []
 
     grab = grabado if grabado is not None else cargar_grabado()
+    avisos: list[str] = []
 
     for nombre, x0, largo, barrenos_p in piezas:
+        estado, detalle = verificar_pieza(
+            nombre, [(b[0], b[3], b[4]) for b in barrenos_p], catalogo=catalogo
+        )
+        if estado == "no_coincide":
+            errores.append(detalle)
+            continue
+        if estado == "sin_catalogo":
+            avisos.append(detalle)
         golpes: list[tuple[float, float, str]] = []
         if grab.get("habilitado"):
             golpes.append(
@@ -376,10 +388,108 @@ def construir_filas_barra(
 
     if len(filas) > N_FILAS:
         errores.append(f"{len(filas)} filas; LJcad admite {N_FILAS} por archivo")
+    if not errores:
+        errores.extend(verificar_filas_barra(hoja, filas))
     if errores:
         raise PunchCsvError(f"[{tag}] " + " | ".join(_agrupar_errores(errores)))
     hoja["cu_punch_cambios_herramental"] = cambios
+    hoja["cu_punch_avisos"] = avisos
     return filas
+
+
+# Simulación del punzonado: área que puede diferir entre lo que deja el golpe y el
+# barreno del DXF (los códigos LJcad van a 1 decimal: 15.08 → 15.1).
+TOL_SIM_FRACCION = 0.06
+TOL_SIM_CENTRO_MM = 0.05
+
+
+def _forma_herramienta(code: str, x: float, y: float):
+    """Huella del punzón ``code`` (``C11.1`` / ``E15.1X10.3``) centrada en (x, y)."""
+    m = re.fullmatch(r"C(\d+(?:\.\d+)?)", code or "")
+    if m:
+        return Point(x, y).buffer(float(m.group(1)) / 2.0, resolution=64)
+    m = re.fullmatch(r"E(\d+(?:\.\d+)?)X(\d+(?:\.\d+)?)", code or "")
+    if not m:
+        return None
+    a, b = float(m.group(1)), float(m.group(2))
+    w = min(a, b)
+    d = (max(a, b) - w) / 2.0
+    seg = LineString([(x - d, y), (x + d, y)]) if a >= b else LineString([(x, y - d), (x, y + d)])
+    return seg.buffer(w / 2.0, resolution=64)
+
+
+def verificar_filas_barra(hoja: dict, filas: list[dict[str, str]]) -> list[str]:
+    """Validación independiente del CSV contra la geometría de la barra.
+
+    Simula cada golpe con la herramienta de su ``TOOLn`` (lo que hará la máquina) y
+    exige que cada barreno de la pieza quede reproducido por exactamente un golpe
+    (posición, medida y orientación), sin golpes de más, con ``Length``/``Width``
+    correctos y el grabado ``M100`` dentro de la pieza y fuera de los barrenos.
+    No reutiliza la clasificación de barrenos que generó el CSV.
+    """
+    errores: list[str] = []
+    ancho_bar = float(hoja.get("placa_h") or 0.0)
+    piezas = [p for p in _piezas_reales(hoja)]
+    if len(piezas) != len(filas):
+        return [f"validación: {len(filas)} filas para {len(piezas)} piezas en la barra"]
+    for p, fila in zip(piezas, filas):
+        nombre = str(p.get("nombre") or "PIEZA")
+        if fila.get("Name") != _model_texto(nombre):
+            errores.append(f"validación: fila '{fila.get('Name')}' no corresponde a {nombre}")
+            continue
+        exterior = p["poligonos"][0]
+        xs = [float(t[0]) for t in exterior]
+        x0, largo = min(xs), max(xs) - min(xs)
+        if abs(float(fila["Length"]) - largo) > 0.01:
+            errores.append(f"validación {nombre}: Length {fila['Length']} ≠ pieza {largo:.2f}")
+        if ancho_bar > 0 and abs(float(fila["Width"]) - ancho_bar) > 0.01:
+            errores.append(f"validación {nombre}: Width {fila['Width']} ≠ solera {ancho_bar:.2f}")
+        tools = [fila.get(f"TOOL{n}", "") for n in range(1, N_MOLDS + 1)]
+        huecos = [Polygon(r) for r in p["poligonos"][1:]]
+        usados = [0] * len(huecos)
+        for n in range(1, N_GOLPES + 1):
+            m = fila.get(f"M{n}", "")
+            if not m:
+                continue
+            gx, gy = float(fila[f"X{n}"]), float(fila[f"Y{n}"])
+            if m == "M100":
+                pt = Point(x0 + gx, gy)
+                if not (0.0 <= gx <= largo and 0.0 <= gy <= (ancho_bar or gy)):
+                    errores.append(f"validación {nombre}: grabado M100 fuera de la pieza")
+                elif any(h.buffer(1.0).contains(pt) for h in huecos):
+                    errores.append(f"validación {nombre}: grabado M100 encima de un barreno")
+                continue
+            k = int(m[1:]) if m[1:].isdigit() else 0
+            code = tools[k - 1] if 1 <= k <= N_MOLDS else ""
+            huella = _forma_herramienta(code, x0 + gx, gy)
+            if huella is None:
+                errores.append(f"validación {nombre}: golpe {m} sin herramienta válida ({code or 'vacía'})")
+                continue
+            cerca = [
+                i for i, h in enumerate(huecos)
+                if Point(x0 + gx, gy).distance(h.centroid) <= TOL_SIM_CENTRO_MM
+            ]
+            if not cerca:
+                errores.append(
+                    f"validación {nombre}: golpe {m} {code} en X{gx:g} Y{gy:g} no cae en ningún barreno"
+                )
+                continue
+            i = cerca[0]
+            usados[i] += 1
+            dif = huella.symmetric_difference(huecos[i]).area / max(huecos[i].area, 1e-9)
+            if dif > TOL_SIM_FRACCION:
+                bx0, by0, bx1, by1 = huecos[i].bounds
+                errores.append(
+                    f"validación {nombre}: {m} = {code} no reproduce el barreno "
+                    f"{bx1 - bx0:.2f}×{by1 - by0:.2f} mm (largo×ancho) en X{gx:g} Y{gy:g}"
+                )
+        for i, u in enumerate(usados):
+            if u != 1:
+                c = huecos[i].centroid
+                errores.append(
+                    f"validación {nombre}: barreno en X{c.x - x0:.2f} Y{c.y:.2f} con {u} golpes (debe ser 1)"
+                )
+    return errores
 
 
 def escribir_csv(path: str, filas: list[dict[str, str]]) -> str:

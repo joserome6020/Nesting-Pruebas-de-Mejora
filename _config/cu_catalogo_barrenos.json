@@ -1,0 +1,1298 @@
+{
+ "generado": "2026-10-02T07:20:47",
+ "origen": "Z:\\♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\\BIENVENIDO\\Departamentos _antes TIK\\ORDENES DE PRODUCCION\\GAE 783 a 798 - GIGA FLUID STACK\\4. Planos",
+ "piezas": {
+  "GENE-BCU-4-901": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-901.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-901.step"
+   ]
+  },
+  "GENE-BCU-4-902": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-902.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-902.step"
+   ]
+  },
+  "GENE-BCU-4-903": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-903.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 10
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-903.step"
+   ]
+  },
+  "GENE-BCU-4-904": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-904.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 10
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-904.step"
+   ]
+  },
+  "GENE-BCU-4-905": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-905.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-905.step"
+   ]
+  },
+  "GENE-BCU-4-906": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-906.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-906.step"
+   ]
+  },
+  "GENE-BCU-4-907": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-907.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-907.step"
+   ]
+  },
+  "GENE-BCU-4-908": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-908.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-908.step"
+   ]
+  },
+  "GENE-BCU-4-909": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-909.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-909.step"
+   ]
+  },
+  "GENE-BCU-4-910": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-910.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-910.step"
+   ]
+  },
+  "GENE-BCU-4-911": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-911.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-911.step"
+   ]
+  },
+  "GENE-BCU-4-912": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-912.step",
+     "modificado": "2026-07-13T09:34:20",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-BCU-4-912.step"
+   ]
+  },
+  "GENE-BCU-5-165": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-165.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-165.step"
+   ]
+  },
+  "GENE-BCU-5-166": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-166.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-166.step"
+   ]
+  },
+  "GENE-BCU-5-167": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-167.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-167.step"
+   ]
+  },
+  "GENE-BCU-5-168": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-168.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-168.step"
+   ]
+  },
+  "GENE-BCU-5-169": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-169.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-169.step"
+   ]
+  },
+  "GENE-BCU-5-170": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-170.step",
+     "modificado": "2026-06-19T13:57:58",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 12
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-BCU-5-170.step"
+   ]
+  },
+  "GENE-FCU-2-105": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-2-105 (Board 10/11) + GENE-FCU-2-105 C",
+     "modificado": "",
+     "ancho_solera_mm": 50.8,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-2-105 (Board 10/11) + GENE-FCU-2-105 C"
+   ]
+  },
+  "GENE-FCU-2.25-101": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-2.25-101 (Board 10/11) + GENE-FCU-2.25-101 C",
+     "modificado": "",
+     "ancho_solera_mm": 57.15,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-2.25-101 (Board 10/11) + GENE-FCU-2.25-101 C"
+   ]
+  },
+  "GENE-FCU-4-105": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-105.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 50.8,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-105.step"
+   ]
+  },
+  "GENE-FCU-4-109": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-109.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-109.step"
+   ]
+  },
+  "GENE-FCU-4-112": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-112.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 20
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-112.step"
+   ]
+  },
+  "GENE-FCU-4-120": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-120.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 10
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 24
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-120.step"
+   ]
+  },
+  "GENE-FCU-4-169": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-4-169.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 95.3,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": [
+      "arista no recta/circular"
+     ]
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-4-169.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-4-169.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-4-169.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-4-169.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-4-169.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-4-169.step"
+   ]
+  },
+  "GENE-FCU-4-301": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-301.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 36
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-301.step"
+   ]
+  },
+  "GENE-FCU-4-303": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-303.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-303.step"
+   ]
+  },
+  "GENE-FCU-4-304": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-304.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-304.step"
+   ]
+  },
+  "GENE-FCU-4-305": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-305.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-4-305.step"
+   ]
+  },
+  "GENE-FCU-4-306": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-4-306 (Board 10/11) + GENE-FCU-4-306 C",
+     "modificado": "",
+     "ancho_solera_mm": null,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-4-306 (Board 10/11) + GENE-FCU-4-306 C"
+   ]
+  },
+  "GENE-FCU-5-102": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-102.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 28
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-102.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 14\\PDF & STEP\\COBRE\\SOLIDOS COBRE\\GENE-FCU-5-102.step",
+    "9919- Board 15\\PDF & STEP\\GENE-FCU-5-102.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-102.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-102.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-102.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-102.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-102.step"
+   ]
+  },
+  "GENE-FCU-5-103": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-103.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 50.8,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-103.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 14\\PDF & STEP\\COBRE\\SOLIDOS COBRE\\GENE-FCU-5-103.step",
+    "9919- Board 15\\PDF & STEP\\GENE-FCU-5-103.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-103.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-103.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-103.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-103.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-103.step"
+   ]
+  },
+  "GENE-FCU-5-104": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-104.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-104.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-104.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-104.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-104.step",
+    "9919- Board 14\\PDF & STEP\\COBRE\\SOLIDOS COBRE\\GENE-FCU-5-104.step",
+    "9919- Board 15\\PDF & STEP\\GENE-FCU-5-104.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-104.STEP",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-104.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-104.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-104.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-104.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-104.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-104.step"
+   ]
+  },
+  "GENE-FCU-5-108": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-108.STEP",
+     "modificado": "2026-06-19T13:58:02",
+     "ancho_solera_mm": 43.7,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-108.STEP"
+   ]
+  },
+  "GENE-FCU-5-109": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-109.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-109.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 14\\PDF & STEP\\COBRE\\SOLIDOS COBRE\\GENE-FCU-5-109.step",
+    "9919- Board 15\\PDF & STEP\\GENE-FCU-5-109.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-109.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-109.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-109.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-109.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-109.step"
+   ]
+  },
+  "GENE-FCU-5-110": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-5-110 (Board 14/15)",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-5-110 (Board 14/15)"
+   ]
+  },
+  "GENE-FCU-5-118": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-118.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 24
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-118.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 14\\PDF & STEP\\COBRE\\SOLIDOS COBRE\\GENE-FCU-5-118.step",
+    "9919- Board 15\\PDF & STEP\\GENE-FCU-5-118.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-118.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-118.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-118.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-118.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-118.step"
+   ]
+  },
+  "GENE-FCU-5-120": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-5-120 (Board 10/11, detalle A) + GENE-FCU-5-120 C (10X Ø11.00, X20 ovalados)",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 10
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 20
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-5-120 (Board 10/11, detalle A) + GENE-FCU-5-120 C (10X Ø11.00, X20 ovalados)"
+   ]
+  },
+  "GENE-FCU-5-121": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-121.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 8
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 20
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-121.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-121.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-121.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-121.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-121.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-121.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-121.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-121.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-121.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-121.step"
+   ]
+  },
+  "GENE-FCU-5-124": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-5-124 (Board 14/15): 10X Ø11.00 THRU + 12 columnas x2 ovalados 10.31x15.07",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 10
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 24
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-5-124 (Board 14/15): 10X Ø11.00 THRU + 12 columnas x2 ovalados 10.31x15.07"
+   ]
+  },
+  "GENE-FCU-5-126": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-126.step",
+     "modificado": "2026-06-19T13:58:02",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-126.step"
+   ]
+  },
+  "GENE-FCU-5-127": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-127.step",
+     "modificado": "2026-06-19T13:58:03",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 4
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 4
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-5-127.step"
+   ]
+  },
+  "GENE-FCU-5-128": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-128.step",
+     "modificado": "2026-07-13T09:34:21",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.0,
+       "largo": 11.0,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 10.31,
+       "largo": 15.07,
+       "eje": "ancho",
+       "cantidad": 16
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 16\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-128.step"
+   ]
+  },
+  "GENE-FCU-5-205": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-205.step",
+     "modificado": "2026-07-13T09:34:44",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 24
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 17.46,
+       "eje": "largo",
+       "cantidad": 16
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 10\\PDF & STEP\\GENE-FCU-5-205.step",
+    "9919- Board 11\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-205.step",
+    "9919- Board 12\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-205.step",
+    "9919- Board 13\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-205.step",
+    "9919- Board 4\\PDF & STEP\\PLANOS COBRE\\SOLIDOS COBRE\\GENE-FCU-5-205.step",
+    "9919- Board 5\\PDF & STEP\\COBRE\\SOLIDOS\\GENE-FCU-5-205.step",
+    "9919- Board 6\\PDF & STEP\\COBRE\\COBRE SOLIDOS\\GENE-FCU-5-205.step",
+    "9919- Board 7\\PDF & STEP\\GENE-FCU-5-205.step",
+    "9919- Board 8\\PDF & STEP\\GENE-FCU-5-205.step",
+    "9919- Board 9\\PDF & STEP\\COBRE\\GENE-FCU-5-205.step"
+   ]
+  },
+  "GENE-FCU-6-105": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 2\\New PDF & STEP\\GENE-FCU-6-105.step",
+     "modificado": "2026-07-13T09:34:22",
+     "ancho_solera_mm": 152.4,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "largo",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\New PDF & STEP\\GENE-FCU-6-105.step",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-6-105.step",
+    "9919- Board 2\\New PDF & STEP\\GENE-FCU-6-105.step",
+    "9919- Board 3\\New PDF & STEP\\GENE-FCU-6-105.step"
+   ]
+  },
+  "GENE-FCU-6-106": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 2\\New PDF & STEP\\GENE-FCU-6-106.STEP",
+     "modificado": "2026-07-13T09:34:22",
+     "ancho_solera_mm": 95.3,
+     "barrenos": [
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 15.88,
+       "eje": "ancho",
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\New PDF & STEP\\GENE-FCU-6-106.STEP",
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-6-106.STEP",
+    "9919- Board 2\\New PDF & STEP\\GENE-FCU-6-106.STEP",
+    "9919- Board 3\\New PDF & STEP\\GENE-FCU-6-106.STEP"
+   ]
+  },
+  "GENE-FCU-6-112": {
+   "variantes": [
+    {
+     "fuente": "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-6-112.step",
+     "modificado": "2026-06-19T13:58:03",
+     "ancho_solera_mm": 95.3,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "9919- Board 1\\PDF & STEPs\\COBRE\\SOLIDOS\\GENE-FCU-6-112.step"
+   ]
+  },
+  "GENE-FCU-6-113": {
+   "variantes": [
+    {
+     "fuente": "PDF: PDF GENE-FCU-6-113 (Board 10/11) + GENE-FCU-6-113 C",
+     "modificado": "",
+     "ancho_solera_mm": null,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF GENE-FCU-6-113 (Board 10/11) + GENE-FCU-6-113 C"
+   ]
+  }
+ }
+}

@@ -74,7 +74,11 @@ def main() -> None:
         os.environ.pop("ARGA_CU_FORCE_DXF_STEP", None)
 
         from modules.dxf_export import cu_punch_csv as pc
+        from modules.nesting_engine import cu_catalogo_barrenos as cb
         from modules.nesting_engine.cu_largos_nesting import empaquetar_largos_cu
+
+        # Geometría sintética con nombres reales: el catálogo de planos se prueba aparte.
+        cb.cargar_catalogo = lambda ruta=None: {}
         from modules.nesting_engine.cu_punch_tooling import (
             cargar_estaciones,
             codigos_molds,

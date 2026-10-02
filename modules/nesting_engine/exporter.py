@@ -1563,14 +1563,26 @@ def exportar_resultados_a_dxf(
         for _err in punch_errores:
             log(f"[CU-PUNCH][ERROR] {_err}")
         raise DxfExportValidationError(
-            "Cobre CNC Busbar Punching: hay barras que la punzonadora no puede hacer "
-            "con el inventario de herramientas (Configuración Global → Herramental "
-            "punzonadora).\n\n"
+            "Cobre CNC Busbar Punching: hay barras que no pasaron la revisión de "
+            "barrenos/herramental (inventario en Configuración Global → Herramental "
+            "punzonadora; catálogo de barrenos de los planos; simulación del "
+            "punzonado). No se generó ningún CSV.\n\n"
             + "\n".join(punch_errores[:12])
             + (f"\n(+{len(punch_errores) - 12} más)" if len(punch_errores) > 12 else "")
         )
     if punch_filas_por_hoja:
         log(f"[CU-PUNCH] barras con CSV de punzonado: {len(punch_filas_por_hoja)}")
+        _sin_cat = sorted(
+            {
+                _a
+                for _data_p in (resultados or {}).values()
+                if isinstance(_data_p, dict)
+                for _hoja_p in _data_p.get("hojas") or []
+                for _a in (_hoja_p.get("cu_punch_avisos") or [])
+            }
+        )
+        for _aviso in _sin_cat:
+            log(f"[CU-PUNCH][AVISO] {_aviso} (solo se validó con el analizador y la simulación)")
 
     from .efficiency_metrics import (
         inicializar_contador_rtz_sobrante,

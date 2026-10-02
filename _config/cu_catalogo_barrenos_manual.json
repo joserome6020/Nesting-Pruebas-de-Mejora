@@ -1,0 +1,117 @@
+{
+ "nota": "Piezas cuyo STEP de GIGA llega vacío: barrenos capturados del plano PDF (GIGA + plano C de Arga). tools/cu_catalogo_barrenos.py las mezcla al catálogo.",
+ "piezas": {
+  "GENE-FCU-2-105": {
+   "fuente": "PDF GENE-FCU-2-105 (Board 10/11) + GENE-FCU-2-105 C",
+   "ancho_solera_mm": 50.8,
+   "largo_mm": 222.25,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 2
+    }
+   ]
+  },
+  "GENE-FCU-2.25-101": {
+   "fuente": "PDF GENE-FCU-2.25-101 (Board 10/11) + GENE-FCU-2.25-101 C",
+   "ancho_solera_mm": 57.15,
+   "largo_mm": 203.2,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 2
+    }
+   ]
+  },
+  "GENE-FCU-4-306": {
+   "fuente": "PDF GENE-FCU-4-306 (Board 10/11) + GENE-FCU-4-306 C",
+   "ancho_solera_mm": null,
+   "largo_mm": 88.9,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 4
+    }
+   ]
+  },
+  "GENE-FCU-5-110": {
+   "fuente": "PDF GENE-FCU-5-110 (Board 14/15)",
+   "ancho_solera_mm": 127.0,
+   "largo_mm": 76.2,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 4
+    }
+   ]
+  },
+  "GENE-FCU-5-120": {
+   "fuente": "PDF GENE-FCU-5-120 (Board 10/11, detalle A) + GENE-FCU-5-120 C (10X Ø11.00, X20 ovalados)",
+   "ancho_solera_mm": 127.0,
+   "largo_mm": 895.38,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.0,
+     "largo": 11.0,
+     "eje": null,
+     "cantidad": 10
+    },
+    {
+     "tipo": "E",
+     "ancho": 10.31,
+     "largo": 15.07,
+     "eje": "ancho",
+     "cantidad": 20
+    }
+   ]
+  },
+  "GENE-FCU-5-124": {
+   "fuente": "PDF GENE-FCU-5-124 (Board 14/15): 10X Ø11.00 THRU + 12 columnas x2 ovalados 10.31x15.07",
+   "ancho_solera_mm": 127.0,
+   "largo_mm": 1095.38,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.0,
+     "largo": 11.0,
+     "eje": null,
+     "cantidad": 10
+    },
+    {
+     "tipo": "E",
+     "ancho": 10.31,
+     "largo": 15.07,
+     "eje": "ancho",
+     "cantidad": 24
+    }
+   ]
+  },
+  "GENE-FCU-6-113": {
+   "fuente": "PDF GENE-FCU-6-113 (Board 10/11) + GENE-FCU-6-113 C",
+   "ancho_solera_mm": null,
+   "largo_mm": 133.35,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    }
+   ]
+  }
+ }
+}

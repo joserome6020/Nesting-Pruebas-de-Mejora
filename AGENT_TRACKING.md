@@ -55,6 +55,24 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02 — CSV cobre: doble protección del herramental (catálogo de planos + simulación)
+
+- `tools/cu_catalogo_barrenos.py`: lee los STEP de GIGA (`4. Planos`) con OCCT y saca
+  por pieza tipo/medida/dirección (`eje` largo/ancho)/cantidad de barrenos →
+  `_config/cu_catalogo_barrenos.json` (48 piezas). STEP vacío/ilegible = error, nunca
+  "sin barrenos". 7 piezas con STEP vacío de GIGA (FCU-2-105, 2.25-101, 4-306, 5-110,
+  5-120, 5-124, 6-113) se capturaron del PDF en `_config/cu_catalogo_barrenos_manual.json`
+  y se mezclan al regenerar.
+- `modules/nesting_engine/cu_catalogo_barrenos.py` + `construir_filas_barra`: si los
+  barrenos del DXF no coinciden con ninguna variante del plano → `PunchCsvError`
+  (bloquea el export); pieza fuera del catálogo → aviso en el log (`cu_punch_avisos`).
+- `verificar_filas_barra`: simula cada golpe con la herramienta de su `TOOLn` y exige
+  que reproduzca el barreno del DXF (centro ±0.05, área ±6 %), uno por barreno.
+- Auditoría: 416 filas GENE de los CSV reales de GIGA coinciden con el catálogo; 66
+  filas ABB-42-BCK-7xx no están en los planos de GIGA (solo aviso).
+- Build: módulo + JSON en `HIDDEN_IMPORTS`/`CRITICAL_SUITE_FILES`/smoke; verificación
+  del JSON en el bundle. Candado `test_cu_catalogo_barrenos.py`.
+
 ### 2026-10-01i — Fix: CSV W.O. 91 X1-H1 llamaba M8 y era M3 (ovalado 10.31×15.08)
 
 - Caso: GENE-FCU-5-108 (solera 1.75") con ovalado 15.08 a lo largo. M3 estaba como

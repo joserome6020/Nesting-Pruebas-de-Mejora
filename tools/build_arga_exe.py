@@ -189,6 +189,7 @@ HIDDEN_IMPORTS = (
     "modules.nesting_engine.nest_optimization",
     "modules.nesting_engine.cu_largos_nesting",
     "modules.nesting_engine.cu_punch_tooling",
+    "modules.nesting_engine.cu_catalogo_barrenos",
     "modules.dxf_export.cu_punch_csv",
     "modules.dxf_mark.cu_mark_vertical",
     "modules.nesting_engine.cu_amada_validacion",
@@ -265,6 +266,8 @@ CRITICAL_SUITE_FILES = (
     ROOT / "modules" / "nesting_engine" / "nest_optimization.py",
     ROOT / "modules" / "nesting_engine" / "cu_largos_nesting.py",
     ROOT / "modules" / "nesting_engine" / "cu_punch_tooling.py",
+    ROOT / "modules" / "nesting_engine" / "cu_catalogo_barrenos.py",
+    ROOT / "_config" / "cu_catalogo_barrenos.json",
     ROOT / "modules" / "dxf_export" / "cu_punch_csv.py",
     ROOT / "modules" / "nesting_engine" / "compact_lite.py",
     ROOT / "modules" / "nesting_engine" / "exporter.py",
@@ -320,6 +323,7 @@ SMOKE_IMPORT_MODULES = (
     "modules.dxf_export.cobre_nest",
     "modules.dxf_export.cu_punch_csv",
     "modules.nesting_engine.cu_punch_tooling",
+    "modules.nesting_engine.cu_catalogo_barrenos",
     "modules.dxf_mark.cu_mark_vertical",
     "modules.dxf_export.cyptube_vertical",
     "modules.dxf_export.cyptube_bridge",
@@ -1079,6 +1083,11 @@ def verify_build_artifacts(
                     f"Build incompleto (onedir): falta plantilla defaults/{rel} "
                     "para bootstrap del data_dir del usuario."
                 )
+        # Segunda protección del CSV de punzonado cobre (catálogo de barrenos de planos).
+        if not any(
+            p.parent.name == "_config" for p in exe_path.parent.rglob("cu_catalogo_barrenos.json")
+        ):
+            raise RuntimeError("Build incompleto: falta _config/cu_catalogo_barrenos.json en el bundle.")
     manifest = exe_path.parent / "arga_build_manifest.json"
     if manifest.is_file():
         data = json.loads(manifest.read_text(encoding="utf-8"))

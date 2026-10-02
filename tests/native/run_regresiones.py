@@ -384,6 +384,10 @@ REGRESIONES = [
         "2026-10-01h - nest cobre agrupa por herramental de punzonado; tope 8 herramientas/barra",
     ),
     (
+        "test_cu_catalogo_barrenos.py",
+        "2026-10-02 - CSV cobre: catálogo de barrenos de planos + simulación del punzonado bloquean",
+    ),
+    (
         "test_lite_hole_fill_brida.py",
         "2026-08-17g - Lite hole-fill denso en brida + kerf completo guest↔guest/host",
     ),
