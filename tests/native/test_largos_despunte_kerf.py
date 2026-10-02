@@ -36,6 +36,15 @@ def test_constantes_nuevas_son_038_y_025():
     assert lns.RECORTE_EXTREMO_LARGOS_IN == 0.25
 
 
+def test_visor_de_tira_usa_la_misma_config_que_el_servicio():
+    # 2026-10-02: el visor tenía kerf 0.25 / despunte 0.5 fijos y mostraba "Útil 239.00 · Kerf 0.25"
+    # aunque el reparto ya era v2.
+    from interface.qt.widgets import largos_tira_canvas as canvas
+
+    assert canvas.KERF_IN == 0.38
+    assert canvas.RECORTE_EXTREMO_IN == 0.25
+
+
 def test_despunte_consume_025_en_cada_extremo():
     # util = 240 − 0.25*2 = 239.5
     assert lc._ll_largo_util_bruto(240.0) == 239.5
@@ -87,6 +96,7 @@ def test_8x6575_siguen_cabiendo_3_por_barra_de_240_con_nueva_config():
 
 if __name__ == "__main__":
     test_constantes_nuevas_son_038_y_025()
+    test_visor_de_tira_usa_la_misma_config_que_el_servicio()
     test_despunte_consume_025_en_cada_extremo()
     test_kerf_se_suma_038_por_pieza()
     test_plan_generado_trae_la_metadata_de_corte()

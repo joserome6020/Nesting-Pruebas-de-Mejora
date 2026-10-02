@@ -5,6 +5,7 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from interface.largos_nesting_service import KERF_LARGOS_IN, RECORTE_EXTREMO_LARGOS_IN
 from interface.qt.widgets.largos_perfil_draw import (
     color_perfil,
     dibujar_extrusion_3d,
@@ -12,8 +13,8 @@ from interface.qt.widgets.largos_perfil_draw import (
     resolver_perfil_para_visor,
 )
 
-KERF_IN = 0.25
-RECORTE_EXTREMO_IN = 0.5
+KERF_IN = KERF_LARGOS_IN
+RECORTE_EXTREMO_IN = RECORTE_EXTREMO_LARGOS_IN
 
 PIEZA_COLORES = [
     "#3B82F6", "#22C55E", "#F59E0B", "#A855F7", "#06B6D4",

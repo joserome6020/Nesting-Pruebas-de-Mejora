@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02n — Visor de tira de largos con config v2
+
+- `interface/qt/widgets/largos_tira_canvas.py` tenía kerf 0.25" / despunte 0.5" fijos:
+  el reparto ya era v2 pero el visor mostraba "Útil 239.00 · Kerf 0.25"" y dibujaba
+  despuntes/gaps/sobrante con los valores viejos. Ahora importa
+  `KERF_LARGOS_IN` / `RECORTE_EXTREMO_LARGOS_IN` del servicio (Útil 239.50 · Kerf 0.38").
+- Candado: `test_visor_de_tira_usa_la_misma_config_que_el_servicio` en
+  `tests/native/test_largos_despunte_kerf.py`. Regresiones 109/109.
+
 ### 2026-10-02m — Release: cobre + largos + plasma (todo lo integrado desde 2026.10.01)
 
 - Empaquetado de **todas** las mejoras desde `v2026.10.01-1796c310`, no solo largos:
