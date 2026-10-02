@@ -55,6 +55,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02h — Datos: SWO vigentes sin cortes con plan en barras reales + CSV vigente
+
+- Se reimportó `lista_largos_job` desde el CSV vigente de 261198, 261091,
+  06-30-2406TANK25502, 62201 y 251176-COMP-HI (cambios reales de diseño, sin cortes).
+- 30 planes de SWO sin cortes/sobrantes regenerados con el largo comercial (015–017, 040,
+  041, 043, 047, 048, 055, 058, 066, 069, 076–080, 083–085, 089, 092, 095, 097, 100, 101,
+  103, 104, 106, 107). Cada plan conserva **solo los remanentes que ya usaba**: los planes
+  sin sesión no apartan remanentes y una regeneración en secuencia los repartía entre órdenes
+  (SWO-040 se quedaba con los de SWO-092). Sesiones con 0 cortes se conservan
+  (`piezas_totales` actualizado). `lista_largos_swo` rehecha donde cambió el job (015, 055,
+  076, 092, 097; 016/017 tienen dos nombres de SWO y no se tocaron).
+- Pedidos (`material_requerido_ldg`) sin tocar: rehacerlos ignora las exclusiones «No pedir»
+  de `_config/largos_mrl_exclusiones.json`. El faltante contra el pedido no aumentó en
+  ninguna SWO; en SWO-055 el CSV cambia PTR027 por PTR048.
+- Fuera: 043/048/099 (CSV por confirmar con ingeniería), 012 (con cortes) y 068.
+- Script: `_tmp/_fix_swos_vigentes_largos.py` (dry-run / `--apply`).
+
 ### 2026-10-02g — Estación de largos: plan en barras del largo comercial (240"), no tiras de 480"
 
 - Caso real SWO-093: el plan guardado armaba CAN011 en una tira de 480" con 7 × 65.75" y
