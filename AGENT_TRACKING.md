@@ -55,6 +55,25 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02i — Datos: `lista_largos_swo` por job, SWO-089 y remanentes exclusivos
+
+- `lista_largos_swo` reconstruida **por job** (no por nombre de SWO): todo nombre que
+  contiene un job sincronizado se rehízo, incluidos `W.O. 11 X7` / `W.O. 12 X7`
+  (recupera VARILLA GUIA).
+- SWO-089: otra PC con versión vieja reescribió el plan en tiras de 480". Se importó
+  TNK3PH-0016 (su CSV nunca se había importado), se rehízo `S.W.O 89 X1` con ambos jobs
+  y el plan quedó en 26 piezas / 5 barras de 240".
+- Remanentes exclusivos y `RESERVADO`: cada remanente queda en una sola SWO (prioridad a
+  la sesión más antigua: 069, 047, 058). Las SWO que perdieron remanentes piden barra
+  nueva (092, 047, 048, 058, 076, 095, 097, 100, 101, 103, 104). MRL **no** se regeneró
+  (ignora exclusiones "No pedir"); faltantes reportados al usuario.
+- Auditoría final (`_tmp/_audit_swos_corregidas.py`, nombres sin `.ipt`): 28/30 OK;
+  SWO-106 sin largos por jobs ATC sin CSV (esperado); SWO-055 RED029 `VARILLA INOX 1/2`
+  el VSM lo muestra como `2` (corta en `/`, solo display; datos correctos).
+- SWO-043, 048, 099, 012, 068 se confían como están por decisión del usuario
+  (job 25430 no es idéntico a 261198); se corrigen solo si planta reporta fallos.
+- Pendiente: release (PCs de ingeniería siguen guardando planes viejos de 480").
+
 ### 2026-10-02h — Datos: SWO vigentes sin cortes con plan en barras reales + CSV vigente
 
 - Se reimportó `lista_largos_job` desde el CSV vigente de 261198, 261091,
