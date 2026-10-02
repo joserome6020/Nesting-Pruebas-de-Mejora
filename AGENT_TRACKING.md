@@ -55,6 +55,15 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02m — Release: cobre + largos + plasma (todo lo integrado desde 2026.10.01)
+
+- Empaquetado de **todas** las mejoras desde `v2026.10.01-1796c310`, no solo largos:
+  cobre (catálogo 176, CSV punzonado, PDF herramental por pieza), largos (CSV vigente,
+  barras 240", config v2 despunte 0.25"/kerf 0.38", remanentes exclusivos), plasma
+  offset 3/16" configurable en PARTS, RTZ acero `SWO-xxx-H##` en `pqart_swo`, Lite
+  void-first y rutas UNC largas en STEP.
+- `main` en GitHub se actualiza a este HEAD para que el tag no caiga al commit viejo.
+
 ### 2026-10-02k — PDF cobre: herramental por pieza y apartado en la hoja
 
 - Reporte PDF de nesting cobre: la tabla general de herramental ya no es «una fila por
@@ -218,6 +227,12 @@ código viejo. Un bug sin candado vuelve.
 - Prueba W.O. 92 X1 (54 barras, 216× GENE-FCU-5-102): DXF↔CSV↔plano 0 problemas
   (6048 Ø11.11→M1, 864 ov 17.46 a lo largo→M6). PDF: columna «Barras» de la tabla de
   herramental usaba la placa (`SCO014 P1, …` cortado); ahora hoja en rangos `H1-H54`.
+- PDF cobre (pedido del usuario): página general = **una tabla por tipo de pieza**
+  (encabezado pieza / piezas / barras / plano; filas Barreno, Medida, Dirección, Cant. x
+  pieza, Estación, Herramienta). En **cada hoja de barra** NO va tabla (satura con muchas
+  piezas): apartado compacto bajo «Proceso: CNC BUSBAR PUNCHING» con las piezas
+  agrupadas por juego de herramental (`(1), (3): M1=C11.1 M6=E17.5X11.1`), máx. 5
+  líneas y el resto a la columna Herramental. `detalle` trae `tipo/medida/direccion`.
 
 ### 2026-10-02c — Catálogo cobre: los barrenos salen del plano PDF (176/176)
 
