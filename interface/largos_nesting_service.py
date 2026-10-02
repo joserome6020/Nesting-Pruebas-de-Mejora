@@ -651,6 +651,8 @@ def sincronizar_jobs_desde_csv(app, jobs) -> dict[str, str]:
         try:
             res = sincronizar_lista_largos_job_si_cambio(job, _db_config(), rutas_candidatas=rutas)
             estado[job] = str(res.get("status") or "desconocido")
+            if res.get("motivo"):
+                estado[job] += f" — {res['motivo']}"
         except Exception as exc:
             estado[job] = f"error:{exc.__class__.__name__}"
             print(f"[LARGOS_NESTING][WARN] Sync CSV→lista_largos_job job={job}: {exc}")

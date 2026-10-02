@@ -978,6 +978,40 @@ def _snapshot_bd(job: str, db_config: dict) -> tuple[Counter, list[str]]:
     return hashes, rutas
 
 
+_PREFIJO_JOB_PIEZA = re.compile(r"^\s*(\d{5,7})\s*-\s*\S")
+
+
+def _motivo_csv_no_confiable(job: str, csv_path: Path, rows: list[dict], rutas_bd) -> str:
+    """Motivo para NO reimportar en automático; vacío si el CSV es confiable.
+
+    Hay CSV de HI que traen la lista consolidada de otros jobs (p. ej. 25430-HI con
+    piezas «261102-ITEM 1») o carpetas con el CSV original más otro distinto; importarlos
+    sin revisión mete piezas ajenas a la demanda de la SWO.
+    """
+    numeros_job = set(re.findall(r"\d{5,7}", _norm_job(job)))
+    ajenos = sorted(
+        {
+            m.group(1)
+            for row in rows
+            for m in [_PREFIJO_JOB_PIEZA.match(_norm_text(row.get("nombre")))]
+            if m and m.group(1) not in numeros_job
+        }
+    )
+    if ajenos:
+        return f"piezas de otros jobs en el CSV ({', '.join(ajenos)})"
+
+    for ruta in rutas_bd or ():
+        original = Path(_norm_text(ruta))
+        if (
+            original.suffix.lower() == ".csv"
+            and str(original.parent).lower() == str(csv_path.parent).lower()
+            and original.name.lower() != csv_path.name.lower()
+            and _path_is_file(original)
+        ):
+            return f"carpeta con dos CSV: se importó {original.name} y ahora se resuelve {csv_path.name}"
+    return ""
+
+
 def sincronizar_lista_largos_job_si_cambio(
     job: str,
     db_config: dict,
@@ -1012,6 +1046,16 @@ def sincronizar_lista_largos_job_si_cambio(
     hashes_csv = Counter(_row_hash(job, row) for row in rows)
     if hashes_csv == hashes_bd:
         return {"ok": True, "status": "sin_cambios", "job": job, "csv_path": str(csv_path)}
+
+    motivo = _motivo_csv_no_confiable(job, csv_path, rows, rutas_bd)
+    if motivo:
+        return {
+            "ok": False,
+            "status": "csv_no_confiable",
+            "job": job,
+            "csv_path": str(csv_path),
+            "motivo": motivo,
+        }
 
     resultado = importar_lista_largos_job(job, ruta, db_config, propagar_material=False)
     if resultado.get("ok"):

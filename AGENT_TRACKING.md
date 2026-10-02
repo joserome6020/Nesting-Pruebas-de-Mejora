@@ -55,6 +55,25 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02f — SWO-093 largos viejos + candado del sync CSV (HI con piezas de otros jobs)
+
+- SWO-093 (261116): el CSV cambió el 28/09 12:10, entre la importación (11:47) y el export
+  (12:18); el ANS de esa fecha no reimportaba desde el botón ni desde el export de una SWO
+  (corregido en 2026-10-02b, sin release todavía). Datos corregidos: se reimportó
+  `lista_largos_job` 261116, se borró la sesión 63 (0 cortes), plan regenerado (64 → 100
+  piezas) y `lista_largos_swo` rehecha. El MRL no se tocó (material recibido): faltan
+  5 SLC046 y 1 SLC039.
+- Auditoría de las SWO vigentes: hay CSV de HI que traen piezas de otros jobs (25430-HI con
+  261102/261307/…, 261198-HI con una pieza de 261116). Con el sync de 2026-10-02b se habrían
+  importado tal cual.
+- `sincronizar_lista_largos_job_si_cambio` ya no reimporta en automático (`csv_no_confiable`
+  + `motivo`, conserva BD) si hay piezas con prefijo de otro job (`NNNNN-…` que no está en el
+  nombre del job) o si el CSV original sigue en la carpeta junto a otro distinto. En la BD
+  actual solo 62155 (piezas `62154-…`) tiene prefijos ajenos. El motivo aparece en el log
+  del nesteo y en el botón Recalcular.
+- Build: sin módulos ni assets nuevos.
+- Candado: 3 casos nuevos en `tests/native/test_largos_swo_csv_vigente.py`.
+
 ### 2026-10-02e — Fix: VSM «No se encontró la hoja SWO-079-H29 en pqart_swo» (RTZ acero)
 
 - Regresión de `3079f6f` (2026-09-28): el export reescribía `sheet_code` y el nombre del

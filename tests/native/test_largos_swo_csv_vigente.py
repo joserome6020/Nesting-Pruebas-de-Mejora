@@ -65,6 +65,56 @@ def test_sync_reimporta_solo_si_el_csv_cambio():
         assert "lock_timeout" in str(cfg_import.get("options")), cfg_import
 
 
+def test_sync_no_importa_csv_hi_con_piezas_de_otros_jobs():
+    """Caso real 25430-HI: su CSV traía la lista consolidada de 261102/261307/…"""
+    filas = [("261102-ITEM 1", "CAN009", 4.0, 16), ("261307-ITEM 3", "ANG037", 35.0, 4)]
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = _crear_job_con_csv(Path(tmp) / "25430-HI", filas)
+        with patch.object(imp, "_snapshot_bd", return_value=(Counter({"viejo": 1}), [])), patch.object(
+            imp, "importar_lista_largos_job"
+        ) as importar:
+            res = imp.sincronizar_lista_largos_job_si_cambio(
+                "25430-HI", {}, rutas_candidatas=[str(carpeta)]
+            )
+    assert res["status"] == "csv_no_confiable", res
+    assert "261102" in res["motivo"] and "261307" in res["motivo"], res
+    importar.assert_not_called()
+
+
+def test_sync_acepta_prefijo_del_propio_job():
+    """261116-HI con piezas «261116 - ITEM 3» sí es su propio CSV."""
+    filas = [("261116 - ITEM 3", "ANG037", 32.0, 4)]
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = _crear_job_con_csv(Path(tmp) / "261116-HI", filas)
+        with patch.object(imp, "_snapshot_bd", return_value=(Counter({"viejo": 1}), [])), patch.object(
+            imp, "importar_lista_largos_job", return_value={"ok": True, "status": "importado"}
+        ) as importar:
+            res = imp.sincronizar_lista_largos_job_si_cambio(
+                "261116-HI", {}, rutas_candidatas=[str(carpeta)]
+            )
+    assert res["status"] == "actualizado", res
+    importar.assert_called_once()
+
+
+def test_sync_no_importa_si_la_carpeta_tiene_otro_csv_ademas_del_importado():
+    filas = [("ITEM 1", "ANG037", 38.0, 4)]
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = _crear_job_con_csv(Path(tmp) / "251007", filas)
+        autodxf = carpeta / "MODEL CORE FILES" / "AutoDXF"
+        original = autodxf / "Lista_Perfiles_Clasificados TANK.csv"
+        original.write_text("Nombre,Clasificacion,Largo (in),Cantidad\nITEM 1,ANG037,30,4", encoding="utf-8")
+        imp._CARPETA_CSV_POR_JOB.pop(imp._norm_job("251007"), None)
+        with patch.object(
+            imp, "_snapshot_bd", return_value=(Counter({"viejo": 1}), [str(original)])
+        ), patch.object(imp, "importar_lista_largos_job") as importar:
+            res = imp.sincronizar_lista_largos_job_si_cambio(
+                "251007", {}, rutas_candidatas=[str(carpeta)]
+            )
+    assert res["status"] == "csv_no_confiable", res
+    assert "dos CSV" in res["motivo"], res
+    importar.assert_not_called()
+
+
 def test_sync_sin_csv_respeta_snapshot():
     with patch.object(imp, "_snapshot_bd", return_value=(Counter(), [])), patch.object(
         imp, "_resolver_carpeta_job_con_csv", return_value=None
@@ -182,6 +232,9 @@ def test_boton_recalcular_swo_sincroniza_cada_job():
 
 if __name__ == "__main__":
     test_sync_reimporta_solo_si_el_csv_cambio()
+    test_sync_no_importa_csv_hi_con_piezas_de_otros_jobs()
+    test_sync_acepta_prefijo_del_propio_job()
+    test_sync_no_importa_si_la_carpeta_tiene_otro_csv_ademas_del_importado()
     test_sync_sin_csv_respeta_snapshot()
     test_sync_usa_ruta_csv_guardada_en_bd_sin_escanear_tanks()
     test_job_sin_csv_no_escanea_tanks_en_cada_nesteo()
