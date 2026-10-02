@@ -117,7 +117,6 @@
    "fuente": "PDF ABB-22-U-BCK-735 (Board 16): 6X Ø11.11 + 2X Ø10.31",
    "ancho_solera_mm": 127.0,
    "reemplaza": true,
-   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
    "barrenos": [
     {
      "tipo": "C",
@@ -139,7 +138,6 @@
    "fuente": "PDF ABB-22-U-BCK-736 (Board 16): 6X Ø11.11 + 2X Ø10.31",
    "ancho_solera_mm": 127.0,
    "reemplaza": true,
-   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
    "barrenos": [
     {
      "tipo": "C",
@@ -161,7 +159,6 @@
    "fuente": "PDF ABB-22-U-BCK-737 (Board 16): 6X Ø11.11 + 2X Ø10.31",
    "ancho_solera_mm": 127.0,
    "reemplaza": true,
-   "conflicto": "El STEP de GIGA trae 4 barrenos en Ø10.41 donde el plano dice Ø11.11; confirmar con GIGA",
    "barrenos": [
     {
      "tipo": "C",

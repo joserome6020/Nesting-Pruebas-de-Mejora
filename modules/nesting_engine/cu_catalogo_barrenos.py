@@ -1,10 +1,11 @@
 """Catálogo de barrenos de las piezas de cobre (segunda protección del CSV de punzonado).
 
 ``_config/cu_catalogo_barrenos.json`` se genera con ``tools/cu_catalogo_barrenos.py``
-desde los STEP de GIGA (y el plano PDF cuando el STEP llega vacío). Antes de
-mandar una pieza a la punzonadora se compara lo que el analizador leyó del DXF
-contra lo que dice el catálogo para esa pieza: tipo, medida, dirección y
-cantidad de cada barreno. Si no coincide con ninguna variante, el CSV no sale.
+a partir de los planos PDF de cobre (manda el plano sobre el 3D). Antes de mandar
+una pieza a la punzonadora se compara lo que el analizador leyó del DXF contra lo
+que dice el plano: tipo, medida, dirección respecto a la barra (un ovalado girado
+90° es error) y cantidad. Si no coincide, el CSV no sale. Una pieza que no está en
+el catálogo (GIGA nuevo) se valida solo con el analizador, sin avisos.
 """
 from __future__ import annotations
 
@@ -107,16 +108,31 @@ def _diferencias(dxf: list[tuple], variante: dict, tol: float) -> list[str]:
                 break
         else:
             leidos.append([k, 1])
-    difs = []
+    sobran: list[list] = []
     pendientes = dict(esperados)
     for k, n in leidos:
         match = next((e for e in pendientes if _igual(e, k, tol)), None)
         esp = pendientes.pop(match, 0) if match else 0
-        if esp != n:
-            difs.append(f"{n}× {_desc(k)} (plano: {esp})")
-    for e, n in pendientes.items():
-        if n:
-            difs.append(f"0× {_desc(e)} (plano: {n})")
+        if n > esp:
+            sobran.append([k, n - esp])
+        elif esp > n:
+            pendientes[match] = esp - n
+    faltan = [[e, n] for e, n in pendientes.items() if n]
+    difs = []
+    # Mismo ovalado con el otro eje: es el slot girado 90°, no otra medida.
+    for s in sobran:
+        for f in faltan:
+            girado = (s[0][0], s[0][1], s[0][2], f[0][3])
+            if s[0][0] == "E" and s[1] and f[1] and s[0][3] != f[0][3] and _igual(girado, f[0], tol):
+                q = min(s[1], f[1])
+                difs.append(
+                    f"{q}× ovalado {f[0][1]:.2f}×{f[0][2]:.2f} GIRADO: el plano lo pide a lo "
+                    f"{f[0][3]} de la barra y el DXF lo trae a lo {s[0][3]}"
+                )
+                s[1] -= q
+                f[1] -= q
+    difs += [f"{n}× {_desc(k)} de más (no está en el plano)" for k, n in sobran if n]
+    difs += [f"faltan {n}× {_desc(e)} que pide el plano" for e, n in faltan if n]
     return difs
 
 
@@ -130,15 +146,14 @@ def verificar_pieza(
     """``(estado, detalle)`` de una pieza contra el catálogo.
 
     ``barrenos``: ``(tipo, dx, dy)`` leídos del DXF con X a lo largo de la barra.
-    ``estado``: ``ok`` | ``sin_catalogo`` | ``no_coincide``.
+    ``estado``: ``ok`` | ``sin_catalogo`` (pieza nueva: manda solo el analizador) |
+    ``no_coincide``.
     """
     cat = cargar_catalogo() if catalogo is None else catalogo
     codigo = codigo_pieza(nombre, cat)
     ent = cat.get(codigo) if codigo else None
-    if not ent:
-        return "sin_catalogo", f"{nombre}: no está en el catálogo de barrenos"
-    if not ent.get("variantes"):
-        return "sin_catalogo", f"{nombre}: pieza de cobre de los planos sin barrenos capturados (STEP ilegible)"
+    if not ent or not ent.get("variantes"):
+        return "sin_catalogo", ""
     dxf = [_clave_dxf(t, float(dx), float(dy)) for t, dx, dy in barrenos]
     mejor: list[str] | None = None
     for v in ent["variantes"]:

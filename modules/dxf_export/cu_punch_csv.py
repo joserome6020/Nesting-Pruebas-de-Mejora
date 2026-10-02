@@ -360,8 +360,9 @@ def construir_filas_barra(
     """Filas CSV de una barra. Lanza ``PunchCsvError`` con todos los problemas juntos.
 
     Deja en ``hoja["cu_punch_cambios_herramental"]`` los cambios respecto al
-    montaje base (herramientas del inventario que la barra necesita) y en
-    ``hoja["cu_punch_avisos"]`` las piezas que no están en el catálogo de barrenos.
+    montaje base (herramientas del inventario que la barra necesita). Una pieza
+    que no coincide con su plano en el catálogo bloquea el CSV; una pieza que no
+    está en el catálogo pasa solo con el analizador y la simulación.
     """
     from modules.nesting_engine.cu_catalogo_barrenos import verificar_pieza
     from modules.nesting_engine.cu_punch_tooling import (
@@ -384,7 +385,6 @@ def construir_filas_barra(
     filas: list[dict[str, str]] = []
 
     grab = grabado if grabado is not None else cargar_grabado()
-    avisos: list[str] = []
 
     for nombre, x0, largo, barrenos_p in piezas:
         estado, detalle = verificar_pieza(
@@ -393,8 +393,6 @@ def construir_filas_barra(
         if estado == "no_coincide":
             errores.append(detalle)
             continue
-        if estado == "sin_catalogo":
-            avisos.append(detalle)
         golpes: list[tuple[float, float, str]] = []
         if grab.get("habilitado"):
             golpes.append(
@@ -424,7 +422,6 @@ def construir_filas_barra(
     if errores:
         raise PunchCsvError(f"[{tag}] " + " | ".join(_agrupar_errores(errores)))
     hoja["cu_punch_cambios_herramental"] = cambios
-    hoja["cu_punch_avisos"] = avisos
     return filas
 
 

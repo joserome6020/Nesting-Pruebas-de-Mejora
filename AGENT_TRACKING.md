@@ -55,6 +55,16 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02d — Cobre: ruido solo si el DXF no coincide con el plano
+
+- Pieza fuera del catálogo (GIGA nuevo): solo analizador + simulación, sin avisos
+  (se quitó `cu_punch_avisos`; en el PDF la columna dice «Analizador»).
+- Ovalado del mismo tamaño con el otro eje → error explícito «GIRADO: el plano lo pide
+  a lo X de la barra y el DXF lo trae a lo Y». El eje se mide contra el ancho de la
+  solera, así que la pieza a 180° sigue OK.
+- Manda el plano: se quitó el campo `conflicto` (ABB-22-U-BCK-735/736/737 = plano).
+- Auditoría CSV reales GIGA: 482/482 OK.
+
 ### 2026-10-02c — Catálogo cobre: los barrenos salen del plano PDF (176/176)
 
 - `tools/cu_catalogo_barrenos.py`: `verificar_contra_plano` marca cada pieza contra las

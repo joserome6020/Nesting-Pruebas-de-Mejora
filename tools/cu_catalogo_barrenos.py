@@ -376,8 +376,6 @@ def mezclar_manual(catalogo: dict, ruta_manual: Path = DEFAULT_MANUAL) -> dict:
             "no_punzonables": [],
         }
         ent = catalogo.setdefault(nombre.upper(), {"variantes": [], "fuentes": []})
-        if m.get("conflicto"):
-            ent["conflicto"] = m["conflicto"]
         if m.get("reemplaza"):
             # El plano manda: el modelo 3D que lo contradice no puede validar una pieza.
             ent["variantes"] = [v]
@@ -416,7 +414,7 @@ def verificar_contra_plano(base: str, catalogo: dict) -> dict:
             ent["plano"] = "sin datos"
             continue
         if var[0]["fuente"].startswith("PDF:"):
-            ent["plano"] = "conflicto con STEP (manda el plano)" if ent.get("conflicto") else "capturado del plano"
+            ent["plano"] = "capturado del plano"
             continue
         nums = _cotas_plano(base, ent.get("planos") or [])
         if not nums:

@@ -1358,7 +1358,7 @@ def _draw_consolidated_piece_pages(
         c.drawRightString(width - 24, 24, footer_code)
         c.showPage()
 
-_CU_CATALOGO_TXT = {"ok": "OK", "sin_catalogo": "Sin plano", "no_coincide": "NO COINCIDE"}
+_CU_CATALOGO_TXT = {"ok": "OK", "sin_catalogo": "Analizador", "no_coincide": "NO COINCIDE"}
 
 
 def _cu_herramental_rows(plates):
@@ -1384,7 +1384,7 @@ def _cu_herramental_rows(plates):
         estados = ent["plano"] - {""}
         plano = (
             "NO COINCIDE" if "no_coincide" in estados
-            else "Sin plano" if "sin_catalogo" in estados
+            else "Analizador" if "sin_catalogo" in estados
             else "OK" if estados else "-"
         )
         grupos = ent["grupos"] or [{"cantidad": 0, "barreno": "sin barrenos", "estacion": "-", "herramienta": "-"}]

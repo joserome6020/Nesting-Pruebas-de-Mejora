@@ -69,9 +69,15 @@ def main() -> None:
         assert cb.verificar_pieza("GENE-FCU-5-108", ok)[0] == "ok"
         assert cb.verificar_pieza("GENE-FCU-5-108 (2)", ok)[0] == "ok", "nombre con sufijo"
         est, det = cb.verificar_pieza("GENE-FCU-5-108", [("E", 10.31, 15.07)] * 2)
-        assert est == "no_coincide" and "a lo ancho" in det, det
+        assert est == "no_coincide" and "2× ovalado 10.31×15.07 GIRADO" in det, det
+        assert "lo pide a lo largo" in det and "trae a lo ancho" in det, det
+        # Un solo slot girado entre dos: se señala ese, no "medida distinta".
+        est, det = cb.verificar_pieza("GENE-FCU-5-108", [("E", 15.07, 10.31), ("E", 10.31, 15.07)])
+        assert est == "no_coincide" and det.count("GIRADO") == 1 and "1× ovalado" in det, det
+        # Pieza acomodada a 180° en la barra: mismos ejes, sigue OK.
+        assert cb.verificar_pieza("GENE-FCU-5-108", [("E", 15.07, 10.31), ("E", 15.08, 10.30)])[0] == "ok"
         est, det = cb.verificar_pieza("GENE-FCU-5-108", ok[:1])
-        assert est == "no_coincide" and "1×" in det, det
+        assert est == "no_coincide" and "faltan 1×" in det, det
         est, _ = cb.verificar_pieza("GENE-FCU-5-108", ok + [("C", 11.11, 11.11)])
         assert est == "no_coincide", "barreno de más"
         est, _ = cb.verificar_pieza("GENE-FCU-5-108", [("E", 20.64, 11.11)] * 2)
@@ -110,7 +116,6 @@ def main() -> None:
         # --- El export bloquea si el DXF no coincide con el plano ---
         hoja = _hoja_fcu108()
         filas = pc.construir_filas_barra(hoja, thickness_mm=6.35)
-        assert hoja["cu_punch_avisos"] == [], hoja["cu_punch_avisos"]
         assert filas[0]["M2"] == "M3" and filas[0]["TOOL3"] == "E15.1X10.3", filas[0]
         cat_otro = {
             "GENE-FCU-5-108": {"variantes": [{"barrenos": [
@@ -120,12 +125,15 @@ def main() -> None:
         try:
             pc.construir_filas_barra(_hoja_fcu108(), thickness_mm=6.35, catalogo=cat_otro)
         except pc.PunchCsvError as exc:
-            assert "no coinciden con el plano" in str(exc), exc
+            assert "no coinciden con el plano" in str(exc) and "GIRADO" in str(exc), exc
         else:
             raise AssertionError("DXF distinto al plano debió bloquear el CSV")
+        # GIGA nuevo (pieza fuera del catálogo): sale el CSV solo con el analizador, sin ruido.
         h_sin = _hoja_fcu108()
-        pc.construir_filas_barra(h_sin, thickness_mm=6.35, catalogo={})
-        assert h_sin["cu_punch_avisos"] and "no está en el catálogo" in h_sin["cu_punch_avisos"][0]
+        filas_sin = pc.construir_filas_barra(h_sin, thickness_mm=6.35, catalogo={})
+        assert filas_sin and filas_sin[0]["TOOL3"] == "E15.1X10.3", filas_sin
+        assert "cu_punch_avisos" not in h_sin
+        assert cb.verificar_pieza("PIEZA-X", ok, catalogo={}) == ("sin_catalogo", "")
 
         # --- Simulación del punzonado detecta CSV alterado ---
         hoja = _hoja_fcu108()

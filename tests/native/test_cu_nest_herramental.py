@@ -152,8 +152,8 @@ def main() -> None:
             [{"id": "W.O. 1 X1-H3", "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"]}]
         )
         assert filas_pdf == [
-            ["M1X", "1x Ø11.11", "M1  C11.1", "H3", "Sin plano"],
-            ["M5X", "1x ov 15.88x11.11 a lo ancho", "M5  E11.1X15.9", "H3", "Sin plano"],
+            ["M1X", "1x Ø11.11", "M1  C11.1", "H3", "Analizador"],
+            ["M5X", "1x ov 15.88x11.11 a lo ancho", "M5  E11.1X15.9", "H3", "Analizador"],
         ], filas_pdf
 
     if previous_data_dir is None:

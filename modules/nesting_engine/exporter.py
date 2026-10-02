@@ -1572,17 +1572,6 @@ def exportar_resultados_a_dxf(
         )
     if punch_filas_por_hoja:
         log(f"[CU-PUNCH] barras con CSV de punzonado: {len(punch_filas_por_hoja)}")
-        _sin_cat = sorted(
-            {
-                _a
-                for _data_p in (resultados or {}).values()
-                if isinstance(_data_p, dict)
-                for _hoja_p in _data_p.get("hojas") or []
-                for _a in (_hoja_p.get("cu_punch_avisos") or [])
-            }
-        )
-        for _aviso in _sin_cat:
-            log(f"[CU-PUNCH][AVISO] {_aviso} (solo se validó con el analizador y la simulación)")
 
     from .efficiency_metrics import (
         inicializar_contador_rtz_sobrante,
