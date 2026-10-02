@@ -403,6 +403,7 @@ def enriquecer_pedido_herinox_cursor(
             mapeo_es_verificado,
             resolver_codigo_contpaq,
             resolver_equivalencia,
+            resolver_equivalencia_por_contpaq,
         )
     except ImportError:
         return 0
@@ -428,8 +429,11 @@ def enriquecer_pedido_herinox_cursor(
         ).strip().upper()
         if not codigo_probe:
             continue
-        if not mapeo_es_verificado(resolver_equivalencia(cursor, codigo_probe)):
-            pendientes_contpaq.append(codigo_probe)
+        if mapeo_es_verificado(resolver_equivalencia(cursor, codigo_probe)):
+            continue
+        if mapeo_es_verificado(resolver_equivalencia_por_contpaq(cursor, codigo_probe)):
+            continue
+        pendientes_contpaq.append(codigo_probe)
 
     resultados_contpaq: dict = {}
     if pendientes_contpaq:
@@ -486,6 +490,8 @@ def enriquecer_pedido_herinox_cursor(
         nuevo_estatus_contpaq = (
             "VERIFIED" if mapeo_verificado else str(mapeo.get("estatus") or "PENDING")
         )
+        if mapeo_verificado and mapeo.get("herinox_codigo"):
+            nuevo_codigo = str(mapeo["herinox_codigo"]).strip().upper()
 
         if (
             not forzar_costo

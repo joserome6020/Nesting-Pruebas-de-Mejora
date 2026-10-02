@@ -276,6 +276,46 @@ def resolver_equivalencia(cursor, herinox_codigo: str) -> dict[str, Any]:
     return data
 
 
+def resolver_equivalencia_por_contpaq(cursor, codigo_contpaq: str) -> dict[str, Any] | None:
+    """Equivalencia VERIFIED activa cuyo SKU ContPAQ es ``codigo_contpaq``.
+
+    La Lista de largos a veces captura el SKU ContPAQ (TUB017) como si fuera
+    Herinox (HR166); el SKU solo puede pertenecer a una equivalencia VERIFIED.
+    """
+    sku = _codigo(codigo_contpaq)
+    if not sku:
+        return None
+    cursor.execute(
+        """
+        SELECT id, herinox_codigo, codigo_contpaq, estatus, origen,
+               especificacion_normalizada, verificado_at, contpaq_catalog_seen_at
+        FROM material_codigo_equivalencias
+        WHERE activo AND estatus = 'VERIFIED' AND UPPER(codigo_contpaq) = UPPER(%s)
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (sku,),
+    )
+    fila = cursor.fetchone()
+    if not fila:
+        return None
+    data = dict(fila) if isinstance(fila, dict) else {
+        "mapping_id": fila[0],
+        "herinox_codigo": fila[1],
+        "codigo_contpaq": fila[2],
+        "estatus": fila[3],
+        "origen": fila[4],
+        "especificacion_normalizada": fila[5],
+        "verificado_at": fila[6],
+        "contpaq_catalog_seen_at": fila[7],
+    }
+    data["mapping_id"] = data.pop("id", data.get("mapping_id"))
+    data["herinox_codigo"] = _codigo(data.get("herinox_codigo"))
+    data["codigo_contpaq"] = _codigo(data.get("codigo_contpaq")) or None
+    data["estatus"] = _codigo(data.get("estatus")) or "PENDING"
+    return data
+
+
 def mapeo_es_verificado(mapeo: dict[str, Any] | None) -> bool:
     return bool(
         mapeo
@@ -338,14 +378,21 @@ def resolver_codigo_contpaq(
     resultados_catalogo: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """
-    Resolución en dos pasos:
+    Resolución en tres pasos:
 
     1. Equivalencia VERIFIED registrada (p. ej. HR166→TUB017).
-    2. Match directo: mismo código existe en ContPAQi (vía ``resultados_catalogo``).
+    2. El código ya es el SKU ContPAQ de una equivalencia VERIFIED
+       (TUB017 capturado como Herinox → HR166/TUB017). ``herinox_codigo``
+       del resultado es el Herinox real.
+    3. Match directo: mismo código existe en ContPAQi (vía ``resultados_catalogo``).
     """
     mapeo = resolver_equivalencia(cursor, herinox_codigo)
     if mapeo_es_verificado(mapeo):
         return mapeo
+
+    inverso = resolver_equivalencia_por_contpaq(cursor, herinox_codigo)
+    if mapeo_es_verificado(inverso):
+        return inverso
 
     herinox = _codigo(herinox_codigo)
     producto = (resultados_catalogo or {}).get(herinox) or {}
@@ -442,8 +489,11 @@ def sincronizar_codigos_contpaq_mrl(
         herinox = _codigo(data.get("codigo_herinox") or data.get("codigo"))
         if not herinox:
             continue
-        if not mapeo_es_verificado(resolver_equivalencia(cursor, herinox)):
-            pendientes_exactos.append(herinox)
+        if mapeo_es_verificado(resolver_equivalencia(cursor, herinox)):
+            continue
+        if mapeo_es_verificado(resolver_equivalencia_por_contpaq(cursor, herinox)):
+            continue
+        pendientes_exactos.append(herinox)
 
     if pendientes_exactos:
         faltantes = [c for c in sorted(set(pendientes_exactos)) if c not in catalogo]
@@ -477,6 +527,8 @@ def sincronizar_codigos_contpaq_mrl(
         verificado = mapeo_es_verificado(mapeo)
         codigo_contpaq = mapeo.get("codigo_contpaq") if verificado else None
         estatus = "VERIFIED" if verificado else str(mapeo.get("estatus") or "PENDING")
+        if verificado and mapeo.get("herinox_codigo"):
+            herinox = _codigo(mapeo.get("herinox_codigo"))
         cursor.execute(
             """
             UPDATE material_requerido_ldg

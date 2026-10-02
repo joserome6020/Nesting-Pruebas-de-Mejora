@@ -21,6 +21,10 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 REGRESIONES = [
     (
+        "test_contpaq_sku_como_herinox.py",
+        "2026-10-02 - SWO-108: SKU ContPAQ (TUB017) capturado como Herinox se resuelve por HR166→TUB017; no deja PENDING ni HTTP 500 en preflight",
+    ),
+    (
         "test_void_cargo_marcas.py",
         "2026-10-01b - Lite void-first: cargo en orificios sin 'marcas' → KeyError 'marcas' (Southwest 0.375_A 36)",
     ),

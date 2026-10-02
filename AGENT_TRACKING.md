@@ -55,6 +55,21 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02o — Fix: preflight ContPAQ SWO-108 «Herinox=TUB017 estatus=PENDING» (HTTP 500)
+
+- No era falta de homologación: `HR166 → TUB017` existe VERIFIED. La MRL traía el SKU
+  ContPAQ (`TUB017`, material Inventor `TUB017 | TUBO perfil | A 36 | TUBO A36 CED 40 2 IN`)
+  como código Herinox; el resolver solo buscaba por Herinox y el match 1:1 `TUB017→TUB017`
+  chocaba con HR166 (error tragado) ⇒ PENDING. Mismo patrón que SWO-068 (`TUB005`/HR174).
+- `resolver_equivalencia_por_contpaq` + paso nuevo en `resolver_codigo_contpaq`: si el
+  código ya es el SKU de una equivalencia VERIFIED, se usa esa y la fila queda con el
+  Herinox real (`sincronizar_codigos_contpaq_mrl` y `lista_largos_material_requerido`).
+- Datos: SWO-108 re-sincronizada (10/10 VERIFIED, MRL 1825 = HR166/TUB017). Quedan 28
+  filas viejas sin PO con el mismo patrón (TUB017/TUB005/TUB010); se corrigen en su
+  siguiente sync.
+- Candado: `tests/native/test_contpaq_sku_como_herinox.py`. Sin cambios al build (módulos
+  existentes).
+
 ### 2026-10-02n — Visor de tira de largos con config v2
 
 - `interface/qt/widgets/largos_tira_canvas.py` tenía kerf 0.25" / despunte 0.5" fijos:
