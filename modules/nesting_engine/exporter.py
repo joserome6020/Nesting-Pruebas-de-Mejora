@@ -985,6 +985,15 @@ def _resolver_display_name_hoja(
     return f"{codigo_base} P{contador_placas[codigo_base]}"
 
 
+def _sheet_code_usa_placa_id(hoja: dict) -> bool:
+    """Solo RTZCU virtual (fuera de la numeración global) usa placa_id como sheet_code.
+
+    RTZ/RTZC de acero consumen un H## en `asignar_numeracion_global_hojas`;
+    reporte_cortes y el VSM buscan esa hoja por SWO-xxx-H## en pqart_swo.
+    """
+    return bool(isinstance(hoja, dict) and hoja.get("cu_rtz_virtual"))
+
+
 def _inyectar_metadata_hoja(
     hoja: dict,
     *,
@@ -1000,11 +1009,7 @@ def _inyectar_metadata_hoja(
     placa_w = _safe_float(hoja.get("placa_w", 0.0), 0.0) or 0.0
     placa_h = _safe_float(hoja.get("placa_h", 0.0), 0.0) or 0.0
 
-    pid_up = str(hoja.get("placa_id") or "").strip().upper()
-    es_rtz_nom = pid_up.startswith("RTZ")
-    if hoja.get("cu_rtz_virtual") or bool(hoja.get("es_retazo")) or es_rtz_nom:
-        # RTZ / RTZCU: el DXF y el pie de PDF usan el mismo id del reporte
-        # (RTZ23-0.25-15.0x21.0-SWO-068), no SWO-068-H48.
+    if _sheet_code_usa_placa_id(hoja):
         sheet_code = str(
             hoja.get("placa_id")
             or hoja.get("cu_rtz_id")
@@ -1898,8 +1903,7 @@ def exportar_resultados_a_dxf(
                         "rot_origin_cy": pz.get("rot_origin_cy", 0.0),
                     })
 
-            if es_cu_rtz_virtual or es_retazo or str(hoja.get("placa_id") or "").upper().startswith("RTZ"):
-                # Misma nomenclatura que el reporte / placa_id (no H##).
+            if _sheet_code_usa_placa_id(hoja):
                 sheet_code = str(
                     hoja.get("placa_id")
                     or hoja.get("cu_rtz_id")

@@ -152,6 +152,10 @@ REGRESIONES = [
         "2026-09-09 - PQART CHECK permite tipo_corte vacío",
     ),
     (
+        "test_rtz_acero_sheet_code_h.py",
+        "2026-10-02 - SWO-079 H29: RTZ acero en pqart_swo = SWO-xxx-H## (VSM)",
+    ),
+    (
         "test_cobre_step_audit_fmt_map.py",
         "2026-09-09 - cobre STEP audit: mapa vacío ≠ todos 3D",
     ),

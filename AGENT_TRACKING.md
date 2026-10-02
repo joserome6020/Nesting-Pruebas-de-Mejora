@@ -55,6 +55,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02e — Fix: VSM «No se encontró la hoja SWO-079-H29 en pqart_swo» (RTZ acero)
+
+- Regresión de `3079f6f` (2026-09-28): el export reescribía `sheet_code` y el nombre del
+  DXF/STEP de RTZ/RTZC de **acero** con el `placa_id` (`RTZ1-0.5-48.0x120.0-SWO-079`),
+  mientras `reporte_cortes` guarda el H## global (`SWO-079-H29`). El VSM busca por H##
+  en `pqart_swo` → la Estación de Corte no podía procesar la placa.
+- `exporter._sheet_code_usa_placa_id`: solo RTZCU virtual (cobre, fuera de la
+  numeración global) usa `placa_id`; acero vuelve a `SWO-xxx-H##` (el id RTZ sigue en
+  `sheet_display_name`). Candado `test_rtz_acero_sheet_code_h.py`.
+- Datos corregidos (32 filas, todas `Pendiente`): SWO-079/089/097/101/103/104/107 →
+  `pqart_swo.sheet_code/nombre_dxf/ruta` + DXF/STEP renombrados a H##
+  (`_tmp/_fix_pqart_rtz_h.py`). El `SWO-079_0.5_SWO-079-H29.dxf` viejo (30/09) quedó como
+  `.OBSOLETO_*`.
+- Regresiones: 100/105; los 5 FAIL (`rtz_reserva`, `regla_area_rtz_ventanas`,
+  `packer_metal_plate_margin`, `ultra_plate_fit`, `tabla_gaps`) fallan igual en HEAD
+  (sin motor C++ compilado en esta PC). Build: sin cambios (módulo ya empaquetado).
+
 ### 2026-10-02d — Cobre: ruido solo si el DXF no coincide con el plano
 
 - Pieza fuera del catálogo (GIGA nuevo): solo analizador + simulación, sin avisos
