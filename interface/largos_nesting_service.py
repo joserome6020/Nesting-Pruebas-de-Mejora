@@ -629,18 +629,50 @@ def _filas_desde_csv_para_pares(app, pares: list[tuple[str, str]]) -> list[dict]
     return filas
 
 
+def sincronizar_jobs_desde_csv(app, jobs) -> dict[str, str]:
+    """
+    Reimporta ``lista_largos_job`` desde el CSV de AutoDXF vigente de cada job
+    (solo si cambió). Un fallo deja el snapshot previo; nunca tumba el cálculo.
+    """
+    from modules.lista_largos_importer import sincronizar_lista_largos_job_si_cambio
+
+    estado: dict[str, str] = {}
+    for job in dict.fromkeys(str(j or "").strip() for j in jobs or []):
+        if not job or _norm_job(job).startswith("SWO") or "S.W.O" in _norm_job(job):
+            continue
+        rutas: list[str] = []
+        if app is not None:
+            try:
+                ruta_app = _resolver_ruta_exportacion_para_job(app, None, job)
+                if ruta_app:
+                    rutas.append(ruta_app)
+            except Exception:
+                pass
+        try:
+            res = sincronizar_lista_largos_job_si_cambio(job, _db_config(), rutas_candidatas=rutas)
+            estado[job] = str(res.get("status") or "desconocido")
+        except Exception as exc:
+            estado[job] = f"error:{exc.__class__.__name__}"
+            print(f"[LARGOS_NESTING][WARN] Sync CSV→lista_largos_job job={job}: {exc}")
+        if estado[job] == "actualizado":
+            print(f"[LARGOS_NESTING] lista_largos_job job={job} actualizado desde CSV AutoDXF.")
+    return estado
+
+
 def _filas_demanda_swo(app, cursor, swo: str) -> tuple[list[dict], str]:
     """
     Demanda de una SWO expandida WO por WO.
 
-    Prioriza lista_largos_job para empatar con el plan canónico que valida el
-    export; si el job aún no tiene lista importada, cae al CSV del AutoDXF.
+    Antes de leer lista_largos_job se sincroniza con el CSV vigente de cada
+    job, para que la SWO siempre parta de la fuente original. Si el job no
+    tiene lista importada ni CSV localizable, cae al CSV cargado en el ANS.
     """
     pares = resolver_wos_fuente_swo(app, swo, cursor=cursor)
     if not pares:
         return [], ""
 
     if cursor is not None:
+        sincronizar_jobs_desde_csv(app, [job for job, _wo in pares])
         filas_bd: list[dict] = []
         for job, work_order in pares:
             filas_bd.extend(_filas_desde_bd_para_wo(cursor, job, work_order))
@@ -786,6 +818,9 @@ def cargar_plan_largos(orden_id: str, tipo_orden: str) -> dict[str, Any]:
     try:
         conexion, cursor_factory = _conexion_bd()
         cursor = conexion.cursor(cursor_factory=cursor_factory)
+        if str(tipo_orden).strip().upper() == "SWO":
+            pares = resolver_wos_fuente_swo(None, str(orden_id).strip(), cursor=cursor)
+            sincronizar_jobs_desde_csv(None, [job for job, _wo in pares])
         plan_json, _row = _ll_obtener_o_generar_plan(
             cursor, str(orden_id).strip(), str(tipo_orden).strip().upper(), reservar=False
         )
@@ -2109,8 +2144,16 @@ def _refrescar_catalogo_herinox_largos() -> int:
         return 0
 
 
-def _sincronizar_lista_largos_job_desde_csv(app, tab, job: str) -> tuple[bool, str]:
+def _sincronizar_lista_largos_job_desde_csv(app, tab, job: str, cursor=None) -> tuple[bool, str]:
     """Reimporta lista_largos_job desde el CSV AutoDXF (misma ruta que export)."""
+    if str(job or "").strip().upper().startswith("SWO"):
+        pares = resolver_wos_fuente_swo(app, job, cursor=cursor)
+        estado = sincronizar_jobs_desde_csv(app, [j for j, _wo in pares])
+        if not estado:
+            return False, "SWO sin jobs fuente para sincronizar lista_largos_job"
+        ok = all(s in ("actualizado", "sin_cambios") for s in estado.values())
+        return ok, ", ".join(f"{j}: {s}" for j, s in estado.items())
+
     try:
         from modules.lista_largos_importer import importar_lista_largos_job
     except ImportError:
@@ -2213,7 +2256,7 @@ def _calcular_plan_largos_fresco_desde_csv(
             "Verifica DEMANDA DE LARGOS o reprocesa AutoDXF.",
         )
 
-    sync_ok, sync_msg = _sincronizar_lista_largos_job_desde_csv(app, tab, job)
+    sync_ok, sync_msg = _sincronizar_lista_largos_job_desde_csv(app, tab, job, cursor=cursor)
     contexto["sync_lista_largos_ok"] = sync_ok
     contexto["sync_lista_largos"] = sync_msg
 

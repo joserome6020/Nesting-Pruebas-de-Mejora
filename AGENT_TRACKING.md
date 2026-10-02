@@ -55,6 +55,23 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02b — SWO: demanda de largos siempre desde el CSV AutoDXF vigente
+
+- Bug operativo: cambiaban largos en el CSV de un job ya exportado y la SWO seguía
+  pidiendo MRL con el snapshot viejo de `lista_largos_job`. El botón «Recalcular
+  desde CSV» tampoco lo arreglaba en SWO (buscaba carpeta «SWO-xxx» → no sync) y al
+  exportar el plan canónico de BD (viejo) ganaba.
+- `modules/lista_largos_importer.sincronizar_lista_largos_job_si_cambio`: localiza el
+  CSV del job (ruta del ANS → caché → TANKS 3 niveles), compara `row_hash` CSV vs BD y
+  solo reimporta si cambió (`propagar_material=False`). Sin CSV/CSV vacío = respeta BD.
+- `interface/largos_nesting_service.sincronizar_jobs_desde_csv` se llama en
+  `_filas_demanda_swo` (nesting/modal), en `cargar_plan_largos(..., "SWO")` (plan
+  canónico del export) y en el botón para cada job de la SWO.
+- Plan con sesión/cortes registrados sigue congelado (`_ll_plan_puede_regenerarse`).
+- Build: sin módulos/assets nuevos; no requiere cambios en `build_arga_exe.py`.
+- Candado: `tests/native/test_largos_swo_csv_vigente.py`. `run_regresiones` 98/104:
+  los 6 FAIL (rtz/packer/gaps/cu_catalogo) ya fallaban antes de este cambio.
+
 ### 2026-10-02 — CSV cobre: doble protección del herramental (catálogo de planos + simulación)
 
 - `tools/cu_catalogo_barrenos.py`: lee los STEP de GIGA (`4. Planos`) con OCCT y saca

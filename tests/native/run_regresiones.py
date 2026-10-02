@@ -88,6 +88,10 @@ REGRESIONES = [
         "2026-08-31b - PO ContPAQ: nombreReporte vacío = correo no enviado (GAM 13040)",
     ),
     (
+        "test_largos_swo_csv_vigente.py",
+        "2026-10-02 - SWO: demanda de largos siempre desde CSV AutoDXF vigente (sync lista_largos_job)",
+    ),
+    (
         "test_mrl_swo_plan_referencia.py",
         "2026-08-31 - SWO MRL: validar con el mismo plan del modal (no regenerar 15→14)",
     ),

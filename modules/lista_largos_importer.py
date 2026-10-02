@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 import re
+from collections import Counter
 from io import StringIO
 from pathlib import Path
 
@@ -906,3 +907,89 @@ def importar_lista_largos_job(
             cursor.close()
         if conexion:
             conexion.close()
+
+
+# job_key → carpeta del job cuyo AutoDXF tiene CSV. Evita repetir la búsqueda
+# en TANKS (SMB) cada vez que se recalcula la demanda de una SWO.
+_CARPETA_CSV_POR_JOB: dict[str, str] = {}
+
+
+def _resolver_carpeta_job_con_csv(job: str, rutas_candidatas=()) -> str | None:
+    job_key = _norm_job(job)
+    candidatas = [str(r) for r in (rutas_candidatas or []) if _norm_text(r)]
+    if job_key in _CARPETA_CSV_POR_JOB:
+        candidatas.append(_CARPETA_CSV_POR_JOB[job_key])
+
+    for ruta in candidatas:
+        if _resolver_csv_lista_largos(_resolver_ruta_autodxf(ruta)) is None:
+            continue
+        job_data = _extraer_job_desde_job_data(ruta)
+        if job_data and not _jobs_equivalentes(job_data, job):
+            continue
+        _CARPETA_CSV_POR_JOB[job_key] = ruta
+        return ruta
+
+    carpeta = _buscar_carpeta_job_corporate(job)
+    if carpeta is not None and _resolver_csv_lista_largos(_resolver_ruta_autodxf(str(carpeta))) is not None:
+        _CARPETA_CSV_POR_JOB[job_key] = str(carpeta)
+        return str(carpeta)
+    return None
+
+
+def _row_hashes_bd(job: str, db_config: dict) -> Counter:
+    job_key = _norm_job(job)
+    conexion = psycopg2.connect(**db_config)
+    try:
+        cursor = conexion.cursor()
+        try:
+            cursor.execute(
+                """
+                SELECT row_hash
+                FROM public.lista_largos_job
+                WHERE job_key = %s
+                OR UPPER(REGEXP_REPLACE(BTRIM(job), '\\s+', ' ', 'g')) = %s
+                """,
+                (job_key, job_key),
+            )
+            return Counter(str(r[0] or "") for r in cursor.fetchall() or [])
+        except psycopg2.Error:
+            conexion.rollback()
+            return Counter()
+        finally:
+            cursor.close()
+    finally:
+        conexion.close()
+
+
+def sincronizar_lista_largos_job_si_cambio(
+    job: str,
+    db_config: dict,
+    rutas_candidatas=(),
+) -> dict:
+    """
+    Alinea ``lista_largos_job`` con el CSV de AutoDXF vigente del job.
+
+    Solo reimporta cuando el contenido del CSV difiere del snapshot en BD.
+    Si el CSV no se encuentra o viene vacío, el snapshot existente se respeta.
+    """
+    job = _norm_text(job)
+    if not job:
+        return {"ok": False, "status": "job_vacio", "job": job}
+
+    ruta = _resolver_carpeta_job_con_csv(job, rutas_candidatas)
+    if not ruta:
+        return {"ok": False, "status": "csv_no_encontrado", "job": job}
+
+    csv_path = _resolver_csv_lista_largos(_resolver_ruta_autodxf(ruta))
+    rows = _leer_csv_lista_largos(csv_path) if csv_path is not None else []
+    if not rows:
+        return {"ok": False, "status": "csv_vacio", "job": job, "csv_path": str(csv_path or "")}
+
+    hashes_csv = Counter(_row_hash(job, row) for row in rows)
+    if hashes_csv == _row_hashes_bd(job, db_config):
+        return {"ok": True, "status": "sin_cambios", "job": job, "csv_path": str(csv_path)}
+
+    resultado = importar_lista_largos_job(job, ruta, db_config, propagar_material=False)
+    if resultado.get("ok"):
+        resultado["status"] = "actualizado"
+    return resultado
