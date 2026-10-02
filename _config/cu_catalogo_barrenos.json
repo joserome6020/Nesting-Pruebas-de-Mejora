@@ -1,5 +1,5 @@
 {
- "generado": "2026-10-02T08:19:17",
+ "generado": "2026-10-02T08:22:13",
  "origen": "Z:\\♦♦GRUPO ARGA CARPETAS COMPARTIDAS♦♦\\BIENVENIDO\\Departamentos _antes TIK\\ORDENES DE PRODUCCION\\GAE 783 a 798 - GIGA FLUID STACK\\4. Planos",
  "piezas": {
   "ABB-22-BCK-101": {
@@ -2678,8 +2678,33 @@
    "plano": "confirmado"
   },
   "ABB-62-10-BCK-33": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-33: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-33: 2X + 4X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2708,11 +2733,36 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-33.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-33.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-34": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-34: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-34: 2X + 4X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2741,11 +2791,36 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-34.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-34.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-35": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-35: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-35: 2X + 4X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2774,11 +2849,36 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-35.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-35.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-36": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-36: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-36: 2X + 4X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2807,11 +2907,36 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-36.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-36.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-37": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-37: 2X + 5X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-37: 2X + 5X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2840,11 +2965,36 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-37.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-37.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-38": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-38: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 10.31,
+       "largo": 10.31,
+       "eje": null,
+       "cantidad": 1
+      },
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-38: 2X + 4X Ø11.11 THRU + Ø10.31 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2873,11 +3023,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-38.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-38.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-39": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-39: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-39: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2906,11 +3074,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-39.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-39.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-40": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-40: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-40: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2939,11 +3125,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-40.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-40.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-41": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-41: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-41: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -2972,11 +3176,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-41.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-41.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-42": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-42: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-42: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3005,11 +3227,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-42.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-42.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-43": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-43: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-43: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3038,11 +3278,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-43.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-43.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-44": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-44: 2X + 4X + 1 Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-44: 2X + 4X + 1 Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3071,11 +3329,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-44.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-44.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-45": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-45: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-45: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3104,11 +3380,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-45.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-45.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-46": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-46: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-46: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3137,11 +3431,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-46.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-46.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-47": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-47: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-47: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3170,11 +3482,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-47.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-47.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-48": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-48: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-48: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3203,11 +3533,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-48.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-48.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-49": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-49: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-49: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3236,11 +3584,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-49.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-49.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-50": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-50: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 8
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-50: 8X Ø11.11 THRU (TYP, contados en el dibujo)"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3269,11 +3635,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-50.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-50.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-57": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-57: 3X + 3X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 152.4,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 9
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-57: 3X + 3X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3302,11 +3686,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-57.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-57.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-58": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-58: 3X + 3X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 152.4,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 9
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-58: 3X + 3X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3335,11 +3737,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-58.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-58.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-59": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-59: 3X + 3X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 152.4,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 9
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-59: 3X + 3X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3368,11 +3788,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-59.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-59.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-60": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-60: 2X + 2X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-60: 2X + 2X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3401,11 +3839,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-60.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-60.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-61": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-61: 2X + 2X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-61: 2X + 2X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3434,11 +3890,29 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-61.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-61.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "ABB-62-10-BCK-62": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF ABB-62-10-BCK-62: 2X + 2X + 1 + 2X Ø11.11 THRU",
+     "modificado": "",
+     "ancho_solera_mm": 101.6,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 7
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF ABB-62-10-BCK-62: 2X + 2X + 1 + 2X Ø11.11 THRU"
+   ],
    "boards": [
     "9919- Board 10",
     "9919- Board 11",
@@ -3467,7 +3941,7 @@
     "9919- Board 8\\PDF & STEP\\ABB-62-10-BCK-62.pdf",
     "9919- Board 9\\PDF & STEP\\COBRE\\ABB-62-10-BCK-62.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "GE8132024-300-346": {
    "variantes": [
@@ -5474,8 +5948,33 @@
    "plano": "confirmado"
   },
   "RLG-J-1-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-1-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-1-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -5484,7 +5983,7 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-1-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-1-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-10-4KA-S": {
    "variantes": [
@@ -6121,8 +6620,33 @@
    "plano": "confirmado"
   },
   "RLG-J-2-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-2-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-2-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6131,7 +6655,7 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-2-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-2-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-20-4KA-S": {
    "variantes": [
@@ -6734,8 +7258,33 @@
    "plano": "confirmado"
   },
   "RLG-J-3-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-3-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 4
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-3-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6744,11 +7293,36 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-3-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-3-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-5-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-5-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-5-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6757,11 +7331,36 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-5-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-5-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-6-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-6-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-6-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6770,11 +7369,36 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-6-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-6-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-7-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-7-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-7-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6783,11 +7407,36 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-7-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-7-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-8-4KA-S": {
-   "variantes": [],
-   "fuentes": [],
+   "variantes": [
+    {
+     "fuente": "PDF: PDF RLG-J-8-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+     "modificado": "",
+     "ancho_solera_mm": 127.0,
+     "barrenos": [
+      {
+       "tipo": "C",
+       "ancho": 11.11,
+       "largo": 11.11,
+       "eje": null,
+       "cantidad": 6
+      },
+      {
+       "tipo": "E",
+       "ancho": 11.11,
+       "largo": 20.64,
+       "eje": "largo",
+       "cantidad": 2
+      }
+     ],
+     "no_punzonables": []
+    }
+   ],
+   "fuentes": [
+    "PDF: PDF RLG-J-8-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo"
+   ],
    "boards": [
     "9919- Board 14",
     "9919- Board 15"
@@ -6796,7 +7445,7 @@
     "9919- Board 14\\PDF & STEP\\COBRE\\RLG-J-8-4KA-S.pdf",
     "9919- Board 15\\PDF & STEP\\RLG-J-8-4KA-S.pdf"
    ],
-   "plano": "sin datos"
+   "plano": "capturado del plano"
   },
   "RLG-J-9-4KA-S": {
    "variantes": [

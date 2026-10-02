@@ -1,5 +1,5 @@
 {
- "nota": "Piezas cuyo STEP de GIGA llega vacío: barrenos capturados del plano PDF (GIGA + plano C de Arga). tools/cu_catalogo_barrenos.py las mezcla al catálogo.",
+ "nota": "Barrenos capturados del plano PDF: piezas con STEP de GIGA vacío o que contradice al plano (reemplaza=true). tools/cu_catalogo_barrenos.py las mezcla al catálogo.",
  "piezas": {
   "GENE-FCU-2-105": {
    "fuente": "PDF GENE-FCU-2-105 (Board 10/11) + GENE-FCU-2-105 C",
@@ -175,6 +175,500 @@
      "ancho": 10.31,
      "largo": 10.31,
      "eje": null,
+     "cantidad": 2
+    }
+   ]
+  },
+  "ABB-62-10-BCK-33": {
+   "fuente": "PDF ABB-62-10-BCK-33: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-34": {
+   "fuente": "PDF ABB-62-10-BCK-34: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-35": {
+   "fuente": "PDF ABB-62-10-BCK-35: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-36": {
+   "fuente": "PDF ABB-62-10-BCK-36: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-38": {
+   "fuente": "PDF ABB-62-10-BCK-38: 2X + 4X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-37": {
+   "fuente": "PDF ABB-62-10-BCK-37: 2X + 5X Ø11.11 THRU + Ø10.31 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    },
+    {
+     "tipo": "C",
+     "ancho": 10.31,
+     "largo": 10.31,
+     "eje": null,
+     "cantidad": 1
+    }
+   ]
+  },
+  "ABB-62-10-BCK-39": {
+   "fuente": "PDF ABB-62-10-BCK-39: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-40": {
+   "fuente": "PDF ABB-62-10-BCK-40: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-41": {
+   "fuente": "PDF ABB-62-10-BCK-41: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-42": {
+   "fuente": "PDF ABB-62-10-BCK-42: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-43": {
+   "fuente": "PDF ABB-62-10-BCK-43: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-44": {
+   "fuente": "PDF ABB-62-10-BCK-44: 2X + 4X + 1 Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-45": {
+   "fuente": "PDF ABB-62-10-BCK-45: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-46": {
+   "fuente": "PDF ABB-62-10-BCK-46: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-47": {
+   "fuente": "PDF ABB-62-10-BCK-47: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-48": {
+   "fuente": "PDF ABB-62-10-BCK-48: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-49": {
+   "fuente": "PDF ABB-62-10-BCK-49: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-50": {
+   "fuente": "PDF ABB-62-10-BCK-50: 8X Ø11.11 THRU (TYP, contados en el dibujo)",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 8
+    }
+   ]
+  },
+  "ABB-62-10-BCK-57": {
+   "fuente": "PDF ABB-62-10-BCK-57: 3X + 3X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 152.4,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 9
+    }
+   ]
+  },
+  "ABB-62-10-BCK-58": {
+   "fuente": "PDF ABB-62-10-BCK-58: 3X + 3X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 152.4,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 9
+    }
+   ]
+  },
+  "ABB-62-10-BCK-59": {
+   "fuente": "PDF ABB-62-10-BCK-59: 3X + 3X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 152.4,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 9
+    }
+   ]
+  },
+  "ABB-62-10-BCK-60": {
+   "fuente": "PDF ABB-62-10-BCK-60: 2X + 2X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-61": {
+   "fuente": "PDF ABB-62-10-BCK-61: 2X + 2X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "ABB-62-10-BCK-62": {
+   "fuente": "PDF ABB-62-10-BCK-62: 2X + 2X + 1 + 2X Ø11.11 THRU",
+   "ancho_solera_mm": 101.6,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 7
+    }
+   ]
+  },
+  "RLG-J-1-4KA-S": {
+   "fuente": "PDF RLG-J-1-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 4
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-2-4KA-S": {
+   "fuente": "PDF RLG-J-2-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 4
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-3-4KA-S": {
+   "fuente": "PDF RLG-J-3-4KA-S: 4X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 4
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-5-4KA-S": {
+   "fuente": "PDF RLG-J-5-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-6-4KA-S": {
+   "fuente": "PDF RLG-J-6-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-7-4KA-S": {
+   "fuente": "PDF RLG-J-7-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
+     "cantidad": 2
+    }
+   ]
+  },
+  "RLG-J-8-4KA-S": {
+   "fuente": "PDF RLG-J-8-4KA-S: 6X Ø11.11 THRU + 2X ovalado 11.11 + 9.53 recto, a lo largo",
+   "ancho_solera_mm": 127.0,
+   "barrenos": [
+    {
+     "tipo": "C",
+     "ancho": 11.11,
+     "largo": 11.11,
+     "eje": null,
+     "cantidad": 6
+    },
+    {
+     "tipo": "E",
+     "ancho": 11.11,
+     "largo": 20.64,
+     "eje": "largo",
      "cantidad": 2
     }
    ]

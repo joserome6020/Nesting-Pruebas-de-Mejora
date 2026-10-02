@@ -55,6 +55,19 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02c — Catálogo cobre: los barrenos salen del plano PDF (176/176)
+
+- `tools/cu_catalogo_barrenos.py`: `verificar_contra_plano` marca cada pieza contra las
+  cotas de su plano (confirmado 129 / capturado del plano 38 / plano parcial 6 /
+  conflicto 3); `--solo-manual` reaplica capturas sin releer STEP; `reemplaza` deja que
+  el plano mande sobre el STEP.
+- 31 piezas con STEP vacío (ABB-62-10-BCK-33…50, 57…62, RLG-J-1…8) capturadas del plano
+  en `_config/cu_catalogo_barrenos_manual.json`. RLG-J: 2 ovalados 11.11+9.53 a lo largo.
+- Conflicto GIGA: ABB-22-U-BCK-735/736/737 — plano 6× Ø11.11 + 2× Ø10.31, STEP con
+  4× Ø10.41. Manda el plano (el CSV se bloquea si el DXF trae Ø10.41).
+- Candado en `test_cu_catalogo_barrenos.py`: ninguna pieza sin barrenos, 735 plano vs
+  STEP, RLG-J-1 orientación del ovalado, BCK-57.
+
 ### 2026-10-02b — SWO: demanda de largos siempre desde el CSV AutoDXF vigente
 
 - Bug operativo: cambiaban largos en el CSV de un job ya exportado y la SWO seguía

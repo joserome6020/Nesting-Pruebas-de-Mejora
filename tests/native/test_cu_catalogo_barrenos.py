@@ -93,6 +93,19 @@ def main() -> None:
         # FCU-5-118: 6× Ø11 + 24 ovalados a lo ancho (STEP).
         b118 = [("C", 11.0, 11.0)] * 6 + [("E", 10.31, 15.07)] * 24
         assert cb.verificar_pieza("GENE-FCU-5-118", b118)[0] == "ok"
+        # El catálogo sale de los planos: ninguna pieza de cobre sin barrenos.
+        vacias = [pn for pn, e in cat.items() if not e.get("variantes")]
+        assert not vacias, f"piezas sin barrenos del plano: {vacias}"
+        # ABB-22-U-BCK-735: el plano (6× Ø11.11 + 2× Ø10.31) manda sobre el STEP con Ø10.41.
+        b735 = [("C", 11.11, 11.11)] * 6 + [("C", 10.31, 10.31)] * 2
+        assert cb.verificar_pieza("ABB-22-U-BCK-735", b735)[0] == "ok"
+        b735_step = [("C", 11.11, 11.11)] * 2 + [("C", 10.41, 10.41)] * 4 + [("C", 10.31, 10.31)] * 2
+        assert cb.verificar_pieza("ABB-22-U-BCK-735", b735_step)[0] == "no_coincide"
+        # RLG-J-1 (STEP vacío, leído del plano): 4× Ø11.11 + 2 ovalados 20.64×11.11 a lo largo.
+        bj1 = [("C", 11.11, 11.11)] * 4 + [("E", 20.64, 11.11)] * 2
+        assert cb.verificar_pieza("RLG-J-1-4KA-S", bj1)[0] == "ok"
+        assert cb.verificar_pieza("RLG-J-1-4KA-S", [("C", 11.11, 11.11)] * 4 + [("E", 11.11, 20.64)] * 2)[0] == "no_coincide"
+        assert cb.verificar_pieza("ABB-62-10-BCK-57", [("C", 11.11, 11.11)] * 9)[0] == "ok"
 
         # --- El export bloquea si el DXF no coincide con el plano ---
         hoja = _hoja_fcu108()
