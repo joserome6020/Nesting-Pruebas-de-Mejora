@@ -92,8 +92,31 @@ def bar_key(material: str, bar_idx: int) -> str:
     return f"{material}::{int(bar_idx)}"
 
 
-KERF_LARGOS_IN = 0.25
-RECORTE_EXTREMO_LARGOS_IN = 0.5
+KERF_LARGOS_IN = 0.38
+"""Gap entre cortes (planes nuevos, config_version>=2). Para planes previos ver
+`KERF_LARGOS_IN_LEGACY` y `kerf_despunte_de_plan`."""
+
+RECORTE_EXTREMO_LARGOS_IN = 0.25
+"""Despunte en cada extremo de la barra (planes nuevos, config_version>=2)."""
+
+KERF_LARGOS_IN_LEGACY = 0.25
+RECORTE_EXTREMO_LARGOS_IN_LEGACY = 0.5
+
+
+def kerf_despunte_de_plan(plan_json: object) -> tuple[float, float]:
+    """(kerf, despunte) a usar para cálculos sobre un plan ya guardado.
+
+    Si el plan trae metadata (`kerf_in`, `despunte_in`) se usa esa; si no, se
+    asumen los valores legacy (planes anteriores al 02/10/2026). Permite que
+    planes viejos y nuevos coexistan sin que la UI recalcule sobrantes con
+    parámetros distintos a los que se usaron al nestear.
+    """
+    if isinstance(plan_json, dict):
+        kerf = plan_json.get("kerf_in")
+        despunte = plan_json.get("despunte_in")
+        if kerf is not None and despunte is not None:
+            return float(kerf), float(despunte)
+    return KERF_LARGOS_IN_LEGACY, RECORTE_EXTREMO_LARGOS_IN_LEGACY
 
 
 def nombre_pieza_largo_display(nombre: str) -> str:

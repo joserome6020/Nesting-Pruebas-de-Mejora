@@ -83,9 +83,46 @@ LISTA_LARGOS_STOCK_MAXIMO = 480.0
 
 LISTA_LARGOS_STOCK_MINIMO = 240.0
 
-LISTA_LARGOS_KERF = 0.25
+LISTA_LARGOS_KERF = 0.38
+"""Gap entre cortes del aserrado de largos.
 
-LISTA_LARGOS_RECORTE_EXTREMO = 0.5
+Valor vigente a partir del 02/10/2026 (planes `config_version >= 2`). Planes
+previos quedan en `LISTA_LARGOS_KERF_LEGACY` y se interpretan con ese valor
+(ver `plan_kerf_despunte`).
+"""
+
+LISTA_LARGOS_RECORTE_EXTREMO = 0.25
+"""Despunte en cada extremo de la barra (inicio y fin).
+
+Valor vigente a partir del 02/10/2026. Para planes viejos ver
+`LISTA_LARGOS_RECORTE_EXTREMO_LEGACY`.
+"""
+
+LISTA_LARGOS_CONFIG_VERSION = 2
+"""Versión de la configuración de corte guardada en cada `plan_json`.
+
+- v1 (sin metadata): kerf 0.25", despunte 0.5" en cada extremo.
+- v2 (02/10/2026 en adelante): kerf 0.38", despunte 0.25" en cada extremo.
+"""
+
+LISTA_LARGOS_KERF_LEGACY = 0.25
+LISTA_LARGOS_RECORTE_EXTREMO_LEGACY = 0.5
+
+
+def plan_kerf_despunte(plan_json: object) -> tuple[float, float]:
+    """Devuelve (kerf, despunte) usados para generar un plan.
+
+    Si el plan trae metadata (`kerf_in`, `despunte_in`), se usa esa; si no, es
+    un plan previo al 02/10/2026 y se devuelven los valores legacy. Así los
+    planes nuevos y los viejos pueden coexistir sin que la UI o la estación
+    recalculen sobrantes con parámetros distintos a los que se usaron al nestear.
+    """
+    if isinstance(plan_json, dict):
+        kerf = plan_json.get("kerf_in")
+        despunte = plan_json.get("despunte_in")
+        if kerf is not None and despunte is not None:
+            return float(kerf), float(despunte)
+    return LISTA_LARGOS_KERF_LEGACY, LISTA_LARGOS_RECORTE_EXTREMO_LEGACY
 
 LISTA_LARGOS_REM_MINIMO = 15.0
 
@@ -2068,6 +2105,9 @@ def _ll_generar_plan_desde_payload(
             "data": {},
             "total_piezas": 0,
             "total_barras": 0,
+            "kerf_in": LISTA_LARGOS_KERF,
+            "despunte_in": LISTA_LARGOS_RECORTE_EXTREMO,
+            "config_version": LISTA_LARGOS_CONFIG_VERSION,
         }, []
 
     materiales: dict[str, list[dict]] = {}
@@ -2122,6 +2162,9 @@ def _ll_generar_plan_desde_payload(
         "data": data,
         "total_piezas": int(total_piezas),
         "total_barras": int(total_barras),
+        "kerf_in": LISTA_LARGOS_KERF,
+        "despunte_in": LISTA_LARGOS_RECORTE_EXTREMO,
+        "config_version": LISTA_LARGOS_CONFIG_VERSION,
     }, sorted(remanentes_usados)
 
 def _ll_cargar_plan_row(cursor, orden_id: str, tipo_orden: str):
@@ -2248,9 +2291,16 @@ def _ll_obtener_o_generar_plan(
     plan_hash = _ll_hash_payload(payload)
     plan_json, remanentes_reservar = _ll_generar_plan_desde_payload(cursor, orden_id, tipo_orden, payload)
 
-    # OJO:
-    # Solo se reservan remanentes cuando realmente se va a congelar el plan.
-    if reservar and remanentes_reservar:
+    # Siempre reservar los remanentes del plan recién generado para esta orden.
+    # Si no se reservan, dos SWO distintas pueden plantear con el mismo
+    # remanente, cada una no lo pedirá en su MRL, y la segunda terminará con
+    # material faltante al abrir sesión (lo vivido con SWO-092 .. 106 el
+    # 02/10/2026, remanentes de ANG004/ANG037/SLC035 contados en 7 SWO a la vez).
+    # El parámetro `reservar` se conserva solo por compatibilidad; cualquier
+    # regeneración ya libera primero las reservas viejas de ESTA orden en
+    # `_ll_liberar_reservas_de_orden`, así que la segunda SWO verá el remanente
+    # como RESERVADO para otra y pedirá barra nueva en su MRL.
+    if remanentes_reservar:
         _ll_reservar_remanentes(cursor, remanentes_reservar, orden_id, tipo_orden)
 
     saved_row = _ll_guardar_plan(cursor, orden_id, tipo_orden, plan_hash, plan_json)

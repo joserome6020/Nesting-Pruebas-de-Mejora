@@ -97,6 +97,14 @@ REGRESIONES = [
         "2026-10-02 - SWO-093: plan de la estación en barras del largo comercial (240\"), no tiras de 480\"",
     ),
     (
+        "test_largos_despunte_kerf.py",
+        "2026-10-02 - Config v2 de corte de largos (despunte 0.25\", kerf 0.38\"): planes nuevos la mandan en metadata; viejos caen a 0.5\"/0.25\"",
+    ),
+    (
+        "test_largos_remanentes_exclusivos.py",
+        "2026-10-02 - SWO-092..106: generar plan reserva remanentes para esa orden; dos SWO no pueden compartir el mismo remanente",
+    ),
+    (
         "test_mrl_swo_plan_referencia.py",
         "2026-08-31 - SWO MRL: validar con el mismo plan del modal (no regenerar 15→14)",
     ),

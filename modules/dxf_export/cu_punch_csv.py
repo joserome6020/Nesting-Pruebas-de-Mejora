@@ -320,6 +320,9 @@ def resumen_herramental_barra(
                     f"Ø{dx:.2f}" if t == "C"
                     else f"ov {max(dx, dy):.2f}x{min(dx, dy):.2f} a lo {'largo' if dx >= dy else 'ancho'}"
                 ),
+                "tipo": "Redondo" if t == "C" else "Ovalado",
+                "medida": f"Ø{dx:.2f}" if t == "C" else f"{max(dx, dy):.2f} x {min(dx, dy):.2f}",
+                "direccion": "-" if t == "C" else ("A lo largo" if dx >= dy else "A lo ancho"),
                 "estacion": f"M{i}" if i else "-",
                 "herramienta": codigos[i - 1] if i and i <= len(codigos) else "SIN HERRAMIENTA",
             }

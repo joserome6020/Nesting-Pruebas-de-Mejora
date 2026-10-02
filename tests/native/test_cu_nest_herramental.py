@@ -148,21 +148,36 @@ def main() -> None:
         # PDF: tabla general pieza → barrenos → estación/herramienta.
         import reporte_pdf_nesting as rp
 
-        filas_pdf = rp._cu_herramental_rows(
-            [{"id": "W.O. 1 X1-H3", "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"]}]
-        )
-        assert filas_pdf == [
-            ["M1X", "1x Ø11.11", "M1  C11.1", "H3", "Analizador"],
-            ["M5X", "1x ov 15.88x11.11 a lo ancho", "M5  E11.1X15.9", "H3", "Analizador"],
-        ], filas_pdf
-        # W.O. 92: placa "SCO014 P<n>", hoja "W.O. 92 X1-H<n>" → columna Barras en rangos de hoja.
+        # Una tabla por tipo de pieza: encabezado (piezas, barras, plano) + fila por barreno.
+        placa_mix = {
+            "id": "W.O. 1 X1-H3", "piezas": hojas3[0]["piezas"],
+            "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"],
+        }
+        tablas = rp._cu_herramental_piezas([placa_mix])
+        assert [t["nombre"] for t in tablas] == ["M1X", "M5X"], tablas
+        assert tablas[0]["piezas"] == 1 and tablas[0]["barras"] == "H3" and tablas[0]["plano"] == "Analizador"
+        assert tablas[0]["filas"] == [["Redondo", "Ø11.11", "-", "1", "M1", "C11.1"]], tablas[0]
+        assert tablas[1]["filas"] == [["Ovalado", "15.88 x 11.11", "A lo ancho", "1", "M5", "E11.1X15.9"]], tablas[1]
+        # Hoja de la barra: apartado compacto bajo «Proceso», piezas agrupadas por juego de herramental.
+        reales = [p for p in hojas3[0]["piezas"] if rp._is_real_piece(p)]
+        rows_h, _ids = rp._build_group_summary(reales, herr_por_pieza=res["por_pieza"])
+        assert rp._cu_herr_grupos_hoja(rows_h) == [("M1=C11.1", ["(1)"]), ("M5=E11.1X15.9", ["(2)"])]
+        rows_eq = [
+            {"displayId": "(1)", "herramental": "M1=C11.1 M6=E17.5X11.1"},
+            {"displayId": "(2)", "herramental": "M1=C11.1"},
+            {"displayId": "(3)", "herramental": "M1=C11.1 M6=E17.5X11.1"},
+        ]
+        assert rp._cu_herr_grupos_hoja(rows_eq) == [
+            ("M1=C11.1 M6=E17.5X11.1", ["(1)", "(3)"]), ("M1=C11.1", ["(2)"])
+        ], "piezas con el mismo juego comparten línea (no satura la hoja)"
+        # W.O. 92: placa "SCO014 P<n>", hoja "W.O. 92 X1-H<n>" → barras en rangos de hoja.
         placas_wo92 = [
-            {"id": f"SCO014 P{n}", "sheet_code": f"W.O. 92 X1-H{n}",
+            {"id": f"SCO014 P{n}", "sheet_code": f"W.O. 92 X1-H{n}", "piezas": hojas3[0]["piezas"],
              "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"]}
             for n in list(range(1, 55)) + [60]
         ]
-        filas_wo92 = rp._cu_herramental_rows(placas_wo92)
-        assert filas_wo92[0][3] == "H1-H54, H60", filas_wo92[0]
+        t92 = rp._cu_herramental_piezas(placas_wo92)
+        assert t92[0]["barras"] == "H1-H54, H60" and t92[0]["piezas"] == 55, t92[0]
 
     if previous_data_dir is None:
         os.environ.pop("ARGA_NEST_DATA_DIR", None)

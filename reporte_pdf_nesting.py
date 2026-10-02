@@ -1,6 +1,6 @@
 import os
 import re
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from statistics import mean
 from datetime import datetime
 
@@ -732,11 +732,26 @@ def _fit_text(text, max_width, font_name, font_size):
     return (base + "...") if base else "..."
 
 
-def _draw_cu_proceso_header(c, plate, width, title_color):
-    """Cobre largos: proceso de la barra (Láser vs CNC Busbar Punching) y recortes láser."""
+def _cu_herr_grupos_hoja(rows):
+    """``[(herramental, ["(1)", "(3)"]), ...]``: piezas de la barra agrupadas por juego de herramental."""
+    grupos: "OrderedDict[str, list]" = OrderedDict()
+    for r in rows or []:
+        herr = str(r.get("herramental") or "").strip()
+        if herr:
+            grupos.setdefault(herr, []).append(str(r.get("displayId") or ""))
+    return list(grupos.items())
+
+
+_CU_HERR_MAX_LINEAS = 5
+
+
+def _draw_cu_proceso_header(c, plate, width, title_color, herr_grupos=None):
+    """Cobre largos: proceso de la barra (Láser vs CNC Busbar Punching), recortes láser y
+    apartado de herramental por pieza. Devuelve la Y más baja usada (o ``None``)."""
     proceso = str((plate or {}).get("cu_proceso") or "")
     if not proceso:
-        return
+        return None
+    y_min = 698.0
     texto = f"Proceso: {proceso}"
     if plate.get("cu_rtz_activo") and "LÁSER" in proceso:
         texto += " | RTZCU: CNC BUSBAR PUNCHING"
@@ -771,20 +786,32 @@ def _draw_cu_proceso_header(c, plate, width, title_color):
             c.drawRightString(
                 width - 18, 671 - 11 * i, _fit_text(linea, 270, "Helvetica-Bold", 7.6)
             )
-    elif plate.get("cu_herr_mixta"):
-        c.setFont("Helvetica", 7.6)
+        y_min = 671 - 11 * (len(lineas) - 1)
+    elif recorte:
+        y_min = 684
+    if herr_grupos:
+        y = y_min - 13
+        c.setFont("Helvetica-Bold", 7.6)
         c.setFillColor(colors.HexColor("#1D4ED8"))
-        c.drawRightString(
-            width - 18,
-            671,
-            _fit_text(
-                "Piezas con distinto herramental (montaje base): ver columna Herramental",
-                270,
-                "Helvetica",
-                7.6,
-            ),
-        )
+        c.drawRightString(width - 18, y, "Herramental por pieza (ID del dibujo):")
+        visibles = herr_grupos[:_CU_HERR_MAX_LINEAS]
+        if len(herr_grupos) > _CU_HERR_MAX_LINEAS:
+            visibles = herr_grupos[: _CU_HERR_MAX_LINEAS - 1]
+        c.setFont("Helvetica", 7.6)
+        c.setFillColor(colors.HexColor("#0F172A"))
+        for herr, ids in visibles:
+            y -= 10
+            linea = f"{', '.join(ids)}:  {herr.replace(' ', '   ')}"
+            c.drawRightString(width - 18, y, _fit_text(linea, 300, "Helvetica", 7.6))
+        if len(visibles) < len(herr_grupos):
+            y -= 10
+            resto = sum(len(ids) for _h, ids in herr_grupos[len(visibles):])
+            c.drawRightString(
+                width - 18, y, f"+{resto} piezas con otro herramental: ver columna Herramental"
+            )
+        y_min = y
     c.setFillColor(title_color)
+    return y_min
 
 
 _TABLA_HOJA_HEADERS = ["ID", "JOB", "ITEM", "L (in)", "W (in)", "Cant."]
@@ -1375,8 +1402,27 @@ def _rangos_barras(barras):
     return ", ".join(partes + otros)
 
 
-def _cu_herramental_rows(plates):
-    """Filas de la tabla general de herramental de punzonado (una por tipo de barreno)."""
+_CU_HERR_HEADERS = ["Barreno", "Medida (mm)", "Dirección en la barra", "Cant. x pieza", "Estación", "Herramienta"]
+
+
+def _cu_fila_barreno(g):
+    """``[tipo, medida, dirección, cantidad, estación, herramienta]`` de un grupo de barrenos."""
+    tipo = g.get("tipo")
+    if not tipo:
+        b = str(g.get("barreno") or "")
+        m = re.match(r"ov ([\d.]+)x([\d.]+) a lo (\w+)", b)
+        if m:
+            tipo, medida, direccion = "Ovalado", f"{m.group(1)} x {m.group(2)}", f"A lo {m.group(3)}"
+        else:
+            tipo, medida, direccion = "Redondo", b, "-"
+    else:
+        medida, direccion = g.get("medida") or "-", g.get("direccion") or "-"
+    return [tipo, medida, direccion, str(g.get("cantidad", "")), g.get("estacion") or "-",
+            g.get("herramienta") or "-"]
+
+
+def _cu_herramental_piezas(plates):
+    """Una entrada por número de parte: ``{nombre, piezas, barras, plano, filas}``."""
     piezas: "OrderedDict[str, dict]" = OrderedDict()
     for plate in plates or []:
         detalle = plate.get("cu_herr_detalle") or {}
@@ -1386,15 +1432,17 @@ def _cu_herramental_rows(plates):
             r"(H\d+)\s*$", str(plate.get("id") or "")
         )
         barra = m.group(1) if m else str(plate.get("id") or "")
+        conteo = Counter(str(p.get("nombre") or "") for p in plate.get("piezas") or [] if _is_real_piece(p))
         for nombre, grupos in detalle.items():
             limpio = _clean_piece_name(nombre)
             ent = piezas.setdefault(
-                limpio, {"grupos": grupos, "barras": [], "plano": set()}
+                limpio, {"grupos": grupos, "barras": [], "plano": set(), "piezas": 0}
             )
             if barra not in ent["barras"]:
                 ent["barras"].append(barra)
+            ent["piezas"] += conteo.get(nombre, 0) or 1
             ent["plano"].add((plate.get("cu_herr_catalogo") or {}).get(nombre, ""))
-    rows = []
+    out = []
     for nombre in sorted(piezas):
         ent = piezas[nombre]
         estados = ent["plano"] - {""}
@@ -1403,18 +1451,15 @@ def _cu_herramental_rows(plates):
             else "Analizador" if "sin_catalogo" in estados
             else "OK" if estados else "-"
         )
-        grupos = ent["grupos"] or [{"cantidad": 0, "barreno": "sin barrenos", "estacion": "-", "herramienta": "-"}]
-        for i, g in enumerate(grupos):
-            rows.append(
-                [
-                    nombre if i == 0 else "",
-                    f"{g['cantidad']}x {g['barreno']}",
-                    f"{g['estacion']}  {g['herramienta']}",
-                    _rangos_barras(ent["barras"]) if i == 0 else "",
-                    plano if i == 0 else "",
-                ]
-            )
-    return rows
+        filas = [_cu_fila_barreno(g) for g in ent["grupos"]] or [["Sin barrenos", "-", "-", "0", "-", "-"]]
+        out.append({
+            "nombre": nombre,
+            "piezas": ent["piezas"],
+            "barras": _rangos_barras(ent["barras"]),
+            "plano": plano,
+            "filas": filas,
+        })
+    return out
 
 
 def _draw_cu_herramental_pages(
@@ -1431,12 +1476,26 @@ def _draw_cu_herramental_pages(
     table_line,
     body_text,
 ):
-    """Cobre: tabla general pieza → barrenos → estación/herramienta de la punzonadora."""
-    rows = _cu_herramental_rows(plates)
-    if not rows:
+    """Cobre: una tabla por número de parte → barrenos → estación/herramienta de la punzonadora."""
+    piezas = _cu_herramental_piezas(plates)
+    if not piezas:
         return
     code = f"{work_order_label}-HERRAMENTAL-CU"
-    for page_idx, chunk in enumerate(_split_rows(rows, 30), start=1):
+    x0 = 28
+    cols = [88, 96, 112, 70, 66, 124]
+    tabla_w = sum(cols)
+    titulo_h, head_h, row_h, gap = 20, 16, 16, 14
+    y_min = 50
+    page_idx = 0
+
+    def nueva_pagina():
+        nonlocal page_idx
+        if page_idx:
+            c.setFont("Helvetica-Bold", 9)
+            c.setFillColor(subtitle_color)
+            c.drawRightString(width - 24, 24, code if page_idx == 1 else f"{code}-{page_idx}")
+            c.showPage()
+        page_idx += 1
         _draw_watermark_logo(c, width, height, LOGO_ICON1_PATH)
         c.setFont("Helvetica-Bold", 16)
         c.setFillColor(title_color)
@@ -1452,34 +1511,60 @@ def _draw_cu_herramental_pages(
         _draw_header_logo_left(c, LOGO_MAIN_PATH)
         c.setFillColor(title_color)
         c.setFont("Helvetica-Bold", 11)
-        c.drawString(28, 700, "Herramienta que usa cada pieza según sus barrenos")
-        c.setFont("Helvetica", 8.5)
+        c.drawString(x0, 704, "Herramental por tipo de pieza")
+        c.setFont("Helvetica", 8)
         c.setFillColor(body_text)
         c.drawString(
-            28,
-            686,
-            "Plano: OK = barrenos del DXF iguales al plano de GIGA; ov = ovalado "
-            "(largo x ancho, dirección respecto a la solera).",
+            x0, 691,
+            "Plano: OK = barrenos del DXF iguales al plano; Analizador = pieza nueva, validada "
+            "solo por el analizador. Ovalado: largo x ancho.",
         )
+        return 676
+
+    y = nueva_pagina()
+    for p in piezas:
+        alto = titulo_h + head_h + row_h * len(p["filas"])
+        if y - alto < y_min:
+            y = nueva_pagina()
+        # Encabezado de la pieza
+        c.setFillColor(table_head)
+        c.setStrokeColor(table_line)
+        c.setLineWidth(1)
+        c.rect(x0, y - titulo_h, tabla_w, titulo_h, fill=1, stroke=1)
+        c.setFillColor(title_color)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(x0 + 6, y - titulo_h + 6, _fit_text(p["nombre"], 200, "Helvetica-Bold", 10))
+        info = f"Piezas: {p['piezas']}   |   Barras: {p['barras']}   |   Plano: "
+        c.setFont("Helvetica", 8)
+        plano_w = c.stringWidth(p["plano"], "Helvetica-Bold", 8.5)
+        info = _fit_text(info, tabla_w - 220 - plano_w, "Helvetica", 8)
+        info_w = c.stringWidth(info, "Helvetica", 8)
+        x_der = x0 + tabla_w - 6
+        c.setFillColor(body_text)
+        c.drawString(x_der - plano_w - info_w, y - titulo_h + 6.5, info)
+        c.setFont("Helvetica-Bold", 8.5)
+        c.setFillColor(colors.HexColor("#B91C1C") if p["plano"] == "NO COINCIDE" else title_color)
+        c.drawRightString(x_der, y - titulo_h + 6.5, p["plano"])
         _draw_table(
             c=c,
-            x=28,
-            y_top=670,
-            col_widths=[120, 150, 110, 105, 70],
-            headers=["Pieza", "Barrenos", "Estación / herramienta", "Barras", "Plano"],
-            rows=chunk,
-            header_fill=table_head,
+            x=x0,
+            y_top=y - titulo_h,
+            col_widths=cols,
+            headers=_CU_HERR_HEADERS,
+            rows=p["filas"],
+            header_fill=colors.white,
             line_color=table_line,
             title_color=title_color,
             body_text=body_text,
-            row_h=18,
-            header_h=18,
-            font_size=7.2,
+            row_h=row_h,
+            header_h=head_h,
+            font_size=7.6,
         )
-        c.setFont("Helvetica-Bold", 9)
-        c.setFillColor(subtitle_color)
-        c.drawRightString(width - 24, 24, code if page_idx == 1 else f"{code}-{page_idx}")
-        c.showPage()
+        y -= alto + gap
+    c.setFont("Helvetica-Bold", 9)
+    c.setFillColor(subtitle_color)
+    c.drawRightString(width - 24, 24, code if page_idx == 1 else f"{code}-{page_idx}")
+    c.showPage()
 
 
 def _draw_sheet_table_continuation_pages(
@@ -1697,7 +1782,9 @@ def exportar_pdf_nesting(
         c.setFillColor(title_color)
         c.setFont("Helvetica-Bold", 10.5)
         c.drawString(18, 698, f"Material: {plate['material']} | Calibre: {plate['calibre']}")
-        _draw_cu_proceso_header(c, plate, width, title_color)
+        y_proceso = _draw_cu_proceso_header(
+            c, plate, width, title_color, herr_grupos=_cu_herr_grupos_hoja(rows)
+        )
 
         c.setFont("Helvetica", 8.3)
         c.setFillColor(subtitle_color)
@@ -1736,6 +1823,8 @@ def exportar_pdf_nesting(
 
         # ---------------- LEYENDA ----------------
         leg_y, leg_y_rtz, draw_top = _resolve_plate_page_layout(plate, tiene_rtz)
+        if y_proceso is not None:
+            draw_top = min(draw_top, y_proceso - 8)
         _draw_standard_legend(c, leg_y, outer_fill, outer_stroke, mark_color, body_text)
         if leg_y_rtz is not None:
             _draw_rtz_legend(c, leg_y_rtz, body_text, cobre=bool(plate.get("modo_largos_cu")))

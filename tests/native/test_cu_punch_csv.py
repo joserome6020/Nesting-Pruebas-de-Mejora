@@ -207,7 +207,8 @@ def main() -> None:
         assert res_ov["cambios"] == [f"{cambio_ov} (para OVAL-X)"], res_ov
         assert res_ov["por_pieza"] == {"OVAL-X": "M5=E15.9X11.1"} and not res_ov["mixta"]
         assert res_ov["detalle"]["OVAL-X"] == [
-            {"cantidad": 1, "barreno": "ov 15.88x11.11 a lo largo", "estacion": "M5", "herramienta": "E15.9X11.1"}
+            {"cantidad": 1, "barreno": "ov 15.88x11.11 a lo largo", "tipo": "Ovalado", "medida": "15.88 x 11.11",
+             "direccion": "A lo largo", "estacion": "M5", "herramienta": "E15.9X11.1"}
         ], res_ov["detalle"]
         assert res_ov["catalogo"] == {"OVAL-X": "sin_catalogo"}
 

@@ -55,6 +55,50 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02k — PDF cobre: herramental por pieza y apartado en la hoja
+
+- Reporte PDF de nesting cobre: la tabla general de herramental ya no es «una fila por
+  barreno» sino **una tabla por tipo de pieza** con encabezado (piezas, barras, plano)
+  y filas por barreno. Columnas nuevas separan **Barreno / Medida / Dirección**
+  (Redondo Ø; Ovalado largo × ancho a lo largo/ancho).
+- En cada hoja de barra se muestra, bajo «Proceso», un apartado **«Herramental por
+  pieza»** que agrupa los IDs del dibujo por juego de herramental (ej.
+  `(1), (3): M1=C11.1 M6=E17.5X11.1`) con límite de 5 líneas (`_CU_HERR_MAX_LINEAS`).
+- `resumen_herramental_barra` ahora entrega `tipo`, `medida` y `direccion` por grupo
+  para que PDF y CSV compartan la misma estructura.
+- Build: sin módulos ni assets nuevos.
+- Candados actualizados: `tests/native/test_cu_nest_herramental.py`
+  (`_cu_herramental_piezas` + `_cu_herr_grupos_hoja`) y
+  `tests/native/test_cu_punch_csv.py` (nuevos campos del detalle).
+
+### 2026-10-02l — Lista de largos: config v2 (despunte 0.25", kerf 0.38") + remanentes exclusivos
+
+- Nueva configuración de corte: **despunte 0.25" por extremo** y **kerf 0.38"** entre
+  cortes. Cada `plan_json` nuevo lleva `kerf_in`, `despunte_in` y `config_version=2`;
+  los planes previos (sin metadata) se interpretan con los valores legacy (0.25"/0.5")
+  vía `plan_kerf_despunte` / `kerf_despunte_de_plan`. Así los planes viejos y los
+  nuevos coexisten en la BD sin recalcular sobrantes con parámetros distintos a los
+  que se usaron al nestear.
+- Fix del remanente compartido (bug SWO-092..106 del 02/10/2026): al generar un plan,
+  `_ll_obtener_o_generar_plan` **siempre reserva** los remanentes para la orden.
+  Antes solo se reservaban al abrir sesión en la estación, y como el MRL se arma a
+  partir del plan, varias SWO contaban con los mismos remanentes de ANG004/ANG037/SLC035
+  y nadie los pedía en su PO. Validado end-to-end contra la BD real: dos SWO sintéticas
+  no pueden tomar el mismo remanente.
+- Metadata del plan expuesta por fachada: `api_server.LISTA_LARGOS_KERF`,
+  `LISTA_LARGOS_RECORTE_EXTREMO`, `LISTA_LARGOS_CONFIG_VERSION`,
+  `LISTA_LARGOS_KERF_LEGACY`, `LISTA_LARGOS_RECORTE_EXTREMO_LEGACY` y
+  `plan_kerf_despunte`. UI: `interface.largos_nesting_service.kerf_despunte_de_plan`.
+- La Estación de corte del VSM (fuera de este repo) debe adoptar la metadata del
+  `plan_json`; mientras tanto los planes nuevos cortan bien y los viejos quedan iguales.
+- Build: sin módulos ni assets nuevos. Ambos módulos (`api.legacy_core` vía fachada
+  `api_server`; `interface.largos_nesting_service`) ya estaban en `HIDDEN_IMPORTS`,
+  `CRITICAL_SUITE_FILES` y `SMOKE_IMPORT_MODULES`.
+- Candados: `tests/native/test_largos_despunte_kerf.py` (8 casos) y
+  `tests/native/test_largos_remanentes_exclusivos.py` (2 casos). Regresiones 105/108
+  (los 3 que fallan son los pre-existentes de `algorithm_cpp` que no carga el DLL en
+  esta PC).
+
 ### 2026-10-02j — PARTS: offset plasma configurable con clave de Configuración Global
 
 - Antes el 0.0625" estaba fijo en `compute_plasma_offset_mm`. Ahora vive en
