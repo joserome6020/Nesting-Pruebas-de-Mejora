@@ -290,17 +290,42 @@ def resumen_herramental_barra(
 
     ``por_pieza``: nombre → estaciones que usa (``"M1 M5"``); ``cambios``: cambios
     respecto al montaje base con las piezas que los piden; ``mixta``: la barra
-    junta piezas con juegos de herramental distintos.
+    junta piezas con juegos de herramental distintos; ``detalle``: nombre →
+    ``[{cantidad, barreno, estacion, herramienta}]``; ``catalogo``: nombre →
+    estado contra el catálogo de barrenos de los planos.
     """
-    from modules.nesting_engine.cu_punch_tooling import estacion_para_barreno
+    from modules.nesting_engine.cu_catalogo_barrenos import verificar_pieza
+    from modules.nesting_engine.cu_punch_tooling import codigos_molds, estacion_para_barreno
 
     ests, cambios, _falt = montaje_barra(hoja, estaciones=estaciones, inventario=inventario)
+    codigos = codigos_molds(ests)
     piezas, _err = _analizar_barra(hoja)
     por_pieza: dict[str, str] = {}
+    detalle: dict[str, list[dict]] = {}
+    catalogo: dict[str, str] = {}
     usos: dict[int, dict[str, int]] = {}
     for nombre, _x0, _l, bs in piezas:
         idxs = sorted({estacion_para_barreno(b[0], b[3], b[4], ests) for b in bs} - {None})
-        por_pieza[nombre] = " ".join(f"M{i}" for i in idxs) or "-"
+        por_pieza[nombre] = (
+            " ".join(f"M{i}={codigos[i - 1]}" if i <= len(codigos) else f"M{i}" for i in idxs) or "-"
+        )
+        grupos: dict[tuple, int] = {}
+        for t, _cx, _cy, dx, dy in bs:
+            k = (t, round(dx, 2), round(dy, 2), estacion_para_barreno(t, dx, dy, ests))
+            grupos[k] = grupos.get(k, 0) + 1
+        detalle[nombre] = [
+            {
+                "cantidad": q,
+                "barreno": (
+                    f"Ø{dx:.2f}" if t == "C"
+                    else f"ov {max(dx, dy):.2f}x{min(dx, dy):.2f} a lo {'largo' if dx >= dy else 'ancho'}"
+                ),
+                "estacion": f"M{i}" if i else "-",
+                "herramienta": codigos[i - 1] if i and i <= len(codigos) else "SIN HERRAMIENTA",
+            }
+            for (t, dx, dy, i), q in sorted(grupos.items(), key=lambda kv: (kv[0][3] or 99, kv[0][:3]))
+        ]
+        catalogo[nombre] = verificar_pieza(nombre, [(b[0], b[3], b[4]) for b in bs])[0]
         for i in idxs:
             cnt = usos.setdefault(i, {})
             cnt[nombre] = cnt.get(nombre, 0) + 1
@@ -313,7 +338,13 @@ def resumen_herramental_barra(
             cambio = f"{cambio} (para {lista})"
         cambios_det.append(cambio)
     juegos = {v for v in por_pieza.values() if v != "-"}
-    return {"por_pieza": por_pieza, "cambios": cambios_det, "mixta": len(juegos) > 1}
+    return {
+        "por_pieza": por_pieza,
+        "cambios": cambios_det,
+        "mixta": len(juegos) > 1,
+        "detalle": detalle,
+        "catalogo": catalogo,
+    }
 
 
 def construir_filas_barra(

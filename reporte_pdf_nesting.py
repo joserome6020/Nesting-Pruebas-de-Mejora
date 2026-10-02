@@ -1,4 +1,5 @@
 import os
+import re
 from collections import OrderedDict
 from statistics import mean
 from datetime import datetime
@@ -410,6 +411,8 @@ def _enumerate_plates(resultados_nesting):
             cu_cambios_herramental: list = []
             cu_herr_por_pieza: dict = {}
             cu_herr_mixta = False
+            cu_herr_detalle: dict = {}
+            cu_herr_catalogo: dict = {}
             if hoja.get("modo_largos_cu"):
                 try:
                     from modules.dxf_export.cu_punch_csv import (
@@ -426,6 +429,8 @@ def _enumerate_plates(resultados_nesting):
                         cu_cambios_herramental = resumen["cambios"]
                         cu_herr_por_pieza = resumen["por_pieza"]
                         cu_herr_mixta = resumen["mixta"]
+                        cu_herr_detalle = resumen.get("detalle") or {}
+                        cu_herr_catalogo = resumen.get("catalogo") or {}
                 except Exception:
                     pass
 
@@ -436,6 +441,8 @@ def _enumerate_plates(resultados_nesting):
                     "cu_cambios_herramental": cu_cambios_herramental,
                     "cu_herr_por_pieza": cu_herr_por_pieza,
                     "cu_herr_mixta": cu_herr_mixta,
+                    "cu_herr_detalle": cu_herr_detalle,
+                    "cu_herr_catalogo": cu_herr_catalogo,
                     "id": placa_id_final,
                     "base_id": _plate_base_id(placa_id_final),
                     "calibre": str(grupo_calibre),
@@ -790,7 +797,7 @@ def _tabla_hoja_layout(plate):
     if (plate or {}).get("cu_herr_por_pieza"):
         return (
             _TABLA_HOJA_HEADERS + ["Herramental"],
-            [40, 105, 175, 48, 48, 40, 92],
+            [36, 90, 138, 42, 42, 34, 166],
             _TABLA_HOJA_ALIGNS + ["center"],
         )
     return list(_TABLA_HOJA_HEADERS), list(_TABLA_HOJA_COLS), list(_TABLA_HOJA_ALIGNS)
@@ -1351,6 +1358,114 @@ def _draw_consolidated_piece_pages(
         c.drawRightString(width - 24, 24, footer_code)
         c.showPage()
 
+_CU_CATALOGO_TXT = {"ok": "OK", "sin_catalogo": "Sin plano", "no_coincide": "NO COINCIDE"}
+
+
+def _cu_herramental_rows(plates):
+    """Filas de la tabla general de herramental de punzonado (una por tipo de barreno)."""
+    piezas: "OrderedDict[str, dict]" = OrderedDict()
+    for plate in plates or []:
+        detalle = plate.get("cu_herr_detalle") or {}
+        if not detalle:
+            continue
+        m = re.search(r"(H\d+)\s*$", str(plate.get("id") or ""))
+        barra = m.group(1) if m else str(plate.get("id") or "")
+        for nombre, grupos in detalle.items():
+            limpio = _clean_piece_name(nombre)
+            ent = piezas.setdefault(
+                limpio, {"grupos": grupos, "barras": [], "plano": set()}
+            )
+            if barra not in ent["barras"]:
+                ent["barras"].append(barra)
+            ent["plano"].add((plate.get("cu_herr_catalogo") or {}).get(nombre, ""))
+    rows = []
+    for nombre in sorted(piezas):
+        ent = piezas[nombre]
+        estados = ent["plano"] - {""}
+        plano = (
+            "NO COINCIDE" if "no_coincide" in estados
+            else "Sin plano" if "sin_catalogo" in estados
+            else "OK" if estados else "-"
+        )
+        grupos = ent["grupos"] or [{"cantidad": 0, "barreno": "sin barrenos", "estacion": "-", "herramienta": "-"}]
+        for i, g in enumerate(grupos):
+            rows.append(
+                [
+                    nombre if i == 0 else "",
+                    f"{g['cantidad']}x {g['barreno']}",
+                    f"{g['estacion']}  {g['herramienta']}",
+                    ", ".join(ent["barras"]) if i == 0 else "",
+                    plano if i == 0 else "",
+                ]
+            )
+    return rows
+
+
+def _draw_cu_herramental_pages(
+    c,
+    width,
+    height,
+    plates,
+    nombre_orden,
+    work_order_label,
+    title_color,
+    subtitle_color,
+    line_color,
+    table_head,
+    table_line,
+    body_text,
+):
+    """Cobre: tabla general pieza → barrenos → estación/herramienta de la punzonadora."""
+    rows = _cu_herramental_rows(plates)
+    if not rows:
+        return
+    code = f"{work_order_label}-HERRAMENTAL-CU"
+    for page_idx, chunk in enumerate(_split_rows(rows, 30), start=1):
+        _draw_watermark_logo(c, width, height, LOGO_ICON1_PATH)
+        c.setFont("Helvetica-Bold", 16)
+        c.setFillColor(title_color)
+        c.drawCentredString(width / 2, 760, "Herramental de Punzonado - Cobre")
+        c.setFont("Helvetica", 9.5)
+        c.setFillColor(subtitle_color)
+        c.drawCentredString(
+            width / 2, 742, f"Orden: {nombre_orden or '-'} | Work Order: {work_order_label}"
+        )
+        c.setStrokeColor(line_color)
+        c.setLineWidth(1)
+        c.line(18, 730, width - 18, 730)
+        _draw_header_logo_left(c, LOGO_MAIN_PATH)
+        c.setFillColor(title_color)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(28, 700, "Herramienta que usa cada pieza según sus barrenos")
+        c.setFont("Helvetica", 8.5)
+        c.setFillColor(body_text)
+        c.drawString(
+            28,
+            686,
+            "Plano: OK = barrenos del DXF iguales al plano de GIGA; ov = ovalado "
+            "(largo x ancho, dirección respecto a la solera).",
+        )
+        _draw_table(
+            c=c,
+            x=28,
+            y_top=670,
+            col_widths=[120, 150, 110, 105, 70],
+            headers=["Pieza", "Barrenos", "Estación / herramienta", "Barras", "Plano"],
+            rows=chunk,
+            header_fill=table_head,
+            line_color=table_line,
+            title_color=title_color,
+            body_text=body_text,
+            row_h=18,
+            header_h=18,
+            font_size=7.2,
+        )
+        c.setFont("Helvetica-Bold", 9)
+        c.setFillColor(subtitle_color)
+        c.drawRightString(width - 24, 24, code if page_idx == 1 else f"{code}-{page_idx}")
+        c.showPage()
+
+
 def _draw_sheet_table_continuation_pages(
     c,
     width,
@@ -1516,6 +1631,20 @@ def exportar_pdf_nesting(
         body_text=body_text,
         meta_por_ruta=meta_por_ruta,
         job_fallback=job_fallback,
+    )
+    _draw_cu_herramental_pages(
+        c=c,
+        width=width,
+        height=height,
+        plates=plates,
+        nombre_orden=nombre_orden,
+        work_order_label=wo_label,
+        title_color=title_color,
+        subtitle_color=subtitle_color,
+        line_color=line_color,
+        table_head=table_head,
+        table_line=table_line,
+        body_text=body_text,
     )
 
     # ---------------- HOJAS DE PLACA ----------------

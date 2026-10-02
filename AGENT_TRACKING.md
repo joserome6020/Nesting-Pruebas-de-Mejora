@@ -72,7 +72,18 @@ código viejo. Un bug sin candado vuelve.
 - Candado: `tests/native/test_largos_swo_csv_vigente.py`. `run_regresiones` 98/104:
   los 6 FAIL (rtz/packer/gaps/cu_catalogo) ya fallaban antes de este cambio.
 
-### 2026-10-02 — CSV cobre: doble protección del herramental (catálogo de planos + simulación)
+### 2026-10-02b — Catálogo cobre completo (176 piezas) + tabla de herramental en el PDF
+
+- El catálogo inicial (48) solo tomaba STEP `GENE-*CU-*`. Ahora la lista de cobre sale
+  del **material del plano PDF** (`… x .25" Copper` / TU0 / C110) en los 16 boards:
+  176 piezas (ABB-22/42/62, RLG-J, GENE-FCU/BCU/NC, GE8132024). Soportes de acero
+  "for copper" (GENE-BKT, SIHC, SIVC) quedan fuera. STEP idénticos se analizan una vez.
+- 31 piezas con STEP vacío en todos los boards (ABB-62-10-BCK-33…62, RLG-J-1…8) quedan
+  en el catálogo sin barrenos → aviso al exportar hasta capturarlas del PDF.
+- `codigo_pieza` reconoce cualquier número de parte del catálogo (palabra completa, el más largo).
+- PDF de nesteo: página "Herramental de Punzonado - Cobre" (pieza → barrenos → estación y
+  herramienta → barras → estado contra plano) y columna Herramental por hoja con código
+  (`M1=C11.1 M5=E11.1X15.9`). Auditoría: 482/482 filas de CSV reales OK.
 
 - `tools/cu_catalogo_barrenos.py`: lee los STEP de GIGA (`4. Planos`) con OCCT y saca
   por pieza tipo/medida/dirección (`eje` largo/ancho)/cantidad de barrenos →

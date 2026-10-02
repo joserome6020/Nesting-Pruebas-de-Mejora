@@ -59,7 +59,7 @@ def main() -> None:
 
         # --- Catálogo real empaquetado (STEP + PDF manual) ---
         cat = cb.cargar_catalogo()
-        assert len(cat) >= 48, len(cat)
+        assert len(cat) >= 170, f"todas las piezas de cobre de los 16 boards ({len(cat)})"
         for nombre in (
             "GENE-FCU-2-105", "GENE-FCU-2.25-101", "GENE-FCU-4-306", "GENE-FCU-5-110",
             "GENE-FCU-5-120", "GENE-FCU-5-124", "GENE-FCU-6-113",
@@ -77,6 +77,16 @@ def main() -> None:
         est, _ = cb.verificar_pieza("GENE-FCU-5-108", [("E", 20.64, 11.11)] * 2)
         assert est == "no_coincide", "medida distinta"
         assert cb.verificar_pieza("PIEZA-X", ok)[0] == "sin_catalogo"
+        # No todo el cobre se llama GENE-*CU-*: ABB/RLG por número de parte completo.
+        cat_n = {"RLG-J-1-4KA-S": {}, "RLG-J-10-4KA-S": {}, "ABB-62-10-BCK-33": {}}
+        assert cb.codigo_pieza("RLG-J-10-4KA-S (2)", cat_n) == "RLG-J-10-4KA-S"
+        assert cb.codigo_pieza("RLG-J-1-4KA-S", cat_n) == "RLG-J-1-4KA-S"
+        assert cb.codigo_pieza("ABB-62-10-BCK-33_rev", cat_n) == "ABB-62-10-BCK-33"
+        assert cb.codigo_pieza("ABB-62-10-BCK-330", cat_n) is None
+        for pn in ("ABB-42-BCK-705", "ABB-62-10-BCK-33", "RLG-J-A1-4KA-S", "GENE-NC-0808-5"):
+            assert pn in cat, f"{pn}: pieza de cobre de los planos (no se llama GENE-*CU-*)"
+        for pn in ("GENE-BKT-287", "GENE-SIHC-40-40-119"):
+            assert pn not in cat, f"{pn}: soporte de acero 'for copper', no es cobre"
         # FCU-5-120 desde el plano: 10× Ø11.00 + 20 ovalados 10.31×15.07 a lo ancho.
         b120 = [("C", 11.0, 11.0)] * 10 + [("E", 10.31, 15.07)] * 20
         assert cb.verificar_pieza("GENE-FCU-5-120", b120)[0] == "ok"

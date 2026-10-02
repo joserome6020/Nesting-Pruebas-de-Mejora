@@ -205,7 +205,11 @@ def main() -> None:
         assert all("→" not in c for c in pc.montaje_barra(h_ov[0])[1]), "Helvetica sin glifo →"
         res_ov = pc.resumen_herramental_barra(h_ov[0])
         assert res_ov["cambios"] == [f"{cambio_ov} (para OVAL-X)"], res_ov
-        assert res_ov["por_pieza"] == {"OVAL-X": "M5"} and not res_ov["mixta"]
+        assert res_ov["por_pieza"] == {"OVAL-X": "M5=E15.9X11.1"} and not res_ov["mixta"]
+        assert res_ov["detalle"]["OVAL-X"] == [
+            {"cantidad": 1, "barreno": "ov 15.88x11.11 a lo largo", "estacion": "M5", "herramienta": "E15.9X11.1"}
+        ], res_ov["detalle"]
+        assert res_ov["catalogo"] == {"OVAL-X": "sin_catalogo"}
 
         # Caso real W.O. 91 X1-H1 (GENE-FCU-5-108, solera 1.75"): ovalado 10.31×15.08 con
         # 15.08 a lo largo → M3 tal cual está montado (el CSV mandaba M8; planta: "era la 3").

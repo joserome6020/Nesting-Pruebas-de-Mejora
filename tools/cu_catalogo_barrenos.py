@@ -1,6 +1,9 @@
-"""Catálogo de barrenos de las piezas de cobre desde los STEP de GIGA (fuente independiente).
+"""Catálogo de barrenos de las piezas de cobre desde los planos de GIGA (fuente independiente).
 
-Lee cada STEP de cobre (``GENE-*CU-*``) con OCCT y, en las caras planas de la
+La lista de piezas de cobre sale de los PDF de cada board: es de cobre la pieza
+cuyo plano dice material ``… x .25" Copper`` / ``TU0`` / ``C110`` (sin importar
+cómo se llame el archivo; los soportes de acero "for copper" no cuentan).
+Para cada una lee su STEP con OCCT y, en las caras planas de la
 solera, toma cada barreno pasado de sus aristas 3D (círculo = redondo; 2 arcos +
 2 rectas = ovalado). Guarda tipo, ancho, largo y dirección respecto a la solera
 (``eje`` = ``largo`` si lo largo del ovalado va a lo largo de la barra, ``ancho``
@@ -25,7 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = ROOT / "_config" / "cu_catalogo_barrenos.json"
 DEFAULT_MANUAL = ROOT / "_config" / "cu_catalogo_barrenos_manual.json"
-PATRON_PIEZA = re.compile(r"(GENE-[A-Z]*CU-[\d.]+-\d+)", re.I)
+MATERIAL_COBRE = re.compile(
+    r"[\d.]+\s*(?:in|\")*\s*x\s*[\d.]+\s*(?:in|\")*\s*(?:TU0\s*)?copper|\bTU0\b|C1100|C110\b", re.I
+)
+# Número de parte al inicio del nombre del archivo (ABB-62-10-BCK-33, RLG-J-A1-4KA-S, GENE-FCU-5-108…).
+ID_ARCHIVO = re.compile(r"^([A-Z0-9]+(?:[-.][A-Z0-9]+){2,6})", re.I)
 
 
 def _cargar_step(ruta: str):
@@ -243,21 +250,92 @@ def resumen_barrenos(barrenos: list[dict]) -> list[dict]:
     ]
 
 
-def construir_catalogo(base: str, log=print) -> dict:
-    piezas: dict[str, list[dict]] = collections.defaultdict(list)
+def _id_archivo(nombre_archivo: str) -> str | None:
+    m = ID_ARCHIVO.match(Path(nombre_archivo).stem.strip())
+    return m.group(1).upper() if m else None
+
+
+def _es_plano_cobre(ruta: str) -> bool | None:
+    """True/False según el material del plano; None si no es un plano de 1-3 hojas."""
+    import fitz
+
+    try:
+        doc = fitz.open(ruta)
+    except Exception:  # noqa: BLE001
+        return None
+    if doc.page_count > 3:
+        return None
+    return any(MATERIAL_COBRE.search(pg.get_text()) for pg in doc)
+
+
+def inventario_cobre(base: str, log=print) -> dict[str, dict]:
+    """Piezas de cobre de la carpeta de planos: ``{numero_parte: {boards, planos}}``."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    pdfs = []
     for raiz, _dirs, files in os.walk(base):
+        if "OLD" in Path(raiz).parts:
+            continue
+        for f in files:
+            if f.lower().endswith(".pdf") and _id_archivo(f):
+                pdfs.append(os.path.join(raiz, f))
+    log(f"planos PDF a revisar: {len(pdfs)}")
+    piezas: dict[str, dict] = {}
+    with ThreadPoolExecutor(12) as ex:
+        for ruta, cobre in zip(pdfs, ex.map(_es_plano_cobre, pdfs)):
+            if not cobre:
+                continue
+            pn = re.sub(r"[-_ ]?(REV\.?\w*|C)$", "", _id_archivo(os.path.basename(ruta)) or "")
+            rel = os.path.relpath(ruta, base)
+            ent = piezas.setdefault(pn, {"boards": set(), "planos": []})
+            ent["boards"].add(Path(rel).parts[0])
+            ent["planos"].append(rel)
+    return {k: {"boards": sorted(v["boards"]), "planos": sorted(v["planos"])} for k, v in sorted(piezas.items())}
+
+
+def _pieza_de_step(nombre_archivo: str, cobre: dict | None) -> str | None:
+    stem = Path(nombre_archivo).stem.strip().upper()
+    if cobre is None:
+        return _id_archivo(nombre_archivo)
+    mejor = None
+    for pn in cobre:
+        if stem.startswith(pn) and (len(stem) == len(pn) or not stem[len(pn)].isalnum()):
+            if mejor is None or len(pn) > len(mejor):
+                mejor = pn
+    return mejor
+
+
+def construir_catalogo(base: str, log=print, cobre: dict | None = None) -> dict:
+    """Barrenos por pieza desde los STEP. ``cobre``: solo esas piezas (y todas aparecen)."""
+    import hashlib
+
+    piezas: dict[str, list[dict]] = collections.defaultdict(list)
+    vistos: dict[str, dict | None] = {}
+    for raiz, _dirs, files in os.walk(base):
+        if "OLD" in Path(raiz).parts:
+            continue
         for f in files:
             if not f.lower().endswith((".step", ".stp")):
                 continue
-            m = PATRON_PIEZA.search(f)
-            if not m:
+            nombre = _pieza_de_step(f, cobre)
+            if not nombre:
                 continue
-            nombre = m.group(1).upper()
             ruta = os.path.join(raiz, f)
             try:
-                res = analizar_step(ruta)
-            except Exception as exc:  # noqa: BLE001
+                firma = hashlib.md5(Path(ruta).read_bytes()).hexdigest()
+            except OSError as exc:
                 log(f"[ERROR] {nombre}: {exc} ({ruta})")
+                continue
+            if firma in vistos:
+                res = vistos[firma]
+            else:
+                try:
+                    res = analizar_step(ruta)
+                except Exception as exc:  # noqa: BLE001
+                    log(f"[ERROR] {nombre}: {exc} ({ruta})")
+                    res = None
+                vistos[firma] = res
+            if res is None:
                 continue
             piezas[nombre].append(
                 {
@@ -275,7 +353,11 @@ def construir_catalogo(base: str, log=print) -> dict:
             if not any(u["barrenos"] == v["barrenos"] for u in unicas):
                 unicas.append(v)
         catalogo[nombre] = {"variantes": unicas, "fuentes": sorted(v["fuente"] for v in variantes)}
-    return catalogo
+    for nombre, info in (cobre or {}).items():
+        ent = catalogo.setdefault(nombre, {"variantes": [], "fuentes": []})
+        ent["boards"] = info["boards"]
+        ent["planos"] = info["planos"]
+    return dict(sorted(catalogo.items()))
 
 
 def mezclar_manual(catalogo: dict, ruta_manual: Path = DEFAULT_MANUAL) -> dict:
@@ -305,7 +387,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("base", help="carpeta de planos (se recorre completa)")
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     args = ap.parse_args(argv)
-    cat = mezclar_manual(construir_catalogo(args.base))
+    cobre = inventario_cobre(args.base)
+    print(f"piezas de cobre en los planos: {len(cobre)}")
+    cat = mezclar_manual(construir_catalogo(args.base, cobre=cobre))
     data = {
         "generado": _dt.datetime.now().isoformat(timespec="seconds"),
         "origen": args.base,
@@ -314,7 +398,10 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-    print(f"catálogo: {len(cat)} piezas → {out}")
+    sin = [k for k, v in cat.items() if not v["variantes"]]
+    print(f"catálogo: {len(cat)} piezas ({len(sin)} sin barrenos legibles del STEP) → {out}")
+    for k in sin:
+        print(f"  SIN DATOS: {k} ({', '.join(cat[k].get('boards') or [])})")
     return 0
 
 

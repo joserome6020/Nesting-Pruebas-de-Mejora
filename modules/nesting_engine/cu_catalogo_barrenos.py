@@ -56,8 +56,23 @@ def cargar_catalogo(ruta: str | os.PathLike | None = None) -> dict[str, Any]:
     return piezas
 
 
-def codigo_pieza(nombre: str) -> str | None:
-    m = PATRON_PIEZA.search(str(nombre or ""))
+def codigo_pieza(nombre: str, catalogo: dict | None = None) -> str | None:
+    """Número de parte del catálogo contenido en ``nombre`` (el más largo, como palabra completa)."""
+    n = str(nombre or "").upper()
+    mejor = None
+    for k in catalogo or {}:
+        i = n.find(k)
+        while i >= 0:
+            antes = n[i - 1] if i > 0 else ""
+            despues = n[i + len(k)] if i + len(k) < len(n) else ""
+            if not antes.isalnum() and not despues.isalnum():
+                if mejor is None or len(k) > len(mejor):
+                    mejor = k
+                break
+            i = n.find(k, i + 1)
+    if mejor:
+        return mejor
+    m = PATRON_PIEZA.search(n)
     return m.group(1).upper() if m else None
 
 
@@ -118,10 +133,12 @@ def verificar_pieza(
     ``estado``: ``ok`` | ``sin_catalogo`` | ``no_coincide``.
     """
     cat = cargar_catalogo() if catalogo is None else catalogo
-    codigo = codigo_pieza(nombre)
+    codigo = codigo_pieza(nombre, cat)
     ent = cat.get(codigo) if codigo else None
-    if not ent or not ent.get("variantes"):
+    if not ent:
         return "sin_catalogo", f"{nombre}: no está en el catálogo de barrenos"
+    if not ent.get("variantes"):
+        return "sin_catalogo", f"{nombre}: pieza de cobre de los planos sin barrenos capturados (STEP ilegible)"
     dxf = [_clave_dxf(t, float(dx), float(dy)) for t, dx, dy in barrenos]
     mejor: list[str] | None = None
     for v in ent["variantes"]:

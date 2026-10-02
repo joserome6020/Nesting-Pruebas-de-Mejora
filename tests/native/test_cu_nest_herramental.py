@@ -142,8 +142,19 @@ def main() -> None:
         hojas3, _ = empaquetar_largos_cu(mix, _placas(), separacion_in=0.0)
         assert len(hojas3) == 1
         res = pc.resumen_herramental_barra(hojas3[0])
-        assert res["por_pieza"] == {"M1X": "M1", "M5X": "M5"}, res
+        assert res["por_pieza"] == {"M1X": "M1=C11.1", "M5X": "M5=E11.1X15.9"}, res
         assert res["mixta"] and res["cambios"] == []
+
+        # PDF: tabla general pieza → barrenos → estación/herramienta.
+        import reporte_pdf_nesting as rp
+
+        filas_pdf = rp._cu_herramental_rows(
+            [{"id": "W.O. 1 X1-H3", "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"]}]
+        )
+        assert filas_pdf == [
+            ["M1X", "1x Ø11.11", "M1  C11.1", "H3", "Sin plano"],
+            ["M5X", "1x ov 15.88x11.11 a lo ancho", "M5  E11.1X15.9", "H3", "Sin plano"],
+        ], filas_pdf
 
     if previous_data_dir is None:
         os.environ.pop("ARGA_NEST_DATA_DIR", None)
