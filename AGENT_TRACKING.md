@@ -55,6 +55,22 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02g — Estación de largos: plan en barras del largo comercial (240"), no tiras de 480"
+
+- Caso real SWO-093: el plan guardado armaba CAN011 en una tira de 480" con 7 × 65.75" y
+  sobrante 17"; se compran barras de 240" (caben 3). La estación del VSM muestra el plan tal
+  cual está en `lista_largos_planes` (no lo regenera al consultar), así que indicaba cortes
+  imposibles y sobrantes falsos.
+- `_ll_generar_plan_desde_payload` usa el largo comercial de cada material del catálogo
+  Herinox (`catalogo_largos.datos_material_requerido_pedido`, mismo origen que el pedido MRL;
+  caché de 10 min). Materiales que se compran en 480" (TUB007, CAN006, …) siguen en 480";
+  sin catálogo o con un largo fuera del rango 240–480 se conserva la elección 240/480 anterior.
+- Simulación read-only sobre 53 SWO: 0 tiras más largas que la barra comprada (antes 236) y
+  ninguna orden pide más barras. SWO-093 guardada de nuevo: 18 × 240" + remanente 169".
+- Planes congelados (sesión/cortes) conservan sus tiras de 480" hasta que se regeneren.
+- Build: `catalogo_largos` ya está en `HIDDEN_IMPORTS` y `CRITICAL_SUITE_FILES`; sin cambios.
+- Candado: `tests/native/test_largos_plan_largo_comercial.py`.
+
 ### 2026-10-02f — SWO-093 largos viejos + candado del sync CSV (HI con piezas de otros jobs)
 
 - SWO-093 (261116): el CSV cambió el 28/09 12:10, entre la importación (11:47) y el export

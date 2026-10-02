@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from datetime import datetime
 
@@ -1913,7 +1913,47 @@ def _ll_consumir_remanentes_material(
 
     return barras, pendientes, remanentes_usados
 
-def _ll_resolver_pendientes_con_stock(piezas_pendientes: list[dict]) -> list[dict]:
+_LL_CATALOGO_TTL_S = 600.0
+_LL_CATALOGO_CACHE: dict[str, Any] = {"datos": None, "ts": 0.0}
+
+
+def _ll_largos_comerciales_por_material(materiales) -> dict[str, float]:
+    """Largo comercial (in) de cada material según el catálogo Herinox del pedido.
+
+    El plan debe usar la barra que realmente llega a piso: si se arma en tiras de
+    480" pero se compran barras de 240", la estación indica cortes que no caben.
+    Material sin catálogo → 0 (se conserva la elección 240/480).
+    """
+    try:
+        from catalogo_largos import (
+            _cargar_placas_largos_desde_herinox,
+            datos_material_requerido_pedido,
+        )
+
+        ahora = time.monotonic()
+        if _LL_CATALOGO_CACHE["datos"] is None or ahora - _LL_CATALOGO_CACHE["ts"] > _LL_CATALOGO_TTL_S:
+            _LL_CATALOGO_CACHE["datos"] = _cargar_placas_largos_desde_herinox(solo_disponibles=False)
+            _LL_CATALOGO_CACHE["ts"] = ahora
+        catalogo = _LL_CATALOGO_CACHE["datos"]
+    except Exception as exc:
+        print(f"[LISTA_LARGOS][WARN] Catálogo Herinox no disponible para el plan: {exc}")
+        return {}
+
+    out: dict[str, float] = {}
+    for material in materiales:
+        try:
+            largo = safe_float(datos_material_requerido_pedido(material, 1, catalogo=catalogo).get("largo"), 0.0)
+        except Exception:
+            largo = 0.0
+        if LISTA_LARGOS_STOCK_MINIMO - 1e-6 <= largo <= LISTA_LARGOS_STOCK_MAXIMO + 1e-6:
+            out[material] = largo
+    return out
+
+
+def _ll_resolver_pendientes_con_stock(
+    piezas_pendientes: list[dict],
+    largo_comercial: float = 0.0,
+) -> list[dict]:
     barras = []
     pendientes = list(sorted(
         piezas_pendientes,
@@ -1961,6 +2001,16 @@ def _ll_resolver_pendientes_con_stock(piezas_pendientes: list[dict]) -> list[dic
 
         if not pendientes:
             break
+
+        if largo_comercial > 0:
+            idxs_com = _ll_mejor_subset_para_capacidad(pendientes, _ll_largo_util_bruto(largo_comercial))
+            if idxs_com:
+                barra = _ll_crear_barra_stock(largo_comercial)
+                _ll_aplicar_piezas_a_barra(barra, [pendientes[i] for i in idxs_com])
+                barras.append(barra)
+                idxs_set = set(idxs_com)
+                pendientes = [pieza for i, pieza in enumerate(pendientes) if i not in idxs_set]
+                continue
 
         util_240 = _ll_largo_util_bruto(LISTA_LARGOS_STOCK_MINIMO)
         util_480 = _ll_largo_util_bruto(LISTA_LARGOS_STOCK_MAXIMO)
@@ -2027,6 +2077,7 @@ def _ll_generar_plan_desde_payload(
 
     data = {}
     remanentes_usados = set()
+    largos_comerciales = _ll_largos_comerciales_por_material(materiales.keys())
 
     for material in sorted(materiales.keys()):
         piezas_material = list(materiales[material])
@@ -2042,7 +2093,9 @@ def _ll_generar_plan_desde_payload(
                 piezas_material,
             )
 
-        barras_stock = _ll_resolver_pendientes_con_stock(pendientes)
+        barras_stock = _ll_resolver_pendientes_con_stock(
+            pendientes, largos_comerciales.get(material, 0.0)
+        )
 
         barras_finales = barras_rem + barras_stock
 

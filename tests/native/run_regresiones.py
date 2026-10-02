@@ -92,6 +92,10 @@ REGRESIONES = [
         "2026-10-02 - SWO: demanda de largos siempre desde CSV AutoDXF vigente (sync lista_largos_job)",
     ),
     (
+        "test_largos_plan_largo_comercial.py",
+        "2026-10-02 - SWO-093: plan de la estación en barras del largo comercial (240\"), no tiras de 480\"",
+    ),
+    (
         "test_mrl_swo_plan_referencia.py",
         "2026-08-31 - SWO MRL: validar con el mismo plan del modal (no regenerar 15→14)",
     ),
