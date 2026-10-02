@@ -1361,6 +1361,20 @@ def _draw_consolidated_piece_pages(
 _CU_CATALOGO_TXT = {"ok": "OK", "sin_catalogo": "Analizador", "no_coincide": "NO COINCIDE"}
 
 
+def _rangos_barras(barras):
+    """``["H1", "H2", "H3", "H7"]`` → ``"H1-H3, H7"``; lo que no es ``H<n>`` va tal cual."""
+    nums = sorted({int(b[1:]) for b in barras if re.fullmatch(r"H\d+", b)})
+    otros = [b for b in barras if not re.fullmatch(r"H\d+", b)]
+    tramos = []
+    for n in nums:
+        if tramos and n == tramos[-1][1] + 1:
+            tramos[-1][1] = n
+        else:
+            tramos.append([n, n])
+    partes = [f"H{a}" if a == b else f"H{a}-H{b}" for a, b in tramos]
+    return ", ".join(partes + otros)
+
+
 def _cu_herramental_rows(plates):
     """Filas de la tabla general de herramental de punzonado (una por tipo de barreno)."""
     piezas: "OrderedDict[str, dict]" = OrderedDict()
@@ -1368,7 +1382,9 @@ def _cu_herramental_rows(plates):
         detalle = plate.get("cu_herr_detalle") or {}
         if not detalle:
             continue
-        m = re.search(r"(H\d+)\s*$", str(plate.get("id") or ""))
+        m = re.search(r"(H\d+)\s*$", str(plate.get("sheet_code") or "")) or re.search(
+            r"(H\d+)\s*$", str(plate.get("id") or "")
+        )
         barra = m.group(1) if m else str(plate.get("id") or "")
         for nombre, grupos in detalle.items():
             limpio = _clean_piece_name(nombre)
@@ -1394,7 +1410,7 @@ def _cu_herramental_rows(plates):
                     nombre if i == 0 else "",
                     f"{g['cantidad']}x {g['barreno']}",
                     f"{g['estacion']}  {g['herramienta']}",
-                    ", ".join(ent["barras"]) if i == 0 else "",
+                    _rangos_barras(ent["barras"]) if i == 0 else "",
                     plano if i == 0 else "",
                 ]
             )

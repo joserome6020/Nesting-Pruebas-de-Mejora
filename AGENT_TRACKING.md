@@ -81,6 +81,9 @@ código viejo. Un bug sin candado vuelve.
   solera, así que la pieza a 180° sigue OK.
 - Manda el plano: se quitó el campo `conflicto` (ABB-22-U-BCK-735/736/737 = plano).
 - Auditoría CSV reales GIGA: 482/482 OK.
+- Prueba W.O. 92 X1 (54 barras, 216× GENE-FCU-5-102): DXF↔CSV↔plano 0 problemas
+  (6048 Ø11.11→M1, 864 ov 17.46 a lo largo→M6). PDF: columna «Barras» de la tabla de
+  herramental usaba la placa (`SCO014 P1, …` cortado); ahora hoja en rangos `H1-H54`.
 
 ### 2026-10-02c — Catálogo cobre: los barrenos salen del plano PDF (176/176)
 

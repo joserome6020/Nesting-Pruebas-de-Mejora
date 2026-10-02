@@ -155,6 +155,14 @@ def main() -> None:
             ["M1X", "1x Ø11.11", "M1  C11.1", "H3", "Analizador"],
             ["M5X", "1x ov 15.88x11.11 a lo ancho", "M5  E11.1X15.9", "H3", "Analizador"],
         ], filas_pdf
+        # W.O. 92: placa "SCO014 P<n>", hoja "W.O. 92 X1-H<n>" → columna Barras en rangos de hoja.
+        placas_wo92 = [
+            {"id": f"SCO014 P{n}", "sheet_code": f"W.O. 92 X1-H{n}",
+             "cu_herr_detalle": res["detalle"], "cu_herr_catalogo": res["catalogo"]}
+            for n in list(range(1, 55)) + [60]
+        ]
+        filas_wo92 = rp._cu_herramental_rows(placas_wo92)
+        assert filas_wo92[0][3] == "H1-H54, H60", filas_wo92[0]
 
     if previous_data_dir is None:
         os.environ.pop("ARGA_NEST_DATA_DIR", None)
