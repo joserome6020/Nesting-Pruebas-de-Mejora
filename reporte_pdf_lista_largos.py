@@ -7,9 +7,21 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
 from reportlab.pdfgen import canvas
 
-KERF = 0.25
-RECORTE_EXTREMO = 0.5
+KERF = 0.38
+RECORTE_EXTREMO = 0.25
+KERF_LEGACY = 0.25
+RECORTE_EXTREMO_LEGACY = 0.5
 REM_MINIMO = 15.0
+
+
+def kerf_despunte_de_plan(plan: object) -> tuple[float, float]:
+    """Planes guardados sin `kerf_in`/`despunte_in` (previos al 02/10/2026) se dibujan con valores legacy."""
+    if isinstance(plan, dict):
+        kerf = plan.get("kerf_in")
+        despunte = plan.get("despunte_in")
+        if kerf is not None and despunte is not None:
+            return float(kerf), float(despunte)
+    return KERF_LEGACY, RECORTE_EXTREMO_LEGACY
 
 THEME = {
     "bg": colors.white,
@@ -121,7 +133,7 @@ def _build_bar_legend_and_labels(bar):
     return labels_for_cortes, legend_rows
 
 
-def calcular_kpis(data_nesteo):
+def calcular_kpis(data_nesteo, kerf: float = KERF, despunte: float = RECORTE_EXTREMO):
     barras_totales = 0
     piezas_totales = 0
     total_capacidad_util = 0.0
@@ -140,12 +152,12 @@ def calcular_kpis(data_nesteo):
             k = (str(mat), stock, source, rem_id)
             material_requerido[k] = material_requerido.get(k, 0) + 1
 
-            util = stock - (RECORTE_EXTREMO * 2)
+            util = stock - (despunte * 2)
             total_capacidad_util += max(0.0, util)
 
             for p in (b.get("cortes") or []):
                 piezas_totales += 1
-                total_usado += float(p.get("largo", 0.0) or 0.0) + KERF
+                total_usado += float(p.get("largo", 0.0) or 0.0) + kerf
 
     eficiencia = (total_usado / total_capacidad_util * 100) if total_capacidad_util > 0 else 0.0
 
@@ -207,7 +219,8 @@ def generar_pdf_lista_largos(snapshot: dict):
     hora_inicio = _fmt_fecha(snapshot.get("hora_inicio"))
     hora_fin = _fmt_fecha(snapshot.get("hora_fin"))
 
-    barras_totales, piezas_totales, eficiencia, tabla_mat = calcular_kpis(data_nesteo)
+    kerf, despunte = kerf_despunte_de_plan(snapshot.get("plan"))
+    barras_totales, piezas_totales, eficiencia, tabla_mat = calcular_kpis(data_nesteo, kerf, despunte)
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=letter)
@@ -458,7 +471,7 @@ def generar_pdf_lista_largos(snapshot: dict):
 
         source = (b.get("source") or "STOCK").upper()
         stock = float(b.get("largo_stock", 0.0) or 0.0)
-        util = stock - (RECORTE_EXTREMO * 2)
+        util = stock - (despunte * 2)
 
         rem_show = float(b.get("remanente_show", b.get("remanente_calc", 0.0)) or 0.0)
         ocupado = util - rem_show
@@ -531,7 +544,7 @@ def generar_pdf_lista_largos(snapshot: dict):
         c.setFillColor(colors.white)
         c.rect(track_x, track_bottom, track_w, track_h, fill=1, stroke=1)
 
-        trim_w = track_w * (RECORTE_EXTREMO / stock) if stock > 0 else 0.0
+        trim_w = track_w * (despunte / stock) if stock > 0 else 0.0
         usable_x0 = track_x + trim_w
         usable_x1 = track_x + track_w - trim_w
         usable_w = max(0.0, usable_x1 - usable_x0)
@@ -568,7 +581,7 @@ def generar_pdf_lista_largos(snapshot: dict):
         scale = (usable_w / util) if util > 0 else 0.0
 
         for i_p, p in enumerate(b.get("cortes", [])):
-            consumo = float(p.get("largo", 0.0) or 0.0) + KERF
+            consumo = float(p.get("largo", 0.0) or 0.0) + kerf
             pw = max(0.0, consumo * scale)
 
             remaining = end_x - cursor_x

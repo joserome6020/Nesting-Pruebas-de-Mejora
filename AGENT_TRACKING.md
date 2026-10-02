@@ -61,8 +61,13 @@ código viejo. Un bug sin candado vuelve.
   el reparto ya era v2 pero el visor mostraba "Útil 239.00 · Kerf 0.25"" y dibujaba
   despuntes/gaps/sobrante con los valores viejos. Ahora importa
   `KERF_LARGOS_IN` / `RECORTE_EXTREMO_LARGOS_IN` del servicio (Útil 239.50 · Kerf 0.38").
-- Candado: `test_visor_de_tira_usa_la_misma_config_que_el_servicio` en
-  `tests/native/test_largos_despunte_kerf.py`. Regresiones 109/109.
+- `reporte_pdf_lista_largos.py` (PDF de lista de largos de las rutas de órdenes) y
+  `reporte_pdf_nesteo_largos_piso.py` (PDF consumo en piso del ANS, importa de él)
+  también tenían 0.25 / 0.5 fijos. Defaults ahora 0.38 / 0.25; el PDF de lista de
+  largos toma `kerf_in`/`despunte_in` del plan guardado y cae a legacy si no los trae.
+- Candados en `tests/native/test_largos_despunte_kerf.py`:
+  `test_visor_de_tira_usa_la_misma_config_que_el_servicio`,
+  `test_pdfs_de_largos_usan_config_v2_y_respetan_planes_viejos`.
 
 ### 2026-10-02m — Release: cobre + largos + plasma (todo lo integrado desde 2026.10.01)
 

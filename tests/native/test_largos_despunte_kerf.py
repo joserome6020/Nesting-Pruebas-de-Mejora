@@ -45,6 +45,28 @@ def test_visor_de_tira_usa_la_misma_config_que_el_servicio():
     assert canvas.RECORTE_EXTREMO_IN == 0.25
 
 
+def test_pdfs_de_largos_usan_config_v2_y_respetan_planes_viejos():
+    # 2026-10-02: ambos PDF (lista de largos y consumo en piso) tenían 0.25 / 0.5 fijos.
+    import reporte_pdf_lista_largos as pdf_ll
+    import reporte_pdf_nesteo_largos_piso as pdf_piso
+
+    assert (pdf_ll.KERF, pdf_ll.RECORTE_EXTREMO) == (0.38, 0.25)
+    assert (pdf_piso.KERF, pdf_piso.RECORTE_EXTREMO) == (0.38, 0.25)
+    assert pdf_ll.kerf_despunte_de_plan({"kerf_in": 0.38, "despunte_in": 0.25}) == (0.38, 0.25)
+    assert pdf_ll.kerf_despunte_de_plan({"orden_id": "SWO-050"}) == (0.25, 0.5)
+
+    data = {CAN011: [{"source": "STOCK", "largo_stock": 240.0, "remanente_show": 40.0,
+                      "barra_index": 1, "cortes": [{"nombre": "ITEM 1", "largo": 65.75}] * 3}]}
+    _, _, ef_v2, _ = pdf_ll.calcular_kpis(data, *pdf_ll.kerf_despunte_de_plan({"kerf_in": 0.38, "despunte_in": 0.25}))
+    _, _, ef_legacy, _ = pdf_ll.calcular_kpis(data, *pdf_ll.kerf_despunte_de_plan({}))
+    assert round(ef_v2, 2) == round(3 * (65.75 + 0.38) / 239.5 * 100, 2)
+    assert round(ef_legacy, 2) == round(3 * (65.75 + 0.25) / 239.0 * 100, 2)
+
+    for plan in ({"kerf_in": 0.38, "despunte_in": 0.25, "config_version": 2}, {}):
+        buf = pdf_ll.generar_pdf_lista_largos({"orden_id": "SWO-T", "plan": plan, "data_nesteo": data})
+        assert buf.getvalue()[:4] == b"%PDF"
+
+
 def test_despunte_consume_025_en_cada_extremo():
     # util = 240 − 0.25*2 = 239.5
     assert lc._ll_largo_util_bruto(240.0) == 239.5
@@ -97,6 +119,7 @@ def test_8x6575_siguen_cabiendo_3_por_barra_de_240_con_nueva_config():
 if __name__ == "__main__":
     test_constantes_nuevas_son_038_y_025()
     test_visor_de_tira_usa_la_misma_config_que_el_servicio()
+    test_pdfs_de_largos_usan_config_v2_y_respetan_planes_viejos()
     test_despunte_consume_025_en_cada_extremo()
     test_kerf_se_suma_038_por_pieza()
     test_plan_generado_trae_la_metadata_de_corte()
