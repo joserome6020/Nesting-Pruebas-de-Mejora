@@ -2024,7 +2024,7 @@ class NestingCalcMixin:
             "La compensación plasma se marca en PARTS → columna ESP.\n\n"
             "Luego hay que nestear de nuevo (recomendado: EJECUTAR NESTING "
             "completo, o renestear el calibre) para separar placas solo-plasma "
-            "con stock 1/16\" por lado — paridad AutoCAD.\n"
+            f"con stock {self._plasma_offset_in_vigente():.4f}\" por lado — paridad AutoCAD.\n"
             "Renestear sólo una placa NO separa plasma/láser.",
         )
 
@@ -2034,8 +2034,15 @@ class NestingCalcMixin:
             "Plasma",
             "La compensación plasma se marca en PARTS → columna ESP.\n\n"
             "Selecciona las piezas y vuelve a nestear (calibre o nest completo). "
-            "El stock es 0.0625\" (1/16\") por lado, como en AutoCAD OFFSET.",
+            f"El stock vigente es {self._plasma_offset_in_vigente():.4f}\" por lado "
+            "(PARTS → OFFSET PLASMA), como en AutoCAD OFFSET.",
         )
+
+    @staticmethod
+    def _plasma_offset_in_vigente() -> float:
+        from modules.plasma_compensator import get_plasma_offset_in
+
+        return float(get_plasma_offset_in())
 
     def _build_piezas_para_renest_calibre(self, clave):
         # Conservar ambos conteos para informar el origen del renesteo. La

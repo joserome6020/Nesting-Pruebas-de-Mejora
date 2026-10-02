@@ -43,16 +43,91 @@ NESTING_DXF_SEGMENTS = (
 )
 
 
+# Estándar planta 2026-10-02: 3/16" por lado (antes 1/16").
+PLASMA_OFFSET_DEFAULT_IN = 0.1875
+PLASMA_OFFSET_MAX_IN = 0.20
+_PLASMA_OFFSET_CONFIG_RELATIVE = os.path.join("_config", "plasma_offset.json")
+# Override de ruta (tests / regresiones): aislar del valor guardado en la PC.
+_PLASMA_OFFSET_CONFIG_ENV = "ARGA_PLASMA_OFFSET_CONFIG"
+_plasma_offset_cache: dict = {"path": None, "mtime": None, "value": None}
+
+
+class PlasmaOffsetError(ValueError):
+    """Offset plasma configurado fuera de rango."""
+
+
+def _plasma_offset_config_path() -> Path:
+    override = str(os.environ.get(_PLASMA_OFFSET_CONFIG_ENV) or "").strip()
+    if override:
+        return Path(override)
+    try:
+        import config as app_config
+
+        return Path(app_config.asegurar_archivo_persistente(_PLASMA_OFFSET_CONFIG_RELATIVE))
+    except Exception:
+        return Path(__file__).resolve().parents[1] / _PLASMA_OFFSET_CONFIG_RELATIVE
+
+
+def normalizar_plasma_offset_in(value) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PlasmaOffsetError("El offset plasma debe ser un número en pulgadas.") from exc
+    if not (0.0 < number <= PLASMA_OFFSET_MAX_IN):
+        raise PlasmaOffsetError(
+            f"El offset plasma debe estar entre 0 y {PLASMA_OFFSET_MAX_IN:.2f}\" por lado."
+        )
+    return round(number, 5)
+
+
+def get_plasma_offset_in() -> float:
+    """Offset plasma vigente (in por lado). Archivo inválido ⇒ estándar 3/16\"."""
+    import json
+
+    path = _plasma_offset_config_path()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else None
+    except OSError:
+        mtime = None
+    cache = _plasma_offset_cache
+    if cache["value"] is not None and cache["path"] == str(path) and cache["mtime"] == mtime:
+        return float(cache["value"])
+    value = PLASMA_OFFSET_DEFAULT_IN
+    if mtime is not None:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            value = normalizar_plasma_offset_in((raw or {}).get("offset_in"))
+        except Exception:
+            value = PLASMA_OFFSET_DEFAULT_IN
+    cache.update(path=str(path), mtime=mtime, value=value)
+    return float(value)
+
+
+def set_plasma_offset_in(offset_in: float) -> Path:
+    import json
+
+    value = normalizar_plasma_offset_in(offset_in)
+    path = _plasma_offset_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"version": 1, "offset_in": value}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    _plasma_offset_cache.update(path=None, mtime=None, value=None)
+    return path
+
+
 def compute_plasma_offset_mm(thickness_in: float) -> float:
     """
-    Regla de compensación plasma (export + PARTS):
-    0.0625 in por lado en todos los calibres. Convertido a mm.
+    Regla de compensación plasma (export + PARTS): mismo offset por lado en
+    todos los calibres (estándar 0.1875 in, editable con clave en PARTS).
+    Convertido a mm.
 
-    ``thickness_in`` se conserva en la firma (callers / DXF) pero ya no
-    cambia la magnitud: planta pidió el mismo stock en fino y grueso.
+    ``thickness_in`` se conserva en la firma (callers / DXF) pero no cambia
+    la magnitud: planta pidió el mismo stock en fino y grueso.
     """
     del thickness_in
-    return 0.0625 * 25.4
+    return get_plasma_offset_in() * 25.4
 
 
 def resolver_dxf_plasma(ruta_origen: str | Path, offset_mm: float) -> tuple[str | None, str]:
@@ -189,13 +264,13 @@ def resolver_off_dxf_plasma(doc, offset_mm: float) -> tuple[float, str, float]:
 
     Bug de planta: DXF en pulgadas con ``$INSUNITS=4`` (mm) hacía
     ``off_dxf = 1.5875`` sobre coords en pulgadas → +1.59\" por lado
-    (×25.4 del stock real 0.0625\"). Paridad AutoCAD: stock fijo 1/16\" por lado.
+    (×25.4 del stock real). Paridad AutoCAD: mismo stock por lado en todo calibre.
 
     Returns:
         (off_dxf, unidad_detectada, unit_to_mm)
     """
     off_mm = float(offset_mm or 0.0)
-    off_in = off_mm / 25.4  # regla planta: 0.0625\"
+    off_in = off_mm / 25.4
     bbox = _bbox_outer_dxf_units(doc)
     max_dim = 0.0
     if bbox is not None:
@@ -227,8 +302,8 @@ def resolver_off_dxf_plasma(doc, offset_mm: float) -> tuple[float, str, float]:
         label = "inch(default)"
 
     off_dxf = off_mm / unit_to_mm
-    # Techo duro: jamás más de 0.20\" de stock por lado (regla es 0.0625\").
-    techo_in = 0.20
+    # Techo duro: jamás más de 0.20\" de stock por lado.
+    techo_in = PLASMA_OFFSET_MAX_IN
     if unit_to_mm >= 25.0 and off_dxf > techo_in:
         return off_in, f"{label}->cap_inch", 25.4
     if unit_to_mm < 2.0 and off_dxf > techo_in * 25.4:
@@ -259,12 +334,12 @@ def asegurar_dxf_plasma_compensado(
     off = float(offset_mm or 0.0)
     if off <= 0:
         return None, "Offset plasma inválido."
-    # Stock planta: 0.0625\" (±1 %) — rechazar callers con mm mal escalados.
+    # Rechazar callers con mm mal escalados (×25.4 del stock real).
     off_in = off / 25.4
-    if off_in > 0.20:
+    if off_in > PLASMA_OFFSET_MAX_IN:
         return None, (
             f"Offset plasma fuera de rango ({off_in:.4f}\" por lado); "
-            "esperado 0.0625\" (1/16\")."
+            f"máximo {PLASMA_OFFSET_MAX_IN:.2f}\"."
         )
     dst = ruta_dxf_plasma_compensado(src)
     try:

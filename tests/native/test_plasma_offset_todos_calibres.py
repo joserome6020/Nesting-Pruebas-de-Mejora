@@ -12,12 +12,14 @@ RAIZ = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(RAIZ))
 
 from modules.plasma_compensator import (  # noqa: E402
+    PLASMA_OFFSET_DEFAULT_IN,
     asegurar_dxf_plasma_compensado,
     compensate_dxf_for_plasma,
     compute_plasma_offset_mm,
 )
 
-OFFSET_IN = 0.0625
+# 2026-10-02: el estándar pasó de 1/16" a 3/16" (editable en PARTS).
+OFFSET_IN = PLASMA_OFFSET_DEFAULT_IN
 OFFSET_MM = OFFSET_IN * 25.4
 
 
@@ -29,8 +31,9 @@ def test_offset_0625_fino_y_grueso() -> None:
 
 def test_regla_unica_en_fuente() -> None:
     src = (RAIZ / "modules" / "plasma_compensator.py").read_text(encoding="utf-8")
+    assert "PLASMA_OFFSET_DEFAULT_IN = 0.1875" in src
     fn = src.split("def compute_plasma_offset_mm", 1)[1].split("\ndef ", 1)[0]
-    assert "0.0625" in fn
+    assert "get_plasma_offset_in()" in fn
     assert "0.0125" not in fn
     assert "0.250" not in fn
     assert "> 0.75" not in fn

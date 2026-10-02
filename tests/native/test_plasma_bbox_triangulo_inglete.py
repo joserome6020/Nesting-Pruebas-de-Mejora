@@ -24,12 +24,13 @@ def test_triangulo_tipo_solera_no_se_rechaza_por_bbox() -> None:
     import ezdxf  # type: ignore
 
     from modules.plasma_compensator import (
+        PLASMA_OFFSET_DEFAULT_IN,
         compensate_dxf_for_plasma,
         compute_plasma_offset_mm,
     )
 
     off_mm = compute_plasma_offset_mm(0.373)
-    assert abs(off_mm - 0.0625 * 25.4) < 1e-9
+    assert abs(off_mm - PLASMA_OFFSET_DEFAULT_IN * 25.4) < 1e-9
 
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)

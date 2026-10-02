@@ -6062,7 +6062,9 @@ class MotorNesting:
                 cal = p_src.get("calibre") or pieza_pack.get("calibre") or 0.25
                 off = float(compute_plasma_offset_mm(float(cal)))
             except Exception:
-                off = 0.0625 * 25.4
+                from modules.plasma_compensator import get_plasma_offset_in
+
+                off = get_plasma_offset_in() * 25.4
         try:
             from modules.plasma_compensator import asegurar_dxf_plasma_compensado
 

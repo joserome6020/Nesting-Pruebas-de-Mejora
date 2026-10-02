@@ -87,8 +87,11 @@ def test_no_recompensar_si_origen_ya_es_plasma_compensated():
 
 
 def test_offset_regla_sigue_0625():
-    assert abs(compute_plasma_offset_mm(0.25) - OFFSET_MM) < 1e-9
-    assert abs(compute_plasma_offset_mm(1.0) - OFFSET_MM) < 1e-9
+    from modules.plasma_compensator import PLASMA_OFFSET_DEFAULT_IN
+
+    esperado = PLASMA_OFFSET_DEFAULT_IN * 25.4
+    assert abs(compute_plasma_offset_mm(0.25) - esperado) < 1e-9
+    assert abs(compute_plasma_offset_mm(1.0) - esperado) < 1e-9
 
 
 if __name__ == "__main__":

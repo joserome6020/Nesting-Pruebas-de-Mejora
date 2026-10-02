@@ -55,6 +55,25 @@ código viejo. Un bug sin candado vuelve.
 
 ## Changelog
 
+### 2026-10-02j — PARTS: offset plasma configurable con clave de Configuración Global
+
+- Antes el 0.0625" estaba fijo en `compute_plasma_offset_mm`. Ahora vive en
+  `_config/plasma_offset.json` (persistente por PC; máx. 0.20", JSON inválido ⇒
+  estándar). API: `get_plasma_offset_in` / `set_plasma_offset_in`.
+- **Estándar nuevo (pedido del usuario): 0.1875" (3/16) por lado** —
+  `PLASMA_OFFSET_DEFAULT_IN`. Probado en W.O. 94 X2 (261092): Processed → Compensated
+  +0.1875"/lado en las 5 piezas, nest y DXF H1 3.625×4.851 (Parking Stands).
+- PARTS, junto a TANQUES: combo **OFFSET PLASMA** (1/32…3/16 + OTRO…). Cambiarlo pide
+  `_autorizar_edicion_dyt` (misma clave que tabla de gaps / Configuración Global) y
+  regenera los Plasma Compensated de las piezas marcadas (el sidecar compara offset).
+  Nests ya calculados conservan `plasma_offset_mm_manual` hasta renestear.
+- Fallbacks fijos `0.0625 * 25.4` en manager / exporter / nesting_graphics → valor vigente.
+- `run_regresiones.py` fija `ARGA_PLASMA_OFFSET_CONFIG` a un temp: los candados usan el
+  estándar aunque la PC tenga otro valor guardado. Candados que fijaban 0.0625 vía
+  `compute_plasma_offset_mm` ahora comparan contra `PLASMA_OFFSET_DEFAULT_IN`.
+- Build: sin módulos ni assets nuevos (JSON se crea al guardar).
+- Candado: `tests/native/test_plasma_offset_configurable.py`. Regresiones 109/109.
+
 ### 2026-10-02i — Datos: `lista_largos_swo` por job, SWO-089 y remanentes exclusivos
 
 - `lista_largos_swo` reconstruida **por job** (no por nombre de SWO): todo nombre que

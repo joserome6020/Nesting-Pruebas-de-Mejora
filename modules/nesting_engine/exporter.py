@@ -1506,7 +1506,9 @@ def exportar_resultados_a_dxf(
     exportados_principales = []
     cyptube_vertical_records = []
     thickness_para_step = getattr(config, "FREECAD_THK_MM", 6.35)
-    plasma_offset_job = 0.0625 * 25.4
+    from modules.plasma_compensator import compute_plasma_offset_mm as _plasma_off_mm
+
+    plasma_offset_job = float(_plasma_off_mm(0.25))
 
     from .sheet_numbering import (
         asignar_numeracion_global_hojas,

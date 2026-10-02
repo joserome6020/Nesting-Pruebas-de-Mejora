@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
@@ -443,6 +444,10 @@ REGRESIONES = [
         "test_parts_catalog_editable.py",
         "2026-08-20q - PARTS Material/Calibre editables empatan catálogo nest",
     ),
+    (
+        "test_plasma_offset_configurable.py",
+        "2026-10-02 - Offset plasma editable en PARTS (clave DyT) llega a todo el pipeline",
+    ),
 ]
 
 
@@ -455,6 +460,11 @@ def main() -> int:
     except Exception:
         pass
     entorno = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # Offset plasma editable en PARTS: los candados usan el estándar del código,
+    # no el valor guardado en esta PC.
+    entorno["ARGA_PLASMA_OFFSET_CONFIG"] = str(
+        Path(tempfile.gettempdir()) / f"ans_regresiones_plasma_offset_{os.getpid()}.json"
+    )
 
     for archivo, motivo in REGRESIONES:
         ruta = Path(__file__).with_name(archivo)

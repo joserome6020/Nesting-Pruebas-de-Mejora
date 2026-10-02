@@ -194,6 +194,22 @@ class TabParts(QWidget, TimerHost):
         row_tanques.addWidget(self.btn_aplicar_tanques)
         self.ent_tanques.returnPressed.connect(self.aplicar_cantidad_tanques)
         row_tanques.addStretch(1)
+        self.lbl_offset_plasma = QLabel("OFFSET PLASMA:")
+        self.lbl_offset_plasma.setStyleSheet(
+            f"font-weight:700;color:{COLOR_GRIS_DARK};font-size:{s(12, min_px=10)}px;"
+        )
+        row_tanques.addWidget(self.lbl_offset_plasma)
+        self.cmb_offset_plasma = QComboBox()
+        apply_herinox_combo(self.cmb_offset_plasma)
+        self.cmb_offset_plasma.setMinimumWidth(s(150, min_px=120))
+        self.cmb_offset_plasma.setToolTip(
+            "Compensación plasma por lado (OUTER crece, INNER encoge).\n"
+            "Aplica a todos los calibres. Cambiarlo requiere la contraseña\n"
+            "de Configuración Global y luego hay que renestear."
+        )
+        self._poblar_combo_offset_plasma()
+        self.cmb_offset_plasma.activated.connect(self._on_offset_plasma_elegido)
+        row_tanques.addWidget(self.cmb_offset_plasma)
         hdr_box.addLayout(row_tanques)
 
         self._dxf_audit_token = 0
@@ -377,6 +393,7 @@ class TabParts(QWidget, TimerHost):
     def _al_mostrar_pestana(self):
         self._sync_parts_header_scrollbar()
         self._actualizar_lbl_job_activo()
+        self._poblar_combo_offset_plasma()
 
     def _actualizar_lbl_job_activo(self):
         if not hasattr(self, "lbl_job_activo"):
@@ -1287,6 +1304,125 @@ class TabParts(QWidget, TimerHost):
                 return str(out)
         return str(mapa.get(clave) or ruta_dxf)
 
+    _OFFSET_PLASMA_PRESETS_IN = (
+        (0.03125, "1/32"),
+        (0.046875, "3/64"),
+        (0.0625, "1/16"),
+        (0.078125, "5/64"),
+        (0.09375, "3/32"),
+        (0.125, "1/8"),
+        (0.15625, "5/32"),
+        (0.1875, "3/16"),
+    )
+    _OFFSET_PLASMA_OTRO = "otro"
+
+    def _poblar_combo_offset_plasma(self, valor_in: float | None = None) -> None:
+        from modules.plasma_compensator import get_plasma_offset_in
+
+        actual = float(valor_in if valor_in is not None else get_plasma_offset_in())
+        cmb = self.cmb_offset_plasma
+        cmb.blockSignals(True)
+        cmb.clear()
+        idx_actual = -1
+        for val, frac in self._OFFSET_PLASMA_PRESETS_IN:
+            cmb.addItem(f'{val:.4f}"  ({frac})', float(val))
+            if abs(val - actual) < 1e-6:
+                idx_actual = cmb.count() - 1
+        if idx_actual < 0:
+            cmb.addItem(f'{actual:.4f}"', actual)
+            idx_actual = cmb.count() - 1
+        cmb.addItem("OTRO…", self._OFFSET_PLASMA_OTRO)
+        cmb.setCurrentIndex(idx_actual)
+        cmb.blockSignals(False)
+
+    def _on_offset_plasma_elegido(self, idx: int) -> None:
+        from interface.qt.dialogs.nesting_modals import _autorizar_edicion_dyt
+        from modules.plasma_compensator import (
+            PLASMA_OFFSET_MAX_IN,
+            PlasmaOffsetError,
+            get_plasma_offset_in,
+            set_plasma_offset_in,
+        )
+
+        actual = float(get_plasma_offset_in())
+        dato = self.cmb_offset_plasma.itemData(idx)
+        if dato != self._OFFSET_PLASMA_OTRO and abs(float(dato or 0.0) - actual) < 1e-6:
+            return
+        if not _autorizar_edicion_dyt(
+            self,
+            titulo="Offset plasma",
+            mensaje=(
+                f'Offset plasma actual: {actual:.4f}" por lado.\n\n'
+                "Ingrese la contraseña de Configuración Global para modificarlo."
+            ),
+        ):
+            self._poblar_combo_offset_plasma(actual)
+            return
+        if dato == self._OFFSET_PLASMA_OTRO:
+            from PySide6.QtWidgets import QInputDialog
+
+            nuevo, ok = QInputDialog.getDouble(
+                self,
+                "Offset plasma",
+                f'Offset por lado en pulgadas (máx. {PLASMA_OFFSET_MAX_IN:.2f}"):',
+                actual,
+                0.001,
+                PLASMA_OFFSET_MAX_IN,
+                4,
+            )
+            if not ok:
+                self._poblar_combo_offset_plasma(actual)
+                return
+        else:
+            nuevo = float(dato)
+        try:
+            set_plasma_offset_in(nuevo)
+        except (PlasmaOffsetError, OSError) as exc:
+            QMessageBox.critical(self, "Offset plasma", str(exc))
+            self._poblar_combo_offset_plasma(actual)
+            return
+        vigente = float(get_plasma_offset_in())
+        self._poblar_combo_offset_plasma(vigente)
+        errores = self._reaplicar_offset_plasma_parts()
+        msg = (
+            f'Offset plasma actualizado a {vigente:.4f}" por lado.\n\n'
+            "Las piezas marcadas PLASMA se regeneraron con el nuevo valor. "
+            "Los nesteos ya calculados conservan el offset anterior hasta renestear."
+        )
+        if errores:
+            msg += "\n\nNo se pudieron regenerar:\n" + "\n".join(errores[:10])
+            QMessageBox.warning(self, "Offset plasma", msg)
+        else:
+            QMessageBox.information(self, "Offset plasma", msg)
+
+    def _reaplicar_offset_plasma_parts(self) -> list[str]:
+        """Regenera los DXF Plasma Compensated de PARTS con el offset vigente."""
+        errores: list[str] = []
+        for item in getattr(self.app, "datos_partes_actuales", []) or []:
+            try:
+                pieza, _m, _q, cal, _st, ruta = item
+            except Exception:
+                continue
+            if not ruta or not self._plasma_guardada(ruta):
+                continue
+            off = self._offset_plasma_desde_calibre(cal)
+            if not off:
+                errores.append(f"{pieza}: calibre ilegible")
+                continue
+            ok, out_or_msg = self._validar_compensacion_plasma_dxf(ruta, off)
+            if not ok:
+                errores.append(f"{pieza}: {out_or_msg}")
+                continue
+            from interface.utils_nesting import clave_orientacion_cobre_ruta
+
+            if getattr(self.app, "plasma_dxf_por_ruta", None) is None:
+                self.app.plasma_dxf_por_ruta = {}
+            self.app.plasma_dxf_por_ruta[clave_orientacion_cobre_ruta(ruta)] = str(out_or_msg)
+        ruta_sel = str(getattr(self, "_ruta_fila_actual", "") or "")
+        if ruta_sel and self._plasma_guardada(ruta_sel):
+            QTimer.singleShot(0, lambda r=ruta_sel: self._refrescar_parts_tras_plasma(r))
+        return errores
+
     def _validar_compensacion_plasma_dxf(self, ruta_dxf, offset_mm: float) -> tuple[bool, str]:
         """Genera DXF compensado (mismo pipeline OUTER+/INNER−) y valida que exista."""
         from modules.plasma_compensator import asegurar_dxf_plasma_compensado
@@ -1623,6 +1759,7 @@ class TabParts(QWidget, TimerHost):
 
     def seleccionar_fila(self, ruta_dxf, frame_fila, nombre_pieza, material=None):
         self._nombre_fila_actual = str(nombre_pieza or "")
+        self._ruta_fila_actual = str(ruta_dxf or "")
         inner = self.lista_scroll.widget()
         if inner:
             for i in range(self._lista_layout.count()):

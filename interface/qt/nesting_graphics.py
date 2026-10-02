@@ -808,7 +808,9 @@ def _dims_pieza_tabla_in(p: dict, *, offset_comp: float = 0.0, hoja: dict | None
             )
             off_pieza = float(compute_plasma_offset_mm(float(cal)))
         except Exception:
-            off_pieza = 0.0625 * 25.4
+            from modules.plasma_compensator import get_plasma_offset_in
+
+            off_pieza = get_plasma_offset_in() * 25.4
     if compensada and off_pieza > 0.0 and not bool(
         p.get("plasma_fuente_ya_compensada") or p.get("ruta_plasma")
     ):
