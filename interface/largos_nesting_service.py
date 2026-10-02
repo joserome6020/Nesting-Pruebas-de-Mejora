@@ -656,6 +656,11 @@ def sincronizar_jobs_desde_csv(app, jobs) -> dict[str, str]:
             print(f"[LARGOS_NESTING][WARN] Sync CSV→lista_largos_job job={job}: {exc}")
         if estado[job] == "actualizado":
             print(f"[LARGOS_NESTING] lista_largos_job job={job} actualizado desde CSV AutoDXF.")
+        elif estado[job] != "sin_cambios":
+            print(
+                f"[LARGOS_NESTING][WARN] job={job}: CSV no sincronizado ({estado[job]}); "
+                "se usa lista_largos_job existente."
+            )
     return estado
 
 
@@ -674,9 +679,16 @@ def _filas_demanda_swo(app, cursor, swo: str) -> tuple[list[dict], str]:
     if cursor is not None:
         sincronizar_jobs_desde_csv(app, [job for job, _wo in pares])
         filas_bd: list[dict] = []
+        pares_sin_bd: list[tuple[str, str]] = []
         for job, work_order in pares:
-            filas_bd.extend(_filas_desde_bd_para_wo(cursor, job, work_order))
+            filas_par = _filas_desde_bd_para_wo(cursor, job, work_order)
+            if filas_par:
+                filas_bd.extend(filas_par)
+            else:
+                pares_sin_bd.append((job, work_order))
         if filas_bd:
+            if pares_sin_bd:
+                filas_bd.extend(_filas_desde_csv_para_pares(app, pares_sin_bd))
             return filas_bd, "swo_bd"
 
     filas_csv = _filas_desde_csv_para_pares(app, pares)

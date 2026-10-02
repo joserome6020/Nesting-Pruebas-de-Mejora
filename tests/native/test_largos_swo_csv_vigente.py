@@ -41,7 +41,7 @@ def test_sync_reimporta_solo_si_el_csv_cambio():
         )
         hashes_iguales = Counter(imp._row_hash("251007", r) for r in rows_csv)
 
-        with patch.object(imp, "_row_hashes_bd", return_value=hashes_iguales), patch.object(
+        with patch.object(imp, "_snapshot_bd", return_value=(hashes_iguales, [])), patch.object(
             imp, "importar_lista_largos_job"
         ) as importar:
             res = imp.sincronizar_lista_largos_job_si_cambio(
@@ -52,7 +52,7 @@ def test_sync_reimporta_solo_si_el_csv_cambio():
 
         viejo = Counter(hashes_iguales)
         viejo.pop(next(iter(viejo)))
-        with patch.object(imp, "_row_hashes_bd", return_value=viejo), patch.object(
+        with patch.object(imp, "_snapshot_bd", return_value=(viejo, [])), patch.object(
             imp, "importar_lista_largos_job", return_value={"ok": True, "status": "importado"}
         ) as importar:
             res = imp.sincronizar_lista_largos_job_si_cambio(
@@ -61,15 +61,60 @@ def test_sync_reimporta_solo_si_el_csv_cambio():
         assert res["status"] == "actualizado", res
         importar.assert_called_once()
         assert importar.call_args.kwargs.get("propagar_material") is False
+        cfg_import = importar.call_args.args[2]
+        assert "lock_timeout" in str(cfg_import.get("options")), cfg_import
 
 
 def test_sync_sin_csv_respeta_snapshot():
-    with patch.object(imp, "_resolver_carpeta_job_con_csv", return_value=None), patch.object(
-        imp, "importar_lista_largos_job"
-    ) as importar:
+    with patch.object(imp, "_snapshot_bd", return_value=(Counter(), [])), patch.object(
+        imp, "_resolver_carpeta_job_con_csv", return_value=None
+    ), patch.object(imp, "importar_lista_largos_job") as importar:
         res = imp.sincronizar_lista_largos_job_si_cambio("251007", {})
     assert res["status"] == "csv_no_encontrado"
     importar.assert_not_called()
+
+
+def test_sync_usa_ruta_csv_guardada_en_bd_sin_escanear_tanks():
+    """Sin la ruta del ANS (export) se usa source_csv_path de BD, no el escaneo SMB."""
+    filas = [("ITEM 1", "ANG037", 38.0, 4)]
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = _crear_job_con_csv(Path(tmp) / "TNK3PH-0017", filas)
+        csv_bd = carpeta / "MODEL CORE FILES" / "AutoDXF" / "Lista_Largos.csv"
+        hashes = Counter(
+            imp._row_hash("TNK3PH-0017", r) for r in imp._leer_csv_lista_largos(csv_bd)
+        )
+        imp._CARPETA_CSV_POR_JOB.pop(imp._norm_job("TNK3PH-0017"), None)
+        with patch.object(imp, "_snapshot_bd", return_value=(hashes, [str(csv_bd)])), patch.object(
+            imp, "_buscar_carpeta_job_corporate"
+        ) as escaneo:
+            res = imp.sincronizar_lista_largos_job_si_cambio("TNK3PH-0017", {})
+        assert res["status"] == "sin_cambios", res
+        escaneo.assert_not_called()
+
+
+def test_job_sin_csv_no_escanea_tanks_en_cada_nesteo():
+    """Jobs sin CSV (ATC) no deben congelar el nesteo con el escaneo SMB de TANKS."""
+    imp._CARPETA_CSV_POR_JOB.pop("JOB-INEXISTENTE", None)
+    with patch.object(imp, "_buscar_carpeta_job_corporate", return_value=None) as escaneo:
+        assert imp._resolver_carpeta_job_con_csv("JOB-INEXISTENTE") is None
+    escaneo.assert_not_called()
+
+
+def test_tanks_encuentra_job_a_dos_niveles():
+    """Producción: TANKS/SOUTHWEST/TNK3PH-0017 (cliente/job), no solo producto/cliente/job."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "TANKS"
+        carpeta = _crear_job_con_csv(root / "SOUTHWEST" / "TNK3PH-0017", [("A", "ANG037", 10.0, 1)])
+        hit = imp._buscar_carpeta_job_corporate("TNK3PH-0017", roots=[root])
+        assert hit == carpeta, hit
+
+
+def test_tanks_dos_niveles_no_confunde_atc_con_tanque():
+    """HV-ATC-261431 no debe tomar el CSV del tanque TANKS/VANTRAN/261431."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "TANKS"
+        _crear_job_con_csv(root / "VANTRAN" / "261431", [("A", "ANG037", 10.0, 1)])
+        assert imp._buscar_carpeta_job_corporate("HV-ATC-261431", roots=[root]) is None
 
 
 def test_demanda_swo_sincroniza_csv_antes_de_leer_bd():
@@ -87,6 +132,24 @@ def test_demanda_swo_sincroniza_csv_antes_de_leer_bd():
     assert origen == "swo_bd"
     assert orden[0] == "sync:251007,251008", orden
     assert orden[1:] == ["bd:251007", "bd:251008"], orden
+
+
+def test_demanda_swo_mixta_completa_job_sin_bd_con_csv():
+    """Un job con lista en BD y otro sin ella: no se debe omitir el segundo."""
+    with patch.object(lns, "resolver_wos_fuente_swo", return_value=PARES_SWO), patch.object(
+        lns, "sincronizar_jobs_desde_csv", return_value={}
+    ), patch.object(
+        lns,
+        "_filas_desde_bd_para_wo",
+        side_effect=lambda cur, job, wo: [{"job": job}] if job == "251007" else [],
+    ), patch.object(
+        lns,
+        "_filas_desde_csv_para_pares",
+        side_effect=lambda app, pares: [{"job": j, "origen": "csv"} for j, _w in pares],
+    ):
+        filas, origen = lns._filas_demanda_swo(MagicMock(), MagicMock(), "SWO-099")
+    assert origen == "swo_bd"
+    assert [f["job"] for f in filas] == ["251007", "251008"], filas
 
 
 def test_plan_canonico_swo_sincroniza_antes_de_generar():
@@ -120,7 +183,12 @@ def test_boton_recalcular_swo_sincroniza_cada_job():
 if __name__ == "__main__":
     test_sync_reimporta_solo_si_el_csv_cambio()
     test_sync_sin_csv_respeta_snapshot()
+    test_sync_usa_ruta_csv_guardada_en_bd_sin_escanear_tanks()
+    test_job_sin_csv_no_escanea_tanks_en_cada_nesteo()
+    test_tanks_encuentra_job_a_dos_niveles()
+    test_tanks_dos_niveles_no_confunde_atc_con_tanque()
     test_demanda_swo_sincroniza_csv_antes_de_leer_bd()
+    test_demanda_swo_mixta_completa_job_sin_bd_con_csv()
     test_plan_canonico_swo_sincroniza_antes_de_generar()
     test_boton_recalcular_swo_sincroniza_cada_job()
     print("OK")

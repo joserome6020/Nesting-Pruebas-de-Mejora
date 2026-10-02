@@ -68,9 +68,16 @@ código viejo. Un bug sin candado vuelve.
   `_filas_demanda_swo` (nesting/modal), en `cargar_plan_largos(..., "SWO")` (plan
   canónico del export) y en el botón para cada job de la SWO.
 - Plan con sesión/cortes registrados sigue congelado (`_ll_plan_puede_regenerarse`).
+- Revisión (2026-10-02c): ruta del CSV = ANS → caché → `source_csv_path` de BD, **sin**
+  escaneo TANKS en el sync (~15 s/job en SMB; congelaba el nesteo con jobs ATC sin CSV).
+  `lock_timeout` 15 s en el sync (el import hace ALTER TABLE). SWO mixta (un job en BD y
+  otro no) completa el faltante con el CSV del ANS en vez de omitirlo.
+  `_buscar_carpeta_job_corporate` ahora ve `TANKS/<cliente>/<job>` (2 niveles) solo con
+  nombre exacto (sufijo numérico confundía HV-ATC-261431 con el tanque 261431).
+  Verificado read-only contra BD real: jobs importados dan hash IGUAL (sin reimport loop).
 - Build: sin módulos/assets nuevos; no requiere cambios en `build_arga_exe.py`.
-- Candado: `tests/native/test_largos_swo_csv_vigente.py`. `run_regresiones` 98/104:
-  los 6 FAIL (rtz/packer/gaps/cu_catalogo) ya fallaban antes de este cambio.
+- Candado: `tests/native/test_largos_swo_csv_vigente.py`. `run_regresiones` 99/104:
+  los 5 FAIL (rtz/packer/gaps) ya fallaban antes de este cambio.
 
 ### 2026-10-02b — Catálogo cobre completo (176 piezas) + tabla de herramental en el PDF
 

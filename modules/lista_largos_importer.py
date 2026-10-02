@@ -152,7 +152,7 @@ def _buscar_carpeta_job_corporate(
     vs carpeta VSM «GIGABOARD5»).
     Prefiere la carpeta que sí tenga MODEL CORE FILES/AutoDXF.
 
-    Solo recorre 3 niveles (producto / cliente / job). Un rglob sobre TANKS
+    Solo recorre 2-3 niveles (cliente / job o producto / cliente / job). Un rglob sobre TANKS
     en SMB congela el export de SWO (caso SWO-022 / 9919-11CABINET, 10+ min).
     """
     job_n = _norm_job(job)
@@ -189,6 +189,15 @@ def _buscar_carpeta_job_corporate(
                 continue
             for cliente in clientes:
                 if not _path_is_dir(cliente):
+                    continue
+                # TANKS/<cliente>/<job> (2 niveles) también existe en producción.
+                # Solo nombre exacto: el match por sufijo numérico confunde
+                # HV-ATC-261431 con la carpeta del tanque 261431.
+                if _job_compact(cliente.name) == job_key:
+                    clave = str(cliente).lower()
+                    if clave not in vistos:
+                        vistos.add(clave)
+                        _registrar(cliente)
                     continue
                 try:
                     jobs_dirs = list(cliente.iterdir())
@@ -909,16 +918,25 @@ def importar_lista_largos_job(
             conexion.close()
 
 
-# job_key → carpeta del job cuyo AutoDXF tiene CSV. Evita repetir la búsqueda
-# en TANKS (SMB) cada vez que se recalcula la demanda de una SWO.
+# job_key → última ruta válida con CSV; sirve al plan canónico del export, que
+# corre sin las rutas del ANS.
 _CARPETA_CSV_POR_JOB: dict[str, str] = {}
 
+SYNC_LOCK_TIMEOUT_MS = 15000
 
-def _resolver_carpeta_job_con_csv(job: str, rutas_candidatas=()) -> str | None:
+
+def _resolver_carpeta_job_con_csv(job: str, rutas_candidatas=(), rutas_respaldo=()) -> str | None:
+    """
+    Orden: rutas del ANS → caché de sesión → rutas de respaldo (BD).
+
+    Sin escaneo de TANKS: tarda ~15 s por job en SMB y se ejecutaría en cada
+    nesteo para jobs que no llevan CSV (p. ej. ATC de una SWO).
+    """
     job_key = _norm_job(job)
     candidatas = [str(r) for r in (rutas_candidatas or []) if _norm_text(r)]
     if job_key in _CARPETA_CSV_POR_JOB:
         candidatas.append(_CARPETA_CSV_POR_JOB[job_key])
+    candidatas += [str(r) for r in (rutas_respaldo or []) if _norm_text(r)]
 
     for ruta in candidatas:
         if _resolver_csv_lista_largos(_resolver_ruta_autodxf(ruta)) is None:
@@ -928,15 +946,11 @@ def _resolver_carpeta_job_con_csv(job: str, rutas_candidatas=()) -> str | None:
             continue
         _CARPETA_CSV_POR_JOB[job_key] = ruta
         return ruta
-
-    carpeta = _buscar_carpeta_job_corporate(job)
-    if carpeta is not None and _resolver_csv_lista_largos(_resolver_ruta_autodxf(str(carpeta))) is not None:
-        _CARPETA_CSV_POR_JOB[job_key] = str(carpeta)
-        return str(carpeta)
     return None
 
 
-def _row_hashes_bd(job: str, db_config: dict) -> Counter:
+def _snapshot_bd(job: str, db_config: dict) -> tuple[Counter, list[str]]:
+    """(row_hash del snapshot, rutas CSV con que se importó) para el job."""
     job_key = _norm_job(job)
     conexion = psycopg2.connect(**db_config)
     try:
@@ -944,21 +958,24 @@ def _row_hashes_bd(job: str, db_config: dict) -> Counter:
         try:
             cursor.execute(
                 """
-                SELECT row_hash
+                SELECT row_hash, source_csv_path
                 FROM public.lista_largos_job
                 WHERE job_key = %s
                 OR UPPER(REGEXP_REPLACE(BTRIM(job), '\\s+', ' ', 'g')) = %s
                 """,
                 (job_key, job_key),
             )
-            return Counter(str(r[0] or "") for r in cursor.fetchall() or [])
+            filas = cursor.fetchall() or []
         except psycopg2.Error:
             conexion.rollback()
-            return Counter()
+            return Counter(), []
         finally:
             cursor.close()
     finally:
         conexion.close()
+    hashes = Counter(str(r[0] or "") for r in filas)
+    rutas = list(dict.fromkeys(str(r[1] or "").strip() for r in filas if str(r[1] or "").strip()))
+    return hashes, rutas
 
 
 def sincronizar_lista_largos_job_si_cambio(
@@ -976,7 +993,14 @@ def sincronizar_lista_largos_job_si_cambio(
     if not job:
         return {"ok": False, "status": "job_vacio", "job": job}
 
-    ruta = _resolver_carpeta_job_con_csv(job, rutas_candidatas)
+    # El import hace ALTER TABLE (lock exclusivo aunque la columna exista): si otra
+    # sesión tiene abierta lista_largos_job, mejor fallar y conservar el snapshot
+    # que congelar el nesteo esperando el lock.
+    db_config = dict(db_config or {})
+    db_config.setdefault("options", f"-c lock_timeout={SYNC_LOCK_TIMEOUT_MS}")
+
+    hashes_bd, rutas_bd = _snapshot_bd(job, db_config)
+    ruta = _resolver_carpeta_job_con_csv(job, rutas_candidatas, rutas_bd)
     if not ruta:
         return {"ok": False, "status": "csv_no_encontrado", "job": job}
 
@@ -986,7 +1010,7 @@ def sincronizar_lista_largos_job_si_cambio(
         return {"ok": False, "status": "csv_vacio", "job": job, "csv_path": str(csv_path or "")}
 
     hashes_csv = Counter(_row_hash(job, row) for row in rows)
-    if hashes_csv == _row_hashes_bd(job, db_config):
+    if hashes_csv == hashes_bd:
         return {"ok": True, "status": "sin_cambios", "job": job, "csv_path": str(csv_path)}
 
     resultado = importar_lista_largos_job(job, ruta, db_config, propagar_material=False)
